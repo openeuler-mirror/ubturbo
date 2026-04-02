@@ -360,8 +360,11 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 	u64 mig_cnt_backup;
 	u64 mig_cnt_min;
 	int successful_cnt = 0;
-
 	int retry = MAX_MIGRATE_PID_NUMA_RETRY_TIME;
+
+	if (is_link_down()) {
+		return;
+	}
 	do {
 		for (i = 0; i < len; i++) {
 			struct pagemapread pm = { 0 };
