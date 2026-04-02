@@ -19,6 +19,7 @@
 #include <linux/time64.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <acpi/ghes.h>
 
 #include "migrate_task.h"
 #include "smap_migrate_wrapper.h"
@@ -27,6 +28,7 @@
 #include "iomem.h"
 #include "ham_migration.h"
 #include "pid_ioctl.h"
+#include "ubus_notify.h"
 #include "tracking_manage.h"
 
 #define SMAP_WATCH_NAME "smap_migrate_result"
@@ -132,6 +134,10 @@ static void migrate_back_work_func(struct work_struct *work)
 		pr_err("failed to iterate obmm_dev in migrate back schedule, ret: %d\n",
 		       ret);
 	}
+	if (is_link_down()) {
+		queue_delayed_work(migrate_back_wq, &migrate_back_work, msecs_to_jiffies(MB_INTV));
+		return;
+	}
 
 next:
 	found = false;
@@ -176,6 +182,11 @@ next:
 	goto next;
 }
 
+static struct notifier_block hisi_ubus_link_down_notify_err = {
+	.notifier_call = hisi_ubus_notify_error,
+	.priority = 100,
+};
+
 static int __init tracking_init(void)
 {
 	int ret = 0;
@@ -188,6 +199,11 @@ static int __init tracking_init(void)
 	ret = smap_process_symbols();
 	if (ret) {
 		pr_err("smap process symbols failed\n");
+		return ret;
+	}
+	ret = ghes_register_vendor_record_notifier(&hisi_ubus_link_down_notify_err);
+	if (ret) {
+		pr_err("failed to register vendor record notifier, ret: %d\n", ret);
 		return ret;
 	}
 	ret = init_acpi_mem();

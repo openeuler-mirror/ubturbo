@@ -21,6 +21,7 @@
 #include "iomem.h"
 #include "smap_migrate_wrapper.h"
 #include "common.h"
+#include "ubus_notify.h"
 #include "smap_migrate_pages.h"
 
 #define PHYSICAL_ADDR 80
@@ -777,6 +778,11 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 	if (msg->cnt == 0) {
 		return 0;
 	}
+
+	if (is_link_down()) {
+		pr_err("link down, stop migrate.\n");
+		return -ENOMEM;
+	}
 	arr = kzalloc(msg->cnt * sizeof(*arr), GFP_KERNEL);
 	if (!arr)
 		return -ENOMEM;
@@ -978,6 +984,11 @@ unsigned int smap_migrate_numa(struct migrate_numa_inner_msg *msg)
 	unsigned int ret = 0;
 	int i;
 	int nid = msg->dest_nid;
+
+	if (is_link_down()) {
+		pr_err("link down, stop migrate.\n");
+		return -EINVAL;
+	}
 	for (i = 0; i < msg->count; i++) {
 		int retry = MAX_MIGRATE_NUMA_RETRY_TIME;
 		u64 start_pa = msg->range[i].pa_start;

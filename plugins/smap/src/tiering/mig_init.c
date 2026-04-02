@@ -19,6 +19,7 @@
 #include "acpi_mem.h"
 #include "iomem.h"
 #include "ham_migration.h"
+#include "ubus_notify.h"
 #include "mig_init.h"
 
 #undef pr_fmt
@@ -337,8 +338,11 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len, int *mig
 	unsigned int failed_cnt;
 	u64 mig_cnt;
 	int successful_cnt = 0;
-
 	int retry = MAX_MIGRATE_PID_NUMA_RETRY_TIME;
+
+	if (is_link_down()) {
+		return;
+	}
 	do {
 		for (i = 0; i < len; i++) {
 			struct pagemapread pm = { 0 };
