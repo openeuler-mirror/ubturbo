@@ -966,7 +966,6 @@ static int get_vma_numa_node(struct kvm *kvm, struct vm_area_struct *vma,
 
 	pte = smap_huge_ptep_get(ptep);
 	if (!pte_present(pte)) {
-		pr_err("PTE is not presented\n");
 		return 0;
 	}
 

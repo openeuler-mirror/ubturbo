@@ -194,7 +194,7 @@ unsigned int smap_migrate(struct folio **folios, unsigned int nr_folios,
 			folios, nr_folios, smap_alloc_new_node_page_mig_back,
 			NULL, to_node, remote_migrate_mode, &nr_succeeded);
 		if (err) {
-			pr_err("failed to migrate back, ret: %d\n", err);
+			pr_warn("failed to migrate back, ret: %d\n", err);
 		}
 	} else if (MIGRATE_TYPE_HOTNESS == type) {
 		err = isolate_and_migrate_folios(folios, nr_folios,
@@ -202,7 +202,7 @@ unsigned int smap_migrate(struct folio **folios, unsigned int nr_folios,
 						 to_node, remote_migrate_mode,
 						 &nr_succeeded);
 		if (err) {
-			pr_err("failed to migrate, ret: %d\n", err);
+			pr_warn("failed to migrate, ret: %d\n", err);
 		}
 	} else if (MIGRATE_TYPE_REMOTE == type) {
 		err = smap_isolate_and_migrate_folios(
