@@ -253,7 +253,7 @@ N_CPUS=$(grep processor /proc/cpuinfo | wc -l)
 echo "$N_CPUS processors detected."
  
 CMAKE_CMD="cmake -DCMAKE_BUILD_TYPE=Debug $CURRENT_PATH"
-BUILD_CMD="make -j $((N_CPUS-2))"
+BUILD_CMD="make -j $((N_CPUS))"
  
 echo $CMAKE_CMD
 $CMAKE_CMD || {

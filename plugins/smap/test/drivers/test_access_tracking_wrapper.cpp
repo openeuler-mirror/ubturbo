@@ -5,6 +5,8 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
+#include <linux/mm.h>
+
 #include "access_tracking_wrapper.h"
 
 using namespace std;

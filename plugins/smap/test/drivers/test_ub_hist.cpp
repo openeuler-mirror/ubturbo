@@ -43,6 +43,20 @@ static uint64_t reg_base_cpp_addrs[] = {
 extern "C" int ub_hist_ba_init(struct ub_hist_ba_device *ba_dev);
 extern "C" int ub_hist_probe(struct platform_device *pdev);
 extern "C" int ub_hist_remove(struct platform_device *pdev);
+extern "C" int ub_hist_init(enum platform_type platform);
+extern "C" void ub_hist_exit(void);
+extern "C" int ub_hist_query_ba_count(void);
+extern "C" int ub_hist_query_ba_tags(uint64_t *p_tags, int count);
+extern "C" int ub_hist_set_state(struct ub_hist_ba_config *config, uint64_t ba_tag);
+extern "C" int ub_hist_get_state(struct ub_hist_ba_config *config, uint64_t ba_tag);
+extern "C" int ub_hist_get_statistic_result(struct ub_hist_ba_result *result);
+extern "C" long ub_hist_ioctl_do_work(unsigned int cmd, unsigned long arg);
+extern "C" long ub_hist_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+extern "C" int ub_hist_open(struct inode *inode, struct file *filp);
+extern "C" int ub_hist_release(struct inode *inode, struct file *filp);
+extern "C" int ub_hist_lock_device(void);
+extern "C" void ub_hist_unlock_device(void);
+extern "C" bool capable(int cap);
 class DriversUbHistMidTest : public ::testing::Test {
 protected:
     void SetUp() override
@@ -66,11 +80,104 @@ protected:
     }
 };
 
+TEST_F(DriversUbHistMidTest, comprehensive_blocking)
+{
+    struct hist_scan_cfg cfg_data;
+    uint32_t result_count;
+    uint32_t max_entry;
+    size_t total_len;
+    struct addr_count_pair *result_pair;
+
+    smap_hist_middle_add_roi(0x40000000000ULL, 16 * GB);
+
+    smap_hist_middle_get_scan_config(&cfg_data);
+    cfg_data.scan_mode = SCAN_WITH_2M;
+    cfg_data.run_mode = RUN_SYNC_BLOCKING;
+    smap_hist_middle_set_scan_config(&cfg_data);
+
+    total_len = smap_hist_middle_get_roi_total_len();
+    max_entry = total_len >> SHIFT_2M;
+    result_pair = (struct addr_count_pair *)malloc(sizeof(struct addr_count_pair) * max_entry);
+
+    smap_hist_middle_scan_enable();
+    smap_hist_middle_get_hot_pages(result_pair, &result_count);
+    free(result_pair);
+    smap_hist_middle_scan_disable();
+}
+
+extern "C" int ub_hist_query_ba_info(uint64_t ba_tag, struct ub_hist_ba_info *ba_info);
+TEST_F(DriversUbHistMidTest, comprehensive_threading)
+{
+    struct ub_hist_ba_info ba_info[4];
+    for (int i = 0; i < 4; i++) {
+        EXPECT_EQ(0, ub_hist_query_ba_info(reg_base_cpp_addrs[i], &ba_info[i]));
+    }
+    for (int i = 0; i < 4; i++) {
+        EXPECT_EQ(0, smap_hist_middle_add_roi(ba_info[i].nc_range.start, 100 * MB));
+        EXPECT_EQ(0, smap_hist_middle_add_roi(ba_info[i].cc_range.start, 100 * MB));
+    }
+    EXPECT_EQ(800 * MB, smap_hist_middle_get_roi_total_len());
+    EXPECT_EQ(8, smap_hist_middle_get_roi_count());
+
+    for (int i = 0; i < 4; i++) {
+        EXPECT_EQ(0, smap_hist_middle_del_roi(ba_info[i].nc_range.start + 20 * MB, 20 * MB));
+        EXPECT_EQ(0, smap_hist_middle_del_roi(ba_info[i].cc_range.start + 20 * MB, 20 * MB));
+    }
+
+    EXPECT_EQ((800 - 160) * MB, smap_hist_middle_get_roi_total_len());
+    EXPECT_EQ(16, smap_hist_middle_get_roi_count());
+    struct hist_roi_data *roi_buf = (struct hist_roi_data *)malloc(sizeof(struct hist_roi_data) * 16);
+    EXPECT_EQ(0, smap_hist_get_roi_info(roi_buf, 16));
+    free(roi_buf);
+
+    for (int i = 0; i < 4; i++) {
+        EXPECT_EQ(0, smap_hist_middle_del_roi(ba_info[i].nc_range.start + 10 * MB, 30 * MB));
+        EXPECT_EQ(0, smap_hist_middle_del_roi(ba_info[i].cc_range.start + 10 * MB, 30 * MB));
+    }
+    EXPECT_EQ((800 - 160 - 80) * MB, smap_hist_middle_get_roi_total_len());
+    EXPECT_EQ(16, smap_hist_middle_get_roi_count());
+
+    for (int i = 0; i < 4; i++) {
+        EXPECT_EQ(0, smap_hist_middle_del_roi(ba_info[i].nc_range.start + 20 * MB, 30 * MB));
+        EXPECT_EQ(0, smap_hist_middle_del_roi(ba_info[i].cc_range.start + 20 * MB, 30 * MB));
+    }
+    EXPECT_EQ((800 - 160 - 80 - 80) * MB, smap_hist_middle_get_roi_total_len());
+    EXPECT_EQ(16, smap_hist_middle_get_roi_count());
+
+    for (int i = 0; i < 4; i++) {
+        GTEST_ASSERT_TRUE(smap_hist_middle_query_addr_in_roi(ba_info[i].cc_range.start + 50 * MB));
+        GTEST_ASSERT_FALSE(smap_hist_middle_query_addr_in_roi(ba_info[i].cc_range.start + 30 * MB));
+
+        EXPECT_EQ(0, smap_hist_middle_add_roi(ba_info[i].nc_range.start + 5 * MB, 70 * MB));
+        EXPECT_EQ(0, smap_hist_middle_add_roi(ba_info[i].cc_range.start + 10 * MB, 80 * MB));
+
+        GTEST_ASSERT_TRUE(smap_hist_middle_query_addr_in_roi(ba_info[i].cc_range.start + 50 * MB));
+        GTEST_ASSERT_TRUE(smap_hist_middle_query_addr_in_roi(ba_info[i].cc_range.start + 30 * MB));
+    }
+    EXPECT_EQ(800 * MB, smap_hist_middle_get_roi_total_len());
+    EXPECT_EQ(8, smap_hist_middle_get_roi_count());
+
+    for (int i = 0; i < 4; i++) {
+        EXPECT_EQ(0, smap_hist_middle_del_roi(ba_info[i].nc_range.start, 100 * MB));
+    }
+    EXPECT_EQ(400 * MB, smap_hist_middle_get_roi_total_len());
+    EXPECT_EQ(4, smap_hist_middle_get_roi_count());
+
+    smap_hist_middle_reset_roi();
+    EXPECT_EQ(0, smap_hist_middle_get_roi_total_len());
+    EXPECT_EQ(0, smap_hist_middle_get_roi_count());
+}
+
 TEST_F(DriversUbHistMidTest, QueryCountAndTags)
 {
     uint64_t tags[DEFAULT_NUMA_NODE] = {};
 
-    EXPECT_EQ(0, ub_hist_query_ba_count());
+    EXPECT_EQ(DEFAULT_NUMA_NODE, ub_hist_query_ba_count());
+    EXPECT_EQ(0, ub_hist_query_ba_tags(tags, DEFAULT_NUMA_NODE));
+    EXPECT_EQ(REG_BASE_CPP_ADDR_0, tags[0]);
+    EXPECT_EQ(REG_BASE_CPP_ADDR_1, tags[1]);
+    EXPECT_EQ(REG_BASE_CPP_ADDR_2, tags[2]);
+    EXPECT_EQ(REG_BASE_CPP_ADDR_3, tags[3]);
     EXPECT_EQ(-EINVAL, ub_hist_query_ba_tags(tags, DEFAULT_NUMA_NODE - 1));
 }
 
@@ -88,4 +195,38 @@ TEST_F(DriversUbHistMidTest, ValidateStateApisInvalidArgs)
     EXPECT_EQ(-EINVAL, ub_hist_get_statistic_result(nullptr));
     result.ba_tag = 0xdeadbeef;
     EXPECT_EQ(-ENODEV, ub_hist_get_statistic_result(&result));
+}
+
+TEST_F(DriversUbHistMidTest, IoctlDispatch)
+{
+    EXPECT_EQ(-ENOTTY, ub_hist_ioctl(nullptr, 0xffff, 0));
+}
+
+TEST_F(DriversUbHistMidTest, IoctlDoWorkInvalidAndGetStatistic)
+{
+    uint64_t arg[1 + BA_STS_VALUE_COUNT] = {};
+    struct ub_hist_ba_result result = {};
+
+    EXPECT_EQ(-EINVAL, ub_hist_ioctl_do_work(0xffff, 0));
+
+    result.ba_tag = REG_BASE_CPP_ADDR_0;
+    MOCKER(ub_hist_get_statistic_result).stubs().will(returnValue(0));
+    arg[0] = REG_BASE_CPP_ADDR_0;
+    EXPECT_EQ(0, ub_hist_ioctl_do_work(UB_HIST_IOCTL_GET_STATISTIC_RESULT,
+        reinterpret_cast<unsigned long>(arg)));
+}
+
+TEST_F(DriversUbHistMidTest, OpenAndRelease)
+{
+    MOCKER(capable).stubs().will(returnValue(false));
+    EXPECT_EQ(-EPERM, ub_hist_open(nullptr, nullptr));
+
+    GlobalMockObject::verify();
+    MOCKER(capable).stubs().will(returnValue(true));
+    MOCKER(ub_hist_lock_device).stubs().will(returnValue(-EBUSY));
+    EXPECT_EQ(-EBUSY, ub_hist_open(nullptr, nullptr));
+
+    GlobalMockObject::verify();
+    MOCKER(ub_hist_unlock_device).stubs();
+    EXPECT_EQ(0, ub_hist_release(nullptr, nullptr));
 }
