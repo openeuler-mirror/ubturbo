@@ -23,8 +23,12 @@
 #define S8_MAX		((s8)(U8_MAX >> 1))
 #define S8_MIN		((s8)(-S8_MAX - 1))
 
+#ifndef SIZE_MAX
 #define SIZE_MAX	(~(size_t)0)
+#endif
 #define PHYS_ADDR_MAX	(~(phys_addr_t)0)
+#ifndef SSIZE_MAX
 #define SSIZE_MAX	((ssize_t)(SIZE_MAX >> 1))
+#endif
 
 #endif

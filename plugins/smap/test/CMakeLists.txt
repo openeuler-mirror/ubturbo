@@ -4,6 +4,8 @@ project(SMAP VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 11)
 
+find_package(Threads REQUIRED)
+
 set(SMAP_SRC ${CMAKE_CURRENT_LIST_DIR}/dt_src)
 set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage -DACPI_NOT_READY")
 set(CMAKE_C_FLAGS " ${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage -DACPI_NOT_READY")
@@ -141,6 +143,7 @@ add_executable(smap_dt ${TEST_SRC})
 
 TARGET_MOCKCPP(smap_dt)
 TARGET_GTEST(smap_dt)
+target_link_libraries(smap_dt Threads::Threads ${CMAKE_DL_LIBS})
 
 # include headers
 target_include_directories(smap_dt PUBLIC

@@ -888,7 +888,9 @@ TEST_F(InterfaceTest, TestSmapRemoveWithoutAccessIoctlRemoveFailed)
 TEST_F(InterfaceTest, TestSmapRemove)
 {
     int ret;
-    struct RemoveMsg msg;
+    struct RemoveMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
 
     EnvAtomicSet(&g_status, 1);
     MOCKER(CheckSmapRemoveMsg).stubs().will(returnValue(0));

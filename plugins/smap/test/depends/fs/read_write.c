@@ -16,7 +16,7 @@ loff_t default_llseek(struct file *file, loff_t offset, int whence)
 	return 0;
 }
 
-int iterate_dir(struct file *, struct dir_context *)
+int iterate_dir(struct file *file, struct dir_context *ctx)
 {
 	return 0;
 }

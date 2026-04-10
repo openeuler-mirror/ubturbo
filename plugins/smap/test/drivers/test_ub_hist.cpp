@@ -65,3 +65,27 @@ protected:
         cout << "[Phase TearDown End]" << endl;
     }
 };
+
+TEST_F(DriversUbHistMidTest, QueryCountAndTags)
+{
+    uint64_t tags[DEFAULT_NUMA_NODE] = {};
+
+    EXPECT_EQ(0, ub_hist_query_ba_count());
+    EXPECT_EQ(-EINVAL, ub_hist_query_ba_tags(tags, DEFAULT_NUMA_NODE - 1));
+}
+
+TEST_F(DriversUbHistMidTest, ValidateStateApisInvalidArgs)
+{
+    struct ub_hist_ba_config config = {};
+    struct ub_hist_ba_result result = {};
+
+    EXPECT_EQ(-EINVAL, ub_hist_set_state(nullptr, REG_BASE_CPP_ADDR_0));
+    EXPECT_EQ(-ENODEV, ub_hist_set_state(&config, 0xdeadbeef));
+
+    EXPECT_EQ(-EINVAL, ub_hist_get_state(nullptr, REG_BASE_CPP_ADDR_0));
+    EXPECT_EQ(-ENODEV, ub_hist_get_state(&config, 0xdeadbeef));
+
+    EXPECT_EQ(-EINVAL, ub_hist_get_statistic_result(nullptr));
+    result.ba_tag = 0xdeadbeef;
+    EXPECT_EQ(-ENODEV, ub_hist_get_statistic_result(&result));
+}

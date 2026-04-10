@@ -57,7 +57,8 @@ static inline int pgd_bad(pgd_t pgd)		{ return 0; }
 #define pgprot_writecombine(x) x
 
 #if LINUX_VERSION_CODE == KERNEL_VERSION(6, 6, 0)
-static inline int __ptep_test_and_clear_young(void *, int, pte_t *ptep)
+static inline int __ptep_test_and_clear_young(void *vma, int address,
+					      pte_t *ptep)
 #else
 static inline int __ptep_test_and_clear_young(pte_t *ptep)
 #endif

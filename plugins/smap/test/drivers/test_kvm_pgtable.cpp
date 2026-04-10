@@ -230,3 +230,49 @@ TEST_F(KvmPgTableTest, WalkContinueTest)
     ret = kvm_pgtable_walk_continue(&walker, r);
     EXPECT_EQ(true, ret);
 }
+
+TEST_F(KvmPgTableTest, WalkContinueHandleFault)
+{
+    struct kvm_pgtable_walker walker = {
+        .cb = my_callback_function,
+        .flags = KVM_PGTABLE_WALK_HANDLE_FAULT,
+    };
+
+    EXPECT_EQ(false, kvm_pgtable_walk_continue(&walker, -EAGAIN));
+    EXPECT_EQ(false, kvm_pgtable_walk_continue(&walker, -EINVAL));
+}
+
+TEST_F(KvmPgTableTest, KvmPgtableWalkOutOfRange)
+{
+    struct kvm_pgtable pgt = {
+        .ia_bits = 1,
+        .pgd = (u64 *)malloc(sizeof(u64)),
+    };
+    struct kvm_pgtable_walk_data data = {
+        .pgt = &pgt,
+        .addr = 8,
+        .end = 9,
+    };
+
+    EXPECT_EQ(-ERANGE, _kvm_pgtable_walk(&pgt, &data));
+    free(pgt.pgd);
+}
+
+extern "C" int smap_stage2_test_clear_young(struct kvm_pgtable *pgt, u64 addr,
+    u64 size, kvm_pte_t attr_set, kvm_pte_t attr_clr, bool mkold,
+    kvm_pte_t *orig_pte, int *level, bool *young,
+    enum kvm_pgtable_walk_flags flags);
+TEST_F(KvmPgTableTest, Stage2ClearYoungPropagatesWalkError)
+{
+    struct kvm_pgtable pgt = {};
+    bool young = false;
+    kvm_pte_t orig = 0;
+    int level = -1;
+
+    MOCKER(kvm_pgtable_walk).stubs().will(returnValue(-EINVAL));
+    EXPECT_EQ(-EINVAL, smap_stage2_test_clear_young(&pgt, 0, 1, 0, 0, true,
+        &orig, &level, &young, KVM_PGTABLE_WALK_LEAF));
+    EXPECT_EQ(false, young);
+    EXPECT_EQ(-1, level);
+    EXPECT_EQ(0, orig);
+}

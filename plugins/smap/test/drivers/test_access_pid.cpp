@@ -397,7 +397,7 @@ TEST_F(DriversAccessPidTest, InitAccessStatisticPidTest)
 extern "C" int init_access_statistic_pid(struct access_add_pid_payload *payload, int page_size);
 TEST_F(DriversAccessPidTest, AccessAddStatisticPid)
 {
-    struct access_add_pid_payload payload;
+    struct access_add_pid_payload payload = {};
     payload.type = STATISTIC_SCAN;
     MOCKER(init_access_statistic_pid).stubs().will(returnValue(0));
     int ret = access_add_statistic_pid(1, &payload, PAGE_SIZE_2M);
