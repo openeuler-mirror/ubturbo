@@ -48,6 +48,7 @@ using SmapMigrateRemoteNumaFunc = int (*)(struct MigrateNumaMsg *msg);
 using SmapMigratePidRemoteNumaFunc = int (*)(struct MigrateEscapeMsg *msg);
 using SmapQueryProcessConfigFunc = int (*)(int nid, struct ProcessPayload *result, int inLen, int *outLen);
 using SmapQueryRemoteNumaFreqFunc = int (*)(uint16_t *numa, uint64_t *freq, uint16_t length);
+using SmapNotifyNumaListStatusFunc = int (*)(struct NumaStatusList *msg);
 
 class TurboModuleSmap : public TurboModule {
 public:
@@ -87,6 +88,7 @@ RetCode SmapMigrateRemoteNumaHandler(const TurboByteBuffer &inputBuffer, TurboBy
 RetCode SmapMigratePidRemoteNumaHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
 RetCode SmapQueryProcessConfigHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
 RetCode SmapQueryRemoteNumaFreqHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
+RetCode SmapNotifyNumaListStatusHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
 int OpenSmapHandler();
 void CloseSmapHandler();
 void RegSmapHandler();

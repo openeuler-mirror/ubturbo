@@ -1218,4 +1218,54 @@ int SmapQueryRemoteNumaFreqCodec::DecodeResponse(TurboByteBuffer &buffer, uint64
     return ret;
 }
 
+int SmapNotifyNumaListStatusCodec::EncodeRequest(TurboByteBuffer &buffer, NumaStatusList *msg)
+{
+    size_t size = sizeof(NumaStatusList);
+    buffer.data = new (std::nothrow) uint8_t[size];
+    if (!buffer.data) {
+        return -EINVAL;
+    }
+    int ret = memcpy_s(buffer.data, size, msg, size);
+    if (ret) {
+        SmapResetBuf(&buffer);
+        return ret;
+    }
+    buffer.len = size;
+    return ret;
+}
+
+int SmapNotifyNumaListStatusCodec::DecodeRequest(const TurboByteBuffer &buffer, NumaStatusList &msg)
+{
+    if (buffer.len < sizeof(NumaStatusList)) {
+        return -EINVAL;
+    }
+    msg = *static_cast<NumaStatusList *>(static_cast<void *>(buffer.data));
+    return 0;
+}
+
+int SmapNotifyNumaListStatusCodec::EncodeResponse(TurboByteBuffer &buffer, int returnValue)
+{
+    size_t size = sizeof(int);
+    buffer.data = new (std::nothrow) uint8_t[size];
+    if (!buffer.data) {
+        return -EINVAL;
+    }
+    int ret = memcpy_s(buffer.data, size, &returnValue, size);
+    if (ret) {
+        SmapResetBuf(&buffer);
+        return ret;
+    }
+    buffer.len = size;
+    buffer.freeFunc = SmapDeleteData;
+    return ret;
+}
+
+int SmapNotifyNumaListStatusCodec::DecodeResponse(TurboByteBuffer &buffer)
+{
+    if (buffer.len < sizeof(int)) {
+        return IPC_ERROR;
+    }
+    return *static_cast<int *>(static_cast<void *>(buffer.data));
+}
+
 }

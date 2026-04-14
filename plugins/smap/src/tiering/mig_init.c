@@ -504,6 +504,10 @@ static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 		rc = __ioctl_migrate_pid_remote_numa(argp);
 		break;
 	}
+	case SMAP_SEND_MSG_TO_KERNEL: {
+		// TODO
+		break;
+	}
 	default:
 		rc = -ENOTTY;
 	}

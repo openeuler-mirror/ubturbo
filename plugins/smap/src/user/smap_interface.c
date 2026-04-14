@@ -2210,3 +2210,29 @@ int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t
     SMAP_LOGGER_INFO("ubturbo_smap_remote_numa_freq_query success.");
     return 0;
 }
+
+int ubturbo_notify_numa_list_status(NumaStatusList *msg)
+{
+    if (msg->cnt == 0) {
+        SMAP_LOGGER_ERROR("ubturbo_notify_numa_list_status cnt is 0.");
+        return -EINVAL;
+    }
+    if (!msg->entries) {
+        SMAP_LOGGER_ERROR("ubturbo_notify_numa_list_status entry is NULL.");
+        return -EINVAL;
+    }
+
+    int fd = open(TIERING_PATH, O_RDWR);
+    if (fd < 0) {
+        printf("cannot find access dev under /dev.\n");
+    }
+    int ret = ioctl(fd, SMAP_SET_LINKDOWN_STATUS, msg);
+    if (ret < 0) {
+        printf("access ioctl error: %d.\n", ret);
+        close(fd);
+        return ret;
+    }
+
+    close(fd);
+    return 0;
+}

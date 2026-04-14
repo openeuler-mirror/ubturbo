@@ -312,6 +312,16 @@ int ubturbo_smap_process_config_query(int nid, struct ProcessPayload *result, in
  */
 int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t length);
 
+/* *
+ * @brief   设置Linkdown状态
+ *
+ * @param cnt      [IN] 数组大小
+ * @param numid      [IN] 需要设置的numaid
+ * @param status    [IN] numa状态 
+ * @return int  0：操作成功；非0：操作失败
+ */
+int ubturbo_notify_numa_list_status(NumaStatusList *msg);
+
 #ifdef __cplusplus
 }
 #endif
