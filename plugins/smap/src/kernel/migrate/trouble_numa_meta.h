@@ -39,6 +39,6 @@ int is_trouble_numa_list_empty(void);
 
 int is_trouble_numa(u16 numa_id);
 
-void deal_trouble_numa_info(void *msg);
+int deal_trouble_numa_info(struct numa_status_list *numa_info);
 
 #endif

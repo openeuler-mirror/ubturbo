@@ -581,6 +581,38 @@ static int __ioctl_set_ub_dma_avail(void __user *argp)
 	return 0;
 }
 
+static int __ioctl_send_numa_msg_to_kernel(void __user *argp)
+{
+	int ret = 0;
+	struct numa_status_list *kmsg = NULL;
+	u16 cnt = 0;
+	size_t total_size = 0;
+	struct numa_status_list header;
+
+	if (copy_from_user(&header, (void __user *)arg, sizeof(header))) {
+        return -EFAULT;
+    }
+
+    cnt = header.cnt;
+    if (cnt == 0) {
+        return -EINVAL;
+    }
+
+    total_size = struct_size(kmsg, entries, cnt);
+    kmsg = kmalloc(total_size, GFP_KERNEL);
+    if (!kmsg) {
+        return -ENOMEM;
+    }
+
+	if (copy_from_user(kmsg, (void __user *)arg, total_size)) {
+        ret = -EFAULT;
+        kfree(kmsg);
+		return -EFAULT;
+    }
+
+	return deal_trouble_numa_info(kmsg);
+}
+
 static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 			  unsigned long arg)
 {
