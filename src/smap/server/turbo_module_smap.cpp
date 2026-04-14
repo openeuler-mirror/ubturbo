@@ -464,7 +464,7 @@ RetCode SmapNotifyNumaListStatusHandler(const TurboByteBuffer &inputBuffer, Turb
                         "[Smap] SmapNotifyNumaListStatusHandler DecodeRequest error " << ret;
         return TURBO_ERROR;
     }
-    int result = g_smapNotifyNumaListStatus(msg);
+    int result = g_smapNotifyNumaListStatus(&msg);
     ret = codec.EncodeResponse(outputBuffer, result);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) <<

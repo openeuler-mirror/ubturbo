@@ -102,16 +102,6 @@ struct migrate_pid_remote_numa_msg {
     int *mig_res_array; // 迁移结果
 };
 
-struct numa_entry {
-	u16 numaid;
-	u16 status;
-};
- 	 
-struct numa_linkdown_set_msg {
-	u16 cnt;
-	struct numa_entry entry[];
-};
-
 typedef enum {
 	NORMAL_MIGRATE,
 	REMOTE_MIGRATE,

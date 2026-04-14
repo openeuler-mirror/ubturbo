@@ -184,9 +184,8 @@ static int deal_trouble_numa_info_inner(struct numa_entry *info)
     return 0;
 }
 
-void deal_trouble_numa_info(void *msg)
+int deal_trouble_numa_info(struct numa_status_list *numa_info)
 {
-    struct numa_status_list *numa_info = (struct numa_status_list *)msg;
     struct numa_node *node, *tmp;
     unsigned long irq_flags;
     unsigned long *keep_bits;
@@ -203,7 +202,7 @@ void deal_trouble_numa_info(void *msg)
     keep_bits = bitmap_zalloc(max_id, GFP_KERNEL);
     if (!keep_bits) {
         pr_err("Failed to allocate bitmap\n");
-        return;
+        return -ENOMEM;
     }
 
     for (i = 0; i < numa_info->cnt; i++) {
@@ -224,10 +223,12 @@ void deal_trouble_numa_info(void *msg)
         int ret = deal_trouble_numa_info_inner(&numa_info->entries[i]);
         if (ret) {
             pr_err("Failed to deal with NUMA ID %u\n", numa_info->entries[i].numa_id);
+            return ret;
         }
     }
 
     write_unlock_irqrestore(&g_manager.lock, irq_flags);
+    return 0;
 }
 
 int trouble_numa_list_get_all(u16 *buffer, size_t buf_size)

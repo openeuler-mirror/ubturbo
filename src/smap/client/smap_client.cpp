@@ -590,3 +590,32 @@ int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t
     delete[] recv.data;
     return ret;
 }
+
+int ubturbo_notify_numa_list_status(NumaStatusList *msg)
+{
+    TurboByteBuffer send;
+    TurboByteBuffer recv;
+    SmapNotifyNumaListStatusCodec handler;
+    if (!msg) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] Notify numa list status msg is null.\n");
+        return -EINVAL;
+    }
+    int ret = handler.EncodeRequest(send, msg);
+    if (ret) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_notify_numa_list_status Encode request error %d.\n", ret);
+        return IPC_ERROR;
+    }
+    uint32_t ipcRet = UBTurboFunctionCaller("ubturbo_notify_numa_list_status", send, recv);
+    if (ipcRet != IPC_OK) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] Call ubturbo_notify_numa_list_status error %u.\n", ipcRet);
+        delete[] send.data;
+        return ipcRet;
+    }
+    ret = handler.DecodeResponse(recv);
+    if (ret == IPC_ERROR) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_notify_numa_list_status Decode response error %d.\n", ret);
+    }
+    delete[] send.data;
+    delete[] recv.data;
+    return ret;
+}

@@ -480,6 +480,38 @@ static int __ioctl_check_pagesize(void __user *argp)
 	return pageType == smap_pgsize ? 0 : -EINVAL;
 }
 
+static int __ioctl_send_numa_msg_to_kernel(void __user *argp)
+{
+	int ret = 0;
+	struct numa_status_list *kmsg = NULL;
+	u16 cnt = 0;
+	size_t total_size = 0;
+	struct numa_status_list header;
+
+	if (copy_from_user(&header, (void __user *)arg, sizeof(header))) {
+        return -EFAULT;
+    }
+
+    cnt = header.cnt;
+    if (cnt == 0) {
+        return -EINVAL;
+    }
+
+    total_size = struct_size(kmsg, entries, cnt);
+    kmsg = kmalloc(total_size, GFP_KERNEL);
+    if (!kmsg) {
+        return -ENOMEM;
+    }
+
+	if (copy_from_user(kmsg, (void __user *)arg, total_size)) {
+        ret = -EFAULT;
+        kfree(kmsg);
+		return -EFAULT;
+    }
+
+	return deal_trouble_numa_info(kmsg);
+}
+
 static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 			  unsigned long arg)
 {
@@ -504,8 +536,8 @@ static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 		rc = __ioctl_migrate_pid_remote_numa(argp);
 		break;
 	}
-	case SMAP_SEND_MSG_TO_KERNEL: {
-		// TODO
+	case SMAP_SEND_NUMA_MSG_TO_KERNEL: {
+		rc = __ioctl_send_numa_msg_to_kernel(argp);
 		break;
 	}
 	default:

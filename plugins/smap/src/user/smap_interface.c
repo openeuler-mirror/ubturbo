@@ -2226,13 +2226,24 @@ int ubturbo_notify_numa_list_status(NumaStatusList *msg)
     if (fd < 0) {
         printf("cannot find access dev under /dev.\n");
     }
-    int ret = ioctl(fd, SMAP_SET_LINKDOWN_STATUS, msg);
-    if (ret < 0) {
-        printf("access ioctl error: %d.\n", ret);
+
+    size_t total_size = sizeof(NumaStatusList) + msg->cnt * sizeof(NumaEntry);
+
+    NumaStatusList *user_msg = (NumaStatusList *)malloc(total_size);
+    if (!user_msg) {
+        SMAP_LOGGER_ERROR("Malloc failed.");
         close(fd);
+        return -ENOMEM;
+    }
+    int ret = ioctl(fd, SMAP_SEND_NUMA_MSG_TO_KERNEL, user_msg);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("access ioctl error: %d.", ret);
+        close(fd);
+        free(user_msg);
         return ret;
     }
 
     close(fd);
+    free(user_msg);
     return 0;
 }

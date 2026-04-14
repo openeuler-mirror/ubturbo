@@ -126,6 +126,16 @@ struct MigrateEscapeMsg {
     struct MigrateEscapePayload payload[MAX_NR_MIGRATE_ESCAPE];
 };
 
+typedef struct {
+    uint16_t numaid;
+    uint16_t status;
+} NumaEntry;
+
+typedef struct {
+    uint16_t cnt;
+    NumaEntry entries[];
+} NumaStatusList;
+
 typedef void (*Logfunc)(int level, const char *str, const char *moduleName);
 
 /* *
