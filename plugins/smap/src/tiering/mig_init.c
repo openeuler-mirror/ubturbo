@@ -19,7 +19,7 @@
 #include "acpi_mem.h"
 #include "iomem.h"
 #include "ham_migration.h"
-#include "ubus_notify.h"
+#include "trouble_numa_meta.h"
 #include "mig_init.h"
 
 #undef pr_fmt
@@ -340,11 +340,13 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len, int *mig
 	int successful_cnt = 0;
 	int retry = MAX_MIGRATE_PID_NUMA_RETRY_TIME;
 
-	if (is_link_down()) {
-		return;
-	}
 	do {
 		for (i = 0; i < len; i++) {
+			if (is_trouble_numa(payloads[i].src_nid) || is_trouble_numa(payloads[i].dest_nid)) {
+				pr_err("trouble numa(%d-%d), stop migrate pid %d.\n",
+					payloads[i].src_nid, payloads[i].dest_nid, payloads[i].pid);
+				continue;
+			}
 			struct pagemapread pm = { 0 };
 			if (mig_res[i] == 1) {
 				continue;

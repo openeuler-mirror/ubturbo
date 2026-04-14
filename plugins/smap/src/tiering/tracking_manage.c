@@ -19,7 +19,6 @@
 #include <linux/time64.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <acpi/ghes.h>
 
 #include "migrate_task.h"
 #include "smap_migrate_wrapper.h"
@@ -28,6 +27,7 @@
 #include "iomem.h"
 #include "ham_migration.h"
 #include "pid_ioctl.h"
+#include "trouble_numa_meta.h"
 #include "ubus_notify.h"
 #include "tracking_manage.h"
 
@@ -134,10 +134,6 @@ static void migrate_back_work_func(struct work_struct *work)
 		pr_err("failed to iterate obmm_dev in migrate back schedule, ret: %d\n",
 		       ret);
 	}
-	if (is_link_down()) {
-		queue_delayed_work(migrate_back_wq, &migrate_back_work, msecs_to_jiffies(MB_INTV));
-		return;
-	}
 
 next:
 	found = false;
@@ -159,16 +155,21 @@ next:
 
 	task = prev_task;
 	list_for_each_entry(subtask, &task->subtask, task_list) {
-		for (i = 0; i < SUBTASK_RETRY_TIME; i++) {
-			if (is_smap_pg_huge())
-				smap_handle_migrate_back_subtask(subtask);
-			else
-				smap_handle_migrate_back_subtask_4k(subtask);
-			if (subtask->status != MB_SUBTASK_ERR) {
-				break;
+		if (is_trouble_numa(subtask->src_nid)) {
+			pr_err("trouble numa(%d), stop migrate.\n", subtask->src_nid);
+			subtask->status = MB_SUBTASK_ERR;
+		} else {
+			for (i = 0; i < SUBTASK_RETRY_TIME; i++) {
+				if (is_smap_pg_huge())
+					smap_handle_migrate_back_subtask(subtask);
+				else
+					smap_handle_migrate_back_subtask_4k(subtask);
+				if (subtask->status != MB_SUBTASK_ERR) {
+					break;
+				}
+				msleep(SUBTASK_SLEEP_TIME);
+				pr_debug("migrate back retry time %d\n", i);
 			}
-			msleep(SUBTASK_SLEEP_TIME);
-			pr_debug("migrate back retry time %d\n", i);
 		}
 		if (subtask->status == MB_SUBTASK_ERR) {
 			task->status = MB_TASK_ERR;
@@ -181,11 +182,6 @@ next:
 	}
 	goto next;
 }
-
-static struct notifier_block hisi_ubus_link_down_notify_err = {
-	.notifier_call = hisi_ubus_notify_error,
-	.priority = 100,
-};
 
 static int __init tracking_init(void)
 {
@@ -201,7 +197,7 @@ static int __init tracking_init(void)
 		pr_err("smap process symbols failed\n");
 		return ret;
 	}
-	ret = ghes_register_vendor_record_notifier(&hisi_ubus_link_down_notify_err);
+	ret = hisi_ubus_register_link_down_notifier();
 	if (ret) {
 		pr_err("failed to register vendor record notifier, ret: %d\n", ret);
 		return ret;

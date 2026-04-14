@@ -21,7 +21,7 @@
 #include "iomem.h"
 #include "smap_migrate_wrapper.h"
 #include "common.h"
-#include "ubus_notify.h"
+#include "trouble_numa_meta.h"
 #include "smap_migrate_pages.h"
 
 #define PHYSICAL_ADDR 80
@@ -779,10 +779,6 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 		return 0;
 	}
 
-	if (is_link_down()) {
-		pr_err("link down, stop migrate.\n");
-		return -ENOMEM;
-	}
 	arr = kzalloc(msg->cnt * sizeof(*arr), GFP_KERNEL);
 	if (!arr)
 		return -ENOMEM;
@@ -808,7 +804,8 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 		arr[i] = 1;
 
 		if (is_node_invalid(mig_list[i].from) ||
-		    is_node_invalid(mig_list[i].to)) {
+		    is_node_invalid(mig_list[i].to) || is_trouble_numa(mig_list[i].from) ||
+			is_trouble_numa(mig_list[i].to)) {
 			continue;
 		}
 		if (mig_list[i].nr <= 0 || mig_list[i].nr > MAX_MIG_LIST_NR) {
@@ -985,8 +982,8 @@ unsigned int smap_migrate_numa(struct migrate_numa_inner_msg *msg)
 	int i;
 	int nid = msg->dest_nid;
 
-	if (is_link_down()) {
-		pr_err("link down, stop migrate.\n");
+	if (is_trouble_numa(msg->src_nid) || is_trouble_numa(msg->dest_nid)) {
+		pr_err("trouble numa(%d-%d), stop migrate.\n", msg->src_nid, msg->dest_nid);
 		return -EINVAL;
 	}
 	for (i = 0; i < msg->count; i++) {

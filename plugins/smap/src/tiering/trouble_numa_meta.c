@@ -8,6 +8,7 @@
 #include <linux/slab.h>
 #include <linux/list.h>
 #include <linux/rwlock.h>
+#include <linux/bitmap.h>
 
 #include "trouble_numa_meta.h"
 
@@ -154,27 +155,79 @@ int is_trouble_numa(u16 numa_id)
     return is_trouble_numa_in_list(numa_id);
 }
 
+static int deal_trouble_numa_info_inner(struct numa_entry *info)
+{
+    u8 found = 0;
+    struct numa_node *node;
+
+    list_for_each_entry(node, &g_manager.head, list) {
+        if (node->numa_id == info->numa_id && info->status == NUMA_AVAILABLE) {
+            list_del(&node->list);
+            kfree(node);
+            return 0;
+        }
+    }
+
+    if (!found && info->status == NUMA_UNAVAILABLE) {
+        struct numa_node *new_node = kmalloc(sizeof(*new_node), GFP_ATOMIC);
+        if (new_node) {
+            new_node->numa_id = info->numa_id;
+            INIT_LIST_HEAD(&new_node->list);
+            list_add_tail(&new_node->list, &g_manager.head);
+            return 0;
+        } else {
+            pr_err("Failed to allocate node for NUMA %d\n", info->numa_id);
+            return -ENOMEM;
+        }
+    }
+
+    return 0;
+}
+
 void deal_trouble_numa_info(void *msg)
 {
     struct numa_status_list *numa_info = (struct numa_status_list *)msg;
+    struct numa_node *node, *tmp;
+    unsigned long irq_flags;
+    unsigned long *keep_bits;
+    int max_id = 0;
     int i;
-    int ret;
 
     for (i = 0; i < numa_info->cnt; i++) {
-        if (numa_info->entries[i].status == NUMA_UNAVAILABLE) {
-            ret = trouble_numa_list_add(numa_info->entries[i].numa_id);
-            if (ret && ret != -EEXIST) {
-                pr_err("Failed to add NUMA ID %u to trouble list\n", numa_info->entries[i].numa_id);
-            }
-        } else if (numa_info->entries[i].status == NUMA_AVAILABLE) {
-            ret = trouble_numa_list_del(numa_info->entries[i].numa_id);
-            if (ret) {
-                pr_err("Failed to remove NUMA ID %u from trouble list\n", numa_info->entries[i].numa_id);
-            }
-        } else {
-            pr_warn("Unknown status %u for NUMA ID %u\n", numa_info->entries[i].status, numa_info->entries[i].numa_id);
+        if (numa_info->entries[i].numa_id > max_id) {
+            max_id = numa_info->entries[i].numa_id;
         }
     }
+    max_id = max_id + 1;
+
+    keep_bits = bitmap_zalloc(max_id, GFP_KERNEL);
+    if (!keep_bits) {
+        pr_err("Failed to allocate bitmap\n");
+        return;
+    }
+
+    for (i = 0; i < numa_info->cnt; i++) {
+        u16 id = numa_info->entries[i].numa_id;
+        __set_bit(id, keep_bits);
+    }
+
+    write_lock_irqsave(&g_manager.lock, irq_flags);
+    list_for_each_entry_safe(node, tmp, &g_manager.head, list) {
+        if (node->numa_id >= max_id || !test_bit(node->numa_id, keep_bits)) {
+            list_del(&node->list);
+            kfree(node);
+        }
+    }
+    bitmap_free(keep_bits);
+
+    for (i = 0; i < numa_info->cnt; i++) {
+        int ret = deal_trouble_numa_info_inner(&numa_info->entries[i]);
+        if (ret) {
+            pr_err("Failed to deal with NUMA ID %u\n", numa_info->entries[i].numa_id);
+        }
+    }
+
+    write_unlock_irqrestore(&g_manager.lock, irq_flags);
 }
 
 int trouble_numa_list_get_all(u16 *buffer, size_t buf_size)
