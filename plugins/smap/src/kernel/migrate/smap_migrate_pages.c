@@ -428,6 +428,10 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 		if (is_smap_pg_huge() && PageHuge(page) && !PageHead(page)) {
 			continue;
 		}
+		if (is_page_hwpoison(page)) {
+			pr_err("unsupported page type: hwpoison\n");
+			continue;
+		}
 		ret = smap_add_page_for_migration(
 			page, migrate_folios, &nr_folios, 0, MPOL_MF_MOVE_ALL);
 		if (ret) {
@@ -505,6 +509,10 @@ static void process_pages_for_migration(struct migrate_back_subtask *task,
 		}
 		page = pfn_to_online_page(pfn);
 		if (!page) {
+			continue;
+		}
+		if (is_page_hwpoison(page)) {
+			pr_err("unsupported page type: hwpoison\n");
 			continue;
 		}
 		if (__folio_test_movable(page_folio(page)) ||
@@ -952,6 +960,10 @@ static int smap_pre_migrate_range(struct folio **folios,
 
 		page = pfn_to_online_page(pfn);
 		if (!page) {
+			continue;
+		}
+		if (is_page_hwpoison(page)) {
+			pr_err("unsupported page type: hwpoison\n");
 			continue;
 		}
 		folio = page_folio(page);
