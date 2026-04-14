@@ -21,6 +21,7 @@
 extern "C" {
 #endif
 
+#define MAX_NUMA_NUM 18
 #define MAX_NR_MIGRATE_ESCAPE 300
 #define MAX_NR_MIGBACK 50
 #define MAX_NR_MIGNUMA 50
@@ -136,7 +137,7 @@ typedef struct {
 
 typedef struct {
     uint16_t cnt;
-    NumaEntry entries[];
+    NumaEntry entries[MAX_NUMA_NUM];
 } NumaStatusList;
 
 enum {
@@ -344,7 +345,7 @@ int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t
  *
  * @param cnt      [IN] 数组大小
  * @param numid      [IN] numa id号
- * @param status    [IN] numa状态 
+ * @param status    [IN] numa状态 1:可用，0:不可用
  * @return int  0：操作成功；非0：操作失败
  */
 int ubturbo_notify_numa_list_status(NumaStatusList *msg);

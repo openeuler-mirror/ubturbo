@@ -156,7 +156,7 @@ next:
 	task = prev_task;
 	list_for_each_entry(subtask, &task->subtask, task_list) {
 		if (is_trouble_numa(subtask->src_nid)) {
-			pr_err("trouble numa(%d), stop migrate.\n", subtask->src_nid);
+			pr_err("migrate back is trouble numa(%d), stop migrate.\n", subtask->src_nid);
 			subtask->status = MB_SUBTASK_ERR;
 		} else {
 			for (i = 0; i < SUBTASK_RETRY_TIME; i++) {
@@ -202,6 +202,7 @@ static int __init tracking_init(void)
 		pr_err("failed to register vendor record notifier, ret: %d\n", ret);
 		return ret;
 	}
+	init_trouble_numa_manager();
 	ret = init_acpi_mem();
 	if (ret < 0) {
 		pr_err("failed to init ACPI memory, ret: %d\n", ret);
@@ -265,6 +266,8 @@ out_smap_node_sysfs:
 static void __exit tracking_exit(void)
 {
 	resource();
+	cleanup_trouble_numa_manager();
+	hisi_ubus_unregister_link_down_notifier();
 	pr_info("SMAP exit successfully\n");
 }
 

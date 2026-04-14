@@ -343,7 +343,7 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len, int *mig
 	do {
 		for (i = 0; i < len; i++) {
 			if (is_trouble_numa(payloads[i].src_nid) || is_trouble_numa(payloads[i].dest_nid)) {
-				pr_err("trouble numa(%d-%d), stop migrate pid %d.\n",
+				pr_err("walk and migrate is trouble numa(%d-%d), stop migrate pid %d.\n",
 					payloads[i].src_nid, payloads[i].dest_nid, payloads[i].pid);
 				continue;
 			}
@@ -480,36 +480,38 @@ static int __ioctl_check_pagesize(void __user *argp)
 	return pageType == smap_pgsize ? 0 : -EINVAL;
 }
 
+#define NUMA_ID_CNT_MAX 32
+
 static int __ioctl_send_numa_msg_to_kernel(void __user *argp)
 {
 	int ret = 0;
-	struct numa_status_list *kmsg = NULL;
-	u16 cnt = 0;
-	size_t total_size = 0;
-	struct numa_status_list header;
+	struct numa_status_list msg;
+	u16 numa_ids[NUMA_ID_CNT_MAX];
+	int i;
 
-	if (copy_from_user(&header, (void __user *)arg, sizeof(header))) {
-        return -EFAULT;
-    }
-
-    cnt = header.cnt;
-    if (cnt == 0) {
-        return -EINVAL;
-    }
-
-    total_size = struct_size(kmsg, entries, cnt);
-    kmsg = kmalloc(total_size, GFP_KERNEL);
-    if (!kmsg) {
-        return -ENOMEM;
-    }
-
-	if (copy_from_user(kmsg, (void __user *)arg, total_size)) {
-        ret = -EFAULT;
-        kfree(kmsg);
+	if (copy_from_user(&msg, (void __user *)argp, sizeof(struct numa_status_list))) {
+		pr_err("copy from user failed when receiving NUMA status list header\n");
 		return -EFAULT;
-    }
+	}
 
-	return deal_trouble_numa_info(kmsg);
+	if (msg.cnt == 0) {
+		pr_err("invalid NUMA status list header\n");
+		return -EINVAL;
+	}
+
+	for (i = 0; i < msg.cnt; i++) {
+		pr_info("Received NUMA ID from user space: %u status: %u", msg.entries[i].numa_id, msg.entries[i].status);
+	}
+	ret = deal_trouble_numa_info(&msg);
+	if (ret) {
+		pr_err("failed to deal trouble NUMA info, ret: %d\n", ret);
+	}
+	int count = trouble_numa_list_get_all(numa_ids, NUMA_ID_CNT_MAX);
+	for (i = 0; i < count; i++) {
+		pr_info("Get all trouble NUMA ID: %u\n", numa_ids[i]);
+	}
+
+	return ret;
 }
 
 static long smu_mig_ioctl(struct file *file, unsigned int cmd,

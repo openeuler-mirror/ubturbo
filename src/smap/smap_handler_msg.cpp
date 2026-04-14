@@ -1220,26 +1220,41 @@ int SmapQueryRemoteNumaFreqCodec::DecodeResponse(TurboByteBuffer &buffer, uint64
 
 int SmapNotifyNumaListStatusCodec::EncodeRequest(TurboByteBuffer &buffer, NumaStatusList *msg)
 {
-    size_t size = sizeof(NumaStatusList);
+    if (!msg || msg->cnt > MAX_NUMA_NUM) return -EINVAL;
+
+    size_t size = sizeof(uint16_t) + msg->cnt * sizeof(NumaEntry);
     buffer.data = new (std::nothrow) uint8_t[size];
-    if (!buffer.data) {
-        return -EINVAL;
-    }
-    int ret = memcpy_s(buffer.data, size, msg, size);
-    if (ret) {
-        SmapResetBuf(&buffer);
-        return ret;
-    }
+    if (!buffer.data) return -ENOMEM;
+
+    uint8_t *p = buffer.data;
+
+    uint16_t netCnt = msg->cnt;
+    memcpy(p, &netCnt, sizeof(uint16_t));
+    p += sizeof(uint16_t);
+
+    memcpy(p, msg->entries, msg->cnt * sizeof(NumaEntry));
+
     buffer.len = size;
-    return ret;
+    return 0;
 }
 
 int SmapNotifyNumaListStatusCodec::DecodeRequest(const TurboByteBuffer &buffer, NumaStatusList &msg)
 {
-    if (buffer.len < sizeof(NumaStatusList)) {
-        return -EINVAL;
-    }
-    msg = *static_cast<NumaStatusList *>(static_cast<void *>(buffer.data));
+    if (buffer.len < sizeof(uint16_t)) return -EINVAL;
+
+    const uint8_t *p = buffer.data;
+    uint16_t netCnt;
+    memcpy(&netCnt, p, sizeof(uint16_t));
+    uint16_t cnt = netCnt;
+    p += sizeof(uint16_t);
+
+    if (cnt > MAX_NUMA_NUM) return -EINVAL;
+    size_t expected = sizeof(uint16_t) + cnt * sizeof(NumaEntry);
+    if (buffer.len < expected) return -EINVAL;
+
+    msg.cnt = cnt;
+    memcpy(msg.entries, p, cnt * sizeof(NumaEntry));
+
     return 0;
 }
 

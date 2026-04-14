@@ -983,7 +983,7 @@ unsigned int smap_migrate_numa(struct migrate_numa_inner_msg *msg)
 	int nid = msg->dest_nid;
 
 	if (is_trouble_numa(msg->src_nid) || is_trouble_numa(msg->dest_nid)) {
-		pr_err("trouble numa(%d-%d), stop migrate.\n", msg->src_nid, msg->dest_nid);
+		pr_err("migrate numa is trouble numa(%d-%d), stop migrate.\n", msg->src_nid, msg->dest_nid);
 		return -EINVAL;
 	}
 	for (i = 0; i < msg->count; i++) {

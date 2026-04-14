@@ -27,7 +27,7 @@
 #define SMAP_MIG_PID_REMOTE_NUMA \
 	_IOW(SMAP_MIG_MAGIC, 3, struct migrate_pid_remote_numa_msg)
 #define SMAP_SEND_NUMA_MSG_TO_KERNEL \
-	_IOW(SMAP_MIG_MAGIC, 4, struct numa_linkdown_set_msg)
+	_IOW(SMAP_MIG_MAGIC, 4, struct numa_status_list)
 
 typedef struct {
 	u64 pme;

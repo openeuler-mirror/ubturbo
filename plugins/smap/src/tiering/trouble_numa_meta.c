@@ -12,6 +12,9 @@
 
 #include "trouble_numa_meta.h"
 
+#undef pr_fmt
+#define pr_fmt(fmt) "SMAP_trouble_numa: " fmt
+
 struct numa_node {
     u16 numa_id;
     struct list_head list;
@@ -52,7 +55,7 @@ int trouble_numa_list_add(u16 numa_id)
     write_lock_irqsave(&g_manager.lock, irq_flags);
     list_for_each_entry(tmp, &g_manager.head, list) {
         if (tmp->numa_id == numa_id) {
-            pr_warn("NUMA ID %u already exists\n", numa_id);
+            pr_warn_ratelimited("Trouble NUMA ID %u already exists in trouble list\n", numa_id);
             ret = -EEXIST;
             goto out;
         }
@@ -74,47 +77,7 @@ out:
     return ret;
 }
 
-int trouble_numa_list_del(u16 numa_id)
-{
-    struct numa_node *node, *tmp;
-    unsigned long irq_flags;
-    int ret = -ENOENT;
-
-    write_lock_irqsave(&g_manager.lock, irq_flags);
-
-    list_for_each_entry_safe(node, tmp, &g_manager.head, list) {
-        if (node->numa_id == numa_id) {
-            list_del(&node->list);
-            kfree(node);
-            ret = 0;
-            break;
-        }
-    }
-
-    write_unlock_irqrestore(&g_manager.lock, irq_flags);
-
-    if (ret != 0) {
-        pr_warn("NUMA ID %u not found for deletion\n", numa_id);
-    }
-
-    return ret;
-}
-
-void trouble_numa_list_del_all(void)
-{
-    struct numa_node *node, *tmp;
-    unsigned long irq_flags;
-    write_lock_irqsave(&g_manager.lock, irq_flags);
-
-    list_for_each_entry_safe(node, tmp, &g_manager.head, list) {
-        list_del(&node->list);
-        kfree(node);
-    }
-
-    write_unlock_irqrestore(&g_manager.lock, irq_flags);
-}
-
-int is_trouble_numa_in_list(u16 numa_id)
+static int is_trouble_numa_in_list(u16 numa_id)
 {
     struct numa_node *node;
     unsigned long irq_flags;
@@ -132,7 +95,7 @@ int is_trouble_numa_in_list(u16 numa_id)
     return 0;
 }
 
-int is_trouble_numa_list_empty(void)
+static int is_trouble_numa_list_empty(void)
 {
     unsigned long irq_flags;
     int ret = 0;
@@ -161,10 +124,13 @@ static int deal_trouble_numa_info_inner(struct numa_entry *info)
     struct numa_node *node;
 
     list_for_each_entry(node, &g_manager.head, list) {
-        if (node->numa_id == info->numa_id && info->status == NUMA_AVAILABLE) {
-            list_del(&node->list);
-            kfree(node);
-            return 0;
+        if (node->numa_id == info->numa_id) {
+            if (info->status == NUMA_AVAILABLE) {
+                list_del(&node->list);
+                kfree(node);
+                return 0;
+            }
+            found = 1;
         }
     }
 
@@ -174,6 +140,7 @@ static int deal_trouble_numa_info_inner(struct numa_entry *info)
             new_node->numa_id = info->numa_id;
             INIT_LIST_HEAD(&new_node->list);
             list_add_tail(&new_node->list, &g_manager.head);
+            pr_info("Added trouble NUMA ID %u to the trouble list\n", info->numa_id);
             return 0;
         } else {
             pr_err("Failed to allocate node for NUMA %d\n", info->numa_id);
@@ -223,6 +190,7 @@ int deal_trouble_numa_info(struct numa_status_list *numa_info)
         int ret = deal_trouble_numa_info_inner(&numa_info->entries[i]);
         if (ret) {
             pr_err("Failed to deal with NUMA ID %u\n", numa_info->entries[i].numa_id);
+            write_unlock_irqrestore(&g_manager.lock, irq_flags);
             return ret;
         }
     }
@@ -238,7 +206,6 @@ int trouble_numa_list_get_all(u16 *buffer, size_t buf_size)
     int count = 0;
 
     read_lock_irqsave(&g_manager.lock, irq_flags);
-
     list_for_each_entry(node, &g_manager.head, list) {
         if (count < buf_size) {
             buffer[count++] = node->numa_id;
@@ -248,6 +215,5 @@ int trouble_numa_list_get_all(u16 *buffer, size_t buf_size)
     }
 
     read_unlock_irqrestore(&g_manager.lock, irq_flags);
-
     return count;
 }
