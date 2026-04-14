@@ -7,8 +7,8 @@
 #define _TROUBLR_NUMA_META_H
 
 enum numa_list_flags {
-    NUMA_AVAILABLE = 0,
-    NUMA_UNAVAILABLE
+    NUMA_UNAVAILABLE = 0,
+    NUMA_AVAILABLE
 };
 
 struct numa_entry {
@@ -36,6 +36,8 @@ int is_trouble_numa_in_list(u16 numa_id);
 int trouble_numa_list_get_all(u16 *buffer, size_t buf_size);
 
 int is_trouble_numa_list_empty(void);
+
+int is_trouble_numa(u16 numa_id);
 
 void deal_trouble_numa_info(void *msg);
 

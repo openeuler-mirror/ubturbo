@@ -1,13 +1,12 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/types.h>
-#include <linux/atomic.h>
 #include <linux/cper.h>
 #include <acpi/ghes.h>
+#include <linux/numa_remote.h>
 
+#include "trouble_numa_meta.h"
 #include "ubus_notify.h"
-
-#define HISI_UBUS_VAILD_ID BIT(3)
 
 #pragma pack(push, 1)  // 强制1字节对齐
 
@@ -94,8 +93,8 @@ static int is_link_down_err(struct cper_sec_proc_arm *err)
     char *p = (char *)err;
     int i;
 
-    if (err->validation_bits & HISI_UBUS_VAILD_ID) {
-        err_info_sz = sizeof(struct cper_sec_proc_arm) * err->err_info_num;
+    if (err->validation_bits & CPER_ARM_VALID_VENDOR_INFO) {
+        err_info_sz = sizeof(struct cper_arm_err_info) * err->err_info_num;
         if (!err->context_info_num) {
             err_info = (struct hisi_vendor_error_info *)(p + err_info_sz);
         } else {
@@ -112,7 +111,59 @@ static int is_link_down_err(struct cper_sec_proc_arm *err)
     return 0;
 }
 
-static atomic_t link_flag = ATOMIC_INIT(0);
+static int ghes_handle_addr_to_numa(unsigned long pfn)
+{
+    struct page *p;
+    int node;
+    int ret;
+
+    p = pfn_to_page(pfn);
+    if (!p) {
+        pr_err("invalid pfn: %lu\n", pfn);
+        return -EINVAL;
+    }
+
+    node = page_to_nid(p);
+    if (!numa_is_remote_node(node)) {
+        pr_err("invalid local node: %d\n", node);
+        return -EINVAL;
+    }
+
+    ret = trouble_numa_list_add(node);
+    if (ret && ret != -EEXIST) {
+        pr_err("failed to add trouble NUMA node: %d\n", node);
+        return ret;
+    }
+
+    return 0;
+}
+
+static void ghes_handle_critical_ras(struct cper_sec_proc_arm *err)
+{
+    int i;
+    unsigned long pfn;
+    char *p;
+    int ret;
+
+    p = (char *)(err + 1);
+    for (i = 0; i < err->err_info_num; i++) {
+        struct cper_arm_err_info *err_info = (struct cper_arm_err_info *)p;
+        int has_pa = err_info->validation_bits & CPER_ARM_INFO_VALID_PHYSICAL_ADDR;
+        if (has_pa) {
+            pfn = PHYS_PFN(err_info->physical_fault_addr);
+            if (!pfn_valid(pfn)) {
+                pr_err("invalid pfn: %lu\n", pfn);
+                continue;
+            }
+            ret = ghes_handle_addr_to_numa(pfn);
+            if (ret) {
+                pr_err("failed to handle addr to numa: %d\n", ret);
+                continue;
+            }
+        }
+        p += err_info->length;
+    }
+}
 
 int hisi_ubus_notify_error(struct notifier_block *nb, unsigned long event, void *data)
 {
@@ -127,19 +178,19 @@ int hisi_ubus_notify_error(struct notifier_block *nb, unsigned long event, void 
 
     struct cper_sec_proc_arm *err_data = (struct cper_sec_proc_arm *)acpi_hest_get_payload(gdata);
     if (is_link_down_err(err_data)) {
-        pr_err("ubus ras submit link down.\n");
-        atomic_set(&link_flag, 1);
+        ghes_handle_critical_ras(err_data);
+        pr_info("ubus ras submit link down.\n");
     }
 
     return NOTIFY_DONE;
 };
 
-int is_link_down(void)
-{
-    return atomic_read(&link_flag);
-}
+static struct notifier_block hisi_ubus_link_down_notify_err = {
+	.notifier_call = hisi_ubus_notify_error,
+	.priority = 100,
+};
 
-void remove_link_down(void)
+int hisi_ubus_register_link_down_notifier(void)
 {
-    atomic_set(&link_flag, 0);
+	return ghes_register_vendor_record_notifier(&hisi_ubus_link_down_notify_err);
 }
