@@ -36,6 +36,11 @@ static inline bool folio_test_hugetlb(struct folio *folio)
     return false;
 }
 
+static inline bool is_page_hwpoison(struct folio *folio)
+{
+    return false;
+}
+
 #define PF_POISONED_CHECK(page) ({ page; })
 
 #define page_folio(p)		(_Generic((p),				\
