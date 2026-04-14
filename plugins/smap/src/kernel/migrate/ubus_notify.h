@@ -8,4 +8,6 @@
 
 int hisi_ubus_register_link_down_notifier(void);
 
+void hisi_ubus_unregister_link_down_notifier(void);
+
 #endif
