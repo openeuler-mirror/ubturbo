@@ -88,7 +88,7 @@ int DisableTracking(struct ProcessManager *manager)
             break;
         }
         SMAP_LOGGER_INFO("Scanning still in progress, attempt %d/%d, will retry.",
-                            attempts + 1, MAX_DISABLE_SCAN_ATTEMPS);
+                         attempts + 1, MAX_DISABLE_SCAN_ATTEMPS);
         attempts++;
         if (attempts < MAX_DISABLE_SCAN_ATTEMPS) {
             sleep(1);
