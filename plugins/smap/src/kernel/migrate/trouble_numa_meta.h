@@ -3,8 +3,8 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
  */
 
-#ifndef _TROUBLR_NUMA_META_H
-#define _TROUBLR_NUMA_META_H
+#ifndef _TROUBLE_NUMA_META_H
+#define _TROUBLE_NUMA_META_H
 
 #define MAX_NUMA_NUM 18
 
