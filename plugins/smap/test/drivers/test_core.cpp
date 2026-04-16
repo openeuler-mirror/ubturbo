@@ -134,7 +134,7 @@ TEST_F(DriversCoreTest, NodeTrackingEnable)
     }
 }
 
-extern "C" void node_tracking_disable(struct tracking_node_dev *node_dev);
+extern "C" int node_tracking_disable(struct tracking_node_dev *node_dev);
 TEST_F(DriversCoreTest, NodeTrackingDisable)
 {
     node_tracking_disable(node_dev);
@@ -221,7 +221,7 @@ TEST_F(DriversCoreTest, HandTrackingCmd)
     struct tracking_node_dev *t_node_dev = NULL;
     long ret = 0;
 
-    MOCKER(node_tracking_disable).stubs().will(ignoreReturnValue());
+    MOCKER(node_tracking_disable).stubs().will(returnValue(0));
     ret = handle_tracking_cmd(t_node_dev, TRACKING_DISABLED);
     EXPECT_EQ(0, ret);
 
