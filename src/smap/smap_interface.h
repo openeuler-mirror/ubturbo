@@ -17,7 +17,6 @@
 extern "C" {
 #endif
 
-#define MAX_NUMA_NUM 18
 #define MAX_NR_MIGRATE_ESCAPE 300
 #define REMOTE_NUMA_NUM 18
 #define MAX_NR_MIGOUT 40
@@ -164,7 +163,7 @@ typedef struct {
 
 typedef struct {
     uint16_t cnt;
-    NumaEntry entries[MAX_NUMA_NUM];
+    NumaEntry entries[REMOTE_NUMA_NUM];
 } NumaStatusList;
 
 typedef void (*Logfunc)(int level, const char *str, const char *moduleName);

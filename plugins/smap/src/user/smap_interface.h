@@ -19,7 +19,6 @@
 extern "C" {
 #endif
 
-#define MAX_NUMA_NUM 18
 #define MAX_NR_MIGRATE_ESCAPE 300
 #ifndef MAX_NR_GROUPED_MIGOUT
 #define MAX_NR_GROUPED_MIGOUT MAX_NR_MIGOUT
@@ -165,7 +164,7 @@ typedef struct {
 
 typedef struct {
     uint16_t cnt;
-    NumaEntry entries[MAX_NUMA_NUM];
+    NumaEntry entries[REMOTE_NUMA_NUM];
 } NumaStatusList;
 
 enum {
