@@ -814,10 +814,6 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 		    is_node_invalid(mig_list[i].to)) {
 			continue;
 		}
-		if (is_trouble_numa(mig_list[i].from) ||
-			is_trouble_numa(mig_list[i].to)) {
-			continue;
-		}
 		if (mig_list[i].nr <= 0 || mig_list[i].nr > MAX_MIG_LIST_NR) {
 			continue;
 		}
@@ -830,6 +826,11 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 		mig_list[i].failed_mig_nr = 0;
 
 again:
+		if (is_trouble_numa(mig_list[i].from) ||
+		    is_trouble_numa(mig_list[i].to)) {
+			continue;
+		}
+
 		nr_this_migrate = MIN(nr_remain_folios, NR_BATCHED_MIGRATION);
 		folio_index = mig_list[i].nr - nr_remain_folios;
 
