@@ -390,7 +390,57 @@ int main(void)
 }
 ```
 
+# SetIpcTimeLimit: 配置IPC客户端超时时间
 
+## 框架 FRAMEWORK
+
+UBTurbo框架
+
+## 摘要 SYNOPSIS
+
+```cpp
+#include "turbo_ipc_client.h"
+
+uint32_t SetIpcTimeLimit(uint32_t timeLimit);
+```
+
+## 描述 DESCRIPTION
+
+客户端通过进程间通信调用服务端函数。
+
+## 参数 Parameters
+
+| name     | IN/OUT | description                                                  |
+| -------- | ------ | ------------------------------------------------------------ |
+| timeLimit | IN     | 超时时间，单位秒，默认值60s                               |
+
+## 返回值 RETURN VALUE
+
+返回值0：表示成功。
+返回值1：失败。
+
+## 约束 CONSTRAINTS
+
+暂无
+
+## 附注 NOTES
+
+暂无
+
+## 样例 EXAMPLES
+
+以下程序完成客户端超时时间配置。
+
+```cpp
+#include "turbo_ipc_client.h"
+
+int main(void)
+{
+    uint32_t timeLimit = 180;
+    uint32_t ret = SetIpcTimeLimit(timeLimit);
+    return 0;
+}
+```
 
 # UBTurboRegIpcService: 服务端注册回调函数
 
