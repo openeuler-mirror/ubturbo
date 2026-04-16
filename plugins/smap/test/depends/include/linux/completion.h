@@ -23,6 +23,6 @@ static inline void reinit_completion(struct completion *x)
 
 void complete(struct completion *);
 void wait_for_completion(struct completion *x);
-int wait_for_completion_killable(struct completion *x);
+bool completion_done(struct completion *x);
 
 #endif

@@ -13,7 +13,7 @@ extern "C" {
 
 void stub_tracking_enable(struct device *ldev);
 
-void stub_tracking_disable(struct device *ldev);
+int stub_tracking_disable(struct device *ldev);
 
 int stub_tracking_read(struct device *ldev, void *buffer, u32 length);
 

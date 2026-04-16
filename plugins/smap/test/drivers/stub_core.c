@@ -12,9 +12,10 @@ void stub_tracking_enable(struct device *ldev)
     ldev->numa_node = 1;
 }
 
-void stub_tracking_disable(struct device *ldev)
+int stub_tracking_disable(struct device *ldev)
 {
     ldev->numa_node = 2;
+    return 0;
 }
 
 int stub_tracking_read(struct device *ldev, void *buffer, u32 length)

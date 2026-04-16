@@ -398,17 +398,17 @@ TEST_F(DriversAccessPidTest, AccessAddStatisticPid)
     struct access_add_pid_payload payload;
     payload.type = STATISTIC_SCAN;
     MOCKER(init_access_statistic_pid).stubs().will(returnValue(0));
-    int ret = access_add_statistic_pid(1, &payload, PAGE_SIZE_2M);
+    int ret = access_add_statistic_pid(1, &payload, PAGE_SIZE_2M, NULL);
     EXPECT_EQ(0, ret);
 
     GlobalMockObject::verify();
     MOCKER(init_access_statistic_pid).stubs().will(returnValue(-EINVAL));
-    ret = access_add_statistic_pid(1, &payload, PAGE_SIZE_2M);
+    ret = access_add_statistic_pid(1, &payload, PAGE_SIZE_2M, NULL);
     EXPECT_EQ(-EINVAL, ret);
 
     // wrong type case, should return 0
     payload.type = NORMAL_SCAN;
-    ret = access_add_statistic_pid(1, &payload, PAGE_SIZE_2M);
+    ret = access_add_statistic_pid(1, &payload, PAGE_SIZE_2M, NULL);
     EXPECT_EQ(0, ret);
 }
 
@@ -446,7 +446,7 @@ TEST_F(DriversAccessPidTest, AccessAddPid)
     // failed case
     MOCKER(init_access_pid).stubs().will(returnValue(1));
     MOCKER(submit_one_work).stubs();
-    ret = access_add_pid(1, &payload);
+    ret = access_add_pid(1, &payload, 0);
     EXPECT_EQ(1, ret);
 
     // success case
@@ -454,7 +454,7 @@ TEST_F(DriversAccessPidTest, AccessAddPid)
     INIT_LIST_HEAD(&ap_data.list);
     MOCKER(init_access_pid).stubs().with(&payload, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
     MOCKER(submit_one_work).stubs();
-    ret = access_add_pid(1, &payload);
+    ret = access_add_pid(1, &payload, 0);
     EXPECT_EQ(0, ret);
 }
 
@@ -484,7 +484,7 @@ TEST_F(DriversAccessPidTest, AccessAddPidDuplicateCase)
     MOCKER(init_access_pid).stubs().with(&payload[0], outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
     MOCKER(destroy_access_pid).stubs().will(returnValue(0));
     MOCKER(submit_one_work).stubs();
-    ret = access_add_pid(2, payload);
+    ret = access_add_pid(2, payload, 0);
     EXPECT_EQ(-EINVAL, ret);
     EXPECT_EQ(0, ap_data_len());
 
@@ -495,7 +495,7 @@ TEST_F(DriversAccessPidTest, AccessAddPidDuplicateCase)
     MOCKER(init_access_pid).stubs().with(&payload[0], outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
     MOCKER(destroy_access_pid).stubs().will(returnValue(0));
     MOCKER(submit_one_work).stubs();
-    ret = access_add_pid(1, payload);
+    ret = access_add_pid(1, payload, 0);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, ap_data_len());
 
@@ -505,7 +505,7 @@ TEST_F(DriversAccessPidTest, AccessAddPidDuplicateCase)
     MOCKER(init_access_pid).stubs().with(&payload[0], outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
     MOCKER(destroy_access_pid).stubs().will(returnValue(0));
     MOCKER(submit_one_work).stubs();
-    ret = access_add_pid(1, payload);
+    ret = access_add_pid(1, payload, 0);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, ap_data_len());
     // check whether ap_data update

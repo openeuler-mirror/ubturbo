@@ -13,7 +13,7 @@
 
 struct tracking_operations {
 	void (*tracking_enable)(struct device *ldev);
-	void (*tracking_disable)(struct device *ldev);
+	int (*tracking_disable)(struct device *ldev);
 	int (*tracking_mode_set)(struct device *ldev, u8 trk_mode);
 	int (*tracking_set_page_size)(struct device *ldev, u8 page_size);
 	int (*tracking_reinit_actc_buffer)(struct device *ldev);

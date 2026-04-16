@@ -63,13 +63,14 @@ static void hist_tracking_enable(struct device *ldev)
 	hist_thread_resume();
 }
 
-static void hist_tracking_disable(struct device *ldev)
+static int hist_tracking_disable(struct device *ldev)
 {
 	struct access_tracking_dev *hdev;
 
 	hdev = to_access_tracking_dev(ldev);
 	hdev->enable_on = false;
 	hist_thread_pause();
+	return 0;
 }
 
 static void actc_buffer_deinit(struct access_tracking_dev *hdev)

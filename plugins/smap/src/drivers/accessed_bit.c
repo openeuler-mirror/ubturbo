@@ -517,48 +517,6 @@ static int hva_to_hpa(struct kvm *kvm, u64 host_va, scan_type type, pid_t pid)
 	return ret;
 }
 
-static bool find_tracking_index(struct statistics_tracking_info *stat_info,
-				unsigned long vaddr, unsigned int *index)
-{
-	u64 i;
-
-	for (i = 0; i < stat_info->page_num[L1]; i++) {
-		if (stat_info->vaddr[L1][i] == vaddr) {
-			*index = i;
-			return true;
-		}
-	}
-
-	for (i = 0; i < stat_info->page_num[L2]; i++) {
-		if (stat_info->vaddr[L2][i] == vaddr) {
-			*index = i + stat_info->page_num[L1];
-			return true;
-		}
-	}
-
-	return false;
-}
-
-static int calc_tracking_index(unsigned long vaddr, pid_t pid,
-			       unsigned int *index)
-{
-	bool found = false;
-	struct statistics_tracking_info *tmp;
-	down_read(&statistic_lock);
-	list_for_each_entry(tmp, &statistic_pid_list, node) {
-		if (tmp->pid == pid) {
-			found = find_tracking_index(tmp, vaddr, index);
-			if (found) {
-				break;
-			}
-		}
-	}
-	up_read(&statistic_lock);
-	if (!found)
-		return -ERANGE;
-	return 0;
-}
-
 static void clear_statistic_tracking_info(pid_t pid)
 {
 	u32 wins_index;
@@ -578,33 +536,61 @@ static void clear_statistic_tracking_info(pid_t pid)
 	up_read(&statistic_lock);
 }
 
-static void update_tracking_info(pid_t pid, unsigned int index)
+static void update_statistic_scan_freq_mm(u64 *vaddr, u64 page_cnt, int pid)
 {
+	int i;
+	int j;
 	u32 wins_index;
 	struct statistics_tracking_info *tmp;
 	down_read(&statistic_lock);
 	list_for_each_entry(tmp, &statistic_pid_list, node) {
 		if (tmp->pid == pid) {
-			wins_index = tmp->scan_num;
-			tmp->sliding_windows[wins_index][index] = TRUE_REF;
-			break;
+			i = 0;
+			j = 0;
+			while (i < page_cnt && j < tmp->page_num[L1]) {
+				if (vaddr[i] == tmp->vaddr[L1][j]) {
+					wins_index = tmp->scan_num;
+					tmp->sliding_windows[wins_index][j] = TRUE_REF;
+					i += 1;
+					j += 1;
+				} else if (vaddr[i] < tmp->vaddr[L1][j]) {
+					i += 1;
+				} else {
+					j += 1;
+				}
+			}
+
+			i = 0;
+			j = 0;
+			while (i < page_cnt && j < tmp->page_num[L2]) {
+				if (vaddr[i] == tmp->vaddr[L2][j]) {
+					wins_index = tmp->scan_num;
+					tmp->sliding_windows[wins_index][j + tmp->page_num[L1]] = TRUE_REF;
+					i += 1;
+					j += 1;
+				} else if (vaddr[i] < tmp->vaddr[L2][j]) {
+					i += 1;
+				} else {
+					j += 1;
+				}
+			}
 		}
 	}
 	up_read(&statistic_lock);
 }
 
-static int fill_statistics_tracking(unsigned long hva, pid_t pid)
+static void update_statistic_scan_num(pid_t pid)
 {
-	int ret;
-	unsigned int index;
-	ret = calc_tracking_index(hva, pid, &index);
-	if (ret) {
-		pr_err("out of range while finding index of HVA\n");
-		return ret;
+	struct statistics_tracking_info *tmp;
+	down_read(&statistic_lock);
+	list_for_each_entry(tmp, &statistic_pid_list, node) {
+		if (tmp->pid == pid) {
+			tmp->scan_num++;
+			tmp->scan_num %= tmp->window_num;
+			break;
+		}
 	}
-
-	update_tracking_info(pid, index);
-	return ret;
+	up_read(&statistic_lock);
 }
 
 static bool memslot_is_mem(struct kvm_memory_slot *memslot)
@@ -625,7 +611,8 @@ static int scan_kvm_memslots(struct kvm *kvm, pid_t pid, int page_size,
 	struct kvm_memory_slot *memslot;
 	gpa_t gpa;
 	int bkt;
-
+	u64 nr_pages, cur_index;
+	u64 *vaddr;
 	if (!kvm || !kvm->arch.mmu.pgt) {
 		pr_err("invalid kvm passed to scan kvm memslots\n");
 		return -EINVAL;
@@ -634,7 +621,20 @@ static int scan_kvm_memslots(struct kvm *kvm, pid_t pid, int page_size,
 	slots = kvm_memslots(kvm);
 	if (!slots)
 		return -EINVAL;
-	clear_statistic_tracking_info(pid);
+
+	nr_pages = 0;
+	kvm_for_each_memslot(memslot, bkt, slots) {
+		if (!memslot_is_mem(memslot))
+			continue;
+		nr_pages += memslot->npages;
+	}
+	nr_pages >>= (__builtin_ctz(g_pagesize_huge) - PAGE_SHIFT);
+
+	vaddr = kzalloc(sizeof(u64) * nr_pages, GFP_ATOMIC);
+	if (!vaddr) 
+		return -ENOMEM;
+
+	cur_index = 0;
 	kvm_for_each_memslot(memslot, bkt, slots) {
 		unsigned long hva;
 		int ret;
@@ -643,8 +643,7 @@ static int scan_kvm_memslots(struct kvm *kvm, pid_t pid, int page_size,
 		for (gpa = memslot->base_gfn << PAGE_SHIFT;
 		     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
 		     gpa += (gpa_t)page_size) {
-			if (!smap_kvm_pgtable_stage2_mkold(kvm->arch.mmu.pgt,
-							   gpa))
+			if (!smap_kvm_pgtable_stage2_mkold(kvm->arch.mmu.pgt, gpa))
 				continue;
 			hva = gfn_to_hva_memslot(memslot, gpa_to_gfn(gpa));
 			if (!get_vma_if_huge_page(kvm, hva))
@@ -652,13 +651,16 @@ static int scan_kvm_memslots(struct kvm *kvm, pid_t pid, int page_size,
 			ret = hva_to_hpa(kvm, hva, type, pid);
 			if (ret)
 				continue;
-			if (type == STATISTIC_SCAN) {
-				ret = fill_statistics_tracking(hva, pid);
-			}
+			vaddr[cur_index++] = hva;
+			if (cur_index >= nr_pages)
+				break;
 		}
 	}
 	kvm_flush_remote_tlbs(kvm);
-
+	clear_statistic_tracking_info(pid);
+	update_statistic_scan_freq_mm(vaddr, cur_index, pid);
+	update_statistic_scan_num(pid);
+	kfree(vaddr);
 	return 0;
 }
 
@@ -1140,20 +1142,6 @@ static void release_resources(struct file *filp, struct task_struct *task,
 		put_pid(pid);
 }
 
-static void update_statistic_scan_num(pid_t pid)
-{
-	struct statistics_tracking_info *tmp;
-	down_read(&statistic_lock);
-	list_for_each_entry(tmp, &statistic_pid_list, node) {
-		if (tmp->pid == pid) {
-			tmp->scan_num++;
-			tmp->scan_num %= tmp->window_num;
-			break;
-		}
-	}
-	up_read(&statistic_lock);
-}
-
 static int scan_forward_2M(pid_t pid, int page_size, scan_type type)
 {
 	int srcu_idx;
@@ -1187,7 +1175,6 @@ static int scan_forward_2M(pid_t pid, int page_size, scan_type type)
 
 	post_scan_kvm_memslots(kvm, srcu_idx);
 	release_resources(filp, task, pid_s);
-	update_statistic_scan_num(pid);
 	return 0;
 }
 
@@ -1310,49 +1297,6 @@ static int take_vma_snapshot(struct mm_struct *mm,
 	*vma_arr = arr;
 	mmap_read_unlock(mm);
 	return 0;
-}
-
-static void update_statistic_scan_freq_mm(u64 *vaddr, u64 page_cnt, int pid)
-{
-	int i;
-	int j;
-	u32 wins_index;
-	struct statistics_tracking_info *tmp;
-	down_read(&statistic_lock);
-	list_for_each_entry(tmp, &statistic_pid_list, node) {
-		if (tmp->pid == pid) {
-			i = 0;
-			j = 0;
-			while (i < page_cnt && j < tmp->page_num[L1]) {
-				if (vaddr[i] == tmp->vaddr[L1][j]) {
-					wins_index = tmp->scan_num;
-					tmp->sliding_windows[wins_index][j] = TRUE_REF;
-					i += 1;
-					j += 1;
-				} else if (vaddr[i] < tmp->vaddr[L1][j]) {
-					i += 1;
-				} else {
-					j += 1;
-				}
-			}
-
-			i = 0;
-			j = 0;
-			while (i < page_cnt && j < tmp->page_num[L2]) {
-				if (vaddr[i] == tmp->vaddr[L2][j]) {
-					wins_index = tmp->scan_num;
-					tmp->sliding_windows[wins_index][j + tmp->page_num[L1]] = TRUE_REF;
-					i += 1;
-					j += 1;
-				} else if (vaddr[i] < tmp->vaddr[L2][j]) {
-					i += 1;
-				} else {
-					j += 1;
-				}
-			}
-		}
-	}
-	up_read(&statistic_lock);
 }
 
 static int setup_statistic_scan(struct pte_walk *pte_walk, int pid,
