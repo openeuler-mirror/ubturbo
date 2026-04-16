@@ -126,6 +126,16 @@ struct MigrateEscapeMsg {
     struct MigrateEscapePayload payload[MAX_NR_MIGRATE_ESCAPE];
 };
 
+typedef struct {
+    uint16_t numaid;
+    uint16_t status;
+} NumaEntry;
+
+typedef struct {
+    uint16_t cnt;
+    NumaEntry entries[REMOTE_NUMA_NUM];
+} NumaStatusList;
+
 typedef void (*Logfunc)(int level, const char *str, const char *moduleName);
 
 /* *
@@ -311,6 +321,16 @@ int ubturbo_smap_process_config_query(int nid, struct ProcessPayload *result, in
  * @return int  0：操作成功；非0：操作失败
  */
 int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t length);
+
+/* *
+ * @brief   设置Linkdown状态
+ *
+ * @param cnt      [IN] 数组大小
+ * @param numid      [IN] 需要设置的numaid
+ * @param status    [IN] numa状态 1:可用，0:不可用
+ * @return int  0：操作成功；非0：操作失败
+ */
+int ubturbo_notify_numa_list_status(NumaStatusList *msg);
 
 #ifdef __cplusplus
 }

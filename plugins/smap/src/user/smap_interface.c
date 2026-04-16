@@ -2210,3 +2210,25 @@ int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t
     SMAP_LOGGER_INFO("ubturbo_smap_remote_numa_freq_query success.");
     return 0;
 }
+
+int ubturbo_notify_numa_list_status(NumaStatusList *msg)
+{
+    SMAP_LOGGER_INFO("received ubturbo_notify_numa_list_status msg.");
+    if (!msg) {
+        SMAP_LOGGER_ERROR("ubturbo_notify_numa_list_status msg is NULL.");
+        return -EINVAL;
+    }
+    if (msg->cnt == 0) {
+        SMAP_LOGGER_ERROR("ubturbo_notify_numa_list_status cnt is 0.");
+        return -EINVAL;
+    }
+
+    struct ProcessManager *manager = GetProcessManager();
+    int ret = ioctl(manager->fds.migrate, SMAP_SEND_NUMA_MSG_TO_KERNEL, msg);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("access ioctl send numa list status error: %s\n", strerror(errno));
+        return -EBADF;
+    }
+    SMAP_LOGGER_INFO("ubturbo_notify_numa_list_status success.");
+    return 0;
+}

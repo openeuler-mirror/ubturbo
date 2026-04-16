@@ -176,5 +176,13 @@ public:
         int &returnValue);
 };
 
+class SmapNotifyNumaListStatusCodec {
+public:
+    int EncodeRequest(TurboByteBuffer &buffer, NumaStatusList *msg);
+    int DecodeRequest(const TurboByteBuffer &buffer, NumaStatusList &msg);
+    int EncodeResponse(TurboByteBuffer &buffer, int returnValue);
+    int DecodeResponse(TurboByteBuffer &buffer);
+};
+
 }
 #endif  // SMAP_CODEC_H

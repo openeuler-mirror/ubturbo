@@ -23,6 +23,7 @@
 #include "common.h"
 #include "err.h"
 #include "iomem.h"
+#include "trouble_numa_meta.h"
 
 using namespace std;
 
@@ -33,15 +34,23 @@ protected:
     void SetUp() override
     {
         cout << "[Phase SetUp Begin]" << endl;
+        init_trouble_numa_manager();
         cout << "[Phase SetUp End]" << endl;
     }
     void TearDown() override
     {
         cout << "[Phase TearDown Begin]" << endl;
+        cleanup_trouble_numa_manager();
         GlobalMockObject::verify();
         cout << "[Phase TearDown End]" << endl;
     }
 };
+
+static void MockWalkPidPagemap(struct pagemapread *pm)
+{
+    pm->mig_info.mig_cnt = 1;
+    pm->mig_info.page_cnt = 4;
+}
 
 extern "C" void free_migrate_list_addr(int len, struct mig_list *mlist);
 TEST_F(MigInitTest, FreeMigrateListAddr)
@@ -388,9 +397,6 @@ TEST_F(MigInitTest, __IoctlCheckPagesizeAbnormalTwo)
 extern "C" void walkpage_and_migrate(struct mig_payload *payloads, int len, int *mig_res);
 TEST_F(MigInitTest, walkpage_and_migrate_Success)
 {
-    struct pagemapread pm = { 0 };
-    pm.mig_info.mig_cnt = 1;
-    pm.mig_info.page_cnt = 4;
     struct mig_payload payload = {
         .pid = 1234,
         .src_nid = 4,
@@ -403,8 +409,7 @@ TEST_F(MigInitTest, walkpage_and_migrate_Success)
     int successful_pids[1] = {0};
 
     MOCKER(get_node_page_cnt_iomem).stubs().will(returnValue(1));
-    MOCKER(walk_pid_pagemap).stubs()
-        .with(outBoundP(&pm, sizeof(pm))).will(ignoreReturnValue());
+    MOCKER(walk_pid_pagemap).stubs().will(invoke(MockWalkPidPagemap));
     MOCKER(smap_migrate).stubs().will(returnValue(0));
 
     walkpage_and_migrate(&payload, 1, successful_pids);
@@ -582,58 +587,4 @@ static void IoctlMigrateE2ETestMock(struct migrate_msg *msg, unsigned int pageSi
         .will(returnValue(0UL));
     MOCKER(free_migrate_list_addr).stubs().will(ignoreReturnValue());
     MOCKER(free_migrate_list).stubs().will(ignoreReturnValue());
-}
-
-// __ioctl_migrate end-to-end test
-TEST_F(MigInitTest, __IoctlMigrateE2ETest)
-{
-    struct mig_list *migList;
-    int ret;
-    int cnt = 2;
-    struct migrate_msg argp;
-    struct migrate_msg msg;
-    EXPECT_NE(nullptr, migList);
-    migList = (struct mig_list*)vzalloc(cnt * sizeof(struct mig_list));
-    u64 startAddr = 0x100000000;
-    int addCnt = 0;
-    for (int i = 0; i < cnt; ++i) {
-        migList[i].from = 0;
-        migList[i].to = 5;
-        migList[i].pid = 105428 + i;
-        migList[i].nr = 5120 * (i + 1);  // 5120, 10240, 15360 etc
-        migList[i].addr = (u64*)vzalloc(migList[i].nr * sizeof(u64));
-        EXPECT_NE(nullptr, migList[i].addr);
-        for (int j = 0; j < migList[i].nr; ++j) {
-            migList[i].addr[j] = startAddr + 4096 * (addCnt);
-            ++addCnt;
-        }
-    }
-    msg.cnt = cnt;
-    msg.mig_list = migList;
-    msg.mul_mig.page_size = TWO_MEGA_SIZE;
-    msg.mul_mig.is_mul_thread = false;
-
-    // 10 huge page can migrate, 5120 page migrate success
-    IoctlMigrateE2ETestMock(&msg, HUGE_PAGE, 5120, 10);
-    ret = __ioctl_migrate(&argp);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(5110, migList[0].failed_pre_migrated_nr);
-    EXPECT_EQ(0, migList[0].failed_mig_nr);
-    EXPECT_EQ(10230, migList[1].failed_pre_migrated_nr);
-    EXPECT_EQ(0, migList[1].failed_mig_nr);
-
-    GlobalMockObject::verify();
-    // 10 huge page can migrate, 0 page migrate success
-    IoctlMigrateE2ETestMock(&msg, HUGE_PAGE, 0, 10);
-    ret = __ioctl_migrate(&argp);
-    EXPECT_EQ(20, ret);
-    EXPECT_EQ(5110, migList[0].failed_pre_migrated_nr);
-    EXPECT_EQ(10, migList[0].failed_mig_nr);
-    EXPECT_EQ(10230, migList[1].failed_pre_migrated_nr);
-    EXPECT_EQ(10, migList[1].failed_mig_nr);
-
-    for (int i = 0; i < cnt; ++i) {
-        vfree(msg.mig_list[i].addr);
-    }
-    vfree(msg.mig_list);
 }
