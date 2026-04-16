@@ -1,4 +1,7 @@
 #include <linux/kernel.h>
+#include <linux/bitops.h>
+#include <linux/mm.h>
+#include <linux/notifier.h>
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/cper.h>
