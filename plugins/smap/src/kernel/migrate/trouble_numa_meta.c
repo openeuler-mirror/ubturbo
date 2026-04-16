@@ -96,9 +96,9 @@ int is_trouble_numa(u16 numa_id)
 static int deal_trouble_numa_info_inner(struct numa_entry *info)
 {
     u8 found = 0;
-    struct numa_node *node;
+    struct numa_node *node,  *tmp;
 
-    list_for_each_entry(node, &g_manager.head, list) { //todo safe
+    list_for_each_entry_safe(node, tmp, &g_manager.head, list) {
         if (node->numa_id == info->numa_id) {
             if (info->status == NUMA_AVAILABLE) {
                 list_del(&node->list);
