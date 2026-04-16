@@ -500,7 +500,7 @@ static int __ioctl_send_numa_msg_to_kernel(void __user *argp)
 	}
 
 	for (i = 0; i < msg.cnt; i++) {
-		pr_info("Received NUMA ID from user space: %u status: %u", msg.entries[i].numa_id, msg.entries[i].status);
+		pr_info("received NUMA ID from user space: %u status: %u", msg.entries[i].numa_id, msg.entries[i].status);
 	}
 	ret = deal_trouble_numa_info(&msg);
 	if (ret) {
@@ -508,7 +508,7 @@ static int __ioctl_send_numa_msg_to_kernel(void __user *argp)
 	}
 	count = trouble_numa_list_get_all(numa_ids, MAX_NUMA_NUM);
 	for (i = 0; i < count; i++) {
-		pr_info("Get all trouble NUMA ID: %u\n", numa_ids[i]);
+		pr_info("get all trouble NUMA ID: %u\n", numa_ids[i]);
 	}
 
 	return ret;
