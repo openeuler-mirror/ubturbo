@@ -932,7 +932,7 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
 | name | IN/OUT | description |
 | --- | --- | --- |
 | pidArr | IN | 进程PID数组。 |
-| scanTime | IN | 扫描间隔，单位ms，必须为50的倍数，最大200。 |
+| scanTime | IN | 扫描间隔，单位ms，必须为50的倍数，最大2000。 |
 | duration | IN | 扫描持续时长，scanType为2时有效。 |
 | len | IN | 数组长度。 |
 | scanType | IN | 0：将进程设置为只扫描状态，1：将进程恢复为冷热扫描加迁移状态，2：表示进程设置为统计特定时长冷热信息状态。 |
@@ -953,11 +953,13 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
 ## 约束 CONSTRAINTS
 
 * SMAP初始化后才能调用。
-* 只支持虚机场景
 * 当进程未被SMAP纳管时，可以调用该接口，此时scanType不能传1。
 * 当进程已经被SMAP纳管时，须先停止冷热迁移，然后才可以调用该接口，scanType可以传0/1/2。
 * scanType传1的情况为进程已被smap纳管，需要从只扫描状态恢复到冷热扫描加迁移状态。
 * 当进程未被SMAP纳管时，只允许进程使用本地numa。
+* scanType传2为统计扫描频次场景，如果查询到的频次数据与期望相差较大，
+  同时dmesg日志有"pid[xx] scan cost xxms exceeded expected scan time:xxms"，
+  表示当前扫描耗时已超过配置的scanTime，需要重新配置合适的scanTime。
 
 ## 附注 NOTES
 
