@@ -2213,28 +2213,21 @@ int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t
 
 int ubturbo_notify_numa_list_status(NumaStatusList *msg)
 {
+    if (!msg) {
+        SMAP_LOGGER_ERROR("ubturbo_notify_numa_list_status msg is NULL.");
+        return -EINVAL;
+    }
     if (msg->cnt == 0) {
         SMAP_LOGGER_ERROR("ubturbo_notify_numa_list_status cnt is 0.");
         return -EINVAL;
     }
-    if (!msg->entries) {
-        SMAP_LOGGER_ERROR("ubturbo_notify_numa_list_status entry is NULL.");
-        return -EINVAL;
-    }
 
-    int fd = open(TIERING_PATH, O_RDWR);
-    if (fd < 0) {
-        printf("cannot find access dev under /dev.\n");
-    }
-
-    int ret = ioctl(fd, SMAP_SEND_NUMA_MSG_TO_KERNEL, msg);
+    struct ProcessManager *manager = GetProcessManager();
+    int ret = ioctl(manager->fds.migrate, SMAP_SEND_NUMA_MSG_TO_KERNEL, msg);
     if (ret < 0) {
-        SMAP_LOGGER_ERROR("access ioctl error: %d.", ret);
-        close(fd);
-        return ret;
+        SMAP_LOGGER_ERROR("access ioctl send numa list status error: %s\n", strerror(errno));
+        return -EBADF;
     }
-
-    close(fd);
 
     return 0;
 }

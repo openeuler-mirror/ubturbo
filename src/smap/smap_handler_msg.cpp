@@ -1220,19 +1220,31 @@ int SmapQueryRemoteNumaFreqCodec::DecodeResponse(TurboByteBuffer &buffer, uint64
 
 int SmapNotifyNumaListStatusCodec::EncodeRequest(TurboByteBuffer &buffer, NumaStatusList *msg)
 {
-    if (!msg || msg->cnt > MAX_NUMA_NUM) return -EINVAL;
+    if (!msg || msg->cnt > REMOTE_NUMA_NUM) {
+        return -EINVAL;
+    }
 
     size_t size = sizeof(uint16_t) + msg->cnt * sizeof(NumaEntry);
     buffer.data = new (std::nothrow) uint8_t[size];
-    if (!buffer.data) return -ENOMEM;
+    if (!buffer.data) {
+        return -ENOMEM;
+    }
 
     uint8_t *p = buffer.data;
 
     uint16_t netCnt = msg->cnt;
-    memcpy(p, &netCnt, sizeof(uint16_t));
+    int ret = memcpy_s(p, sizeof(uint16_t), &netCnt, sizeof(uint16_t));
+    if (ret) {
+        SmapResetBuf(&buffer);
+        return ret;
+    }
     p += sizeof(uint16_t);
 
-    memcpy(p, msg->entries, msg->cnt * sizeof(NumaEntry));
+    ret = memcpy_s(p, msg->cnt * sizeof(NumaEntry), msg->entries, msg->cnt * sizeof(NumaEntry));
+    if (ret) {
+        SmapResetBuf(&buffer);
+        return ret;
+    }
 
     buffer.len = size;
     return 0;
@@ -1240,20 +1252,32 @@ int SmapNotifyNumaListStatusCodec::EncodeRequest(TurboByteBuffer &buffer, NumaSt
 
 int SmapNotifyNumaListStatusCodec::DecodeRequest(const TurboByteBuffer &buffer, NumaStatusList &msg)
 {
-    if (buffer.len < sizeof(uint16_t)) return -EINVAL;
+    if (buffer.len < sizeof(uint16_t)) {
+        return -EINVAL;
+    }
 
     const uint8_t *p = buffer.data;
     uint16_t netCnt;
-    memcpy(&netCnt, p, sizeof(uint16_t));
+    int ret = memcpy_s(&netCnt, sizeof(uint16_t), p, sizeof(uint16_t));
+    if (ret) {
+        return ret;
+    }
     uint16_t cnt = netCnt;
     p += sizeof(uint16_t);
 
-    if (cnt > MAX_NUMA_NUM) return -EINVAL;
+    if (cnt > REMOTE_NUMA_NUM) {
+        return -EINVAL;
+    }
     size_t expected = sizeof(uint16_t) + cnt * sizeof(NumaEntry);
-    if (buffer.len < expected) return -EINVAL;
+    if (buffer.len < expected) {
+        return -EINVAL;
+    }
 
     msg.cnt = cnt;
-    memcpy(msg.entries, p, cnt * sizeof(NumaEntry));
+    ret = memcpy_s(msg.entries, cnt * sizeof(NumaEntry), p, cnt * sizeof(NumaEntry));
+    if (ret) {
+        return ret;
+    }
 
     return 0;
 }
