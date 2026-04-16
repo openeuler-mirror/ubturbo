@@ -759,6 +759,8 @@ static inline bool is_filter_anon(struct page *page)
 	return !PageAnon(page) || page_mapcount(page) > 1;
 }
 
+#define NR_BATCHED_MIGRATION 512
+
 int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 {
 	int i;
@@ -786,6 +788,11 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 	while (1) {
 		int index;
 		int max_from = NUMA_NO_NODE;
+		struct folio **migrate_folios;
+		unsigned int nr_folios = 0;
+		u64 nr_remain_folios, nr_this_migrate, folio_index;
+		int cnt;
+
 		/* Do promotion before demotion */
 		for (index = 0; index < msg->cnt; index++) {
 			if (arr[index])
@@ -817,14 +824,27 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 		pre_migrate_failed = 0;
 		pre_migrate_num = 0;
 		tmp_pre_migrate_nr = 0;
-		struct folio **migrate_folios =
-			vzalloc(mig_list[i].nr * sizeof(struct folio *));
+
+		nr_remain_folios = mig_list[i].nr;
+		mig_list[i].failed_pre_migrated_nr = 0;
+		mig_list[i].failed_mig_nr = 0;
+
+again:
+		nr_this_migrate = MIN(nr_remain_folios, NR_BATCHED_MIGRATION);
+		folio_index = mig_list[i].nr - nr_remain_folios;
+
+		migrate_folios =
+			vzalloc(nr_this_migrate * sizeof(struct folio *));
 		if (!migrate_folios) {
 			kfree(arr);
 			return -ENOMEM;
 		}
-		unsigned int nr_folios = 0;
-		for (j = 0; j < mig_list[i].nr; j++) {
+
+		cnt = nr_folios = 0;
+		for (j = folio_index; j < mig_list[i].nr &&
+		     cnt < nr_this_migrate; j++, cnt++) {
+			int err;
+
 			mig_num++;
 			p_addr = mig_list[i].addr[j];
 			if (p_addr == INVALID_PADDR) {
@@ -846,7 +866,7 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 				non_anon_num++;
 				continue;
 			}
-			int err = is_filter_4k(p_page, msg->mul_mig.page_size);
+			err = is_filter_4k(p_page, msg->mul_mig.page_size);
 			if (err >= 0) {
 				nr_abnormal[err]++;
 				continue;
@@ -862,20 +882,21 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 				pre_migrate_err = pre_migrate_flag;
 			}
 		}
+		nr_remain_folios -= cnt;
 
 		if (pre_migrate_failed) {
 			pr_warn("pre_migrate fail %u pages, ret: %d\n",
 				pre_migrate_failed, pre_migrate_err);
 		}
 
-		mig_list[i].failed_pre_migrated_nr =
-			mig_list[i].nr - tmp_pre_migrate_nr;
+		mig_list[i].failed_pre_migrated_nr +=
+			nr_this_migrate - tmp_pre_migrate_nr;
 		if (nr_folios == 0) {
 			pr_debug("no page to migrate\n");
 			vfree(migrate_folios);
 			continue;
 		}
-		mig_list[i].failed_mig_nr =
+		mig_list[i].failed_mig_nr +=
 			smu_migrate(migrate_folios, nr_folios, mig_list[i].to,
 				    &msg->mul_mig);
 		failed_num += mig_list[i].failed_mig_nr;
@@ -888,6 +909,9 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 			"[%d]: mig_num %d, pre_migrate_num %d, failed_num %llu\n",
 			i, mig_num, pre_migrate_num, mig_list[i].failed_mig_nr);
 		vfree(migrate_folios);
+
+		if (nr_remain_folios > 0)
+			goto again;
 	}
 	kfree(arr);
 	pr_debug("non anon page number: %u\n", non_anon_num);
