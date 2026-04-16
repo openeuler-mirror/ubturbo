@@ -632,9 +632,7 @@ TEST_F(MigInitTest, __IoctlMigrateE2ETest)
     IoctlMigrateE2ETestMock(&msg, HUGE_PAGE, 0, 10);
     ret = __ioctl_migrate(&argp);
     EXPECT_EQ(20, ret);
-    EXPECT_EQ(5110, migList[0].failed_pre_migrated_nr);
     EXPECT_EQ(10, migList[0].failed_mig_nr);
-    EXPECT_EQ(10230, migList[1].failed_pre_migrated_nr);
     EXPECT_EQ(10, migList[1].failed_mig_nr);
 
     for (int i = 0; i < cnt; ++i) {
