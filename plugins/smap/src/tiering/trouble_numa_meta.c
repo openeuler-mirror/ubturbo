@@ -4,7 +4,6 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/list.h>
 #include <linux/rwlock.h>
@@ -36,23 +35,21 @@ void init_trouble_numa_manager(void)
 void cleanup_trouble_numa_manager(void)
 {
     struct numa_node *node, *tmp;
-    unsigned long flags;
 
-    write_lock_irqsave(&g_manager.lock, flags);
+    write_lock(&g_manager.lock);
     list_for_each_entry_safe(node, tmp, &g_manager.head, list) {
         list_del(&node->list);
         kfree(node);
     }
-    write_unlock_irqrestore(&g_manager.lock, flags);
+    write_unlock(&g_manager.lock);
 }
 
 int trouble_numa_list_add(u16 numa_id)
 {
     struct numa_node *node, *tmp;
-    unsigned long irq_flags;
     int ret = 0;
 
-    write_lock_irqsave(&g_manager.lock, irq_flags);
+    write_lock(&g_manager.lock);
     list_for_each_entry(tmp, &g_manager.head, list) {
         if (tmp->numa_id == numa_id) {
             pr_warn_ratelimited("Trouble NUMA ID %u already exists in trouble list\n", numa_id);
@@ -69,34 +66,30 @@ int trouble_numa_list_add(u16 numa_id)
     }
 
     node->numa_id = numa_id;
-    INIT_LIST_HEAD(&node->list);
     list_add_tail(&node->list, &g_manager.head);
 out:
-    write_unlock_irqrestore(&g_manager.lock, irq_flags);
+    write_unlock(&g_manager.lock);
     return ret;
 }
 
 int is_trouble_numa(u16 numa_id)
 {
     struct numa_node *node;
-    unsigned long irq_flags;
 
-    read_lock_irqsave(&g_manager.lock, irq_flags);
-
-    read_lock_irqsave(&g_manager.lock, irq_flags);
+    read_lock(&g_manager.lock);
     if (list_empty(&g_manager.head)) {
-        read_unlock_irqrestore(&g_manager.lock, irq_flags);
+        read_unlock(&g_manager.lock);
         return 0;
     }
 
     list_for_each_entry(node, &g_manager.head, list) {
         if (node->numa_id == numa_id) {
-            read_unlock_irqrestore(&g_manager.lock, irq_flags);
+            read_unlock(&g_manager.lock);
             return 1;
         }
     }
 
-    read_unlock_irqrestore(&g_manager.lock, irq_flags);
+    read_unlock(&g_manager.lock);
     return 0;
 }
 
@@ -105,7 +98,7 @@ static int deal_trouble_numa_info_inner(struct numa_entry *info)
     u8 found = 0;
     struct numa_node *node;
 
-    list_for_each_entry(node, &g_manager.head, list) {
+    list_for_each_entry(node, &g_manager.head, list) { //todo safe
         if (node->numa_id == info->numa_id) {
             if (info->status == NUMA_AVAILABLE) {
                 list_del(&node->list);
@@ -113,6 +106,7 @@ static int deal_trouble_numa_info_inner(struct numa_entry *info)
                 return 0;
             }
             found = 1;
+            break;
         }
     }
 
@@ -120,7 +114,6 @@ static int deal_trouble_numa_info_inner(struct numa_entry *info)
         struct numa_node *new_node = kmalloc(sizeof(*new_node), GFP_ATOMIC);
         if (new_node) {
             new_node->numa_id = info->numa_id;
-            INIT_LIST_HEAD(&new_node->list);
             list_add_tail(&new_node->list, &g_manager.head);
             pr_info("Added trouble NUMA ID %u to the trouble list\n", info->numa_id);
             return 0;
@@ -136,7 +129,6 @@ static int deal_trouble_numa_info_inner(struct numa_entry *info)
 int deal_trouble_numa_info(struct numa_status_list *numa_info)
 {
     struct numa_node *node, *tmp;
-    unsigned long irq_flags;
     unsigned long *keep_bits;
     int max_id = 0;
     int i;
@@ -146,9 +138,8 @@ int deal_trouble_numa_info(struct numa_status_list *numa_info)
             max_id = numa_info->entries[i].numa_id;
         }
     }
-    max_id = max_id + 1;
 
-    keep_bits = bitmap_zalloc(max_id, GFP_KERNEL);
+    keep_bits = bitmap_zalloc(max_id + 1, GFP_KERNEL);
     if (!keep_bits) {
         pr_err("Failed to allocate bitmap\n");
         return -ENOMEM;
@@ -159,9 +150,9 @@ int deal_trouble_numa_info(struct numa_status_list *numa_info)
         __set_bit(id, keep_bits);
     }
 
-    write_lock_irqsave(&g_manager.lock, irq_flags);
+    write_lock(&g_manager.lock);
     list_for_each_entry_safe(node, tmp, &g_manager.head, list) {
-        if (node->numa_id >= max_id || !test_bit(node->numa_id, keep_bits)) {
+        if (node->numa_id > max_id || !test_bit(node->numa_id, keep_bits)) {
             list_del(&node->list);
             kfree(node);
         }
@@ -172,22 +163,21 @@ int deal_trouble_numa_info(struct numa_status_list *numa_info)
         int ret = deal_trouble_numa_info_inner(&numa_info->entries[i]);
         if (ret) {
             pr_err("Failed to deal with NUMA ID %u\n", numa_info->entries[i].numa_id);
-            write_unlock_irqrestore(&g_manager.lock, irq_flags);
+            write_unlock(&g_manager.lock);
             return ret;
         }
     }
 
-    write_unlock_irqrestore(&g_manager.lock, irq_flags);
+    write_unlock(&g_manager.lock);
     return 0;
 }
 
 int trouble_numa_list_get_all(u16 *buffer, size_t buf_size)
 {
     struct numa_node *node;
-    unsigned long irq_flags;
     int count = 0;
 
-    read_lock_irqsave(&g_manager.lock, irq_flags);
+    read_lock(&g_manager.lock);
     list_for_each_entry(node, &g_manager.head, list) {
         if (count < buf_size) {
             buffer[count++] = node->numa_id;
@@ -196,6 +186,6 @@ int trouble_numa_list_get_all(u16 *buffer, size_t buf_size)
         }
     }
 
-    read_unlock_irqrestore(&g_manager.lock, irq_flags);
+    read_unlock(&g_manager.lock);
     return count;
 }

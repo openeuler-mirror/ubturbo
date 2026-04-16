@@ -342,12 +342,13 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len, int *mig
 
 	do {
 		for (i = 0; i < len; i++) {
+			struct pagemapread pm = { 0 };
+
 			if (is_trouble_numa(payloads[i].src_nid) || is_trouble_numa(payloads[i].dest_nid)) {
 				pr_err("walk and migrate is trouble numa(%d-%d), stop migrate pid %d.\n",
 					payloads[i].src_nid, payloads[i].dest_nid, payloads[i].pid);
 				continue;
 			}
-			struct pagemapread pm = { 0 };
 			if (mig_res[i] == 1) {
 				continue;
 			}
@@ -480,14 +481,13 @@ static int __ioctl_check_pagesize(void __user *argp)
 	return pageType == smap_pgsize ? 0 : -EINVAL;
 }
 
-#define NUMA_ID_CNT_MAX 32
-
 static int __ioctl_send_numa_msg_to_kernel(void __user *argp)
 {
 	int ret = 0;
 	struct numa_status_list msg;
-	u16 numa_ids[NUMA_ID_CNT_MAX];
+	u16 numa_ids[MAX_NUMA_NUM];
 	int i;
+	int count;
 
 	if (copy_from_user(&msg, (void __user *)argp, sizeof(struct numa_status_list))) {
 		pr_err("copy from user failed when receiving NUMA status list header\n");
@@ -506,7 +506,7 @@ static int __ioctl_send_numa_msg_to_kernel(void __user *argp)
 	if (ret) {
 		pr_err("failed to deal trouble NUMA info, ret: %d\n", ret);
 	}
-	int count = trouble_numa_list_get_all(numa_ids, NUMA_ID_CNT_MAX);
+	count = trouble_numa_list_get_all(numa_ids, MAX_NUMA_NUM);
 	for (i = 0; i < count; i++) {
 		pr_info("Get all trouble NUMA ID: %u\n", numa_ids[i]);
 	}

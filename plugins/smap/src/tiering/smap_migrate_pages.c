@@ -804,7 +804,10 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 		arr[i] = 1;
 
 		if (is_node_invalid(mig_list[i].from) ||
-		    is_node_invalid(mig_list[i].to) || is_trouble_numa(mig_list[i].from) ||
+		    is_node_invalid(mig_list[i].to)) {
+			continue;
+		}
+		if (is_trouble_numa(mig_list[i].from) ||
 			is_trouble_numa(mig_list[i].to)) {
 			continue;
 		}
