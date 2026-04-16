@@ -20,6 +20,7 @@
 #include <linux/mmzone.h>
 #include <linux/ktime.h>
 #include <linux/spinlock.h>
+#include <linux/smp.h>
 
 #include "check.h"
 #include "access_iomem.h"
@@ -104,27 +105,31 @@ static void submit_scan_works(struct access_tracking_dev *adev)
 	up_read(&ap_data.lock);
 }
 
-static void wait_scan_works(struct access_tracking_dev *adev)
+static int check_scan_works_status(struct access_tracking_dev *adev)
 {
 	struct access_pid *ap;
 	struct access_tracking_dev *adev_head = get_first_access_dev();
+	bool all_complete = true;
 	if (adev != adev_head) {
-		return;
+		return 0;
 	}
+
 	down_read(&ap_data.lock);
 	list_for_each_entry(ap, &ap_data.list, node) {
-		if (wait_for_completion_killable(&ap->work_done)) {
-			up_read(&ap_data.lock);
-			return;
+		if (!completion_done(&ap->work_done)) {
+			all_complete = false;
+			break;
 		}
-	}
+    }
 	up_read(&ap_data.lock);
+
+	return all_complete ? 0 : -EBUSY;
 }
 
 static int create_scan_workqueue(void)
 {
 	struct access_tracking_dev *adev = get_first_access_dev();
-	adev->scanq = alloc_workqueue("accessbit_workq", WQ_CPU_INTENSIVE,
+	adev->scanq = alloc_workqueue("accessbit_workq", WQ_UNBOUND,
 				      WQ_MAX_THREADS);
 	if (!adev->scanq) {
 		pr_err("unable to init access bit workqueue\n");
@@ -165,12 +170,13 @@ static void access_tracking_enable(struct device *ldev)
 	submit_scan_works(adev);
 }
 
-static void access_tracking_disable(struct device *ldev)
+static int access_tracking_disable(struct device *ldev)
 {
 	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
 	if (adev->is_hist)
-		return;
-	wait_scan_works(adev);
+		return 0;
+
+	return check_scan_works_status(adev);
 }
 
 static u64 calc_access_len_v2(struct access_tracking_dev *adev)
@@ -462,7 +468,8 @@ static void work_func(struct work_struct *work)
 		       adev->page_count, page_size, adev->node);
 	}
 	ap->cur_times++;
-	pr_debug("pid[%d] scan took %lldus for %dth time\n", ap->pid, scan_time, ap->cur_times);
+	pr_debug("pid[%d] cpu[%d], scan took %lldus for %dth time\n", ap->pid,
+			 raw_smp_processor_id(), scan_time, ap->cur_times);
 
 	scan_delay_ms = ap->scan_time;
 	if (ap->type == STATISTIC_SCAN) {

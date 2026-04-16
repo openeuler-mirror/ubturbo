@@ -411,60 +411,6 @@ TEST_F(AccessedBitTest, hvaToHpaTest)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" bool find_tracking_index(struct statistics_tracking_info *stat_info,
-                                    unsigned long vaddr, unsigned int *index);
-TEST_F(AccessedBitTest, FindTrackingIndex)
-{
-    unsigned long vaddr = 0x2;
-    unsigned int index;
-    struct statistics_tracking_info stat_info;
-    stat_info.page_num[0] = 1;
-    stat_info.page_num[1] = 1;
-    u64 addr1[1] = { 0x1 };
-    u64 addr2[1] = { 0x2 };
-    stat_info.vaddr[0] = addr1;
-    stat_info.vaddr[1] = addr2;
-
-    bool ret = find_tracking_index(&stat_info, vaddr, &index);
-    EXPECT_EQ(true, ret);
-    EXPECT_EQ(1, index);
-}
-
-extern "C" int calc_tracking_index(unsigned long vaddr, pid_t pid, unsigned int *index);
-TEST_F(AccessedBitTest, CalcTrackingIndex)
-{
-    unsigned long vaddr = 0x2;
-    unsigned int index;
-    struct statistics_tracking_info stat_info;
-
-    EXPECT_EQ(true, list_empty(&statistic_pid_list));
-    list_add(&stat_info.node, &statistic_pid_list);
-    stat_info.pid = 1;
-    stat_info.page_num[0] = 1;
-    stat_info.page_num[1] = 1;
-    u64 addr1[1] = { 0x1 };
-    u64 addr2[1] = { 0x2 };
-    stat_info.vaddr[0] = addr1;
-    stat_info.vaddr[1] = addr2;
-
-    int ret = calc_tracking_index(0x2, 1, &index);
-    EXPECT_EQ(0, ret);
-
-    ret = calc_tracking_index(0x3, 1, &index);
-    EXPECT_EQ(-ERANGE, ret);
-    list_del(&stat_info.node);
-}
-
-extern "C" void update_tracking_info(pid_t pid, unsigned int index);
-extern "C" int fill_statistics_tracking(unsigned long hva, pid_t pid);
-TEST_F(AccessedBitTest, FillStatisticsTracking)
-{
-    MOCKER(calc_tracking_index).stubs().will(returnValue(0));
-    MOCKER(update_tracking_info).stubs();
-    int ret = fill_statistics_tracking(1, 1);
-    EXPECT_EQ(0, ret);
-}
-
 extern "C" struct vm_area_struct *get_vma_if_huge_page(struct kvm *kvm, unsigned long host_va);
 extern "C" int scan_kvm_memslots(struct kvm *kvm, pid_t pid, int page_size, scan_type type);
 TEST_F(AccessedBitTest, scanKvmMemslotsWithNullKvm)

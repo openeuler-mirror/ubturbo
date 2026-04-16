@@ -37,6 +37,8 @@ typedef enum {
     MODE_MAX,
 } ScanMode;
 
+#define MAX_DISABLE_SCAN_ATTEMPS 3
+
 static int SendCmdToAllNodes(int fds[], unsigned long cmd, int arg)
 {
     int i;
@@ -70,9 +72,33 @@ int EnableTracking(struct ProcessManager *manager)
     return SendCmdToAllNodes(manager->fds.nodes, SMAP_IOCTL_TRACKING_CMD, 1);
 }
 
-int DisableTracking(struct ProcessManager *manager)
+static inline int DisableTrackingInternal(struct ProcessManager *manager)
 {
     return SendCmdToAllNodes(manager->fds.nodes, SMAP_IOCTL_TRACKING_CMD, 0);
+}
+
+int DisableTracking(struct ProcessManager *manager)
+{
+    int ret;
+    int attempts = 0;
+
+    while (attempts < MAX_DISABLE_SCAN_ATTEMPS) {
+        ret = DisableTrackingInternal(manager);
+        if (!ret) {
+            break;
+        }
+        SMAP_LOGGER_INFO("Scanning still in progress, attempt %d/%d, will retry.",
+                            attempts + 1, MAX_DISABLE_SCAN_ATTEMPS);
+        attempts++;
+        if (attempts < MAX_DISABLE_SCAN_ATTEMPS) {
+            sleep(1);
+            continue;
+        } else {
+            SMAP_LOGGER_WARNING("Max attempts reached, skipping current migration cycle.");
+            return ret;
+        }
+    }
+    return ret;
 }
 
 static int ConfigTrackingDev(int *trackingFds, uint32_t pageSize)
