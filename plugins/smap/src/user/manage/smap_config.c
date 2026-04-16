@@ -522,11 +522,10 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
 {
     struct ProcessManager *manager = GetProcessManager();
     struct ProcessPayload *p, *tmp;
-    PidType type = GetPidType(manager);
     int nrPayload = 0;
 
     for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
-        if (!attr->groupPolicy.enabled && attr->type == type) {
+        if (!attr->groupPolicy.enabled || attr->groupPolicy.groupCount <= 0) {
             nrPayload++;
         }
     }
@@ -547,7 +546,7 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
 
     tmp = p;
     for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
-        if (attr->groupPolicy.enabled || attr->type != type) {
+        if (attr->groupPolicy.enabled && attr->groupPolicy.groupCount > 0) {
             continue;
         }
         tmp->pid = attr->pid;

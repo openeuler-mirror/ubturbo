@@ -42,6 +42,7 @@
 #define REMOTE_NUMA_MEMORY_MAX (TIB / MIB)
 #define NUMA_MAPS_MAX_PATTERN_LEN 20
 #define LOCAL_NUMA_BIT_MAP_MASK 0xF
+#define MIN_GROUP_QUOTA_SIZE_KB KB_PER_2MB
 
 static EnvAtomic g_status;
 
@@ -522,6 +523,46 @@ static bool HasDuplicateInt(const int *arr, int count)
     return false;
 }
 
+static bool IsSameLocalSet(const MigrationGroupAttr *oldGroup, const struct MigrationGroup *newGroup)
+{
+    if (oldGroup->localCount != newGroup->localCount) {
+        return false;
+    }
+    for (int i = 0; i < newGroup->localCount; i++) {
+        bool found = false;
+        for (int j = 0; j < oldGroup->localCount; j++) {
+            if (newGroup->localNids[i] == oldGroup->localNids[j]) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static uint64_t FindInheritedGroupedUsedPages(const GroupMigrationPolicy *oldPolicy,
+                                              const struct MigrationGroup *newGroup, int targetNid)
+{
+    if (!oldPolicy || !oldPolicy->enabled) {
+        return 0;
+    }
+    for (int i = 0; i < oldPolicy->groupCount; i++) {
+        const MigrationGroupAttr *oldGroup = &oldPolicy->groups[i];
+        if (!IsSameLocalSet(oldGroup, newGroup)) {
+            continue;
+        }
+        for (int j = 0; j < oldGroup->targetCount; j++) {
+            if (oldGroup->targets[j].nid == targetNid) {
+                return oldGroup->targets[j].usedPages;
+            }
+        }
+    }
+    return 0;
+}
+
 static int CheckGroupedTarget(const struct MigrationGroup *group, int payloadIdx, int groupIdx)
 {
     int targets[MAX_GROUP_REMOTE_NUMA] = { 0 };
@@ -535,8 +576,9 @@ static int CheckGroupedTarget(const struct MigrationGroup *group, int payloadIdx
             SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target nid %d invalid.", payloadIdx, groupIdx, i, nid);
             return -EINVAL;
         }
-        if (group->targets[i].quotaSize == 0) {
-            SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target quota is zero.", payloadIdx, groupIdx, i);
+        if (group->targets[i].quotaSize < MIN_GROUP_QUOTA_SIZE_KB) {
+            SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target quota %lluKB is too small.",
+                              payloadIdx, groupIdx, i, group->targets[i].quotaSize);
             return -EINVAL;
         }
         targets[i] = nid;
@@ -647,7 +689,8 @@ static void BuildGroupedNodeBitmap(const struct GroupedMigrateOutPayload *payloa
     }
 }
 
-static void BuildGroupPolicy(const struct GroupedMigrateOutPayload *payload, GroupMigrationPolicy *policy)
+static void BuildGroupPolicy(const struct GroupedMigrateOutPayload *payload, const GroupMigrationPolicy *oldPolicy,
+                             GroupMigrationPolicy *policy)
 {
     policy->enabled = true;
     policy->groupCount = payload->groupCount;
@@ -663,7 +706,14 @@ static void BuildGroupPolicy(const struct GroupedMigrateOutPayload *payload, Gro
         for (int j = 0; j < group->targetCount; j++) {
             attr->targets[j].nid = group->targets[j].nid;
             attr->targets[j].quotaPages = KBToHugePage(group->targets[j].quotaSize);
-            attr->targets[j].usedPages = 0;
+            uint64_t inheritedUsed = FindInheritedGroupedUsedPages(oldPolicy, group, attr->targets[j].nid);
+            attr->targets[j].usedPages = inheritedUsed > attr->targets[j].quotaPages ?
+                                         attr->targets[j].quotaPages : inheritedUsed;
+            if (inheritedUsed > attr->targets[j].quotaPages) {
+                SMAP_LOGGER_WARNING("grouped pid %d group %d target %d inherited used pages %llu exceed quota %llu.",
+                                    payload->pid, i, attr->targets[j].nid, inheritedUsed,
+                                    attr->targets[j].quotaPages);
+            }
             SMAP_LOGGER_INFO("grouped pid %d group %d target %d quota pages %llu.",
                              payload->pid, i, attr->targets[j].nid, attr->targets[j].quotaPages);
         }
@@ -698,7 +748,8 @@ static int AddGroupedProcessesToGlobalManager(struct GroupedMigrateOutMsg *msg, 
 {
     for (int i = 0; i < msg->count; i++) {
         GroupMigrationPolicy policy = { 0 };
-        BuildGroupPolicy(&msg->payload[i], &policy);
+        ProcessAttr *oldAttr = GetProcessAttrLocked(msg->payload[i].pid);
+        BuildGroupPolicy(&msg->payload[i], oldAttr ? &oldAttr->groupPolicy : NULL, &policy);
         int ret = ProcessAddGroupedManage(msg->payload[i].pid, nodeBitmap[i], &policy);
         if (ret == -ESRCH) {
             *hasInvalidPid = true;
@@ -710,6 +761,50 @@ static int AddGroupedProcessesToGlobalManager(struct GroupedMigrateOutMsg *msg, 
         }
     }
     return 0;
+}
+
+static bool IsGroupedPidByRemoteNid(pid_t pid, int remoteNid)
+{
+    ProcessAttr *attr = GetProcessAttrLocked(pid);
+    if (!attr || !attr->groupPolicy.enabled) {
+        return false;
+    }
+    for (int i = 0; i < attr->groupPolicy.groupCount; i++) {
+        MigrationGroupAttr *group = &attr->groupPolicy.groups[i];
+        for (int j = 0; j < group->targetCount; j++) {
+            if (group->targets[j].nid == remoteNid) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool IsGroupedAttrByRemoteNid(ProcessAttr *attr, int remoteNid)
+{
+    if (!attr || !attr->groupPolicy.enabled) {
+        return false;
+    }
+    for (int i = 0; i < attr->groupPolicy.groupCount; i++) {
+        MigrationGroupAttr *group = &attr->groupPolicy.groups[i];
+        for (int j = 0; j < group->targetCount; j++) {
+            if (group->targets[j].nid == remoteNid) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool IsAnyGroupedPidOnRemoteNid(int remoteNid)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
+        if (IsGroupedAttrByRemoteNid(attr, remoteNid)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap)
@@ -939,6 +1034,10 @@ static int CheckMigrateBackMsg(struct MigrateBackMsg *msg)
         struct MigrateBackPayload *payload = &msg->payload[i];
         int srcNid = payload->srcNid;
         int destNid = payload->destNid;
+        if (IsAnyGroupedPidOnRemoteNid(srcNid)) {
+            SMAP_LOGGER_ERROR("migrate back does not support grouped pid on remote node %d.", srcNid);
+            return -EINVAL;
+        }
         if (IsNodeInvalid(srcNid)) {
             SMAP_LOGGER_ERROR("mig back msg num: [%d] srcNode %d invalid.", i, srcNid);
             return -EINVAL;
@@ -1031,6 +1130,11 @@ static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType)
             return -EINVAL;
         }
         for (int j = 0; j < msg->payload[i].count; j++) {
+            if (IsGroupedPidByRemoteNid(msg->payload[i].pid, msg->payload[i].nid[j])) {
+                SMAP_LOGGER_ERROR("remove does not support grouped pid %d remote node %d.",
+                                  msg->payload[i].pid, msg->payload[i].nid[j]);
+                return -EINVAL;
+            }
             if (!IsRemoveRemoteNidValid(msg->payload[i].nid[j])) {
                 SMAP_LOGGER_ERROR("[%d] pid:%d remote node%d invalid.",
                     i, msg->payload[i].pid, msg->payload[i].nid[j]);

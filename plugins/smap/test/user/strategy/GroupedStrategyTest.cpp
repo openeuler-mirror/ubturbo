@@ -8,6 +8,7 @@
 #include "mockcpp/mokc.h"
 
 #include "manage/manage.h"
+#include "strategy/strategy.h"
 #include "strategy/grouped_strategy.h"
 
 class GroupedStrategyTest : public ::testing::Test {
