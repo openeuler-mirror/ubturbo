@@ -23,6 +23,7 @@
 #include "common.h"
 #include "err.h"
 #include "iomem.h"
+#include "trouble_numa_meta.h"
 
 using namespace std;
 
@@ -33,15 +34,23 @@ protected:
     void SetUp() override
     {
         cout << "[Phase SetUp Begin]" << endl;
+        init_trouble_numa_manager();
         cout << "[Phase SetUp End]" << endl;
     }
     void TearDown() override
     {
         cout << "[Phase TearDown Begin]" << endl;
+        cleanup_trouble_numa_manager();
         GlobalMockObject::verify();
         cout << "[Phase TearDown End]" << endl;
     }
 };
+
+static void MockWalkPidPagemap(struct pagemapread *pm)
+{
+    pm->mig_info.mig_cnt = 1;
+    pm->mig_info.page_cnt = 4;
+}
 
 extern "C" void free_migrate_list_addr(int len, struct mig_list *mlist);
 TEST_F(MigInitTest, FreeMigrateListAddr)
@@ -388,9 +397,6 @@ TEST_F(MigInitTest, __IoctlCheckPagesizeAbnormalTwo)
 extern "C" void walkpage_and_migrate(struct mig_payload *payloads, int len, int *mig_res);
 TEST_F(MigInitTest, walkpage_and_migrate_Success)
 {
-    struct pagemapread pm = { 0 };
-    pm.mig_info.mig_cnt = 1;
-    pm.mig_info.page_cnt = 4;
     struct mig_payload payload = {
         .pid = 1234,
         .src_nid = 4,
@@ -403,8 +409,7 @@ TEST_F(MigInitTest, walkpage_and_migrate_Success)
     int successful_pids[1] = {0};
 
     MOCKER(get_node_page_cnt_iomem).stubs().will(returnValue(1));
-    MOCKER(walk_pid_pagemap).stubs()
-        .with(outBoundP(&pm, sizeof(pm))).will(ignoreReturnValue());
+    MOCKER(walk_pid_pagemap).stubs().will(invoke(MockWalkPidPagemap));
     MOCKER(smap_migrate).stubs().will(returnValue(0));
 
     walkpage_and_migrate(&payload, 1, successful_pids);
