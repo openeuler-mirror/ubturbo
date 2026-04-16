@@ -487,7 +487,26 @@ static void SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
     }
 }
 
-static int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
+static void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeBitmap,
+                                    const GroupMigrationPolicy *policy)
+{
+    attr->pid = pid;
+    attr->scanTime = SCAN_TIME_2M;
+    attr->duration = 0;
+    attr->scanType = NORMAL_SCAN;
+    attr->type = VM_TYPE;
+    attr->migrateMode = MIG_MEMSIZE_MODE;
+    attr->remoteNumaCnt = GetL2Count(nodeBitmap);
+    attr->enableSwap = true;
+    attr->initLocalMemRatio = HUNDRED;
+    attr->numaAttr.numaNodes = nodeBitmap;
+    attr->groupPolicy = *policy;
+    if (time(&attr->scanStart) == (time_t)-1) {
+        SMAP_LOGGER_ERROR("get time error");
+    }
+}
+
+int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
 {
     int ret;
     if (g_processManager.nr[type] >= GetCurrentMaxNrPid()) {
@@ -683,6 +702,49 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
         SMAP_LOGGER_INFO("Add pid %d to list done.", param->pid);
     }
 
+    return 0;
+}
+
+int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy)
+{
+    int ret = CheckPid(pid);
+    if (ret) {
+        SMAP_LOGGER_ERROR("grouped pid %d check failed: %d.", pid, ret);
+        return ret;
+    }
+    if (!policy || !policy->enabled) {
+        SMAP_LOGGER_ERROR("grouped policy of pid %d is invalid.", pid);
+        return -EINVAL;
+    }
+
+    ProcessAttr *current = GetProcessAttrLocked(pid);
+    if (current) {
+        SetGroupedProcessConfig(current, pid, nodeBitmap, policy);
+        SMAP_LOGGER_INFO("Update grouped pid %d success, group count %d.", pid, policy->groupCount);
+        return 0;
+    }
+
+    if (g_processManager.nr[VM_TYPE] >= GetCurrentMaxNrPid()) {
+        SMAP_LOGGER_ERROR("nr of grouped vm pid is out of limit.");
+        return -EINVAL;
+    }
+
+    ProcessAttr *attr = calloc(1, sizeof(ProcessAttr));
+    if (!attr) {
+        SMAP_LOGGER_ERROR("Alloc memory for grouped process failed.");
+        return -ENOMEM;
+    }
+    attr->numaAttr.numaNodes = nodeBitmap;
+    ret = VMPreprocess(pid, attr);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Preprocess grouped VM process %d failed: %d.", pid, ret);
+        free(attr);
+        return ret;
+    }
+    SetGroupedProcessConfig(attr, pid, nodeBitmap, policy);
+    LinkedListAdd(&g_processManager.processes, &attr);
+    g_processManager.nr[VM_TYPE]++;
+    SMAP_LOGGER_INFO("Add grouped pid %d success, group count %d.", pid, policy->groupCount);
     return 0;
 }
 

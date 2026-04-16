@@ -480,6 +480,11 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType)
     }
 
     for (i = 0; i < msg->count; i++) {
+        ProcessAttr *attr = GetProcessAttrLocked(msg->payload[i].pid);
+        if (attr && attr->groupPolicy.enabled) {
+            SMAP_LOGGER_ERROR("pid %d already uses grouped migrate out.", msg->payload[i].pid);
+            return -EINVAL;
+        }
         if (msg->payload[i].count <= 0 || msg->payload[i].count > REMOTE_NUMA_NUM) {
             SMAP_LOGGER_ERROR("pid: %d, migrate out payload count:%d is invalid.",
                               msg->payload[i].pid, msg->payload[i].count);
@@ -505,7 +510,209 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType)
     return 0;
 }
 
-static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType)
+static bool HasDuplicateInt(const int *arr, int count)
+{
+    for (int i = 0; i < count; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (arr[i] == arr[j]) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static int CheckGroupedTarget(const struct MigrationGroup *group, int payloadIdx, int groupIdx)
+{
+    int targets[MAX_GROUP_REMOTE_NUMA] = { 0 };
+    if (!IsCountValid(group->targetCount, MAX_GROUP_REMOTE_NUMA)) {
+        SMAP_LOGGER_ERROR("[%d:%d] grouped target count %d invalid.", payloadIdx, groupIdx, group->targetCount);
+        return -EINVAL;
+    }
+    for (int i = 0; i < group->targetCount; i++) {
+        int nid = group->targets[i].nid;
+        if (!IsRemoteNidValid(nid)) {
+            SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target nid %d invalid.", payloadIdx, groupIdx, i, nid);
+            return -EINVAL;
+        }
+        if (group->targets[i].quotaSize == 0) {
+            SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target quota is zero.", payloadIdx, groupIdx, i);
+            return -EINVAL;
+        }
+        targets[i] = nid;
+    }
+    if (HasDuplicateInt(targets, group->targetCount)) {
+        SMAP_LOGGER_ERROR("[%d:%d] grouped target nids duplicate.", payloadIdx, groupIdx);
+        return -EINVAL;
+    }
+    return 0;
+}
+
+static int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int payloadIdx)
+{
+    bool localUsed[LOCAL_NUMA_NUM] = { 0 };
+    if (!IsCountValid(payload->groupCount, MAX_MIGRATION_GROUP_NUM)) {
+        SMAP_LOGGER_ERROR("[%d] grouped group count %d invalid.", payloadIdx, payload->groupCount);
+        return -EINVAL;
+    }
+    ProcessAttr *attr = GetProcessAttrLocked(payload->pid);
+    if (attr && !attr->groupPolicy.enabled) {
+        SMAP_LOGGER_ERROR("pid %d already uses normal migrate out.", payload->pid);
+        return -EINVAL;
+    }
+    for (int i = 0; i < payload->groupCount; i++) {
+        struct MigrationGroup *group = &payload->groups[i];
+        if (!IsCountValid(group->localCount, MAX_GROUP_LOCAL_NUMA)) {
+            SMAP_LOGGER_ERROR("[%d:%d] grouped local count %d invalid.", payloadIdx, i, group->localCount);
+            return -EINVAL;
+        }
+        if (group->localMemLimitSize == 0) {
+            SMAP_LOGGER_ERROR("[%d:%d] grouped local mem limit is zero.", payloadIdx, i);
+            return -EINVAL;
+        }
+        if (HasDuplicateInt(group->localNids, group->localCount)) {
+            SMAP_LOGGER_ERROR("[%d:%d] grouped local nids duplicate.", payloadIdx, i);
+            return -EINVAL;
+        }
+        for (int j = 0; j < group->localCount; j++) {
+            int nid = group->localNids[j];
+            if (!IsLocalNidValid(nid) || nid < 0) {
+                SMAP_LOGGER_ERROR("[%d:%d:%d] grouped local nid %d invalid.", payloadIdx, i, j, nid);
+                return -EINVAL;
+            }
+            if (localUsed[nid]) {
+                SMAP_LOGGER_ERROR("[%d:%d:%d] grouped local nid %d is used by another group.", payloadIdx, i, j, nid);
+                return -EINVAL;
+            }
+            localUsed[nid] = true;
+        }
+        int ret = CheckGroupedTarget(group, payloadIdx, i);
+        if (ret) {
+            return ret;
+        }
+    }
+    return 0;
+}
+
+static int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pidType)
+{
+    if (!msg) {
+        SMAP_LOGGER_ERROR("grouped migrate out msg is null.");
+        return -EINVAL;
+    }
+    if (!IsPidTypeValid(pidType) || pidType != VM_TYPE || !IsHugeMode()) {
+        SMAP_LOGGER_ERROR("grouped migrate out only supports 2M VM, pidType %d.", pidType);
+        return -EINVAL;
+    }
+    if (!IsCountValid(msg->count, MAX_NR_GROUPED_MIGOUT)) {
+        SMAP_LOGGER_ERROR("grouped migrate out count %d invalid.", msg->count);
+        return -EINVAL;
+    }
+    for (int i = 0; i < msg->count; i++) {
+        for (int j = i + 1; j < msg->count; j++) {
+            if (msg->payload[j].pid == msg->payload[i].pid) {
+                SMAP_LOGGER_ERROR("grouped migrate out duplicate pid %d.", msg->payload[i].pid);
+                return -EINVAL;
+            }
+        }
+    }
+    pid_t uniquePids[MAX_NR_GROUPED_MIGOUT];
+    for (int i = 0; i < msg->count; i++) {
+        uniquePids[i] = msg->payload[i].pid;
+    }
+    if (!IsMigOutCountValid(uniquePids, msg->count, pidType)) {
+        SMAP_LOGGER_ERROR("grouped migrate out count will exceed max pid count: %d.", GetCurrentMaxNrPid());
+        return -EINVAL;
+    }
+    for (int i = 0; i < msg->count; i++) {
+        int ret = CheckGroupedPayload(&msg->payload[i], i);
+        if (ret) {
+            return ret;
+        }
+    }
+    return 0;
+}
+
+static void BuildGroupedNodeBitmap(const struct GroupedMigrateOutPayload *payload, uint32_t *nodeBitmap)
+{
+    *nodeBitmap = 0;
+    for (int i = 0; i < payload->groupCount; i++) {
+        const struct MigrationGroup *group = &payload->groups[i];
+        for (int j = 0; j < group->localCount; j++) {
+            AddL1(nodeBitmap, group->localNids[j]);
+        }
+        for (int j = 0; j < group->targetCount; j++) {
+            AddL2ByNid(nodeBitmap, group->targets[j].nid);
+        }
+    }
+}
+
+static void BuildGroupPolicy(const struct GroupedMigrateOutPayload *payload, GroupMigrationPolicy *policy)
+{
+    policy->enabled = true;
+    policy->groupCount = payload->groupCount;
+    for (int i = 0; i < payload->groupCount; i++) {
+        const struct MigrationGroup *group = &payload->groups[i];
+        MigrationGroupAttr *attr = &policy->groups[i];
+        attr->localCount = group->localCount;
+        attr->targetCount = group->targetCount;
+        attr->localLimitPages = KBToHugePageCeil(group->localMemLimitSize);
+        for (int j = 0; j < group->localCount; j++) {
+            attr->localNids[j] = group->localNids[j];
+        }
+        for (int j = 0; j < group->targetCount; j++) {
+            attr->targets[j].nid = group->targets[j].nid;
+            attr->targets[j].quotaPages = KBToHugePage(group->targets[j].quotaSize);
+            attr->targets[j].usedPages = 0;
+            SMAP_LOGGER_INFO("grouped pid %d group %d target %d quota pages %llu.",
+                             payload->pid, i, attr->targets[j].nid, attr->targets[j].quotaPages);
+        }
+        SMAP_LOGGER_INFO("grouped pid %d group %d localLimit pages %llu.",
+                         payload->pid, i, attr->localLimitPages);
+    }
+}
+
+static int ProcessAddGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap)
+{
+    struct AccessAddPidPayload payload[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    for (int i = 0; i < msg->count; i++) {
+        payload[i].type = NORMAL_SCAN;
+        payload[i].pid = msg->payload[i].pid;
+        payload[i].scanTime = SCAN_TIME_2M;
+        payload[i].numaNodes = nodeBitmap[i];
+        if (!PidIsValid(msg->payload[i].pid)) {
+            SMAP_LOGGER_WARNING("grouped pid %d doesn't exist.", msg->payload[i].pid);
+            payload[i].pid = NON_EXIST_PID;
+        }
+        SMAP_LOGGER_INFO("grouped pid %d numaNodes %#x.", msg->payload[i].pid, payload[i].numaNodes);
+    }
+    int ret = AccessIoctlAddPid(msg->count, payload);
+    if (ret) {
+        SMAP_LOGGER_ERROR("grouped access module add pids error: %d.", ret);
+    }
+    return ret;
+}
+
+static int AddGroupedProcessesToGlobalManager(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                              bool *hasInvalidPid)
+{
+    for (int i = 0; i < msg->count; i++) {
+        GroupMigrationPolicy policy = { 0 };
+        BuildGroupPolicy(&msg->payload[i], &policy);
+        int ret = ProcessAddGroupedManage(msg->payload[i].pid, nodeBitmap[i], &policy);
+        if (ret == -ESRCH) {
+            *hasInvalidPid = true;
+            continue;
+        }
+        if (ret) {
+            SMAP_LOGGER_ERROR("add grouped process %d failed: %d.", msg->payload[i].pid, ret);
+            return ret;
+        }
+    }
+    return 0;
+}
+
+static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap)
 {
     int ret = 0;
     if (!msg) {
@@ -524,10 +731,14 @@ static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType)
             continue;
         }
         // assign values for local numa nodes
-        ret = SetProcessLocalNuma(msg->payload[i].pid, &payload[i].numaNodes, pidType == VM_TYPE);
-        if (ret) {
-            SMAP_LOGGER_ERROR("Query pid %d memory usage failed: %d.", msg->payload[i].pid, ret);
-            return ret;
+        if (nodeBitmap) {
+            payload[i].numaNodes = nodeBitmap[i];
+        } else {
+            ret = SetProcessLocalNuma(msg->payload[i].pid, &payload[i].numaNodes, pidType == VM_TYPE);
+            if (ret) {
+                SMAP_LOGGER_ERROR("Query pid %d memory usage failed: %d.", msg->payload[i].pid, ret);
+                return ret;
+            }
         }
         // assign values for remote numa nodes
         for (int j = 0; j < msg->payload[i].count; ++j) {
@@ -663,7 +874,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
     }
 
     // send ioctl to add pid to access pid list
-    ret = ProcessAddTrackingManage(msg, pidType);
+    ret = ProcessAddTrackingManage(msg, pidType, nodeBitmap);
     if (ret) {
         SMAP_LOGGER_ERROR("Add process tracking failed: %d.", ret);
         EnvMutexUnlock(&manager->lock);
@@ -676,6 +887,42 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
         SMAP_LOGGER_ERROR("Add processes to global manager failed: %d.", ret);
     }
 
+    EnvMutexUnlock(&manager->lock);
+    return (ret == 0 && hasInvalidPid) ? -ESRCH : ret;
+}
+
+int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    bool hasInvalidPid = false;
+
+    SMAP_LOGGER_INFO("Receive ubturbo_smap_migrate_out_grouped msg.");
+    if (!ubturbo_smap_is_running()) {
+        SMAP_LOGGER_ERROR("Smap already stopped, grouped migrate out failed.");
+        return -EPERM;
+    }
+
+    EnvMutexLock(&manager->lock);
+    int ret = CheckGroupedMigrateOutMsg(msg, pidType);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Grouped migrate out msg check failed, ret: %d.", ret);
+        EnvMutexUnlock(&manager->lock);
+        return ret;
+    }
+
+    uint32_t nodeBitmap[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    for (int i = 0; i < msg->count; i++) {
+        BuildGroupedNodeBitmap(&msg->payload[i], &nodeBitmap[i]);
+    }
+
+    ret = ProcessAddGroupedTrackingManage(msg, nodeBitmap);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Add grouped process tracking failed: %d.", ret);
+        EnvMutexUnlock(&manager->lock);
+        return ret;
+    }
+
+    ret = AddGroupedProcessesToGlobalManager(msg, nodeBitmap, &hasInvalidPid);
     EnvMutexUnlock(&manager->lock);
     return (ret == 0 && hasInvalidPid) ? -ESRCH : ret;
 }

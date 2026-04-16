@@ -523,7 +523,13 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
     struct ProcessManager *manager = GetProcessManager();
     struct ProcessPayload *p, *tmp;
     PidType type = GetPidType(manager);
-    int nrPayload = manager->nr[type];
+    int nrPayload = 0;
+
+    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
+        if (!attr->groupPolicy.enabled && attr->type == type) {
+            nrPayload++;
+        }
+    }
 
     SMAP_LOGGER_DEBUG("BuildAllProcessPayload nrPayload %d.", nrPayload);
     if (nrPayload == 0) {
@@ -541,6 +547,9 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
 
     tmp = p;
     for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
+        if (attr->groupPolicy.enabled || attr->type != type) {
+            continue;
+        }
         tmp->pid = attr->pid;
         tmp->scanType = attr->scanType;
         tmp->type = attr->type;

@@ -25,6 +25,18 @@ extern "C" {
 #define MAX_NR_MIGBACK 50
 #define MAX_NR_MIGNUMA 50
 #define MAX_NR_REMOVE MAX_NR_MIGOUT
+#ifndef MAX_NR_GROUPED_MIGOUT
+#define MAX_NR_GROUPED_MIGOUT MAX_NR_MIGOUT
+#endif
+#ifndef MAX_MIGRATION_GROUP_NUM
+#define MAX_MIGRATION_GROUP_NUM 8
+#endif
+#ifndef MAX_GROUP_LOCAL_NUMA
+#define MAX_GROUP_LOCAL_NUMA 4
+#endif
+#ifndef MAX_GROUP_REMOTE_NUMA
+#define MAX_GROUP_REMOTE_NUMA REMOTE_NUMA_NUM
+#endif
 #define ADAPT_ALLOC_PERIOD 1000
 #define SCAN_MIGRATE_PERIOD LIGHT_STABLE_MIGRATE_CYCLE
 #define USER_DEFAULT_MIGRATE_OUT_RATIO 25
@@ -80,6 +92,30 @@ struct MigrateOutPayload {
 struct MigrateOutMsg {
     int count;
     struct MigrateOutPayload payload[MAX_NR_MIGOUT];
+};
+
+struct MigrationTarget {
+    int nid;
+    uint64_t quotaSize; // 该组允许驻留在此远端NUMA的最大内存，单位KB
+};
+
+struct MigrationGroup {
+    int localCount;
+    int localNids[MAX_GROUP_LOCAL_NUMA];
+    int targetCount;
+    struct MigrationTarget targets[MAX_GROUP_REMOTE_NUMA];
+    uint64_t localMemLimitSize; // 组级本地NUMA最低保留水线，单位KB
+};
+
+struct GroupedMigrateOutPayload {
+    pid_t pid;
+    int groupCount;
+    struct MigrationGroup groups[MAX_MIGRATION_GROUP_NUM];
+};
+
+struct GroupedMigrateOutMsg {
+    int count;
+    struct GroupedMigrateOutPayload payload[MAX_NR_GROUPED_MIGOUT];
 };
 
 struct MigrateBackPayload {
@@ -146,6 +182,15 @@ typedef void (*Logfunc)(int level, const char *str, const char *moduleName);
  * @return int  0：操作成功；非0：操作失败
  */
 int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType);
+
+/* *
+ * @brief   设置大规格弹性虚机的组级迁移策略
+ *
+ * @param msg      [IN] 迁移组信息，包含PID、本地NUMA集合、远端NUMA集合、远端quota和本地保留水线
+ * @param pidType  [IN] 进程类型，仅支持虚机2M页类型
+ * @return int  0：操作成功；非0：操作失败
+ */
+int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType);
 
 /* *
  * @brief   迁移指定地址段的远端NUMA内存

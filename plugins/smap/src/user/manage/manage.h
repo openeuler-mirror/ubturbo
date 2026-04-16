@@ -19,6 +19,18 @@
 
 #define LOCAL_NUMA_NUM 4
 #define REMOTE_NUMA_NUM 18
+#ifndef MAX_NR_GROUPED_MIGOUT
+#define MAX_NR_GROUPED_MIGOUT MAX_NR_MIGOUT
+#endif
+#ifndef MAX_MIGRATION_GROUP_NUM
+#define MAX_MIGRATION_GROUP_NUM 8
+#endif
+#ifndef MAX_GROUP_LOCAL_NUMA
+#define MAX_GROUP_LOCAL_NUMA LOCAL_NUMA_NUM
+#endif
+#ifndef MAX_GROUP_REMOTE_NUMA
+#define MAX_GROUP_REMOTE_NUMA REMOTE_NUMA_NUM
+#endif
 #define RESERVED_RATIO 0.05
 #define RESERVED_MEMORY 200
 #define MAX_4K_PROCESSES_CNT 300
@@ -137,6 +149,26 @@ typedef struct {
 } SeparateParam;
 
 typedef struct {
+    int nid;
+    uint64_t quotaPages;
+    uint64_t usedPages;
+} GroupTargetAttr;
+
+typedef struct {
+    int localCount;
+    int localNids[MAX_GROUP_LOCAL_NUMA];
+    int targetCount;
+    GroupTargetAttr targets[MAX_GROUP_REMOTE_NUMA];
+    uint64_t localLimitPages;
+} MigrationGroupAttr;
+
+typedef struct {
+    bool enabled;
+    int groupCount;
+    MigrationGroupAttr groups[MAX_MIGRATION_GROUP_NUM];
+} GroupMigrationPolicy;
+
+typedef struct {
     int index;
     unsigned short nrVcpu;
     unsigned long long *cpuTime[MAX_RES_LEN];
@@ -227,6 +259,7 @@ struct ProcessAttribute {
     NumaAttribute numaAttr;
     WalkPage walkPage;
     AdaptMem adaptMem;
+    GroupMigrationPolicy groupPolicy;
     StrategyAttribute strategyAttr;
     ScanAttribute scanAttr;
     VMPidAttribute vmPidAttr;
@@ -386,6 +419,7 @@ int SetProcessLocalNuma(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag);
 int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
 
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap);
+int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
 
 void CheckAndRemoveInvalidProcess(void);
 
@@ -473,6 +507,12 @@ ProcessAttr *GetProcessAttrLocked(pid_t pid);
 
 bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid);
 FILE *OpenNumaMaps(pid_t pid);
+
+static inline uint64_t KBToHugePageCeil(uint64_t memSize)
+{
+    int pageSizeKB = GetHugePageSize() / KIB;
+    return (memSize + pageSizeKB - 1) / pageSizeKB;
+}
 
 static inline uint64_t KBToHugePage(uint64_t memSize)
 {
