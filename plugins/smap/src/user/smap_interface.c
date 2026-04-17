@@ -1230,6 +1230,48 @@ static int CheckMigrateBackGroupedPidLocked(struct MigrateBackMsg *msg)
     return 0;
 }
 
+static bool IsMigrateBackNidDuplicatedBefore(struct MigrateBackMsg *msg, int idx)
+{
+    int nid = msg->payload[idx].srcNid;
+
+    for (int i = 0; i < idx; i++) {
+        if (msg->payload[i].srcNid == nid) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void ClearMigrateBackBusyForbiddenBefore(struct MigrateBackMsg *msg, int count)
+{
+    for (int i = 0; i < count; i++) {
+        int srcNid = msg->payload[i].srcNid;
+        if (IsMigrateBackNidDuplicatedBefore(msg, i)) {
+            continue;
+        }
+        ClearNodeForbiddenReason(srcNid, NODE_FORBIDDEN_MIGBACK_BUSY);
+        SMAP_LOGGER_INFO("smap clear node %d migrate back busy forbidden.", srcNid);
+    }
+}
+
+static void ClearMigrateBackBusyForbidden(struct MigrateBackMsg *msg)
+{
+    ClearMigrateBackBusyForbiddenBefore(msg, msg->count);
+}
+
+static void CompleteMigrateBackForbidden(struct MigrateBackMsg *msg)
+{
+    for (int i = 0; i < msg->count; i++) {
+        int srcNid = msg->payload[i].srcNid;
+        if (IsMigrateBackNidDuplicatedBefore(msg, i)) {
+            continue;
+        }
+        SetNodeForbiddenReason(srcNid, NODE_FORBIDDEN_MIGBACK_DONE);
+        ClearNodeForbiddenReason(srcNid, NODE_FORBIDDEN_MIGBACK_BUSY);
+        SMAP_LOGGER_INFO("smap keep node %d forbidden after migrate back.", srcNid);
+    }
+}
+
 static int SetMigrateBackForbiddenLocked(struct MigrateBackMsg *msg)
 {
     int ret = CheckMigrateBackGroupedPidLocked(msg);
@@ -1237,8 +1279,17 @@ static int SetMigrateBackForbiddenLocked(struct MigrateBackMsg *msg)
         return ret;
     }
     for (int i = 0; i < msg->count; i++) {
-        SetNodeForbidden(msg->payload[i].srcNid);
-        SMAP_LOGGER_INFO("smap disable node %d because migrate back.", msg->payload[i].srcNid);
+        int srcNid = msg->payload[i].srcNid;
+        if (IsMigrateBackNidDuplicatedBefore(msg, i)) {
+            continue;
+        }
+        ret = TrySetNodeForbiddenReason(srcNid, NODE_FORBIDDEN_MIGBACK_BUSY);
+        if (ret) {
+            SMAP_LOGGER_ERROR("node %d is already migrate back busy.", srcNid);
+            ClearMigrateBackBusyForbiddenBefore(msg, i);
+            return ret;
+        }
+        SMAP_LOGGER_INFO("smap disable node %d because migrate back.", srcNid);
     }
     return 0;
 }
@@ -1273,10 +1324,6 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
         SMAP_LOGGER_ERROR("Smap check mig back msg err: %d.", ret);
         return ret;
     }
-    // save forbidden info
-    EnvAtomic tmpForbiddenNodes[MAX_NODES];
-    SaveNodeForbidden(tmpForbiddenNodes, MAX_NODES);
-
     struct ProcessManager *manager = GetProcessManager();
     EnvMutexLock(&manager->lock);
     ret = SetMigrateBackForbiddenLocked(msg);
@@ -1289,14 +1336,14 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
     ret = CheckMigrateBackReadyMsg(msg);
     if (ret) {
         SMAP_LOGGER_ERROR("Smap check mig back ready err: %d.", ret);
-        RecoverNodeForbidden(tmpForbiddenNodes, MAX_NODES);
+        ClearMigrateBackBusyForbidden(msg);
         return ret;
     }
 
     for (int i = 0; i < msg->count; i++) {
         if (!CheckProcessIdle(msg->payload[i].srcNid)) {
             SMAP_LOGGER_ERROR("Smap check migrate idle timeout.");
-            RecoverNodeForbidden(tmpForbiddenNodes, MAX_NODES);
+            ClearMigrateBackBusyForbidden(msg);
             return -EAGAIN;
         }
     }
@@ -1304,8 +1351,9 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
     ret = IoctlHandler(msg);
     SMAP_LOGGER_INFO("migrateback result: %d.", ret);
     if (ret != 0) {
-        // recover forbidden info
-        RecoverNodeForbidden(tmpForbiddenNodes, MAX_NODES);
+        ClearMigrateBackBusyForbidden(msg);
+    } else {
+        CompleteMigrateBackForbidden(msg);
     }
     return ret;
 }
@@ -1489,10 +1537,19 @@ int ubturbo_smap_node_enable(struct EnableNodeMsg *msg)
         return -EINVAL;
     }
     if (msg->enable == ENABLE_NUMA_MIG) {
-        ClearNodeForbidden(msg->nid);
+        EnvMutexLock(&pm->lock);
+        if (IsNodeForbiddenReason(msg->nid, NODE_FORBIDDEN_MIGBACK_BUSY)) {
+            EnvMutexUnlock(&pm->lock);
+            SMAP_LOGGER_ERROR("node %d is migrate back busy, enable node failed.", msg->nid);
+            return -EAGAIN;
+        }
+        ClearNodeForbiddenReason(msg->nid, NODE_FORBIDDEN_USER | NODE_FORBIDDEN_MIGBACK_DONE);
+        EnvMutexUnlock(&pm->lock);
         SMAP_LOGGER_INFO("smap enable node %d.", msg->nid);
     } else if (msg->enable == DISABLE_NUMA_MIG) {
-        SetNodeForbidden(msg->nid);
+        EnvMutexLock(&pm->lock);
+        SetNodeForbiddenReason(msg->nid, NODE_FORBIDDEN_USER);
+        EnvMutexUnlock(&pm->lock);
         SMAP_LOGGER_INFO("smap disable node %d.", msg->nid);
     } else {
         SMAP_LOGGER_INFO("enable args:%d is invalid.", msg->enable);

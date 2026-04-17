@@ -84,6 +84,10 @@
 
 extern EnvAtomic g_forbiddenNodes[MAX_NODES];
 
+#define NODE_FORBIDDEN_USER (1 << 0)
+#define NODE_FORBIDDEN_MIGBACK_DONE (1 << 1)
+#define NODE_FORBIDDEN_MIGBACK_BUSY (1 << 2)
+
 typedef uint16_t actc_t;
 
 typedef enum {
@@ -468,7 +472,13 @@ static inline bool IsDestNodeInvalid(int nid)
 
 static inline void SetNodeForbidden(int nid)
 {
-    EnvAtomicSet(&g_forbiddenNodes[nid], 1);
+    int oldValue;
+    int newValue;
+
+    do {
+        oldValue = EnvAtomicRead(&g_forbiddenNodes[nid]);
+        newValue = oldValue | NODE_FORBIDDEN_USER;
+    } while (EnvAtomicCmpAndSwap(oldValue, newValue, &g_forbiddenNodes[nid]) != oldValue);
 }
 
 static inline void ClearNodeForbidden(int nid)
@@ -481,18 +491,47 @@ static inline bool IsNodeForbidden(int nid)
     return EnvAtomicRead(&g_forbiddenNodes[nid]);
 }
 
-static inline void SaveNodeForbidden(EnvAtomic *a, int len)
+static inline bool IsNodeForbiddenReason(int nid, int reason)
 {
-    for (int i = 0; i < len; i++) {
-        EnvAtomicSet(&a[i], EnvAtomicRead(&g_forbiddenNodes[i]));
-    }
+    return (EnvAtomicRead(&g_forbiddenNodes[nid]) & reason) != 0;
 }
 
-static inline void RecoverNodeForbidden(EnvAtomic *a, int len)
+static inline void SetNodeForbiddenReason(int nid, int reason)
 {
-    for (int i = 0; i < len; i++) {
-        EnvAtomicSet(&g_forbiddenNodes[i], EnvAtomicRead(&a[i]));
-    }
+    int oldValue;
+    int newValue;
+
+    do {
+        oldValue = EnvAtomicRead(&g_forbiddenNodes[nid]);
+        newValue = oldValue | reason;
+    } while (EnvAtomicCmpAndSwap(oldValue, newValue, &g_forbiddenNodes[nid]) != oldValue);
+}
+
+static inline void ClearNodeForbiddenReason(int nid, int reason)
+{
+    int oldValue;
+    int newValue;
+
+    do {
+        oldValue = EnvAtomicRead(&g_forbiddenNodes[nid]);
+        newValue = oldValue & (~reason);
+    } while (EnvAtomicCmpAndSwap(oldValue, newValue, &g_forbiddenNodes[nid]) != oldValue);
+}
+
+static inline int TrySetNodeForbiddenReason(int nid, int reason)
+{
+    int oldValue;
+    int newValue;
+
+    do {
+        oldValue = EnvAtomicRead(&g_forbiddenNodes[nid]);
+        if (oldValue & reason) {
+            return -EAGAIN;
+        }
+        newValue = oldValue | reason;
+    } while (EnvAtomicCmpAndSwap(oldValue, newValue, &g_forbiddenNodes[nid]) != oldValue);
+
+    return 0;
 }
 
 int EnableProcessMigrate(pid_t *pidArr, int len, int enable);

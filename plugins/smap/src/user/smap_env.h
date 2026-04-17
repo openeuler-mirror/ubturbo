@@ -120,10 +120,11 @@ static inline void EnvAtomicSet(EnvAtomic *a, int i)
 static inline int EnvAtomicCmpAndSwap(int oldValue, int newValue, EnvAtomic *a)
 {
 #ifdef __cplusplus
-    if (a->counter.compare_exchange_strong(oldValue, newValue)) {
+    int actual = oldValue;
+    if (a->counter.compare_exchange_strong(actual, newValue)) {
         return oldValue;
     }
-    return newValue;
+    return actual;
 #else
     return __sync_val_compare_and_swap(&a->counter, oldValue, newValue); // C 中使用内置函数
 #endif

@@ -898,12 +898,16 @@ TEST_F(InterfaceTest, TestSmapMigrateBackWithProcessIdleCheckFailed)
     int ret;
     struct MigrateBackMsg msg = {};
     msg.count = 1;
+    msg.payload[0].srcNid = 4;
     EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
     MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
     MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(0));
     MOCKER(CheckProcessIdle).stubs().will(returnValue(false));
     ret = ubturbo_smap_migrate_back(&msg);
     EXPECT_EQ(-EAGAIN, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_USER, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
 }
 
 TEST_F(InterfaceTest, TestSmapMigrateBackSuccess)
@@ -916,13 +920,74 @@ TEST_F(InterfaceTest, TestSmapMigrateBackSuccess)
     };
 
     EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
     MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
     MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(0));
-    MOCKER(SetNodeForbidden).stubs().will(ignoreReturnValue());
+    MOCKER(CheckProcessIdle).stubs().will(returnValue(true));
     MOCKER(IoctlHandler).stubs().will(returnValue(0));
     ret = ubturbo_smap_migrate_back(&msgc);
     EXPECT_EQ(0, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_MIGBACK_DONE, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
     EnvAtomicSet(&g_status, 0);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateBackReadyFailedClearBusyOnly)
+{
+    struct MigrateBackMsg msg = {
+        .taskID = 1,
+        .count = 1,
+        .payload = { { 4, 5, 1 } }
+    };
+
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
+    MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(-EAGAIN));
+
+    int ret = ubturbo_smap_migrate_back(&msg);
+    EXPECT_EQ(-EAGAIN, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_USER, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateBackIoctlFailedClearBusyOnly)
+{
+    struct MigrateBackMsg msg = {
+        .taskID = 1,
+        .count = 1,
+        .payload = { { 4, 5, 1 } }
+    };
+
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
+    MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(0));
+    MOCKER(CheckProcessIdle).stubs().will(returnValue(true));
+    MOCKER(IoctlHandler).stubs().will(returnValue(-EBADF));
+
+    int ret = ubturbo_smap_migrate_back(&msg);
+    EXPECT_EQ(-EBADF, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_USER, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateBackRejectBusyNode)
+{
+    struct MigrateBackMsg msg = {
+        .taskID = 1,
+        .count = 1,
+        .payload = { { 4, 5, 1 } }
+    };
+
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_MIGBACK_BUSY);
+    MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+
+    int ret = ubturbo_smap_migrate_back(&msg);
+    EXPECT_EQ(-EAGAIN, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_MIGBACK_BUSY, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
 }
 
 extern "C" int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType);
@@ -1034,6 +1099,7 @@ TEST_F(InterfaceTest, TestSmapEnableNodeWithEnable)
     msg.nid = 4;
     msg.enable = ENABLE_NUMA_MIG;
     EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER | NODE_FORBIDDEN_MIGBACK_DONE);
     ret = ubturbo_smap_node_enable(&msg);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(g_forbiddenNodes[4].counter, 0);
@@ -1049,6 +1115,23 @@ TEST_F(InterfaceTest, TestSmapEnableNodeWithDisable)
     ret = ubturbo_smap_node_enable(&msg);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(g_forbiddenNodes[4].counter, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+TEST_F(InterfaceTest, TestSmapEnableNodeRejectMigrateBackBusy)
+{
+    int ret;
+    struct EnableNodeMsg msg = {};
+    msg.nid = 4;
+    msg.enable = ENABLE_NUMA_MIG;
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4],
+                 NODE_FORBIDDEN_USER | NODE_FORBIDDEN_MIGBACK_DONE | NODE_FORBIDDEN_MIGBACK_BUSY);
+    ret = ubturbo_smap_node_enable(&msg);
+    EXPECT_EQ(-EAGAIN, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_USER | NODE_FORBIDDEN_MIGBACK_DONE | NODE_FORBIDDEN_MIGBACK_BUSY,
+              EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
 }
 
 TEST_F(InterfaceTest, TestSmapEnableNodeWithInvalidEnable)
