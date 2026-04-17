@@ -81,6 +81,7 @@
 
 #define PID_CMD_LENGTH 64
 #define MAX_LINE_LENGTH 1024
+#define NUMA_MAPS_MAX_PATTERN_LEN 20
 
 extern EnvAtomic g_forbiddenNodes[MAX_NODES];
 
@@ -546,6 +547,8 @@ ProcessAttr *GetProcessAttrLocked(pid_t pid);
 
 bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid);
 FILE *OpenNumaMaps(pid_t pid);
+int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES]);
+int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[MAX_NODES]);
 
 static inline uint64_t KBToHugePageCeil(uint64_t memSize)
 {

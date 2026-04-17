@@ -68,7 +68,7 @@ TEST_F(SmapConfigTest, TestCalcProcessConfigLen)
     int nrProcess = 4;
 
     ret = CalcProcessConfigLen(0);
-    EXPECT_EQ(0, ret);
+    EXPECT_EQ(PAYLOAD_HEADER_LEN, ret);
 
     ret = CalcProcessConfigLen(nrProcess);
     EXPECT_EQ(PAYLOAD_HEADER_LEN + (nrProcess * CONFIG_PROC_LEN), ret);
@@ -84,18 +84,22 @@ TEST_F(SmapConfigTest, TestGetProcessConfigLen)
     EXPECT_EQ(header.len + PAYLOAD_HEADER_LEN, ret);
 }
 
-extern "C" size_t CalcConfigLen(int nrProcess);
+extern "C" size_t CalcGroupProcessConfigLen(int nrProcess);
+extern "C" size_t CalcConfigLen(int nrProcess, int nrGroupProcess);
 TEST_F(SmapConfigTest, TestCalcConfigLen)
 {
     int ret;
     int nrProcess = 2;
+    int nrGroupProcess = 1;
     int numaConfigLen = 20;
     int processConfigLen = 30;
+    int groupProcessConfigLen = 40;
 
     MOCKER(CalcNumaConfigLen).stubs().will(returnValue(numaConfigLen));
     MOCKER(CalcProcessConfigLen).stubs().will(returnValue(processConfigLen));
-    ret = CalcConfigLen(nrProcess);
-    EXPECT_EQ(CONFIG_HEADER_LEN + numaConfigLen + processConfigLen, ret);
+    MOCKER(CalcGroupProcessConfigLen).stubs().will(returnValue(groupProcessConfigLen));
+    ret = CalcConfigLen(nrProcess, nrGroupProcess);
+    EXPECT_EQ(CONFIG_HEADER_LEN + numaConfigLen + processConfigLen + groupProcessConfigLen, ret);
 }
 
 extern "C" char *JumpToNumaConfig(char *base);
@@ -304,6 +308,7 @@ TEST_F(SmapConfigTest, TestWriteNumaConfig)
 }
 
 extern "C" void UnmapConfig(char *addr, size_t len);
+extern "C" void WriteEmptyProcessConfigs(char *base);
 extern "C" int InitSmapConfig(int fd);
 TEST_F(SmapConfigTest, TestInitSmapConfigErrOne)
 {
@@ -339,6 +344,7 @@ TEST_F(SmapConfigTest, TestInitSmapConfig)
     MOCKER(MapConfig).stubs().will(returnValue(&addr));
     MOCKER(WriteHeader).stubs().will(ignoreReturnValue());
     MOCKER(WriteNumaConfig).stubs().will(ignoreReturnValue());
+    MOCKER(WriteEmptyProcessConfigs).stubs().will(ignoreReturnValue());
     MOCKER(UnmapConfig).stubs().will(ignoreReturnValue());
     ret = InitSmapConfig(fd);
     EXPECT_EQ(0, ret);
@@ -349,7 +355,7 @@ TEST_F(SmapConfigTest, TestIsConfigHeaderValid)
 {
     bool ret;
     size_t numaConfigLen = 20;
-    size_t minLen = CONFIG_HEADER_LEN + numaConfigLen;
+    size_t minLen = CONFIG_HEADER_LEN + numaConfigLen + PAYLOAD_HEADER_LEN + PAYLOAD_HEADER_LEN;
     struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER, .headerLen = CONFIG_HEADER_LEN, .totalLen = minLen };
 
     MOCKER(CalcNumaConfigLen).stubs().will(returnValue(numaConfigLen));
@@ -675,6 +681,29 @@ TEST_F(SmapConfigTest, TestWriteProcessConfig)
     free(payload);
 }
 
+extern "C" int WriteGroupProcessConfig(char *groupBase, struct GroupProcessPayload *p, int nrPayload);
+TEST_F(SmapConfigTest, TestWriteGroupProcessConfig)
+{
+    int nrProcess = 1;
+    struct GroupProcessPayload np = {};
+    char *groupBase;
+    struct GroupProcessPayload *payload;
+
+    np.pid = 1025;
+    np.type = VM_TYPE;
+    np.groupCount = 1;
+    groupBase = (char *)calloc(1, PAYLOAD_HEADER_LEN + CONFIG_GROUP_PROC_LEN);
+    ASSERT_NE(nullptr, groupBase);
+    payload = (struct GroupProcessPayload *)(groupBase + PAYLOAD_HEADER_LEN);
+
+    int ret = WriteGroupProcessConfig(groupBase, &np, nrProcess);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(CONFIG_GROUP_PROC_LEN, ((struct PayloadHeader *)groupBase)->len);
+    EXPECT_EQ(np.pid, payload[0].pid);
+
+    free(groupBase);
+}
+
 extern "C" int BuildAllProcessPayload(struct ProcessPayload **payload, int *len);
 TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
 {
@@ -692,6 +721,8 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
 
     ASSERT_NE(nullptr, attr1);
     ASSERT_NE(nullptr, attr2);
+    memset(attr1, 0, sizeof(*attr1));
+    memset(attr2, 0, sizeof(*attr2));
 
     attr1->type = VM_TYPE;
     attr1->pid = 1025;
@@ -744,6 +775,8 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
 
     ASSERT_NE(nullptr, attr1);
     ASSERT_NE(nullptr, attr2);
+    memset(attr1, 0, sizeof(*attr1));
+    memset(attr2, 0, sizeof(*attr2));
 
     attr1->type = PROCESS_TYPE;
     attr1->pid = 1234;
@@ -781,26 +814,86 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
     free(payload);
 }
 
-extern "C" int MapAndWriteProcessConfig(int fd, size_t mapLen, struct ProcessPayload *payload, int nrPayload);
+extern "C" int BuildAllGroupProcessPayload(struct GroupProcessPayload **payload, int *len);
+TEST_F(SmapConfigTest, TestBuildAllGroupProcessPayload)
+{
+    int len;
+    struct ProcessManager manager = { .processes = nullptr, .nr = { 0, 1 } };
+    ProcessAttr *attr = nullptr;
+    struct GroupProcessPayload *payload = nullptr;
+
+    attr = (ProcessAttr *)calloc(1, sizeof(*attr));
+    ASSERT_NE(nullptr, attr);
+    attr->type = VM_TYPE;
+    attr->pid = 1025;
+    attr->state = PROC_IDLE;
+    attr->scanTime = 200;
+    attr->scanType = NORMAL_SCAN;
+    attr->migrateMode = MIG_MEMSIZE_MODE;
+    attr->numaAttr.numaNodes = 0x11;
+    attr->groupPolicy.enabled = true;
+    attr->groupPolicy.groupCount = 1;
+    attr->groupPolicy.groups[0].localCount = 1;
+    attr->groupPolicy.groups[0].localNids[0] = 0;
+    attr->groupPolicy.groups[0].targetCount = 1;
+    attr->groupPolicy.groups[0].targets[0].nid = 4;
+    attr->groupPolicy.groups[0].targets[0].quotaPages = 2;
+    attr->groupPolicy.groups[0].targets[0].usedPages = 1;
+    attr->groupPolicy.groups[0].localLimitPages = 3;
+
+    LinkedListAdd(&manager.processes, &attr);
+
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    int ret = BuildAllGroupProcessPayload(&payload, &len);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, len);
+    ASSERT_NE(nullptr, payload);
+    EXPECT_EQ(attr->pid, payload[0].pid);
+    EXPECT_EQ(1, payload[0].groupCount);
+    EXPECT_EQ(2, payload[0].groups[0].targets[0].quotaPages);
+
+    attr = manager.processes;
+    while (attr) {
+        LinkedListRemove(&attr, &manager.processes);
+        attr = manager.processes;
+    }
+    free(payload);
+}
+
+extern "C" int MapAndWriteProcessConfig(int fd, size_t mapLen, struct ProcessPayload *payload, int nrPayload,
+                                        struct GroupProcessPayload *groupPayload, int nrGroupPayload);
+extern "C" char *JumpToGroupProcessConfig(char *processBase);
 TEST_F(SmapConfigTest, TestMapAndWriteProcessConfig)
 {
     int ret;
     int fd;
     int nrPayload = 1;
+    int nrGroupPayload = 1;
     char addr;
     char processBase;
+    char groupBase;
     size_t mapLen;
     struct ProcessPayload payload;
+    struct GroupProcessPayload groupPayload;
 
     MOCKER(MapConfig).stubs().will(returnValue(static_cast<char *>(nullptr)));
-    ret = MapAndWriteProcessConfig(fd, mapLen, &payload, nrPayload);
+    ret = MapAndWriteProcessConfig(fd, mapLen, &payload, nrPayload, &groupPayload, nrGroupPayload);
     EXPECT_EQ(-EBADF, ret);
 
     GlobalMockObject::verify();
     MOCKER(MapConfig).stubs().will(returnValue(&addr));
     MOCKER(JumpToProcessConfig).stubs().will(returnValue(&processBase));
     MOCKER(WriteProcessConfig).stubs().will(returnValue(-EINVAL));
-    ret = MapAndWriteProcessConfig(fd, mapLen, &payload, nrPayload);
+    ret = MapAndWriteProcessConfig(fd, mapLen, &payload, nrPayload, &groupPayload, nrGroupPayload);
+    EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(MapConfig).stubs().will(returnValue(&addr));
+    MOCKER(JumpToProcessConfig).stubs().will(returnValue(&processBase));
+    MOCKER(WriteProcessConfig).stubs().will(returnValue(0));
+    MOCKER(JumpToGroupProcessConfig).stubs().will(returnValue(&groupBase));
+    MOCKER(WriteGroupProcessConfig).stubs().will(returnValue(-EINVAL));
+    ret = MapAndWriteProcessConfig(fd, mapLen, &payload, nrPayload, &groupPayload, nrGroupPayload);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -809,19 +902,27 @@ TEST_F(SmapConfigTest, TestMapAndWriteProcessConfigZeroPayload)
     int ret;
     int fd;
     int nrPayload = 0;
+    int nrGroupPayload = 0;
     char addr;
+    char processBase;
+    char groupBase;
     size_t mapLen;
     struct ProcessPayload payload;
+    struct GroupProcessPayload groupPayload;
 
     MOCKER(MapConfig).stubs().will(returnValue(&addr));
-    MOCKER(JumpToProcessConfig).expects(never()).will(returnValue(static_cast<char *>(nullptr)));
+    MOCKER(JumpToProcessConfig).stubs().will(returnValue(&processBase));
+    MOCKER(WriteProcessConfig).stubs().will(returnValue(0));
+    MOCKER(JumpToGroupProcessConfig).stubs().will(returnValue(&groupBase));
+    MOCKER(WriteGroupProcessConfig).stubs().will(returnValue(0));
     MOCKER(WriteHeader).stubs().will(ignoreReturnValue());
     MOCKER(UnmapConfig).stubs().will(ignoreReturnValue());
-    ret = MapAndWriteProcessConfig(fd, mapLen, &payload, nrPayload);
+    ret = MapAndWriteProcessConfig(fd, mapLen, &payload, nrPayload, &groupPayload, nrGroupPayload);
     EXPECT_EQ(0, ret);
 }
 
 extern "C" int ChangeProcessConfig(int fd);
+extern "C" int BuildAllGroupProcessPayload(struct GroupProcessPayload **payload, int *len);
 TEST_F(SmapConfigTest, TestChangeProcessConfigExtendFile)
 {
     int ret;
@@ -832,6 +933,7 @@ TEST_F(SmapConfigTest, TestChangeProcessConfigExtendFile)
 
     MOCKER(ParseHeader).stubs().with(any(), outBoundP(&header, sizeof(header))).will(returnValue(0));
     MOCKER(BuildAllProcessPayload).stubs().will(returnValue(0));
+    MOCKER(BuildAllGroupProcessPayload).stubs().will(returnValue(0));
     MOCKER(CalcConfigLen).stubs().will(returnValue(newLen));
     MOCKER(TruncateConfig).stubs().will(returnValue(0));
     MOCKER(MapAndWriteProcessConfig).stubs().will(returnValue(-ENOENT));
@@ -849,6 +951,7 @@ TEST_F(SmapConfigTest, TestChangeProcessConfigShrinkFile)
 
     MOCKER(ParseHeader).stubs().with(any(), outBoundP(&header, sizeof(header))).will(returnValue(0));
     MOCKER(BuildAllProcessPayload).stubs().will(returnValue(0));
+    MOCKER(BuildAllGroupProcessPayload).stubs().will(returnValue(0));
     MOCKER(CalcConfigLen).stubs().will(returnValue(newLen));
     MOCKER(TruncateConfig).stubs().will(returnValue(-EPERM));
     MOCKER(MapAndWriteProcessConfig).stubs().will(returnValue(0));
@@ -866,6 +969,14 @@ TEST_F(SmapConfigTest, TestChangeProcessConfig)
     GlobalMockObject::verify();
     MOCKER(ParseHeader).stubs().will(returnValue(0));
     MOCKER(BuildAllProcessPayload).stubs().will(returnValue(-EINVAL));
+    MOCKER(BuildAllGroupProcessPayload).expects(never());
+    ret = ChangeProcessConfig(fd);
+    EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(ParseHeader).stubs().will(returnValue(0));
+    MOCKER(BuildAllProcessPayload).stubs().will(returnValue(0));
+    MOCKER(BuildAllGroupProcessPayload).stubs().will(returnValue(-EINVAL));
     ret = ChangeProcessConfig(fd);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -878,7 +989,7 @@ TEST_F(SmapConfigTest, TestParseConfigOne)
     int fd;
     char base;
     char numaBase;
-    struct SmapConfigHeader header;
+    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER_V1 };
 
     MOCKER(MapConfig).stubs().will(returnValue(static_cast<char *>(nullptr)));
     ret = ParseConfig(fd, &header);
@@ -904,7 +1015,7 @@ TEST_F(SmapConfigTest, TestParseConfigTwo)
     char base;
     char numaBase;
     char processBase;
-    struct SmapConfigHeader header;
+    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER_V1 };
 
     MOCKER(MapConfig).stubs().will(returnValue(reinterpret_cast<char *>(&base)));
     MOCKER(IsRunModeValid).stubs().will(returnValue(true));
@@ -935,13 +1046,56 @@ TEST_F(SmapConfigTest, TestParseConfigTwo)
     EXPECT_EQ(-EPERM, ret);
 }
 
+extern "C" bool IsGroupProcessConfigValid(char *groupBase, char *addr, size_t totalLen);
+extern "C" int RecoverGroupProcessConfig(char *groupBase);
+TEST_F(SmapConfigTest, TestParseConfigV2GroupConfig)
+{
+    int ret;
+    int fd;
+    char base[PAYLOAD_HEADER_LEN * 2] = { 0 };
+    char numaBase;
+    char *processBase = base;
+    char *groupBase = base + PAYLOAD_HEADER_LEN;
+    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER_V2, .totalLen = sizeof(base) };
+
+    MOCKER(MapConfig).stubs().will(returnValue(reinterpret_cast<char *>(base)));
+    MOCKER(IsRunModeValid).stubs().will(returnValue(true));
+    MOCKER(RecoverRunMode).stubs().will(ignoreReturnValue());
+    MOCKER(JumpToNumaConfig).stubs().will(returnValue(reinterpret_cast<char *>(&numaBase)));
+    MOCKER(IsNumaConfigValid).stubs().will(returnValue(true));
+    MOCKER(RecoverNumaConfig).stubs().will(returnValue(0));
+    MOCKER(JumpToProcessConfig).stubs().will(returnValue(reinterpret_cast<char *>(processBase)));
+    MOCKER(IsProcessConfigValid).stubs().will(returnValue(true));
+    MOCKER(RecoverProcessConfig).stubs().will(returnValue(0));
+    MOCKER(JumpToGroupProcessConfig).stubs().will(returnValue(reinterpret_cast<char *>(groupBase)));
+    MOCKER(IsGroupProcessConfigValid).stubs().will(returnValue(false));
+    ret = ParseConfig(fd, &header);
+    EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(MapConfig).stubs().will(returnValue(reinterpret_cast<char *>(base)));
+    MOCKER(IsRunModeValid).stubs().will(returnValue(true));
+    MOCKER(RecoverRunMode).stubs().will(ignoreReturnValue());
+    MOCKER(JumpToNumaConfig).stubs().will(returnValue(reinterpret_cast<char *>(&numaBase)));
+    MOCKER(IsNumaConfigValid).stubs().will(returnValue(true));
+    MOCKER(RecoverNumaConfig).stubs().will(returnValue(0));
+    MOCKER(JumpToProcessConfig).stubs().will(returnValue(reinterpret_cast<char *>(processBase)));
+    MOCKER(IsProcessConfigValid).stubs().will(returnValue(true));
+    MOCKER(RecoverProcessConfig).stubs().will(returnValue(0));
+    MOCKER(JumpToGroupProcessConfig).stubs().will(returnValue(reinterpret_cast<char *>(groupBase)));
+    MOCKER(IsGroupProcessConfigValid).stubs().will(returnValue(true));
+    MOCKER(RecoverGroupProcessConfig).stubs().will(returnValue(-EPERM));
+    ret = ParseConfig(fd, &header);
+    EXPECT_EQ(-EPERM, ret);
+}
+
 TEST_F(SmapConfigTest, TestParseConfigThree)
 {
     int ret;
     int fd;
     char base;
     char numaBase;
-    struct SmapConfigHeader header;
+    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER_V1 };
     MOCKER(MapConfig).stubs().will(returnValue(reinterpret_cast<char *>(&base)));
     MOCKER(IsRunModeValid).stubs().will(returnValue(false));
     ret = ParseConfig(fd, &header);
