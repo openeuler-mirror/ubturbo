@@ -537,6 +537,10 @@ static int CheckGroupedTarget(const struct MigrationGroup *group, int payloadIdx
             SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target nid %d invalid.", payloadIdx, groupIdx, i, nid);
             return -EINVAL;
         }
+        if (IsNodeForbidden(nid)) {
+            SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target nid %d is forbidden.", payloadIdx, groupIdx, i, nid);
+            return -EAGAIN;
+        }
         if (group->targets[i].quotaSize < MIN_GROUP_QUOTA_SIZE_KB) {
             SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target quota %lluKB is too small.",
                               payloadIdx, groupIdx, i, group->targets[i].quotaSize);
@@ -1192,6 +1196,14 @@ static int CheckMigrateBackMsg(struct MigrateBackMsg *msg)
             SMAP_LOGGER_ERROR("mig back msg num: [%d] destNode %d invalid.", i, destNid);
             return -EINVAL;
         }
+    }
+    return 0;
+}
+
+static int CheckMigrateBackReadyMsg(struct MigrateBackMsg *msg)
+{
+    for (int i = 0; i < msg->count; i++) {
+        int srcNid = msg->payload[i].srcNid;
         // 检查待迁回的NUMA上是否有正在搬迁远端的进程
         if (IsRemoteNumaMigrateBackAllowed(srcNid) <= 0) {
             SMAP_LOGGER_ERROR("srcNode %d not allowed to migrate back.", srcNid);
@@ -1214,6 +1226,19 @@ static int CheckMigrateBackGroupedPidLocked(struct MigrateBackMsg *msg)
             SMAP_LOGGER_ERROR("migrate back does not support grouped pid on remote node %d.", srcNid);
             return -EINVAL;
         }
+    }
+    return 0;
+}
+
+static int SetMigrateBackForbiddenLocked(struct MigrateBackMsg *msg)
+{
+    int ret = CheckMigrateBackGroupedPidLocked(msg);
+    if (ret) {
+        return ret;
+    }
+    for (int i = 0; i < msg->count; i++) {
+        SetNodeForbidden(msg->payload[i].srcNid);
+        SMAP_LOGGER_INFO("smap disable node %d because migrate back.", msg->payload[i].srcNid);
     }
     return 0;
 }
@@ -1248,22 +1273,27 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
         SMAP_LOGGER_ERROR("Smap check mig back msg err: %d.", ret);
         return ret;
     }
+    // save forbidden info
+    EnvAtomic tmpForbiddenNodes[MAX_NODES];
+    SaveNodeForbidden(tmpForbiddenNodes, MAX_NODES);
+
     struct ProcessManager *manager = GetProcessManager();
     EnvMutexLock(&manager->lock);
-    ret = CheckMigrateBackGroupedPidLocked(msg);
+    ret = SetMigrateBackForbiddenLocked(msg);
     EnvMutexUnlock(&manager->lock);
     if (ret) {
         SMAP_LOGGER_ERROR("Smap check grouped pid for mig back err: %d.", ret);
         return ret;
     }
-    // save forbidden info
-    EnvAtomic tmpForbiddenNodes[MAX_NODES];
-    for (int i = 0; i < MAX_NODES; i++) {
-        SaveNodeForbidden(tmpForbiddenNodes, MAX_NODES);
+
+    ret = CheckMigrateBackReadyMsg(msg);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Smap check mig back ready err: %d.", ret);
+        RecoverNodeForbidden(tmpForbiddenNodes, MAX_NODES);
+        return ret;
     }
+
     for (int i = 0; i < msg->count; i++) {
-        SetNodeForbidden(msg->payload[i].srcNid);
-        SMAP_LOGGER_INFO("smap disable node %d because migrate back.", msg->payload[i].srcNid);
         if (!CheckProcessIdle(msg->payload[i].srcNid)) {
             SMAP_LOGGER_ERROR("Smap check migrate idle timeout.");
             RecoverNodeForbidden(tmpForbiddenNodes, MAX_NODES);

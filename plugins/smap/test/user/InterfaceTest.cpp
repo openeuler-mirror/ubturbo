@@ -831,6 +831,23 @@ TEST_F(InterfaceTest, TestBuildGroupPolicyRejectRemotePagesExceedQuota)
     EXPECT_EQ(-EINVAL, ret);
 }
 
+extern "C" int CheckGroupedTarget(const struct MigrationGroup *group, int payloadIdx, int groupIdx);
+extern "C" bool IsRemoteNidValid(int nid);
+TEST_F(InterfaceTest, TestCheckGroupedTargetRejectForbiddenTarget)
+{
+    struct MigrationGroup group = {};
+
+    group.targetCount = 1;
+    group.targets[0].nid = 4;
+    group.targets[0].quotaSize = 2048;
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    EnvAtomicSet(&g_forbiddenNodes[4], 1);
+
+    int ret = CheckGroupedTarget(&group, 0, 0);
+    EXPECT_EQ(-EAGAIN, ret);
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
 TEST_F(InterfaceTest, TestSmapMigrateBackWithSmapIsNotRunning)
 {
     int ret;
@@ -859,6 +876,7 @@ TEST_F(InterfaceTest, TestSmapMigrateBackWithMessageCheckFailed)
 }
 extern "C" bool CheckProcessIdle(int nid);
 extern "C" bool IsAllL2NodePidInState(ProcessState state, int l2Node);
+extern "C" int CheckMigrateBackReadyMsg(struct MigrateBackMsg *msg);
 TEST_F(InterfaceTest, TestCheckProcessIdle)
 {
     MOCKER(IsAllL2NodePidInState).stubs().will(returnValue(true));
@@ -882,6 +900,7 @@ TEST_F(InterfaceTest, TestSmapMigrateBackWithProcessIdleCheckFailed)
     msg.count = 1;
     EnvAtomicSet(&g_status, 1);
     MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(0));
     MOCKER(CheckProcessIdle).stubs().will(returnValue(false));
     ret = ubturbo_smap_migrate_back(&msg);
     EXPECT_EQ(-EAGAIN, ret);
@@ -898,6 +917,7 @@ TEST_F(InterfaceTest, TestSmapMigrateBackSuccess)
 
     EnvAtomicSet(&g_status, 1);
     MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(0));
     MOCKER(SetNodeForbidden).stubs().will(ignoreReturnValue());
     MOCKER(IoctlHandler).stubs().will(returnValue(0));
     ret = ubturbo_smap_migrate_back(&msgc);
