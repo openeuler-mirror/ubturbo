@@ -43,6 +43,7 @@
 #define NUMA_MAPS_MAX_PATTERN_LEN 20
 #define LOCAL_NUMA_BIT_MAP_MASK 0xF
 #define MIN_GROUP_QUOTA_SIZE_KB KB_PER_2MB
+#define MAX_GROUP_TARGET_ENTRY (MAX_MIGRATION_GROUP_NUM * MAX_GROUP_REMOTE_NUMA)
 
 static EnvAtomic g_status;
 
@@ -523,46 +524,6 @@ static bool HasDuplicateInt(const int *arr, int count)
     return false;
 }
 
-static bool IsSameLocalSet(const MigrationGroupAttr *oldGroup, const struct MigrationGroup *newGroup)
-{
-    if (oldGroup->localCount != newGroup->localCount) {
-        return false;
-    }
-    for (int i = 0; i < newGroup->localCount; i++) {
-        bool found = false;
-        for (int j = 0; j < oldGroup->localCount; j++) {
-            if (newGroup->localNids[i] == oldGroup->localNids[j]) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static uint64_t FindInheritedGroupedUsedPages(const GroupMigrationPolicy *oldPolicy,
-                                              const struct MigrationGroup *newGroup, int targetNid)
-{
-    if (!oldPolicy || !oldPolicy->enabled) {
-        return 0;
-    }
-    for (int i = 0; i < oldPolicy->groupCount; i++) {
-        const MigrationGroupAttr *oldGroup = &oldPolicy->groups[i];
-        if (!IsSameLocalSet(oldGroup, newGroup)) {
-            continue;
-        }
-        for (int j = 0; j < oldGroup->targetCount; j++) {
-            if (oldGroup->targets[j].nid == targetNid) {
-                return oldGroup->targets[j].usedPages;
-            }
-        }
-    }
-    return 0;
-}
-
 static int CheckGroupedTarget(const struct MigrationGroup *group, int payloadIdx, int groupIdx)
 {
     int targets[MAX_GROUP_REMOTE_NUMA] = { 0 };
@@ -601,6 +562,11 @@ static int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int pay
     if (attr && !attr->groupPolicy.enabled) {
         SMAP_LOGGER_ERROR("pid %d already uses normal migrate out.", payload->pid);
         return -EINVAL;
+    }
+    if (attr && attr->state != PROC_IDLE) {
+        SMAP_LOGGER_ERROR("pid %d state %d is busy for grouped policy update.",
+                          payload->pid, attr->state);
+        return -EAGAIN;
     }
     for (int i = 0; i < payload->groupCount; i++) {
         struct MigrationGroup *group = &payload->groups[i];
@@ -689,8 +655,171 @@ static void BuildGroupedNodeBitmap(const struct GroupedMigrateOutPayload *payloa
     }
 }
 
-static void BuildGroupPolicy(const struct GroupedMigrateOutPayload *payload, const GroupMigrationPolicy *oldPolicy,
-                             GroupMigrationPolicy *policy)
+static int AddNumaPagesFromLine(char *line, uint64_t numaPages[MAX_NODES])
+{
+    char pattern[NUMA_MAPS_MAX_PATTERN_LEN];
+
+    for (int nid = 0; nid < MAX_NODES; nid++) {
+        int ret = snprintf_s(pattern, sizeof(pattern), sizeof(pattern) - 1, " N%d=", nid);
+        if (ret < 0) {
+            SMAP_LOGGER_ERROR("Set numa maps pattern failed, nid %d.", nid);
+            return -EINVAL;
+        }
+
+        char *substr = strstr(line, pattern);
+        if (!substr) {
+            continue;
+        }
+
+        char *value = substr + strlen(pattern);
+        char *end = NULL;
+        errno = 0;
+        uint64_t pages = strtoull(value, &end, 10);
+        if (value == end || errno == ERANGE || UINT64_MAX - numaPages[nid] < pages) {
+            SMAP_LOGGER_ERROR("Parse numa maps pages failed, nid %d, line %s.", nid, line);
+            return -EINVAL;
+        }
+        numaPages[nid] += pages;
+    }
+    return 0;
+}
+
+static int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES])
+{
+    char line[MAX_LINE_LENGTH];
+    FILE *fp = OpenNumaMaps(pid);
+    if (!fp) {
+        SMAP_LOGGER_ERROR("Open pid %d numa maps failed.", pid);
+        return -EINVAL;
+    }
+
+    int ret = 0;
+    while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
+        if (!IsNumaMapLineHuge(line)) {
+            continue;
+        }
+        ret = AddNumaPagesFromLine(line, numaPages);
+        if (ret) {
+            break;
+        }
+    }
+    if (pclose(fp)) {
+        SMAP_LOGGER_WARNING("Close numa maps failed, pid=%d.", pid);
+    }
+    return ret;
+}
+
+static int CollectGroupedTargetEntries(GroupMigrationPolicy *policy, int targetNid,
+                                       int groupIdx[MAX_GROUP_TARGET_ENTRY],
+                                       int targetIdx[MAX_GROUP_TARGET_ENTRY])
+{
+    int count = 0;
+    for (int i = 0; i < policy->groupCount; i++) {
+        MigrationGroupAttr *group = &policy->groups[i];
+        for (int j = 0; j < group->targetCount; j++) {
+            if (group->targets[j].nid != targetNid) {
+                continue;
+            }
+            if (count >= MAX_GROUP_TARGET_ENTRY) {
+                SMAP_LOGGER_ERROR("Grouped target entry count exceeds limit.");
+                return -EINVAL;
+            }
+            groupIdx[count] = i;
+            targetIdx[count] = j;
+            count++;
+        }
+    }
+    return count;
+}
+
+static int InitGroupedTargetUsedPages(pid_t pid, GroupMigrationPolicy *policy,
+                                      int targetNid, uint64_t residentPages)
+{
+    int groupIdx[MAX_GROUP_TARGET_ENTRY] = { 0 };
+    int targetIdx[MAX_GROUP_TARGET_ENTRY] = { 0 };
+    int entryCount = CollectGroupedTargetEntries(policy, targetNid, groupIdx, targetIdx);
+    if (entryCount <= 0) {
+        SMAP_LOGGER_ERROR("pid %d has unmanaged remote node %d resident pages %llu.",
+                          pid, targetNid, residentPages);
+        return -EINVAL;
+    }
+
+    uint64_t quotaSum = 0;
+    for (int i = 0; i < entryCount; i++) {
+        GroupTargetAttr *target = &policy->groups[groupIdx[i]].targets[targetIdx[i]];
+        if (UINT64_MAX - quotaSum < target->quotaPages) {
+            SMAP_LOGGER_ERROR("pid %d remote node %d quota sum overflow.", pid, targetNid);
+            return -EINVAL;
+        }
+        quotaSum += target->quotaPages;
+    }
+    if (quotaSum == 0) {
+        SMAP_LOGGER_ERROR("pid %d remote node %d quota sum is zero.", pid, targetNid);
+        return -EINVAL;
+    }
+    if (residentPages > quotaSum) {
+        SMAP_LOGGER_ERROR("pid %d remote node %d resident pages %llu exceed quota sum %llu.",
+                          pid, targetNid, residentPages, quotaSum);
+        return -EINVAL;
+    }
+
+    uint64_t assignedPages = 0;
+    for (int i = 0; i < entryCount; i++) {
+        GroupTargetAttr *target = &policy->groups[groupIdx[i]].targets[targetIdx[i]];
+        target->usedPages = (__uint128_t)residentPages * target->quotaPages / quotaSum;
+        assignedPages += target->usedPages;
+    }
+
+    uint64_t remainingPages = residentPages - assignedPages;
+    while (remainingPages > 0) {
+        bool progressed = false;
+        for (int i = 0; i < entryCount && remainingPages > 0; i++) {
+            GroupTargetAttr *target = &policy->groups[groupIdx[i]].targets[targetIdx[i]];
+            if (target->usedPages >= target->quotaPages) {
+                continue;
+            }
+            target->usedPages++;
+            remainingPages--;
+            progressed = true;
+        }
+        if (!progressed) {
+            SMAP_LOGGER_ERROR("pid %d remote node %d used pages cannot fit quota.", pid, targetNid);
+            return -EINVAL;
+        }
+    }
+
+    for (int i = 0; i < entryCount; i++) {
+        GroupTargetAttr *target = &policy->groups[groupIdx[i]].targets[targetIdx[i]];
+        if (target->usedPages > target->quotaPages) {
+            SMAP_LOGGER_ERROR("pid %d remote node %d used pages %llu exceed quota %llu.",
+                              pid, targetNid, target->usedPages, target->quotaPages);
+            return -EINVAL;
+        }
+        SMAP_LOGGER_INFO("pid %d remote node %d group %d target used pages %llu.",
+                         pid, targetNid, groupIdx[i], target->usedPages);
+    }
+    return 0;
+}
+
+static int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy,
+                                const uint64_t numaPages[MAX_NODES])
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int nid = nrLocalNuma; nid < MAX_NODES; nid++) {
+        if (numaPages[nid] == 0) {
+            continue;
+        }
+        int ret = InitGroupedTargetUsedPages(pid, policy, nid, numaPages[nid]);
+        if (ret) {
+            return ret;
+        }
+    }
+    return 0;
+}
+
+static int BuildGroupPolicy(const struct GroupedMigrateOutPayload *payload,
+                            const uint64_t numaPages[MAX_NODES],
+                            GroupMigrationPolicy *policy)
 {
     policy->enabled = true;
     policy->groupCount = payload->groupCount;
@@ -706,20 +835,14 @@ static void BuildGroupPolicy(const struct GroupedMigrateOutPayload *payload, con
         for (int j = 0; j < group->targetCount; j++) {
             attr->targets[j].nid = group->targets[j].nid;
             attr->targets[j].quotaPages = KBToHugePage(group->targets[j].quotaSize);
-            uint64_t inheritedUsed = FindInheritedGroupedUsedPages(oldPolicy, group, attr->targets[j].nid);
-            attr->targets[j].usedPages = inheritedUsed > attr->targets[j].quotaPages ?
-                                         attr->targets[j].quotaPages : inheritedUsed;
-            if (inheritedUsed > attr->targets[j].quotaPages) {
-                SMAP_LOGGER_WARNING("grouped pid %d group %d target %d inherited used pages %llu exceed quota %llu.",
-                                    payload->pid, i, attr->targets[j].nid, inheritedUsed,
-                                    attr->targets[j].quotaPages);
-            }
+            attr->targets[j].usedPages = 0;
             SMAP_LOGGER_INFO("grouped pid %d group %d target %d quota pages %llu.",
                              payload->pid, i, attr->targets[j].nid, attr->targets[j].quotaPages);
         }
         SMAP_LOGGER_INFO("grouped pid %d group %d localLimit pages %llu.",
                          payload->pid, i, attr->localLimitPages);
     }
+    return InitGroupedUsedPages(payload->pid, policy, numaPages);
 }
 
 static int ProcessAddGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap)
@@ -743,14 +866,35 @@ static int ProcessAddGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, uin
     return ret;
 }
 
+static int BuildGroupedPolicies(struct GroupedMigrateOutMsg *msg,
+                                GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT])
+{
+    for (int i = 0; i < msg->count; i++) {
+        uint64_t numaPages[MAX_NODES] = { 0 };
+        pid_t pid = msg->payload[i].pid;
+        if (PidIsValid(pid)) {
+            int ret = GetPidNumaPagesFromNumaMaps(pid, numaPages);
+            if (ret) {
+                SMAP_LOGGER_ERROR("Get grouped pid %d numa pages failed: %d.", pid, ret);
+                return ret;
+            }
+        }
+
+        int ret = BuildGroupPolicy(&msg->payload[i], numaPages, &policies[i]);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Build grouped pid %d policy failed: %d.", pid, ret);
+            return ret;
+        }
+    }
+    return 0;
+}
+
 static int AddGroupedProcessesToGlobalManager(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                              GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT],
                                               bool *hasInvalidPid)
 {
     for (int i = 0; i < msg->count; i++) {
-        GroupMigrationPolicy policy = { 0 };
-        ProcessAttr *oldAttr = GetProcessAttrLocked(msg->payload[i].pid);
-        BuildGroupPolicy(&msg->payload[i], oldAttr ? &oldAttr->groupPolicy : NULL, &policy);
-        int ret = ProcessAddGroupedManage(msg->payload[i].pid, nodeBitmap[i], &policy);
+        int ret = ProcessAddGroupedManage(msg->payload[i].pid, nodeBitmap[i], &policies[i]);
         if (ret == -ESRCH) {
             *hasInvalidPid = true;
             continue;
@@ -1010,6 +1154,14 @@ int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidTy
         BuildGroupedNodeBitmap(&msg->payload[i], &nodeBitmap[i]);
     }
 
+    GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    ret = BuildGroupedPolicies(msg, policies);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Build grouped policies failed: %d.", ret);
+        EnvMutexUnlock(&manager->lock);
+        return ret;
+    }
+
     ret = ProcessAddGroupedTrackingManage(msg, nodeBitmap);
     if (ret) {
         SMAP_LOGGER_ERROR("Add grouped process tracking failed: %d.", ret);
@@ -1017,15 +1169,13 @@ int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidTy
         return ret;
     }
 
-    ret = AddGroupedProcessesToGlobalManager(msg, nodeBitmap, &hasInvalidPid);
+    ret = AddGroupedProcessesToGlobalManager(msg, nodeBitmap, policies, &hasInvalidPid);
     EnvMutexUnlock(&manager->lock);
     return (ret == 0 && hasInvalidPid) ? -ESRCH : ret;
 }
 
 static int CheckMigrateBackMsg(struct MigrateBackMsg *msg)
 {
-    struct ProcessManager *manager = GetProcessManager();
-
     if (!IsCountValid(msg->count, MAX_NR_MIGBACK)) {
         SMAP_LOGGER_ERROR("migrateback count : %d is invalid.", msg->count);
         return -EINVAL;
@@ -1034,10 +1184,6 @@ static int CheckMigrateBackMsg(struct MigrateBackMsg *msg)
         struct MigrateBackPayload *payload = &msg->payload[i];
         int srcNid = payload->srcNid;
         int destNid = payload->destNid;
-        if (IsAnyGroupedPidOnRemoteNid(srcNid)) {
-            SMAP_LOGGER_ERROR("migrate back does not support grouped pid on remote node %d.", srcNid);
-            return -EINVAL;
-        }
         if (IsNodeInvalid(srcNid)) {
             SMAP_LOGGER_ERROR("mig back msg num: [%d] srcNode %d invalid.", i, srcNid);
             return -EINVAL;
@@ -1055,6 +1201,18 @@ static int CheckMigrateBackMsg(struct MigrateBackMsg *msg)
         if (GetRunMode() != MEM_POOL_MODE && !CheckReadyMigrateBack(srcNid)) {
             SMAP_LOGGER_ERROR("migrate back error, srcNid %d not ready to migrate back.", srcNid);
             return -EAGAIN;
+        }
+    }
+    return 0;
+}
+
+static int CheckMigrateBackGroupedPidLocked(struct MigrateBackMsg *msg)
+{
+    for (int i = 0; i < msg->count; i++) {
+        int srcNid = msg->payload[i].srcNid;
+        if (IsAnyGroupedPidOnRemoteNid(srcNid)) {
+            SMAP_LOGGER_ERROR("migrate back does not support grouped pid on remote node %d.", srcNid);
+            return -EINVAL;
         }
     }
     return 0;
@@ -1088,6 +1246,14 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
     int ret = CheckMigrateBackMsg(msg);
     if (ret) {
         SMAP_LOGGER_ERROR("Smap check mig back msg err: %d.", ret);
+        return ret;
+    }
+    struct ProcessManager *manager = GetProcessManager();
+    EnvMutexLock(&manager->lock);
+    ret = CheckMigrateBackGroupedPidLocked(msg);
+    EnvMutexUnlock(&manager->lock);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Smap check grouped pid for mig back err: %d.", ret);
         return ret;
     }
     // save forbidden info
@@ -1130,14 +1296,23 @@ static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType)
             return -EINVAL;
         }
         for (int j = 0; j < msg->payload[i].count; j++) {
-            if (IsGroupedPidByRemoteNid(msg->payload[i].pid, msg->payload[i].nid[j])) {
-                SMAP_LOGGER_ERROR("remove does not support grouped pid %d remote node %d.",
-                                  msg->payload[i].pid, msg->payload[i].nid[j]);
-                return -EINVAL;
-            }
             if (!IsRemoveRemoteNidValid(msg->payload[i].nid[j])) {
                 SMAP_LOGGER_ERROR("[%d] pid:%d remote node%d invalid.",
                     i, msg->payload[i].pid, msg->payload[i].nid[j]);
+                return -EINVAL;
+            }
+        }
+    }
+    return 0;
+}
+
+static int CheckSmapRemoveGroupedPidLocked(struct RemoveMsg *msg)
+{
+    for (int i = 0; i < msg->count; i++) {
+        for (int j = 0; j < msg->payload[i].count; j++) {
+            if (IsGroupedPidByRemoteNid(msg->payload[i].pid, msg->payload[i].nid[j])) {
+                SMAP_LOGGER_ERROR("remove does not support grouped pid %d remote node %d.",
+                                  msg->payload[i].pid, msg->payload[i].nid[j]);
                 return -EINVAL;
             }
         }
@@ -1247,6 +1422,12 @@ int ubturbo_smap_remove(struct RemoveMsg *msg, int pidType)
 
     struct ProcessManager *manager = GetProcessManager();
     EnvMutexLock(&manager->lock);
+    ret = CheckSmapRemoveGroupedPidLocked(msg);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Check grouped pid for smap remove failed: %d.", ret);
+        EnvMutexUnlock(&manager->lock);
+        return ret;
+    }
     // send ioctl to remove pid
     ret = IoctlClearProcessRemoteNuma(msg);
     if (ret) {

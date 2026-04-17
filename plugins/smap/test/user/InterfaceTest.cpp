@@ -755,6 +755,82 @@ TEST_F(InterfaceTest, TestSmapMigrateOutFive)
     EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
 }
 
+extern "C" int BuildGroupPolicy(const struct GroupedMigrateOutPayload *payload,
+    const uint64_t numaPages[MAX_NODES], GroupMigrationPolicy *policy);
+TEST_F(InterfaceTest, TestBuildGroupPolicyInitSharedTargetUsedPages)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    GroupMigrationPolicy policy = {};
+    uint64_t numaPages[MAX_NODES] = { 0 };
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    payload.pid = 1234;
+    payload.groupCount = 2;
+    payload.groups[0].localCount = 1;
+    payload.groups[0].localNids[0] = 0;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 4;
+    payload.groups[0].targets[0].quotaSize = 4096;
+    payload.groups[0].localMemLimitSize = 2048;
+    payload.groups[1].localCount = 1;
+    payload.groups[1].localNids[0] = 1;
+    payload.groups[1].targetCount = 1;
+    payload.groups[1].targets[0].nid = 4;
+    payload.groups[1].targets[0].quotaSize = 8192;
+    payload.groups[1].localMemLimitSize = 2048;
+    numaPages[4] = 3;
+
+    int ret = BuildGroupPolicy(&payload, numaPages, &policy);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ((uint64_t)1, policy.groups[0].targets[0].usedPages);
+    EXPECT_EQ((uint64_t)2, policy.groups[1].targets[0].usedPages);
+}
+
+TEST_F(InterfaceTest, TestBuildGroupPolicyRejectUnmanagedRemotePages)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    GroupMigrationPolicy policy = {};
+    uint64_t numaPages[MAX_NODES] = { 0 };
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    payload.pid = 1234;
+    payload.groupCount = 1;
+    payload.groups[0].localCount = 1;
+    payload.groups[0].localNids[0] = 0;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 4;
+    payload.groups[0].targets[0].quotaSize = 4096;
+    payload.groups[0].localMemLimitSize = 2048;
+    numaPages[5] = 1;
+
+    int ret = BuildGroupPolicy(&payload, numaPages, &policy);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestBuildGroupPolicyRejectRemotePagesExceedQuota)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    GroupMigrationPolicy policy = {};
+    uint64_t numaPages[MAX_NODES] = { 0 };
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    payload.pid = 1234;
+    payload.groupCount = 1;
+    payload.groups[0].localCount = 1;
+    payload.groups[0].localNids[0] = 0;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 4;
+    payload.groups[0].targets[0].quotaSize = 2048;
+    payload.groups[0].localMemLimitSize = 2048;
+    numaPages[4] = 2;
+
+    int ret = BuildGroupPolicy(&payload, numaPages, &policy);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
 TEST_F(InterfaceTest, TestSmapMigrateBackWithSmapIsNotRunning)
 {
     int ret;
