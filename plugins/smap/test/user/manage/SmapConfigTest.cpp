@@ -704,6 +704,55 @@ TEST_F(SmapConfigTest, TestWriteGroupProcessConfig)
     free(groupBase);
 }
 
+extern "C" bool IsGroupProcessPayloadValid(struct GroupProcessPayload *payload);
+static void InitValidGroupProcessPayload(struct GroupProcessPayload *payload)
+{
+    *payload = {};
+    payload->pid = 1025;
+    payload->type = VM_TYPE;
+    payload->groupCount = 2;
+    payload->groups[0].localCount = 1;
+    payload->groups[0].localNids[0] = 0;
+    payload->groups[0].targetCount = 2;
+    payload->groups[0].targets[0].nid = 4;
+    payload->groups[0].targets[0].quotaPages = 2;
+    payload->groups[0].targets[1].nid = 5;
+    payload->groups[0].targets[1].quotaPages = 2;
+    payload->groups[0].localLimitPages = 3;
+    payload->groups[1].localCount = 1;
+    payload->groups[1].localNids[0] = 1;
+    payload->groups[1].targetCount = 1;
+    payload->groups[1].targets[0].nid = 6;
+    payload->groups[1].targets[0].quotaPages = 2;
+    payload->groups[1].localLimitPages = 3;
+}
+
+TEST_F(SmapConfigTest, TestIsGroupProcessPayloadValid)
+{
+    struct GroupProcessPayload payload = {};
+
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    InitValidGroupProcessPayload(&payload);
+    EXPECT_TRUE(IsGroupProcessPayloadValid(&payload));
+
+    InitValidGroupProcessPayload(&payload);
+    payload.groups[0].localCount = 2;
+    payload.groups[0].localNids[1] = 0;
+    EXPECT_FALSE(IsGroupProcessPayloadValid(&payload));
+
+    InitValidGroupProcessPayload(&payload);
+    payload.groups[1].localNids[0] = 0;
+    EXPECT_FALSE(IsGroupProcessPayloadValid(&payload));
+
+    InitValidGroupProcessPayload(&payload);
+    payload.groups[0].targets[1].nid = payload.groups[0].targets[0].nid;
+    EXPECT_FALSE(IsGroupProcessPayloadValid(&payload));
+
+    InitValidGroupProcessPayload(&payload);
+    payload.groups[0].targets[0].nid = 4 + REMOTE_NUMA_NUM;
+    EXPECT_FALSE(IsGroupProcessPayloadValid(&payload));
+}
+
 extern "C" int BuildAllProcessPayload(struct ProcessPayload **payload, int *len);
 TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
 {

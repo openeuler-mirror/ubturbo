@@ -552,8 +552,27 @@ static bool HasRecoveredProcessPid(struct ProcessManager *manager, pid_t pid)
     return false;
 }
 
+static bool HasDuplicateConfigInt(const int *arr, int count)
+{
+    for (int i = 0; i < count; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (arr[i] == arr[j]) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static inline bool IsRecoveredGroupTargetValid(int nid, int nrLocalNuma)
+{
+    return nid >= nrLocalNuma && nid < nrLocalNuma + REMOTE_NUMA_NUM && nid < MAX_NODES;
+}
+
 static bool IsGroupProcessPayloadValid(struct GroupProcessPayload *payload)
 {
+    bool localUsed[LOCAL_NUMA_NUM] = { 0 };
+
     if (payload->groupCount <= 0 || payload->groupCount > MAX_MIGRATION_GROUP_NUM) {
         SMAP_LOGGER_WARNING("grouped pid %d group count %d invalid.", payload->pid, payload->groupCount);
         return false;
@@ -568,19 +587,35 @@ static bool IsGroupProcessPayloadValid(struct GroupProcessPayload *payload)
             SMAP_LOGGER_WARNING("grouped pid %d group %d count or limit invalid.", payload->pid, i);
             return false;
         }
+        if (HasDuplicateConfigInt(group->localNids, group->localCount)) {
+            SMAP_LOGGER_WARNING("grouped pid %d group %d local nids duplicate.", payload->pid, i);
+            return false;
+        }
         for (int j = 0; j < group->localCount; j++) {
             int nid = group->localNids[j];
             if (nid < 0 || nid >= nrLocalNuma) {
                 SMAP_LOGGER_WARNING("grouped pid %d group %d local nid %d invalid.", payload->pid, i, nid);
                 return false;
             }
+            if (localUsed[nid]) {
+                SMAP_LOGGER_WARNING("grouped pid %d local nid %d is used by another group.", payload->pid, nid);
+                return false;
+            }
+            localUsed[nid] = true;
         }
+
+        int targets[MAX_GROUP_REMOTE_NUMA] = { 0 };
         for (int j = 0; j < group->targetCount; j++) {
             int nid = group->targets[j].nid;
-            if (nid < nrLocalNuma || nid >= MAX_NODES || group->targets[j].quotaPages == 0) {
+            if (!IsRecoveredGroupTargetValid(nid, nrLocalNuma) || group->targets[j].quotaPages == 0) {
                 SMAP_LOGGER_WARNING("grouped pid %d group %d target nid %d invalid.", payload->pid, i, nid);
                 return false;
             }
+            targets[j] = nid;
+        }
+        if (HasDuplicateConfigInt(targets, group->targetCount)) {
+            SMAP_LOGGER_WARNING("grouped pid %d group %d target nids duplicate.", payload->pid, i);
+            return false;
         }
     }
     return true;
