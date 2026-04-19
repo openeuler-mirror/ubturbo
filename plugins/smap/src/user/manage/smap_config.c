@@ -571,7 +571,7 @@ static inline bool IsRecoveredGroupTargetValid(int nid, int nrLocalNuma)
 
 static bool IsGroupProcessPayloadValid(struct GroupProcessPayload *payload)
 {
-    bool localUsed[LOCAL_NUMA_NUM] = { 0 };
+    bool localUsed[MAX_NODES] = { 0 };
 
     if (payload->groupCount <= 0 || payload->groupCount > MAX_MIGRATION_GROUP_NUM) {
         SMAP_LOGGER_WARNING("grouped pid %d group count %d invalid.", payload->pid, payload->groupCount);
@@ -593,7 +593,7 @@ static bool IsGroupProcessPayloadValid(struct GroupProcessPayload *payload)
         }
         for (int j = 0; j < group->localCount; j++) {
             int nid = group->localNids[j];
-            if (nid < 0 || nid >= nrLocalNuma) {
+            if (nid < 0 || nid >= nrLocalNuma || nid >= MAX_NODES) {
                 SMAP_LOGGER_WARNING("grouped pid %d group %d local nid %d invalid.", payload->pid, i, nid);
                 return false;
             }

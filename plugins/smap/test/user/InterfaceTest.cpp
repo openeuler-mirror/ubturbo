@@ -848,6 +848,98 @@ TEST_F(InterfaceTest, TestCheckGroupedTargetRejectForbiddenTarget)
     EnvAtomicSet(&g_forbiddenNodes[4], 0);
 }
 
+extern "C" int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int payloadIdx);
+TEST_F(InterfaceTest, TestCheckGroupedPayloadAcceptsHigherLocalNid)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    int oldNrLocalNuma = g_processManager.nrLocalNuma;
+
+    g_processManager.nrLocalNuma = 6;
+    payload.pid = 1234;
+    payload.groupCount = 1;
+    payload.groups[0].localCount = 1;
+    payload.groups[0].localNids[0] = 5;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 6;
+    payload.groups[0].targets[0].quotaSize = 2048;
+    payload.groups[0].localMemLimitSize = 2048;
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+
+    int ret = CheckGroupedPayload(&payload, 0);
+    EXPECT_EQ(0, ret);
+    g_processManager.nrLocalNuma = oldNrLocalNuma;
+}
+
+extern "C" int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pidType);
+extern "C" int BuildGroupedPolicies(struct GroupedMigrateOutMsg *msg,
+                                    GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT]);
+extern "C" int ProcessAddGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap);
+extern "C" int AddGroupedProcessesToGlobalManager(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                                  GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT],
+                                                  bool keepTracking[MAX_NR_GROUPED_MIGOUT]);
+TEST_F(InterfaceTest, TestGroupedMigrateOutRollsBackTrackingWhenManageFailed)
+{
+    struct GroupedMigrateOutMsg msg = {};
+
+    msg.count = 1;
+    msg.payload[0].pid = 1234;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckGroupedMigrateOutMsg).stubs().will(returnValue(0));
+    MOCKER(BuildGroupedPolicies).stubs().will(returnValue(0));
+    MOCKER(ProcessAddGroupedTrackingManage).stubs().will(returnValue(0));
+    MOCKER(AddGroupedProcessesToGlobalManager).stubs().will(returnValue(-ENOMEM));
+    MOCKER(AccessIoctlRemovePid).expects(once()).will(returnValue(0));
+
+    int ret = ubturbo_smap_migrate_out_grouped(&msg, VM_TYPE);
+    EXPECT_EQ(-ENOMEM, ret);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+    EnvAtomicSet(&g_status, 0);
+}
+
+TEST_F(InterfaceTest, TestGroupedManageFailureKeepsExistingPidTracking)
+{
+    struct GroupedMigrateOutMsg msg = {};
+    uint32_t nodeBitmap[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT] = {};
+    bool keepTracking[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    ProcessAttr existing = {};
+
+    msg.count = 2;
+    msg.payload[0].pid = 1234;
+    msg.payload[1].pid = 5678;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&existing)).then(returnValue((ProcessAttr *)nullptr));
+    MOCKER(ProcessAddGroupedManage).stubs().will(returnValue(0)).then(returnValue(-ENOMEM));
+
+    int ret = AddGroupedProcessesToGlobalManager(&msg, nodeBitmap, policies, keepTracking);
+    EXPECT_EQ(-ENOMEM, ret);
+    EXPECT_TRUE(keepTracking[0]);
+    EXPECT_FALSE(keepTracking[1]);
+}
+
+extern "C" void RollbackGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, const bool *keepTracking);
+static int CheckGroupedRollbackRemovePayload(int len, struct AccessRemovePidPayload *payload)
+{
+    EXPECT_EQ(1, len);
+    EXPECT_EQ(5678, payload[0].pid);
+    return 0;
+}
+
+TEST_F(InterfaceTest, TestGroupedTrackingRollbackSkipsKeptPid)
+{
+    struct GroupedMigrateOutMsg msg = {};
+    bool keepTracking[MAX_NR_GROUPED_MIGOUT] = { 0 };
+
+    msg.count = 2;
+    msg.payload[0].pid = 1234;
+    msg.payload[1].pid = 5678;
+    keepTracking[0] = true;
+    keepTracking[1] = false;
+    MOCKER(AccessIoctlRemovePid).expects(once()).will(invoke(CheckGroupedRollbackRemovePayload));
+
+    RollbackGroupedTrackingManage(&msg, keepTracking);
+}
+
 TEST_F(InterfaceTest, TestSmapMigrateBackWithSmapIsNotRunning)
 {
     int ret;

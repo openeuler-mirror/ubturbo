@@ -555,7 +555,7 @@ static int CheckGroupedTarget(const struct MigrationGroup *group, int payloadIdx
 
 static int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int payloadIdx)
 {
-    bool localUsed[LOCAL_NUMA_NUM] = { 0 };
+    bool localUsed[MAX_NODES] = { 0 };
     if (!IsCountValid(payload->groupCount, MAX_MIGRATION_GROUP_NUM)) {
         SMAP_LOGGER_ERROR("[%d] grouped group count %d invalid.", payloadIdx, payload->groupCount);
         return -EINVAL;
@@ -586,7 +586,7 @@ static int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int pay
         }
         for (int j = 0; j < group->localCount; j++) {
             int nid = group->localNids[j];
-            if (!IsLocalNidValid(nid) || nid < 0) {
+            if (!IsLocalNidValid(nid) || nid < 0 || nid >= MAX_NODES) {
                 SMAP_LOGGER_ERROR("[%d:%d:%d] grouped local nid %d invalid.", payloadIdx, i, j, nid);
                 return -EINVAL;
             }
@@ -729,22 +729,79 @@ static int BuildGroupedPolicies(struct GroupedMigrateOutMsg *msg,
     return 0;
 }
 
+static void RollbackGroupedManagerAdds(const pid_t *addedPids, int addedCnt);
+static void RollbackGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, const bool *keepTracking);
+
 static int AddGroupedProcessesToGlobalManager(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
                                               GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT],
-                                              bool *hasInvalidPid)
+                                              bool keepTracking[MAX_NR_GROUPED_MIGOUT])
 {
+    pid_t addedPids[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    int addedCnt = 0;
+    bool succeeded[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    bool existedBefore[MAX_NR_GROUPED_MIGOUT] = { 0 };
+
     for (int i = 0; i < msg->count; i++) {
+        existedBefore[i] = GetProcessAttrLocked(msg->payload[i].pid) != NULL;
         int ret = ProcessAddGroupedManage(msg->payload[i].pid, nodeBitmap[i], &policies[i]);
-        if (ret == -ESRCH) {
-            *hasInvalidPid = true;
-            continue;
-        }
         if (ret) {
             SMAP_LOGGER_ERROR("add grouped process %d failed: %d.", msg->payload[i].pid, ret);
+            RollbackGroupedManagerAdds(addedPids, addedCnt);
+            for (int j = 0; j < i; j++) {
+                keepTracking[j] = succeeded[j] && existedBefore[j];
+            }
             return ret;
         }
+        succeeded[i] = true;
+        if (!existedBefore[i]) {
+            addedPids[addedCnt++] = msg->payload[i].pid;
+        }
+        keepTracking[i] = true;
     }
     return 0;
+}
+
+static void RollbackGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, const bool *keepTracking)
+{
+    struct AccessRemovePidPayload payload[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    int count = 0;
+
+    for (int i = 0; i < msg->count; i++) {
+        if (keepTracking && keepTracking[i]) {
+            continue;
+        }
+        payload[count].pid = msg->payload[i].pid;
+        count++;
+    }
+    if (count == 0) {
+        return;
+    }
+    int ret = AccessIoctlRemovePid(count, payload);
+    if (ret) {
+        SMAP_LOGGER_WARNING("rollback grouped tracking failed: %d.", ret);
+    }
+}
+
+static void RollbackGroupedManagerAdds(const pid_t *addedPids, int addedCnt)
+{
+    struct ProcessManager *manager = GetProcessManager();
+
+    for (int i = 0; i < addedCnt; i++) {
+        ProcessAttr *attr = GetProcessAttrLocked(addedPids[i]);
+        if (!attr || !attr->groupPolicy.enabled) {
+            continue;
+        }
+        LinkedListRemove(&attr, &manager->processes);
+        manager->nr[VM_TYPE]--;
+        SMAP_LOGGER_INFO("rollback grouped pid %d from manager.", addedPids[i]);
+    }
+    if (addedCnt == 0) {
+        return;
+    }
+    int ret = SyncAllProcessConfig();
+    if (ret) {
+        SMAP_LOGGER_WARNING("Synchronize grouped rollback config maybe failed: %d.", ret);
+    }
 }
 
 static bool IsGroupedPidByRemoteNid(pid_t pid, int remoteNid)
@@ -973,7 +1030,6 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
 int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType)
 {
     struct ProcessManager *manager = GetProcessManager();
-    bool hasInvalidPid = false;
 
     SMAP_LOGGER_INFO("Receive ubturbo_smap_migrate_out_grouped msg.");
     if (!ubturbo_smap_is_running()) {
@@ -1009,9 +1065,13 @@ int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidTy
         return ret;
     }
 
-    ret = AddGroupedProcessesToGlobalManager(msg, nodeBitmap, policies, &hasInvalidPid);
+    bool keepTracking[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    ret = AddGroupedProcessesToGlobalManager(msg, nodeBitmap, policies, keepTracking);
+    if (ret) {
+        RollbackGroupedTrackingManage(msg, keepTracking);
+    }
     EnvMutexUnlock(&manager->lock);
-    return (ret == 0 && hasInvalidPid) ? -ESRCH : ret;
+    return ret;
 }
 
 static int CheckMigrateBackMsg(struct MigrateBackMsg *msg)

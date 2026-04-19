@@ -753,6 +753,20 @@ TEST_F(SmapConfigTest, TestIsGroupProcessPayloadValid)
     EXPECT_FALSE(IsGroupProcessPayloadValid(&payload));
 }
 
+TEST_F(SmapConfigTest, TestIsGroupProcessPayloadValidHigherLocalNid)
+{
+    struct GroupProcessPayload payload = {};
+
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(6));
+    InitValidGroupProcessPayload(&payload);
+    payload.groupCount = 1;
+    payload.groups[0].localNids[0] = 5;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 6;
+    payload.groups[0].targets[0].quotaPages = 2;
+    EXPECT_TRUE(IsGroupProcessPayloadValid(&payload));
+}
+
 extern "C" int BuildAllProcessPayload(struct ProcessPayload **payload, int *len);
 TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
 {
