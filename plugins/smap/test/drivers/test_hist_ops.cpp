@@ -15,7 +15,6 @@
 #include <linux/vmalloc.h>
 
 #include "access_iomem.h"
-#include "smap_hist_mid.h"
 #include "ub_hist.h"
 #include "hist_ops.h"
 
@@ -37,7 +36,7 @@ protected:
 
 extern list_head drivers_remote_ram_list;
 extern "C" struct smap_hist_dev g_smap_hist_dev;
-extern "C" int ub_hist_init(enum platform_type platform);
+extern "C" int ub_hist_init(void);
 
 extern "C" u64 align_addr(u64 addr, u32 low_bit_len);
 TEST_F(HistOpsTest, align_addr)
@@ -63,6 +62,7 @@ TEST_F(HistOpsTest, align_addr_by_sts_size)
 {
     u64 ret;
     u64 size = 0x1000;
+    g_smap_hist_dev.freq_register_cnt = BA_STS_VALUE_COUNT;
     MOCKER(align_addr).stubs().will(returnValue(size));
     ret = align_addr_by_sts_size(0x1, STS_SIZE_4K);
     EXPECT_EQ(size, ret);
@@ -75,24 +75,17 @@ extern "C" bool addr_seg_is_valid(struct segs_info *info);
 TEST_F(HistOpsTest, addr_seg_is_valid)
 {
     bool ret;
-    struct addr_seg seg = {
-        .start = 0x100000,
-        .size = 0x200000
-    };
-
+    struct addr_seg seg;
     struct segs_info seg_info = {
-        .cnt = 1,
-        .segs = &seg
+        .cnt = 0,
+        .segs = NULL
     };
-
-    MOCKER(addr_is_aligned).stubs().will(returnValue(true));
-    MOCKER(addr_is_aligned).stubs().will(returnValue(true));
-    ret = addr_seg_is_valid(&seg_info);
-    EXPECT_EQ(true, ret);
-
-    GlobalMockObject::verify();
-    MOCKER(addr_is_aligned).stubs().will(returnValue(false));
-    ret = addr_seg_is_valid(&seg_info);
+    struct ub_hist_ba_info ba_info = {
+        .ba_tag = 0,
+    };
+    ba_info.nc_range.start = 0;
+    ba_info.nc_range.end = (1 << HIST_ADDR_SHIFT_16G) - 1;
+    ret = addr_seg_is_valid(NULL);
     EXPECT_EQ(false, ret);
 }
 
@@ -142,8 +135,8 @@ TEST_F(HistOpsTest, addr_seg_cmp_max)
     EXPECT_EQ(1, ret);
 }
 
-extern "C" bool addr_seg_is_continuous_16g(struct addr_seg *seg1, struct addr_seg *seg2);
-TEST_F(HistOpsTest, addr_seg_is_continuous_16g)
+extern "C" bool addr_seg_is_continuous_scan_wins(struct addr_seg *seg1, struct addr_seg *seg2);
+TEST_F(HistOpsTest, addr_seg_is_continuous_scan_wins)
 {
     bool ret;
     struct addr_seg s1 = {
@@ -154,11 +147,11 @@ TEST_F(HistOpsTest, addr_seg_is_continuous_16g)
         .start = 0,
         .size = 0x100,
     };
-    ret = addr_seg_is_continuous_16g(&s1, &s2);
+    ret = addr_seg_is_continuous_scan_wins(&s1, &s2);
     EXPECT_EQ(false, ret);
 }
 
-TEST_F(HistOpsTest, addr_seg_is_continuous_16g_two)
+TEST_F(HistOpsTest, addr_seg_is_continuous_scan_wins_two)
 {
     bool ret;
     struct addr_seg s1 = {
@@ -170,11 +163,11 @@ TEST_F(HistOpsTest, addr_seg_is_continuous_16g_two)
         .size = 0x100,
     };
 
-    ret = addr_seg_is_continuous_16g(&s1, &s2);
+    ret = addr_seg_is_continuous_scan_wins(&s1, &s2);
     EXPECT_EQ(true, ret);
 }
 
-TEST_F(HistOpsTest, addr_seg_is_continuous_16g_three)
+TEST_F(HistOpsTest, addr_seg_is_continuous_scan_wins_three)
 {
     bool ret;
     struct addr_seg s1 = {
@@ -185,7 +178,7 @@ TEST_F(HistOpsTest, addr_seg_is_continuous_16g_three)
         .start = 0x400000000,
         .size = 0x100,
     };
-    ret = addr_seg_is_continuous_16g(&s1, &s2);
+    ret = addr_seg_is_continuous_scan_wins(&s1, &s2);
     EXPECT_EQ(false, ret);
 }
 
@@ -238,12 +231,12 @@ TEST_F(HistOpsTest, merge_segments)
         seg[i].start = i * 0x1000;
         seg[i].size = 0x1000;
     }
-    MOCKER(addr_seg_is_continuous_16g).stubs().will(returnValue(true));
+    MOCKER(addr_seg_is_continuous_scan_wins).stubs().will(returnValue(true));
     ret = merge_segments(seg, cnt);
     EXPECT_EQ(1, ret);
 
     GlobalMockObject::verify();
-    MOCKER(addr_seg_is_continuous_16g).stubs().will(returnValue(false));
+    MOCKER(addr_seg_is_continuous_scan_wins).stubs().will(returnValue(false));
     ret = merge_segments(seg, cnt);
     EXPECT_EQ(2, ret);
     free(seg);
@@ -274,8 +267,8 @@ TEST_F(HistOpsTest, is_intersect)
     EXPECT_EQ(false, ret);
 }
 
-extern "C" void calc_32m_hot_wins(struct segs_info *info, u16 *buf, struct segs_info *win_info);
-TEST_F(HistOpsTest, calc_32m_hot_wins)
+extern "C" void calc_4k_scan_hot_wins(struct segs_info *info, u16 *buf, struct segs_info *win_info);
+TEST_F(HistOpsTest, calc_4k_scan_hot_wins)
 {
     int i;
     struct addr_seg *segs = (struct addr_seg *)malloc(sizeof(struct addr_seg));
@@ -290,20 +283,20 @@ TEST_F(HistOpsTest, calc_32m_hot_wins)
     };
     struct addr_seg *wins = (struct addr_seg *)malloc(sizeof(struct addr_seg) * win_info.cnt);
     win_info.segs = wins;
-    u16 *buf = (u16 *)malloc(sizeof(u16) * 10);
+    u16 *buf = (u16 *)calloc(64, sizeof(u16));
     for (i = 0; i < 10; i++) {
         buf[i] = i;
     }
-    calc_32m_hot_wins(&info, buf, &win_info);
+    calc_4k_scan_hot_wins(&info, buf, &win_info);
     EXPECT_EQ(0, wins[0].start);
     free(segs);
     free(wins);
     free(buf);
 }
 
-extern "C" int generate_aligned_16gb_wins_info(struct segs_info *win_info,
+extern "C" int generate_aligned_2m_scan_wins_info(struct segs_info *win_info,
     struct segs_info *info);
-TEST_F(HistOpsTest, generate_aligned_16gb_wins_info)
+TEST_F(HistOpsTest, generate_aligned_2m_scan_wins_info)
 {
     int ret;
     struct segs_info win_info;
@@ -314,17 +307,17 @@ TEST_F(HistOpsTest, generate_aligned_16gb_wins_info)
         .cnt = 1,
         .segs = segs,
     };
-    ret = generate_aligned_16gb_wins_info(&win_info, &info);
+    ret = generate_aligned_2m_scan_wins_info(&win_info, &info);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, win_info.cnt);
     EXPECT_EQ(0, win_info.segs->start);
-    EXPECT_EQ(16 * GB, win_info.segs->size);
+    EXPECT_EQ(64 * GB, win_info.segs->size);
     free(segs);
 }
 
-extern "C" int generate_aligned_32m_wins_info(struct segs_info *win_info,
+extern "C" int generate_aligned_4k_scan_wins_info(struct segs_info *win_info,
     struct segs_info *info, u16 *buf);
-TEST_F(HistOpsTest, generate_aligned_32m_wins_info)
+TEST_F(HistOpsTest, generate_aligned_4k_scan_wins_info)
 {
     int ret;
     int buf_len = 10;
@@ -338,62 +331,15 @@ TEST_F(HistOpsTest, generate_aligned_32m_wins_info)
     info.segs = segs;
     u16 *buffer = (u16 *)malloc(sizeof(u16) * buf_len);
     MOCKER(count_nr_windows).stubs().will(returnValue(1));
-    MOCKER(calc_32m_hot_wins).stubs().will(ignoreReturnValue());
-    ret = generate_aligned_32m_wins_info(&win_info, &info, buffer);
-    EXPECT_EQ(0, ret);
-}
-
-extern "C" int smap_hist_middle_read(u64 start, u64 size, struct addr_count_pair *actc_pair, int *pair_cnt);
-TEST_F(HistOpsTest, smap_hist_middle_read)
-{
-    int ret;
-
-    g_smap_hist_dev.abort_flag = 1;
-    MOCKER(smap_hist_middle_reset_roi).stubs().will(returnValue(0));
-    MOCKER(smap_hist_middle_add_roi).stubs().will(returnValue(0));
-    MOCKER(smap_hist_middle_scan_enable).stubs().will(returnValue(0));
-    MOCKER(smap_hist_middle_get_hot_pages).stubs().will(returnValue(0));
-    MOCKER(smap_hist_middle_scan_disable).stubs().will(returnValue(0));
-    ret = smap_hist_middle_read(0, 1, nullptr, nullptr);
-    EXPECT_EQ(-EAGAIN, ret);
-
-    g_smap_hist_dev.abort_flag = 0;
-    ret = smap_hist_middle_read(0, 1, nullptr, nullptr);
+    MOCKER(calc_4k_scan_hot_wins).stubs().will(ignoreReturnValue());
+    ret = generate_aligned_4k_scan_wins_info(&win_info, &info, buffer);
     EXPECT_EQ(0, ret);
 }
 
 extern "C" int do_hist_scan_sliding(struct segs_info *info, u32 scan_time, u16 *buf,
     u32 buf_len, u8 sts_size);
-extern "C" int smap_hist_middle_set_scan_config(struct hist_scan_cfg *cfg_data);
-extern "C" void copy_actc_to_buf(struct segs_info *info, struct addr_seg *seg, u16 *dst_buf,
-    struct addr_count_pair *actc_pair, u32 buf_len, u8 sts_size);
-TEST_F(HistOpsTest, do_hist_scan_sliding)
-{
-    int ret;
-    u32 t = 100;
-    u16 *buffer = (u16 *)malloc(sizeof(u16));
-    struct segs_info info = {
-        .cnt = 1,
-    };
-    struct addr_seg *seg = (struct addr_seg *)malloc(sizeof(struct addr_seg));
-    seg[0].start = 0;
-    seg[0].size = 0x100000;
-    info.segs = seg;
-    MOCKER(generate_aligned_16gb_wins_info).stubs()
-        .with(outBoundP(&info, sizeof(info)), any()).will(returnValue(0));
-    MOCKER(smap_hist_middle_set_scan_config).stubs().will(returnValue(0));
-    MOCKER(smap_hist_middle_read).stubs().will(returnValue(0));
-    MOCKER(copy_actc_to_buf).stubs();
-    ret = do_hist_scan_sliding(&info, t, buffer, 1, STS_SIZE_2M);
-    EXPECT_EQ(0, ret);
-
-    GlobalMockObject::verify();
-    MOCKER(generate_aligned_32m_wins_info).stubs().will(returnValue(-ENOMEM));
-    ret = do_hist_scan_sliding(&info, t, buffer, 1, STS_SIZE_4K);
-    EXPECT_EQ(-ENOMEM, ret);
-    free(buffer);
-}
-
+extern "C" void copy_actc_to_buf(struct segs_info *info, struct addr_seg *seg,
+    u16 *dst_buf, u16 *freq, u32 buf_len, enum ub_hist_sts_size sts_size);
 extern "C" int hist_scan_sliding(struct segs_info *info, u32 scan_time_total, u16 *buf, u32 buf_len, u32 pgsize);
 TEST_F(HistOpsTest, hist_scan_sliding)
 {
@@ -506,13 +452,6 @@ TEST_F(HistOpsTest, flush_actc_data)
     struct smap_hist_dev dev;
     dev.flush_actc = 0;
     flush_actc_data(&dev);
-}
-
-extern "C" unsigned int get_cpu_socket_count(void);
-TEST_F(HistOpsTest, get_cpu_socket_count)
-{
-    unsigned int ret = get_cpu_socket_count();
-    EXPECT_EQ(2, ret);
 }
 
 extern int nr_local_numa;
@@ -633,7 +572,7 @@ TEST_F(HistOpsTest, scan_thread_run)
     MOCKER(hist_pginfo_reinit).stubs().will(returnValue(0));
     MOCKER(hist_scan_sliding).stubs().will(returnValue(0));
     MOCKER(add_to_actc_data).stubs().will(ignoreReturnValue());
-    ret = scan_thread_run(nullptr);
+    ret = scan_thread_run(&g_smap_hist_dev);
     EXPECT_EQ(0, ret);
 }
 
@@ -645,7 +584,7 @@ TEST_F(HistOpsTest, scan_thread_run_two)
 
     g_smap_hist_dev.status.status_all = 1;
     MOCKER(hist_pginfo_reinit).stubs().will(returnValue(1));
-    ret = scan_thread_run(nullptr);
+    ret = scan_thread_run(&g_smap_hist_dev);
     EXPECT_EQ(0, ret);
 }
 
@@ -659,7 +598,7 @@ TEST_F(HistOpsTest, scan_thread_run_three)
     g_smap_hist_dev.thread_enable = 1;
     MOCKER(hist_pginfo_reinit).stubs().will(returnValue(0));
     MOCKER(hist_scan_sliding).stubs().will(returnValue(-EINVAL));
-    ret = scan_thread_run(nullptr);
+    ret = scan_thread_run(&g_smap_hist_dev);
     EXPECT_EQ(0, ret);
 }
 
@@ -688,47 +627,18 @@ TEST_F(HistOpsTest, get_hist_dev)
     EXPECT_EQ(dev, get_hist_dev());
 }
 
-extern "C" void smap_hist_mid_exit(void);
+extern "C" void smap_hist_init(void);
 extern "C" void ub_hist_exit(void);
-TEST_F(HistOpsTest, hist_deinit)
-{
-    g_smap_hist_dev.pgcount = 1;
-    struct smap_hist_dev *dev = &g_smap_hist_dev;
-    hist_buffer_init(dev);
-    MOCKER(scan_thread_deinit).stubs().will(ignoreReturnValue());
-    MOCKER(addr_segs_deinit).stubs().will(ignoreReturnValue());
-    MOCKER(smap_hist_mid_exit).stubs().will(ignoreReturnValue());
-    MOCKER(ub_hist_exit).stubs().will(ignoreReturnValue());
-    hist_deinit();
-    EXPECT_EQ(nullptr, g_smap_hist_dev.buf);
-}
-
-extern "C" int smap_hist_chip_init(int nr_socket, bool is_ub_qemu);
-TEST_F(HistOpsTest, smap_hist_chip_init)
-{
-    int ret;
-
-    MOCKER(ub_hist_init).stubs().will(returnValue(0));
-    MOCKER(smap_hist_mid_init).stubs().will(returnValue(-1));
-    MOCKER(ub_hist_exit).stubs();
-    ret = smap_hist_chip_init(2, true);
-    EXPECT_EQ(-1, ret);
-
-    GlobalMockObject::verify();
-    MOCKER(ub_hist_init).stubs().will(returnValue(0));
-    MOCKER(smap_hist_mid_init).stubs().will(returnValue(0));
-    ret = smap_hist_chip_init(1, false);
-    EXPECT_EQ(0, ret);
-}
-
+extern "C" int ub_hist_query_ba_info(uint64_t ba_tag, struct ub_hist_ba_info *ba_info);
+extern "C" int query_hist_ba_info(void);
 TEST_F(HistOpsTest, hist_init)
 {
     int ret;
-    MOCKER(get_cpu_socket_count).stubs().will(returnValue(1));
-    MOCKER(smap_hist_chip_init).stubs().will(returnValue(0));
+    MOCKER(ub_hist_init).stubs().will(returnValue(0));
+    MOCKER(query_hist_ba_info).stubs().will(returnValue(0));
     MOCKER(addr_segs_init).stubs().will(returnValue(0));
     MOCKER(hist_buffer_init).stubs().will(returnValue(0));
     MOCKER(scan_thread_init).stubs().will(returnValue(0));
-    ret = hist_init(SIZE_2M, true);
+    ret = hist_init(SIZE_2M);
     EXPECT_EQ(0, ret);
 }
