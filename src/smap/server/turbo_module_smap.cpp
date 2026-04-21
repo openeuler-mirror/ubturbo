@@ -660,6 +660,8 @@ int OpenSmapHandler()
            !g_smapNotifyNumaListStatus;
     if (flag) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] Smap function not found";
+        dlclose(g_smapHandler);
+        g_smapHandler = nullptr;
         return -EINVAL;
     }
     return 0;

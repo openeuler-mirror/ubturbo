@@ -37,6 +37,7 @@ extern "C" {
 #define KB_PER_2MB 2048
 #define MAX_SCAN_DURATION_SEC 300
 #define NON_EXIST_PID (-1)
+#define MAX_FREQ_QUERY_NUM (256 * 1024 * 40)
 
 enum {
     SLEEP = 0,

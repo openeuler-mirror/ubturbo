@@ -37,6 +37,7 @@ extern "C" {
 #define DEFAULT_L2_NODE (-1)
 #define REMOTE_NUMA_BITS 18
 #define MAX_4K_PROCESSES_CNT 300
+#define MAX_FREQ_QUERY_NUM (256 * 1024 * 40)
 
 
 typedef enum { INPUT_PROCESS = 0, INPUT_VM, INPUT_MAX } InputPidType;

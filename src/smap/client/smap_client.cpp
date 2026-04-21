@@ -357,7 +357,7 @@ int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t
         IPC_CLIENT_LOGGER_ERROR("[Smap] Query vm freq data or lengthOut is null.\n");
         return -EINVAL;
     }
-    if (lengthIn == 0) {
+    if (lengthIn == 0 || lengthIn > MAX_FREQ_QUERY_NUM) {
         IPC_CLIENT_LOGGER_ERROR("[Smap] Query vm freq lengthIn is %d.\n", lengthIn);
         return -EINVAL;
     }
