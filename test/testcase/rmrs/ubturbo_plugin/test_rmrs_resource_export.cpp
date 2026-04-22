@@ -206,8 +206,12 @@ TEST_F(TestRmrsResourceExport, BuildPidInfoFromNodePagesSucceed)
 
     // 验证基础字段
     EXPECT_EQ(pidInfo.pid, testPid);
-    EXPECT_EQ(pidInfo.remoteNumaId, sizeResult);
-    EXPECT_EQ(pidInfo.socketId, 0);
+
+    for (auto &numaInfo: pidInfo.metaNumaInfos) {
+        if (localNodeIds.count(numaInfo.numaId)) {
+            EXPECT_EQ(numaInfo.socketId, numaInfo.numaId % sizeResult);
+        }
+    }
 
     // 验证本地 NUMA ID 顺序（按使用量降序）
     ASSERT_EQ(pidInfo.localNumaIds.size(), sizeResult);
@@ -234,15 +238,14 @@ TEST_F(TestRmrsResourceExport, GetLocalNodeIdsTest)
 
 TEST_F(TestRmrsResourceExport, IsValidLocalNumaNodeTest)
 {
-    uint64_t localUsedMem = 10;
-    uint64_t remoteUsedMem = 5;
+    int totalLocalUsedMem = 10;
+    int totalRemoteUsedMem = 5;
     uint64_t remoteNumaId = 4;
     mempooling::PidInfo info;
     info.pid = -1;
-    info.localUsedMem = localUsedMem;
-    info.remoteUsedMem = remoteUsedMem;
+    info.totalLocalUsedMem = totalLocalUsedMem;
+    info.totalRemoteUsedMem = totalRemoteUsedMem;
     info.localNumaIds = {1};
-    info.remoteNumaId = remoteNumaId;
 
     std::vector<mempooling::PidInfo> vec = {info};
     std::set<uint16_t> res = ResourceExport::GetLocalNodeIds();

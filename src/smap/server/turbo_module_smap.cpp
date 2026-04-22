@@ -579,7 +579,7 @@ int StubSmapMigrateRemoteNuma(struct MigrateNumaMsg *msg)
     return 0;
 }
 
-int StubSmapMigratePidRemoteNuma(pid_t *pidArr, int len, int srcNid, int destNid)
+int StubSmapMigratePidRemoteNuma(struct MigrateEscapeMsg *msg)
 {
     return 0;
 }

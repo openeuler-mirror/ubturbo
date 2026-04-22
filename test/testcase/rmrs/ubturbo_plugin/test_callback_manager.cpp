@@ -61,6 +61,8 @@ protected:
 
 TEST_F(TestCallBackManager, InitSucceed)
 {
+    MOCKER_CPP(ResourceExport::Init, RmrsResult(*)()).stubs().will(returnValue(0));
+    MOCKER_CPP(LibvirtHelper::Init, RmrsResult(*)()).stubs().will(returnValue(0));
     auto res = CallbackManager::Init();
     ASSERT_EQ(res, 0);
 }
@@ -299,15 +301,14 @@ TEST_F(TestCallBackManager, PidNumaInfoCollectRecvHandlerFailed1)
 RmrsResult MockCollectPidNumaInfoSuccess(const std::vector<pid_t> &pids, std::vector<mempooling::PidInfo> &pidInfos)
 {
     pid_t pid = 1234;
-    int localUsedMem = 10;
-    int remoteUsedMem = 5;
+    int totalLocalUsedMem = 10;
+    int totalRemoteUsedMem = 5;
     int remoteNumaId = 4;
     mempooling::PidInfo info;
     info.pid = pid;
-    info.localUsedMem = localUsedMem;
-    info.remoteUsedMem = remoteUsedMem;
+    info.totalLocalUsedMem = totalLocalUsedMem;
+    info.totalRemoteUsedMem = totalRemoteUsedMem;
     info.localNumaIds = {1};
-    info.remoteNumaId = remoteNumaId;
     pidInfos.emplace_back(info);
     return RMRS_OK;
 }

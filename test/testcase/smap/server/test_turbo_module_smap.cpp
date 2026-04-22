@@ -735,14 +735,17 @@ TEST_F(TestTurboModuleSmap, SmapMigratePidRemoteNumaHandlerTest)
 {
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
-    pid_t pidArr[] = {1, 2, 3};
-    int len = 3;
-    int srcNid = 0;
-    int destNid = 1;
+    struct MigrateEscapeMsg msg = {
+        .count = 1,
+    };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    int destNid = 3;
+    msg.payload[0].destNid = destNid;
 
     StubSmapPtr();
     SmapMigratePidRemoteNumaCodec codec;
-    codec.EncodeRequest(inputBuffer, pidArr, len, srcNid, destNid);
+    codec.EncodeRequest(inputBuffer, &msg);
     RetCode result = SmapMigratePidRemoteNumaHandler(inputBuffer, outputBuffer);
     EXPECT_EQ(result, TURBO_OK);
 
@@ -754,14 +757,17 @@ TEST_F(TestTurboModuleSmap, SmapMigratePidRemoteNumaHandlerFailed)
 {
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
-    pid_t pidArr[] = {1, 2, 3};
-    int len = 3;
-    int srcNid = 0;
-    int destNid = 1;
+    struct MigrateEscapeMsg msg = {
+        .count = 1,
+    };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    int destNid = 3;
+    msg.payload[0].destNid = destNid;
 
     StubSmapPtr();
     SmapMigratePidRemoteNumaCodec codec;
-    codec.EncodeRequest(inputBuffer, pidArr, len, srcNid, destNid);
+    codec.EncodeRequest(inputBuffer, &msg);
     MOCKER_CPP(&SmapMigratePidRemoteNumaCodec::EncodeResponse, int (*)(TurboByteBuffer &buffer, int returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
@@ -769,7 +775,7 @@ TEST_F(TestTurboModuleSmap, SmapMigratePidRemoteNumaHandlerFailed)
     EXPECT_EQ(result, TURBO_ERROR);
 
     MOCKER_CPP(&SmapMigratePidRemoteNumaCodec::DecodeRequest,
-               int (*)(const TurboByteBuffer &buffer, pid_t *&pidArr, int &len, int &srcNid, int &destNid))
+               int (*)(const TurboByteBuffer &buffer, MigrateEscapeMsg &msg))
         .stubs()
         .will(returnValue(-EINVAL));
     result = SmapMigratePidRemoteNumaHandler(inputBuffer, outputBuffer);
