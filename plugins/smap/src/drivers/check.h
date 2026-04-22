@@ -29,8 +29,6 @@
 #define MAX_SIZE_PER_NUMA (1UL << 40)
 #define MAX_NR_PAGE_PER_NUMA (MAX_SIZE_PER_NUMA >> PAGE_SHIFT)
 
-#define MAX_FREQ_QUERY_NUM (256 * 1024 * 40)
-
 enum node_level { L1, L2, NR_LEVEL };
 
 extern u32 g_pagesize_huge;

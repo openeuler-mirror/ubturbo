@@ -540,7 +540,7 @@ static long ioctl_get_tracking(void __user *argp)
 	if (copy_from_user(&msg, argp, sizeof(msg)))
 		return -EFAULT;
 
-	if (msg.length == 0 || msg.length > MAX_FREQ_QUERY_NUM) {
+	if (msg.length == 0) {
 		pr_err("invalid message length passed to get tracking data\n");
 		return -EINVAL;
 	}
