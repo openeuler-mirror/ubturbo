@@ -464,7 +464,7 @@ static void work_func(struct work_struct *work)
 	end_time = ktime_get();
 	scan_time = ktime_to_us(ktime_sub(end_time, start_time));
 	if (ret < 0) {
-		pr_err("unable to scan access-flag, page amount: %llu, page size: %d, node: %d\n",
+		pr_debug("unable to scan access-flag, page amount: %llu, page size: %d, node: %d\n",
 		       adev->page_count, page_size, adev->node);
 	}
 	ap->cur_times++;

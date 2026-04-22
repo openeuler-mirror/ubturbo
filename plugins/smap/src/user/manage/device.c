@@ -47,7 +47,7 @@ static int SendCmdToAllNodes(int fds[], unsigned long cmd, int arg)
     for (i = 0; i < MAX_NODES; i++) {
         if (fds[i] >= 0) {
             if (ioctl(fds[i], cmd, arg) < 0) {
-                SMAP_LOGGER_ERROR("ioctl for node%d failed: %s, skipped.", i, strerror(errno));
+                SMAP_LOGGER_DEBUG("ioctl for node%d failed: %s, skipped.", i, strerror(errno));
                 ret = -EBADF;
             }
         }
