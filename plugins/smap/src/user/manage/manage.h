@@ -165,6 +165,7 @@ typedef struct {
     int targetCount;
     GroupTargetAttr targets[MAX_GROUP_REMOTE_NUMA];
     uint64_t localLimitPages;
+    uint8_t swapCandidateRounds;
 } MigrationGroupAttr;
 
 typedef struct {
