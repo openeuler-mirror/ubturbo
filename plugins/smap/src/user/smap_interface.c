@@ -1193,7 +1193,7 @@ static int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint32_t lengthIn, 
         SMAP_LOGGER_ERROR("data or lengthOut null, ubturbo_smap_freq_query failed.");
         return -EINVAL;
     }
-    if (lengthIn == 0 || lengthIn > MAX_FREQ_QUERY_NUM) {
+    if (lengthIn == 0) {
         SMAP_LOGGER_ERROR("lengthIn(%llu) invalid. ubturbo_smap_freq_query failed.", lengthIn);
         return -EINVAL;
     }

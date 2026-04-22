@@ -262,7 +262,7 @@ static void ResetActcDataForPid(ProcessAttr *attr)
 static int InitPidActcData(ProcessAttr *attr)
 {
     if (attr->walkPage.nrPage == 0) {
-        SMAP_LOGGER_ERROR("Get pid %d nr pages failed.", attr->pid);
+        SMAP_LOGGER_DEBUG("Get pid %d nr pages failed.", attr->pid);
         return -EINVAL;
     }
     ActcData *actc[MAX_NODES] = { 0 };
@@ -1011,7 +1011,7 @@ static int FillPidData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
 
     ret = InitPidActcData(attr);
     if (ret) {
-        SMAP_LOGGER_ERROR("Init pid %d actc data failed.", attr->pid);
+        SMAP_LOGGER_DEBUG("Init pid %d actc data failed.", attr->pid);
         return ret;
     }
     ret = InitPidFreq(attr, &apf);
@@ -1027,7 +1027,7 @@ static int FillPidData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
     }
     ret = FillActcData(attr, pmb, &apf);
     if (ret) {
-        SMAP_LOGGER_ERROR("Fill pid %d actc data failed.", attr->pid);
+        SMAP_LOGGER_WARNING("Fill pid %d actc data failed.", attr->pid);
         ResetActcDataForPid(attr);
         FreePidFreq(&apf);
         return ret;
@@ -1696,7 +1696,7 @@ int BuildAllPidData(void)
             SetPidNrPages(current, pmb.nrPages, MAX_NODES);
             ret = FillPidData(current, &pmb);
             if (ret) {
-                SMAP_LOGGER_ERROR("Fill pid %d actc data failed.", current->pid);
+                SMAP_LOGGER_WARNING("Fill pid %d actc data failed.", current->pid);
                 failedCount++;
             }
         }

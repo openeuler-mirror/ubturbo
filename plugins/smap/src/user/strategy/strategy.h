@@ -60,7 +60,7 @@ static inline int CheckActcDataValid(ProcessAttr *process)
         nullFlag &= !process->scanAttr.actcData[n];
     }
     if (nullFlag) {
-        SMAP_LOGGER_ERROR("The actcData is null, pid %d stops migrate out.", process->pid);
+        SMAP_LOGGER_INFO("The actcData is null, pid %d stops migrate out.", process->pid);
         return -ENODATA;
     }
     return 0;
