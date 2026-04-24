@@ -364,7 +364,10 @@ TEST_F(TestRmrsSmapHelper, SmapRemoveVMPidToRemoteNuma_Success)
         return 0;
     };
     MOCKER(&SmapModule::GetSmapRemoveFunc).stubs().will(returnValue(smapRemoveFunc));
-    RmrsResult ret = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(vmPids);
+    uint16_t numa0 = 0;
+    uint16_t numa1 = 1;
+    std::vector<uint16_t> remoteNumaIdList{numa0, numa1};
+    RmrsResult ret = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(remoteNumaIdList, vmPids);
     EXPECT_EQ(ret, RMRS_OK);
     GlobalMockObject::verify();
 }
@@ -386,7 +389,10 @@ TEST_F(TestRmrsSmapHelper, SmapRemoveVMPidToRemoteNuma_Faild_Nullptr)
     vmPids.push_back(pid1);
     SmapRemoveFunc smapRemoveFunc = nullptr;
     MOCKER(&SmapModule::GetSmapRemoveFunc).stubs().will(returnValue(smapRemoveFunc));
-    RmrsResult ret = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(vmPids);
+    uint16_t numa0 = 0;
+    uint16_t numa1 = 1;
+    std::vector<uint16_t> remoteNumaIdList{numa0, numa1};
+    RmrsResult ret = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(remoteNumaIdList, vmPids);
     EXPECT_EQ(ret, RMRS_ERROR);
     GlobalMockObject::verify();
 }
@@ -410,7 +416,10 @@ TEST_F(TestRmrsSmapHelper, SmapRemoveVMPidToRemoteNuma_Faild_M22)
         return -22;
     };
     MOCKER(&SmapModule::GetSmapRemoveFunc).stubs().will(returnValue(smapRemoveFunc));
-    RmrsResult ret = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(vmPids);
+    uint16_t numa0 = 0;
+    uint16_t numa1 = 1;
+    std::vector<uint16_t> remoteNumaIdList{numa0, numa1};
+    RmrsResult ret = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(remoteNumaIdList, vmPids);
     EXPECT_EQ(ret, RMRS_ERROR);
     GlobalMockObject::verify();
 }
@@ -434,7 +443,10 @@ TEST_F(TestRmrsSmapHelper, SmapRemoveVMPidToRemoteNuma_Faild_M9)
         return -9;
     };
     MOCKER(&SmapModule::GetSmapRemoveFunc).stubs().will(returnValue(smapRemoveFunc));
-    RmrsResult ret = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(vmPids);
+    uint16_t numa0 = 0;
+    uint16_t numa1 = 1;
+    std::vector<uint16_t> remoteNumaIdList{numa0, numa1};
+    RmrsResult ret = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(remoteNumaIdList, vmPids);
     EXPECT_EQ(ret, RMRS_ERROR);
     GlobalMockObject::verify();
 }
@@ -458,7 +470,10 @@ TEST_F(TestRmrsSmapHelper, SmapRemoveVMPidToRemoteNuma_Faild_M1)
         return -1;
     };
     MOCKER(&SmapModule::GetSmapRemoveFunc).stubs().will(returnValue(smapRemoveFunc));
-    RmrsResult ret = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(vmPids);
+    uint16_t numa0 = 0;
+    uint16_t numa1 = 1;
+    std::vector<uint16_t> remoteNumaIdList{numa0, numa1};
+    RmrsResult ret = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(remoteNumaIdList, vmPids);
     EXPECT_EQ(ret, RMRS_ERROR);
     GlobalMockObject::verify();
 }

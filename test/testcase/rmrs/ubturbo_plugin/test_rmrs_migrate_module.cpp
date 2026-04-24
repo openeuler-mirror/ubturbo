@@ -266,7 +266,6 @@ RmrsResult TestGetVmInfoImmediately(std::vector<VmDomainInfo> &vmDomainInfos)
     pid_t pid = 12;
     int localUsedMem = 100;
     int remoteNumaId = 4;
-
     VmDomainInfo vmDomainInfo;
     vmDomainInfo.metaData.pid = pid;
     vmDomainInfo.localNumaId = 1;
@@ -920,7 +919,7 @@ TEST_F(TestRmrsMigrateModule, ISPresetMemorySufficient3)
     int remoteUsedMem = 1024;
     pid_t pid = 2;
     int index = 2;
-    uint64_t memMigrateTotalSize;
+    uint64_t memMigrateTotalSize = 0;
     std::map<pid_t, VmNumaInfo> vmNumaInfoMap;
     std::vector<rmrs::serialization::VMPresetParam> vmPresetParam;
     rmrs::serialization::VMPresetParam vm;
