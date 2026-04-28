@@ -19,7 +19,6 @@
 #include "acpi_mem.h"
 #include "iomem.h"
 #include "ham_migration.h"
-#include "trouble_numa_meta.h"
 #include "mig_init.h"
 
 #undef pr_fmt
@@ -338,17 +337,11 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len, int *mig
 	unsigned int failed_cnt;
 	u64 mig_cnt;
 	int successful_cnt = 0;
-	int retry = MAX_MIGRATE_PID_NUMA_RETRY_TIME;
 
+	int retry = MAX_MIGRATE_PID_NUMA_RETRY_TIME;
 	do {
 		for (i = 0; i < len; i++) {
 			struct pagemapread pm = { 0 };
-
-			if (is_trouble_numa(payloads[i].src_nid) || is_trouble_numa(payloads[i].dest_nid)) {
-				pr_err("walk and migrate is trouble numa(%d-%d), stop migrate pid %d.\n",
-					payloads[i].src_nid, payloads[i].dest_nid, payloads[i].pid);
-				continue;
-			}
 			if (mig_res[i] == 1) {
 				continue;
 			}
@@ -481,39 +474,6 @@ static int __ioctl_check_pagesize(void __user *argp)
 	return pageType == smap_pgsize ? 0 : -EINVAL;
 }
 
-static int __ioctl_send_numa_msg_to_kernel(void __user *argp)
-{
-	int ret = 0;
-	struct numa_status_list msg;
-	u16 numa_ids[MAX_NUMA_NUM];
-	int i;
-	int count;
-
-	if (copy_from_user(&msg, (void __user *)argp, sizeof(struct numa_status_list))) {
-		pr_err("copy from user failed when receiving NUMA status list header\n");
-		return -EFAULT;
-	}
-
-	if (msg.cnt == 0) {
-		pr_err("invalid NUMA status list header\n");
-		return -EINVAL;
-	}
-
-	for (i = 0; i < msg.cnt; i++) {
-		pr_info("received NUMA ID from user space: %u status: %u", msg.entries[i].numa_id, msg.entries[i].status);
-	}
-	ret = deal_trouble_numa_info(&msg);
-	if (ret) {
-		pr_err("failed to deal trouble NUMA info, ret: %d\n", ret);
-	}
-	count = trouble_numa_list_get_all(numa_ids, MAX_NUMA_NUM);
-	for (i = 0; i < count; i++) {
-		pr_info("get all trouble NUMA ID: %u\n", numa_ids[i]);
-	}
-
-	return ret;
-}
-
 static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 			  unsigned long arg)
 {
@@ -536,10 +496,6 @@ static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 	}
 	case SMAP_MIG_PID_REMOTE_NUMA: {
 		rc = __ioctl_migrate_pid_remote_numa(argp);
-		break;
-	}
-	case SMAP_SEND_NUMA_MSG_TO_KERNEL: {
-		rc = __ioctl_send_numa_msg_to_kernel(argp);
 		break;
 	}
 	default:

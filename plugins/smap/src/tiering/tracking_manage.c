@@ -27,8 +27,6 @@
 #include "iomem.h"
 #include "ham_migration.h"
 #include "pid_ioctl.h"
-#include "trouble_numa_meta.h"
-#include "ubus_notify.h"
 #include "tracking_manage.h"
 
 #define SMAP_WATCH_NAME "smap_migrate_result"
@@ -155,21 +153,16 @@ next:
 
 	task = prev_task;
 	list_for_each_entry(subtask, &task->subtask, task_list) {
-		if (is_trouble_numa(subtask->src_nid)) {
-			pr_err("migrate back is trouble numa(%d), stop migrate.\n", subtask->src_nid);
-			subtask->status = MB_SUBTASK_ERR;
-		} else {
-			for (i = 0; i < SUBTASK_RETRY_TIME; i++) {
-				if (is_smap_pg_huge())
-					smap_handle_migrate_back_subtask(subtask);
-				else
-					smap_handle_migrate_back_subtask_4k(subtask);
-				if (subtask->status != MB_SUBTASK_ERR) {
-					break;
-				}
-				msleep(SUBTASK_SLEEP_TIME);
-				pr_debug("migrate back retry time %d\n", i);
+		for (i = 0; i < SUBTASK_RETRY_TIME; i++) {
+			if (is_smap_pg_huge())
+				smap_handle_migrate_back_subtask(subtask);
+			else
+				smap_handle_migrate_back_subtask_4k(subtask);
+			if (subtask->status != MB_SUBTASK_ERR) {
+				break;
 			}
+			msleep(SUBTASK_SLEEP_TIME);
+			pr_debug("migrate back retry time %d\n", i);
 		}
 		if (subtask->status == MB_SUBTASK_ERR) {
 			task->status = MB_TASK_ERR;
@@ -197,16 +190,10 @@ static int __init tracking_init(void)
 		pr_err("smap process symbols failed\n");
 		return ret;
 	}
-	init_trouble_numa_manager();
-	ret = hisi_ubus_register_link_down_notifier();
-	if (ret) {
-		pr_err("failed to register vendor record notifier, ret: %d\n", ret);
-		return ret;
-	}
 	ret = init_acpi_mem();
 	if (ret < 0) {
 		pr_err("failed to init ACPI memory, ret: %d\n", ret);
-		goto out_unregister_notifier;
+		return ret;
 	}
 	(void)refresh_remote_ram();
 	if (smap_scene != UB_QEMU_SCENE_ADVANCED) {
@@ -248,7 +235,6 @@ static int __init tracking_init(void)
 			   msecs_to_jiffies(MB_INTV));
 	pr_info("SMAP init successfully\n");
 	return 0;
-
 out_migrate_int:
 	exit_migrate();
 out_dev_int:
@@ -261,17 +247,12 @@ out_workqueue:
 out_smap_node_sysfs:
 	release_remote_ram();
 	reset_acpi_mem();
-out_unregister_notifier:
-	hisi_ubus_unregister_link_down_notifier();
-	cleanup_trouble_numa_manager();
 	return ret;
 }
 
 static void __exit tracking_exit(void)
 {
 	resource();
-	hisi_ubus_unregister_link_down_notifier();
-	cleanup_trouble_numa_manager();
 	pr_info("SMAP exit successfully\n");
 }
 

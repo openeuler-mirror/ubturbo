@@ -88,10 +88,6 @@ list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/coherence_maintain.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/ham_migration.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/ham_tasks_mgr.c)
 
-#linkdown
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/ubus_notify.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/trouble_numa_meta.c)
-
 # access_mmu
 list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_mmu.c)
 # bus
