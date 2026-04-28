@@ -6,7 +6,6 @@
 #include <linux/limits.h>
 
 #define BIT_ULL(nr)		(ULL(1) << (nr))
-#define BIT(nr)			(1UL << (nr))
 
 #define BITS_PER_BYTE 8
 

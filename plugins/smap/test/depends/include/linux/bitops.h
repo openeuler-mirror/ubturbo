@@ -22,11 +22,6 @@
 
 #define CLOCK_MONOTONIC 1
 
-static inline void __set_bit(unsigned long nr, volatile unsigned long *addr)
-{
-    addr[BIT_WORD(nr)] |= 1UL << (nr & (BITS_PER_LONG - 1));
-}
-
 static bool _test_bit(unsigned long nr, const volatile unsigned long *addr)
 {
     return 1UL & (addr[BIT_WORD(nr)] >> (nr & (BITS_PER_LONG - 1)));

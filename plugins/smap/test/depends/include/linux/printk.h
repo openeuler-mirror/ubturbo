@@ -33,7 +33,6 @@
 #define pr_crit(fmt, ...)       printk(KERN_CRIT pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_alert(fmt, ...)      printk(KERN_ALERT pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_emerg(fmt, ...)      printk(KERN_EMERG pr_fmt(fmt), ##__VA_ARGS__)
-#define pr_warn_ratelimited(fmt, ...) pr_warn(fmt, ##__VA_ARGS__)
 
 #define printk_once(fmt, ...)	printk(fmt, ##__VA_ARGS__)
 #define printk_deferred_once(fmt, ...)	printk(fmt, ##__VA_ARGS__)
@@ -47,3 +46,4 @@
 #define pr_info_once(fmt, ...)      printk_once(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__)
 
 #endif
+
