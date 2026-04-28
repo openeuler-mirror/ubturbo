@@ -166,7 +166,7 @@ static inline void post_scan_kvm_gfn(struct kvm *kvm, int idx)
 	srcu_read_unlock(&kvm->srcu, idx);
 }
 
-static int init_vm_mapping(struct vm_mapping_info *info)
+int init_vm_mapping(struct vm_mapping_info *info)
 {
 	if (info->vm_size) {
 		info->mapping = vmalloc(info->vm_size * sizeof(u32));
@@ -449,9 +449,14 @@ int init_access_pid(struct access_add_pid_payload *payload,
 			return -EINVAL;
 		}
 	}
-	ret = create_procfs(ap);
+	ret = access_walk_pagemap_prepare(ap);
 	if (ret) {
 		kfree(ap);
+		return ret;
+	}
+	ret = create_procfs(ap);
+	if (ret) {
+		destroy_access_pid(ap);
 		return ret;
 	}
 	*elem = ap;
@@ -1013,36 +1018,46 @@ void access_remove_pid(int len, struct access_remove_pid_payload *payload)
 {
 	int i;
 	struct access_pid *ap, *tmp;
+	bool found;
 
-	down_write(&ap_data.lock);
 	for (i = 0; i < len; i++) {
+		found = false;
+		down_write(&ap_data.lock);
 		list_for_each_entry_safe(ap, tmp, &ap_data.list, node) {
 			if (ap->pid == payload[i].pid) {
 				list_del(&ap->node);
-				cancel_ap_scan_work(ap);
-				destroy_access_pid(ap);
+				found = true;
 				break;
 			}
 		}
+		up_write(&ap_data.lock);
+		if (found) {
+			cancel_ap_scan_work(ap);
+			destroy_access_pid(ap);
+		}
 	}
-	up_write(&ap_data.lock);
 }
 
 void access_remove_all_pid(void)
 {
-	struct access_pid *ap, *tmp;
+	struct access_pid *ap;
 	struct ham_tracking_info *ap_ham, *tmp_ham;
 	struct statistics_tracking_info *ap_statistic, *tmp_statistic;
 	char path[MAX_PATH_LENGTH];
 
 	pr_info("remove all pid\n");
-	down_write(&ap_data.lock);
-	list_for_each_entry_safe(ap, tmp, &ap_data.list, node) {
+	while (true) {
+		down_write(&ap_data.lock);
+		if (list_empty(&ap_data.list)) {
+			up_write(&ap_data.lock);
+			break;
+		}
+		ap = list_first_entry(&ap_data.list, struct access_pid, node);
 		list_del(&ap->node);
+		up_write(&ap_data.lock);
 		cancel_ap_scan_work(ap);
 		destroy_access_pid(ap);
 	}
-	up_write(&ap_data.lock);
 
 	int ret;
 	spin_lock(&ham_lock);
@@ -1094,7 +1109,7 @@ static void free_ap_white_list_bm(struct access_pid *ap)
 	}
 }
 
-static int init_ap_bm(int node_len, u64 *node_page_count, struct access_pid *ap)
+int init_ap_bm(int node_len, u64 *node_page_count, struct access_pid *ap)
 {
 	size_t nr_bytes = sizeof(unsigned long);
 	int i;
@@ -1157,12 +1172,11 @@ void clean_last_ap_data(struct access_pid *ap)
 	}
 }
 
-int access_walk_pagemap(struct access_pid *ap)
+int access_walk_pagemap_prepare(struct access_pid *ap)
 {
 	int ret;
 	struct access_tracking_dev *adev;
 	u64 nodes_page_count[SMAP_MAX_NUMNODES] = { 0 };
-	struct pagemapread pm = { 0 };
 	if (!ap) {
 		return -EINVAL;
 	}
@@ -1181,6 +1195,20 @@ int access_walk_pagemap(struct access_pid *ap)
 		return ret;
 	}
 	ret = init_vm_mapping(&ap->info);
+	return ret;
+}
+
+int access_walk_pagemap(struct access_pid *ap)
+{
+	int ret;
+	struct pagemapread pm = { 0 };
+	if (!ap) {
+		return -EINVAL;
+	}
+	if (ap->type != NORMAL_SCAN) {
+		return 0;
+	}
+	ret = access_walk_pagemap_prepare(ap);
 	if (ret)
 		return ret;
 	pm.ap = ap;

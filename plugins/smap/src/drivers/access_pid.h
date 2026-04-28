@@ -122,11 +122,19 @@ void clean_last_ap_data(struct access_pid *ap);
 int access_walk_pagemap(struct access_pid *ap);
 struct access_pid *find_access_pid(pid_t pid);
 int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr);
+int init_ap_bm(int node_len, u64 *node_page_count, struct access_pid *ap);
+int init_vm_mapping(struct vm_mapping_info *info);
+int access_walk_pagemap_prepare(struct access_pid *ap);
 
 static inline bool access_pid_is_scanning(pid_t pid)
 {
 	struct access_pid *ap = find_access_pid(pid);
 	return ap && ap->type != NO_SCAN;
+}
+
+static inline bool access_pid_cur_last_scanning(struct access_pid *ap)
+{
+	return ap->type == NORMAL_SCAN && ap->cur_times + 1 >= ap->ntimes;
 }
 
 static inline void clear_vm_mapping(u32 *mapping, u32 len)
