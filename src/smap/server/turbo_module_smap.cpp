@@ -53,7 +53,6 @@ static SmapMigrateRemoteNumaFunc g_smapMigrateRemoteNuma = nullptr;
 static SmapMigratePidRemoteNumaFunc g_smapMigratePidRemoteNuma = nullptr;
 static SmapQueryProcessConfigFunc g_smapQueryProcessConfig = nullptr;
 static SmapQueryRemoteNumaFreqFunc g_smapQueryRemoteNumaFreq = nullptr;
-static SmapNotifyNumaListStatusFunc g_smapNotifyNumaListStatus = nullptr;
 
 RetCode SmapMigrateOutHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
 {
@@ -494,26 +493,6 @@ RetCode SmapQueryProcessConfigHandler(const TurboByteBuffer &inputBuffer, TurboB
     return TURBO_OK;
 }
 
-RetCode SmapNotifyNumaListStatusHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
-{
-    NumaStatusList msg{};
-    SmapNotifyNumaListStatusCodec codec;
-    int ret = codec.DecodeRequest(inputBuffer, msg);
-    if (ret) {
-        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) <<
-                        "[Smap] SmapNotifyNumaListStatusHandler DecodeRequest error " << ret;
-        return TURBO_ERROR;
-    }
-    int result = g_smapNotifyNumaListStatus(&msg);
-    ret = codec.EncodeResponse(outputBuffer, result);
-    if (ret) {
-        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) <<
-                        "[Smap] SmapNotifyNumaListStatusHandler EncodeResponse error " << ret;
-        return TURBO_ERROR;
-    }
-    return TURBO_OK;
-}
-
 RetCode SmapQueryRemoteNumaFreqHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
 {
     uint16_t len;
@@ -707,8 +686,7 @@ int OpenSmapHandler()
            !g_smapInit || !g_smapStop || !g_smapUrgentMigrateOut || !g_setSmapRemoteNumaInfo || !g_smapQueryVmFreq ||
            !g_setSmapRunMode || !g_smapIsRunning || !g_smapMigrateOutSync || !g_smapAddProcessTracking ||
            !g_smapRemoveProcessTracking || !g_smapEnableProcessMigrate || !g_smapMigrateRemoteNuma ||
-           !g_smapMigratePidRemoteNuma || !g_smapQueryProcessConfig || !g_smapQueryRemoteNumaFreq ||
-           !g_smapNotifyNumaListStatus;
+           !g_smapMigratePidRemoteNuma || !g_smapQueryProcessConfig || !g_smapQueryRemoteNumaFreq;
     if (flag) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] Smap function not found";
         dlclose(g_smapHandler);
@@ -749,7 +727,6 @@ void RegSmapHandler()
     ret |= UBTurboRegIpcService("ubturbo_smap_pid_remote_numa_migrate", SmapMigratePidRemoteNumaHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_process_config_query", SmapQueryProcessConfigHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_remote_numa_freq_query", SmapQueryRemoteNumaFreqHandler);
-    ret |= UBTurboRegIpcService("ubturbo_notify_numa_list_status", SmapNotifyNumaListStatusHandler);
     if (ret != 0) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] UBTurboRegIpcService failed.";
     }
@@ -777,7 +754,6 @@ void UnRegSmapHandler()
     ret |= UBTurboUnRegIpcService("ubturbo_smap_pid_remote_numa_migrate");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_process_config_query");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_remote_numa_freq_query");
-    ret |= UBTurboUnRegIpcService("ubturbo_notify_numa_list_status");
     if (ret != 0) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] UBTurboUnRegIpcService failed.";
     }

@@ -29,23 +29,15 @@ protected:
     void SetUp() override
     {
         cout << "[Phase SetUp Begin]" << endl;
-        init_trouble_numa_manager();
         cout << "[Phase SetUp End]" << endl;
     }
     void TearDown() override
     {
         cout << "[Phase TearDown Begin]" << endl;
-        cleanup_trouble_numa_manager();
         GlobalMockObject::verify();
         cout << "[Phase TearDown End]" << endl;
     }
 };
-
-static void MockWalkPidPagemap(struct pagemapread *pm)
-{
-    pm->mig_info.mig_cnt = 1;
-    pm->mig_info.page_cnt = 4;
-}
 
 extern "C" void free_migrate_list_addr(int len, struct mig_list *mlist);
 TEST_F(MigInitTest, FreeMigrateListAddr)

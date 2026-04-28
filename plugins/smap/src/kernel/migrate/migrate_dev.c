@@ -360,8 +360,8 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 	u64 mig_cnt_backup;
 	u64 mig_cnt_min;
 	int successful_cnt = 0;
-	int retry = MAX_MIGRATE_PID_NUMA_RETRY_TIME;
 
+	int retry = MAX_MIGRATE_PID_NUMA_RETRY_TIME;
 	do {
 		for (i = 0; i < len; i++) {
 			struct pagemapread pm = { 0 };
@@ -581,39 +581,6 @@ static int __ioctl_set_ub_dma_avail(void __user *argp)
 
 	set_remote_migrate_mode(available);
 	return 0;
-}
-
-static int __ioctl_send_numa_msg_to_kernel(void __user *argp)
-{
-	int ret = 0;
-	struct numa_status_list msg;
-	u16 numa_ids[MAX_NUMA_NUM];
-	int i;
-	int count;
-
-	if (copy_from_user(&msg, (void __user *)argp, sizeof(struct numa_status_list))) {
-		pr_err("copy from user failed when receiving NUMA status list header\n");
-		return -EFAULT;
-	}
-
-	if (msg.cnt == 0) {
-		pr_err("invalid NUMA status list header\n");
-		return -EINVAL;
-	}
-
-	for (i = 0; i < msg.cnt; i++) {
-		pr_info("received NUMA ID from user space: %u status: %u", msg.entries[i].numa_id, msg.entries[i].status);
-	}
-	ret = deal_trouble_numa_info(&msg);
-	if (ret) {
-		pr_err("failed to deal trouble NUMA info, ret: %d\n", ret);
-	}
-	count = trouble_numa_list_get_all(numa_ids, MAX_NUMA_NUM);
-	for (i = 0; i < count; i++) {
-		pr_info("get all trouble NUMA ID: %u\n", numa_ids[i]);
-	}
-
-	return ret;
 }
 
 static long smu_mig_ioctl(struct file *file, unsigned int cmd,
