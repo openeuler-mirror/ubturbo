@@ -14,6 +14,7 @@
 #include <linux/ioctl.h>
 #include <linux/sort.h>
 #include <linux/fs.h>
+#include <linux/mm.h>
 
 #include "common.h"
 #include "acpi_mem.h"
@@ -342,6 +343,12 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len, int *mig
 	do {
 		for (i = 0; i < len; i++) {
 			struct pagemapread pm = { 0 };
+
+			if (node_is_critical_err(payloads[i].src_nid) || node_is_critical_err(payloads[i].dest_nid)) {
+				pr_err_ratelimited("walk and migrate node %d to node %d is critical error, stop migrate pid %d\n",
+				    payloads[i].src_nid, payloads[i].dest_nid, payloads[i].pid);
+				continue;
+			}
 			if (mig_res[i] == 1) {
 				continue;
 			}
