@@ -46,6 +46,31 @@ static void move_remote_ram(struct list_head *dst, struct list_head *src)
 	}
 }
 
+static void merge_ram_segments(struct list_head *head)
+{
+	struct ram_segment *cur, *next, *tmp;
+
+	if (list_empty(head))
+		return;
+
+	cur = list_first_entry(head, struct ram_segment, node);
+	while (cur) {
+		next = list_next_entry(cur, node);
+		if (list_entry_is_head(next, head, node))
+			break;
+		if (cur->numa_node == next->numa_node &&
+		    cur->end + 1 == next->start) {
+			cur->end = next->end;
+			list_del(&next->node);
+			kfree(next);
+			tmp = cur;
+		} else {
+			tmp = next;
+		}
+		cur = tmp;
+	}
+}
+
 static int insert_remote_ram(u64 pa_start, u64 pa_end, struct list_head *head)
 {
 	struct ram_segment *seg, *tmp;
@@ -165,6 +190,7 @@ int refresh_remote_ram(void)
 		ret = walk_system_ram_remote_range(&tmp_head);
 	if (ret)
 		return ret;
+	merge_ram_segments(&tmp_head);
 	write_lock(&rem_ram_list_lock);
 	free_remote_ram(&remote_ram_list);
 	move_remote_ram(&remote_ram_list, &tmp_head);
