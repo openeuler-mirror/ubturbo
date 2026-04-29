@@ -623,7 +623,7 @@ static void SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
     }
 }
 
-int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
+static int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
 {
     int ret;
     if (g_processManager.nr[type] >= GetCurrentMaxNrPid()) {
