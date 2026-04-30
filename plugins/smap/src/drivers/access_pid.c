@@ -237,6 +237,102 @@ static int mem_freq_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
+/**
+ * fill_actc_data_by_bitmap - 根据bitmap生成actc_data数组
+ * @ap: access_pid结构体指针
+ * @actc: actc_data数组指针（需要预先分配足够空间）
+ * @actc_len: actc数组长度（输出）
+ * @mapping_offset: mapping数组的偏移量（用于获取prior）
+ *
+ * 遍历bitmap，结合频次数据、mapping和white_list_bm，生成actc_data结构体数组。
+ */
+static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
+				     struct actc_data *actc, u32 *actc_len,
+				     u32 mapping_offset)
+{
+	u32 len_cnt = 0;
+	size_t acidx, bm_len;
+	struct access_tracking_dev *adev;
+
+	if (ap->page_num[nid] == 0 || !ap->paddr_bm[nid]) {
+		*actc_len = 0;
+		return;
+	}
+
+	list_for_each_entry(adev, &access_dev, list) {
+		if (adev->node == nid) {
+			break;
+		}
+	}
+	if (list_entry_is_head(adev, &access_dev, list)) {
+		*actc_len = 0;
+		return;
+	}
+
+	down_read(&adev->buffer_lock);
+	bm_len = BITS_PER_TYPE(long) * ap->bm_len[nid];
+	for (acidx = 0; acidx < bm_len; acidx++) {
+		if (len_cnt >= ap->page_num[nid]) {
+			break;
+		}
+		if (!test_bit(acidx, ap->paddr_bm[nid])) {
+			continue;
+		}
+		if (unlikely(acidx >= adev->page_count)) {
+			pr_warn("exceeds total page amount: %llu when lookup access index: %zu on access device: %d\n",
+				adev->page_count, acidx, nid);
+			break;
+		}
+
+		/* 填充addr - 使用相对索引 */
+		actc[len_cnt].addr = len_cnt;
+
+		/* 填充freq */
+		actc[len_cnt].freq = adev->access_bit_actc_data[acidx];
+
+		/* 填充prior - 从mapping获取 */
+		if (ap->info.vm_size && ap->info.mapping) {
+			actc[len_cnt].prior = ap->info.mapping[mapping_offset + len_cnt] & 0xff;
+		} else {
+			actc[len_cnt].prior = 0;
+		}
+
+		/* 填充is_white_list */
+		if (ap->white_list_bm[nid] && test_bit(acidx, ap->white_list_bm[nid])) {
+			actc[len_cnt].is_white_list = 1;
+		} else {
+			actc[len_cnt].is_white_list = 0;
+		}
+
+		len_cnt++;
+	}
+	up_read(&adev->buffer_lock);
+	*actc_len = len_cnt;
+}
+
+/**
+ * fill_pid_actc_data - 为整个pid生成actc_data数组（遍历所有node）
+ * @ap: access_pid结构体指针
+ * @actc: actc_data数组指针（连续存储各node数据）
+ * @actc_len: 各node的actc_len数组（输出）
+ *
+ * 对每个node调用fill_actc_data_by_bitmap生成actc_data。
+ */
+static void fill_pid_actc_data(struct access_pid *ap, struct actc_data *actc,
+			       u32 actc_len[SMAP_MAX_NUMNODES])
+{
+	int nid;
+	u32 mapping_offset = 0;
+	size_t actc_offset = 0;
+
+	for (nid = 0; nid < SMAP_MAX_NUMNODES; nid++) {
+		fill_actc_data_by_bitmap(ap, nid, actc + actc_offset,
+				 &actc_len[nid], mapping_offset);
+		mapping_offset += actc_len[nid];
+		actc_offset += ap->page_num[nid];
+	}
+}
+
 static inline size_t calc_process_page_number(struct access_pid *ap)
 {
 	int i;
@@ -247,54 +343,14 @@ static inline size_t calc_process_page_number(struct access_pid *ap)
 	return ret_len;
 }
 
-static void read_pid_freq(struct access_pid *ap, actc_t *freq, size_t freq_len)
-{
-	int i;
-	u32 len_cnt = 0;
-	size_t acidx, bm_len;
-	struct access_tracking_dev *adev;
-
-	pr_debug("start writing pid %d freq\n", ap->pid);
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
-		if (ap->page_num[i] == 0 || !ap->paddr_bm[i]) {
-			continue;
-		}
-		list_for_each_entry(adev, &access_dev, list) {
-			if (adev->node == i) {
-				break;
-			}
-		}
-		if (list_entry_is_head(adev, &access_dev, list)) {
-			continue;
-		}
-
-		down_read(&adev->buffer_lock);
-		bm_len = BITS_PER_TYPE(long) * ap->bm_len[i];
-		for (acidx = 0; acidx < bm_len && len_cnt < freq_len; acidx++) {
-			if (!test_bit(acidx, ap->paddr_bm[i])) {
-				continue;
-			}
-			if (unlikely(acidx >= adev->page_count)) {
-				pr_warn("exceeds total page amount: %llu when lookup access index: %zu on access device: %d\n",
-					adev->page_count, acidx, i);
-				break;
-			}
-			pr_debug("node:%d acidx:%zu value:%hu len_cnt:%u\n", i,
-				   acidx, adev->access_bit_actc_data[acidx],
-				   len_cnt);
-			freq[len_cnt++] = adev->access_bit_actc_data[acidx];
-		}
-		up_read(&adev->buffer_lock);
-	}
-}
-
 static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 			     loff_t *ppos)
 {
-	actc_t *freq;
+	struct actc_data *actc;
 	struct access_pid *ap = file->private_data;
 	ssize_t len;
 	size_t total_len;
+	u32 actc_len[SMAP_MAX_NUMNODES];
 
 	pr_debug("enter mem_freq_read\n");
 	if (!check_and_clear_ap_state(&ap_data, AP_STATE_FREQ)) {
@@ -302,18 +358,17 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 		goto out;
 	}
 
-	total_len = calc_process_page_number(ap) * sizeof(actc_t);
-	freq = kvmalloc(total_len, GFP_KERNEL);
-	if (!freq) {
+	total_len = calc_process_page_number(ap) * sizeof(struct actc_data);
+	actc = kvmalloc(total_len, GFP_KERNEL);
+	if (!actc) {
 		len = -ENOMEM;
 		goto out;
 	}
 
 	len = -EINVAL;
-	if (*ppos % sizeof(actc_t)) {
+	if (*ppos % sizeof(struct actc_data)) {
 		goto out_free;
 	}
-
 
 	len = 0;
 	if (!cnt || *ppos >= total_len) {
@@ -325,15 +380,15 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 	else
 		len = cnt;
 
-	read_pid_freq(ap, freq, total_len / sizeof(actc_t));
-	if (copy_to_user(buf, freq + (*ppos / sizeof(actc_t)), len)) {
+	fill_pid_actc_data(ap, actc, actc_len);
+	if (copy_to_user(buf, actc + (*ppos / sizeof(struct actc_data)), len)) {
 		len = -EFAULT;
 		goto out_free;
 	}
 	if (*ppos + cnt <= total_len)
 		*ppos += len;
 out_free:
-	kvfree(freq);
+	kvfree(actc);
 out:
 	if (len < 0) {
 		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ |

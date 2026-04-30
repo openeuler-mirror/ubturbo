@@ -1022,6 +1022,139 @@ static int ReadPidFreqInner(struct AccessPidFreq *apf, int numaNum, FILE *file)
 #define FREQ_FILE_RETRY 20
 #define FREQ_FILE_RETRY_DELAY 10000
 
+/**
+ * CalcActcStats - 从actc_data数组计算统计数据
+ * @attr: ProcessAttr结构体指针
+ *
+ * 遍历actc_data数组，计算freqMax、freqMin、freqNum、freqSum等统计数据。
+ */
+static void CalcActcStats(ProcessAttr *attr)
+{
+    uint16_t remoteHotThreshold = GetRemoteHotThreshold();
+
+    for (int nid = 0; nid < MAX_NODES; nid++) {
+        uint64_t actcLen = attr->scanAttr.actcLen[nid];
+        ActcData *actc = attr->scanAttr.actcData[nid];
+        ActCount *count = &attr->scanAttr.actCount[nid];
+
+        if (actcLen == 0 || !actc) {
+            memset(count, 0, sizeof(*count));
+            continue;
+        }
+
+        count->freqMax = 0;
+        count->freqMin = UINT16_MAX;
+        count->freqNum = 0;
+        count->freqSum = 0;
+        count->remoteHotNum = 0;
+        count->whiteNum = 0;
+        count->pageNum = actcLen;
+        count->freqZero = 0;
+
+        for (uint64_t i = 0; i < actcLen; i++) {
+            actc_t freq = actc[i].freq;
+            if (freq != 0) {
+                count->freqNum++;
+                count->freqSum += freq;
+            } else {
+                count->freqZero++;
+            }
+            if (freq >= remoteHotThreshold) {
+                count->remoteHotNum++;
+            }
+            if (actc[i].isWhiteListPage) {
+                count->whiteNum++;
+            }
+            count->freqMax = MAX(count->freqMax, freq);
+            count->freqMin = MIN(count->freqMin, freq);
+        }
+
+        SMAP_LOGGER_INFO("Node%d actcLen %llu, freqMax %u, freqMin %u, freqNum %llu, freqSum %llu, remoteHotNum %llu, whiteNum %llu",
+                         nid, actcLen, count->freqMax, count->freqMin, count->freqNum, count->freqSum, count->remoteHotNum, count->whiteNum);
+    }
+}
+
+/**
+ * ReadPidActcData - 从内核态read完整的actc_data数组
+ * @attr: ProcessAttr结构体指针
+ * @pmb: ProcessMemBitmap结构体指针（包含nrPages信息）
+ *
+ * read连续的actc_data数组，按nrPages分段分配到actcData[nid]。
+ */
+static int ReadPidActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
+{
+    char path[FREQ_FILE_PATH_LEN];
+    int fd;
+    size_t total_actc = 0;
+    size_t shm_size;
+    ActcData *buf;
+    ssize_t read_len;
+    size_t actc_offset = 0;
+
+    snprintf(path, sizeof(path), "/proc/smap/%d/mem_freq", attr->pid);
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        SMAP_LOGGER_ERROR("open mem_freq file failed for pid %d: %d", attr->pid, errno);
+        return -ENODEV;
+    }
+
+    /* 计算总actc_data数量 */
+    for (int nid = 0; nid < MAX_NODES; nid++) {
+        total_actc += pmb->nrPages[nid];
+    }
+
+    if (total_actc == 0) {
+        SMAP_LOGGER_INFO("pid %d has no pages, skip read", attr->pid);
+        close(fd);
+        return 0;
+    }
+
+    shm_size = total_actc * sizeof(ActcData);
+    buf = malloc(shm_size);
+    if (!buf) {
+        SMAP_LOGGER_ERROR("malloc failed for pid %d, size %zu", attr->pid, shm_size);
+        close(fd);
+        return -ENOMEM;
+    }
+
+    /* read完整的actc_data数组 */
+    read_len = read(fd, buf, shm_size);
+    close(fd);
+
+    if (read_len < 0 || read_len != shm_size) {
+        SMAP_LOGGER_ERROR("read failed for pid %d, expected %zu, got %zd", attr->pid, shm_size, read_len);
+        free(buf);
+        return -EIO;
+    }
+
+    /* 分配各node的actcData内存并拷贝 */
+    for (int nid = 0; nid < MAX_NODES; nid++) {
+        attr->scanAttr.actcLen[nid] = pmb->nrPages[nid];
+        if (pmb->nrPages[nid] == 0) {
+            attr->scanAttr.actcData[nid] = NULL;
+            continue;
+        }
+        attr->scanAttr.actcData[nid] = malloc(pmb->nrPages[nid] * sizeof(ActcData));
+        if (!attr->scanAttr.actcData[nid]) {
+            SMAP_LOGGER_ERROR("malloc actcData[%d] failed for pid %d", nid, attr->pid);
+            /* 释放之前已分配的 actcData */
+            for (int i = 0; i < nid; i++) {
+                free(attr->scanAttr.actcData[i]);
+                attr->scanAttr.actcData[i] = NULL;
+            }
+            free(buf);
+            return -ENOMEM;
+        }
+        memcpy(attr->scanAttr.actcData[nid], buf + actc_offset, pmb->nrPages[nid] * sizeof(ActcData));
+        actc_offset += pmb->nrPages[nid];
+    }
+
+    free(buf);
+    SMAP_LOGGER_INFO("read pid %d success, total_actc %zu", attr->pid, total_actc);
+    return 0;
+}
+
 static int ReadPidFreq(struct AccessPidFreq *apf)
 {
     FILE *file;
@@ -1073,32 +1206,14 @@ static int ReadPidFreq(struct AccessPidFreq *apf)
 static int FillPidData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
 {
     int ret;
-    struct AccessPidFreq apf = { 0 }; // Make sure apf len and freq is zeroed
 
-    ret = InitPidActcData(attr);
+    ret = ReadPidActcData(attr, pmb);
     if (ret) {
-        SMAP_LOGGER_ERROR("Init pid %d actc data failed.", attr->pid);
+        SMAP_LOGGER_ERROR("Read pid %d actc data failed: %d", attr->pid, ret);
         return ret;
     }
-    ret = InitPidFreq(attr, &apf);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Init pid %d freq failed: %d\n", attr->pid, ret);
-        return ret;
-    }
-    ret = ReadPidFreq(&apf);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Read pid %d freq failed\n", attr->pid);
-        FreePidFreq(&apf);
-        return ret;
-    }
-    ret = FillActcData(attr, pmb, &apf);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Fill pid %d actc data failed.", attr->pid);
-        ResetActcDataForPid(attr);
-        FreePidFreq(&apf);
-        return ret;
-    }
-    FreePidFreq(&apf);
+
+    CalcActcStats(attr);
     return 0;
 }
 
