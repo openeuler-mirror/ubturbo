@@ -271,13 +271,11 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 
 	down_read(&adev->buffer_lock);
 	bm_len = BITS_PER_TYPE(long) * ap->bm_len[nid];
-	for (acidx = 0; acidx < bm_len; acidx++) {
-		if (len_cnt >= ap->page_num[nid]) {
+	acidx = 0;
+	while (len_cnt < ap->page_num[nid]) {
+		acidx = find_next_bit(ap->paddr_bm[nid], bm_len, acidx);
+		if (acidx >= bm_len)
 			break;
-		}
-		if (!test_bit(acidx, ap->paddr_bm[nid])) {
-			continue;
-		}
 		if (unlikely(acidx >= adev->page_count)) {
 			pr_warn("exceeds total page amount: %llu when lookup access index: %zu on access device: %d\n",
 				adev->page_count, acidx, nid);
@@ -305,6 +303,7 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 		}
 
 		len_cnt++;
+		acidx++;
 	}
 	up_read(&adev->buffer_lock);
 	*actc_len = len_cnt;
