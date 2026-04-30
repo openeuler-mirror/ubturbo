@@ -90,12 +90,16 @@ struct GroupTargetPayload {
     uint64_t quotaPages;
 };
 
+struct GroupLocalPayload {
+    int nid;
+    uint64_t localReservePages;
+};
+
 struct GroupPayload {
     int localCount;
-    int localNids[MAX_GROUP_LOCAL_NUMA];
+    struct GroupLocalPayload locals[MAX_GROUP_LOCAL_NUMA];
     int targetCount;
     struct GroupTargetPayload targets[MAX_GROUP_REMOTE_NUMA];
-    uint64_t localLimitPages;
 };
 
 struct GroupProcessPayload {

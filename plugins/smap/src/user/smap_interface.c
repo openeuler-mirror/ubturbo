@@ -539,9 +539,9 @@ static int CheckGroupedTarget(const struct MigrationGroup *group, int payloadIdx
             SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target nid %d is forbidden.", payloadIdx, groupIdx, i, nid);
             return -EAGAIN;
         }
-        if (group->targets[i].quotaSize < MIN_GROUP_QUOTA_SIZE_KB) {
+        if (group->targets[i].size < MIN_GROUP_QUOTA_SIZE_KB) {
             SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target quota %lluKB is too small.",
-                              payloadIdx, groupIdx, i, group->targets[i].quotaSize);
+                              payloadIdx, groupIdx, i, group->targets[i].size);
             return -EINVAL;
         }
         targets[i] = nid;
@@ -572,29 +572,31 @@ static int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int pay
     }
     for (int i = 0; i < payload->groupCount; i++) {
         struct MigrationGroup *group = &payload->groups[i];
+        int localNids[MAX_GROUP_LOCAL_NUMA] = { 0 };
         if (!IsCountValid(group->localCount, MAX_GROUP_LOCAL_NUMA)) {
             SMAP_LOGGER_ERROR("[%d:%d] grouped local count %d invalid.", payloadIdx, i, group->localCount);
             return -EINVAL;
         }
-        if (group->localMemLimitSize == 0) {
-            SMAP_LOGGER_ERROR("[%d:%d] grouped local mem limit is zero.", payloadIdx, i);
-            return -EINVAL;
-        }
-        if (HasDuplicateInt(group->localNids, group->localCount)) {
-            SMAP_LOGGER_ERROR("[%d:%d] grouped local nids duplicate.", payloadIdx, i);
-            return -EINVAL;
-        }
         for (int j = 0; j < group->localCount; j++) {
-            int nid = group->localNids[j];
+            int nid = group->locals[j].nid;
+            if (group->locals[j].size == 0) {
+                SMAP_LOGGER_ERROR("[%d:%d:%d] grouped local reserve is zero.", payloadIdx, i, j);
+                return -EINVAL;
+            }
             if (!IsLocalNidValid(nid) || nid < 0 || nid >= MAX_NODES) {
                 SMAP_LOGGER_ERROR("[%d:%d:%d] grouped local nid %d invalid.", payloadIdx, i, j, nid);
                 return -EINVAL;
             }
+            localNids[j] = nid;
             if (localUsed[nid]) {
                 SMAP_LOGGER_ERROR("[%d:%d:%d] grouped local nid %d is used by another group.", payloadIdx, i, j, nid);
                 return -EINVAL;
             }
             localUsed[nid] = true;
+        }
+        if (HasDuplicateInt(localNids, group->localCount)) {
+            SMAP_LOGGER_ERROR("[%d:%d] grouped local nids duplicate.", payloadIdx, i);
+            return -EINVAL;
         }
         int ret = CheckGroupedTarget(group, payloadIdx, i);
         if (ret) {
@@ -649,7 +651,7 @@ static void BuildGroupedNodeBitmap(const struct GroupedMigrateOutPayload *payloa
     for (int i = 0; i < payload->groupCount; i++) {
         const struct MigrationGroup *group = &payload->groups[i];
         for (int j = 0; j < group->localCount; j++) {
-            AddL1(nodeBitmap, group->localNids[j]);
+            AddL1(nodeBitmap, group->locals[j].nid);
         }
         for (int j = 0; j < group->targetCount; j++) {
             AddL2ByNid(nodeBitmap, group->targets[j].nid);
@@ -668,19 +670,19 @@ static int BuildGroupPolicy(const struct GroupedMigrateOutPayload *payload,
         MigrationGroupAttr *attr = &policy->groups[i];
         attr->localCount = group->localCount;
         attr->targetCount = group->targetCount;
-        attr->localLimitPages = KBToHugePageCeil(group->localMemLimitSize);
         for (int j = 0; j < group->localCount; j++) {
-            attr->localNids[j] = group->localNids[j];
+            attr->locals[j].nid = group->locals[j].nid;
+            attr->locals[j].localReservePages = KBToHugePageCeil(group->locals[j].size);
+            SMAP_LOGGER_INFO("grouped pid %d group %d local %d reserve pages %llu.",
+                             payload->pid, i, attr->locals[j].nid, attr->locals[j].localReservePages);
         }
         for (int j = 0; j < group->targetCount; j++) {
             attr->targets[j].nid = group->targets[j].nid;
-            attr->targets[j].quotaPages = KBToHugePage(group->targets[j].quotaSize);
+            attr->targets[j].quotaPages = KBToHugePage(group->targets[j].size);
             attr->targets[j].usedPages = 0;
             SMAP_LOGGER_INFO("grouped pid %d group %d target %d quota pages %llu.",
                              payload->pid, i, attr->targets[j].nid, attr->targets[j].quotaPages);
         }
-        SMAP_LOGGER_INFO("grouped pid %d group %d localLimit pages %llu.",
-                         payload->pid, i, attr->localLimitPages);
     }
     return InitGroupedUsedPages(payload->pid, policy, numaPages);
 }

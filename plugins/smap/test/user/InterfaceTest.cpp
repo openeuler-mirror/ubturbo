@@ -768,17 +768,17 @@ TEST_F(InterfaceTest, TestBuildGroupPolicyInitSharedTargetUsedPages)
     payload.pid = 1234;
     payload.groupCount = 2;
     payload.groups[0].localCount = 1;
-    payload.groups[0].localNids[0] = 0;
+    payload.groups[0].locals[0].nid = 0;
+    payload.groups[0].locals[0].size = 2048;
     payload.groups[0].targetCount = 1;
     payload.groups[0].targets[0].nid = 4;
-    payload.groups[0].targets[0].quotaSize = 4096;
-    payload.groups[0].localMemLimitSize = 2048;
+    payload.groups[0].targets[0].size = 4096;
     payload.groups[1].localCount = 1;
-    payload.groups[1].localNids[0] = 1;
+    payload.groups[1].locals[0].nid = 1;
+    payload.groups[1].locals[0].size = 2048;
     payload.groups[1].targetCount = 1;
     payload.groups[1].targets[0].nid = 4;
-    payload.groups[1].targets[0].quotaSize = 8192;
-    payload.groups[1].localMemLimitSize = 2048;
+    payload.groups[1].targets[0].size = 8192;
     numaPages[4] = 3;
 
     int ret = BuildGroupPolicy(&payload, numaPages, &policy);
@@ -798,11 +798,11 @@ TEST_F(InterfaceTest, TestBuildGroupPolicyRejectUnmanagedRemotePages)
     payload.pid = 1234;
     payload.groupCount = 1;
     payload.groups[0].localCount = 1;
-    payload.groups[0].localNids[0] = 0;
+    payload.groups[0].locals[0].nid = 0;
+    payload.groups[0].locals[0].size = 2048;
     payload.groups[0].targetCount = 1;
     payload.groups[0].targets[0].nid = 4;
-    payload.groups[0].targets[0].quotaSize = 4096;
-    payload.groups[0].localMemLimitSize = 2048;
+    payload.groups[0].targets[0].size = 4096;
     numaPages[5] = 1;
 
     int ret = BuildGroupPolicy(&payload, numaPages, &policy);
@@ -820,11 +820,11 @@ TEST_F(InterfaceTest, TestBuildGroupPolicyRejectRemotePagesExceedQuota)
     payload.pid = 1234;
     payload.groupCount = 1;
     payload.groups[0].localCount = 1;
-    payload.groups[0].localNids[0] = 0;
+    payload.groups[0].locals[0].nid = 0;
+    payload.groups[0].locals[0].size = 2048;
     payload.groups[0].targetCount = 1;
     payload.groups[0].targets[0].nid = 4;
-    payload.groups[0].targets[0].quotaSize = 2048;
-    payload.groups[0].localMemLimitSize = 2048;
+    payload.groups[0].targets[0].size = 2048;
     numaPages[4] = 2;
 
     int ret = BuildGroupPolicy(&payload, numaPages, &policy);
@@ -839,7 +839,7 @@ TEST_F(InterfaceTest, TestCheckGroupedTargetRejectForbiddenTarget)
 
     group.targetCount = 1;
     group.targets[0].nid = 4;
-    group.targets[0].quotaSize = 2048;
+    group.targets[0].size = 2048;
     MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     EnvAtomicSet(&g_forbiddenNodes[4], 1);
 
@@ -858,11 +858,11 @@ TEST_F(InterfaceTest, TestCheckGroupedPayloadAcceptsHigherLocalNid)
     payload.pid = 1234;
     payload.groupCount = 1;
     payload.groups[0].localCount = 1;
-    payload.groups[0].localNids[0] = 5;
+    payload.groups[0].locals[0].nid = 5;
+    payload.groups[0].locals[0].size = 2048;
     payload.groups[0].targetCount = 1;
     payload.groups[0].targets[0].nid = 6;
-    payload.groups[0].targets[0].quotaSize = 2048;
-    payload.groups[0].localMemLimitSize = 2048;
+    payload.groups[0].targets[0].size = 2048;
     MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
 

@@ -37,10 +37,8 @@ typedef struct {
 
 typedef struct {
     int groupIdx;
-    uint64_t localUsed;
     uint64_t remoteUsed;
     uint64_t deficit;
-    double deficitRatio;
 } PromoteGroup;
 
 typedef struct {
@@ -100,12 +98,6 @@ static int PromoteGroupCmp(const void *data1, const void *data2)
 {
     const PromoteGroup *g1 = (const PromoteGroup *)data1;
     const PromoteGroup *g2 = (const PromoteGroup *)data2;
-    if (g1->deficitRatio < g2->deficitRatio) {
-        return 1;
-    }
-    if (g1->deficitRatio > g2->deficitRatio) {
-        return -1;
-    }
     if (g1->deficit < g2->deficit) {
         return 1;
     }
@@ -118,7 +110,7 @@ static int PromoteGroupCmp(const void *data1, const void *data2)
 static bool GroupHasLocal(const MigrationGroupAttr *group, int nid)
 {
     for (int i = 0; i < group->localCount; i++) {
-        if (group->localNids[i] == nid) {
+        if (group->locals[i].nid == nid) {
             return true;
         }
     }
@@ -162,9 +154,54 @@ static uint64_t CalcLocalUsed(ProcessAttr *process, const MigrationGroupAttr *gr
 {
     uint64_t used = 0;
     for (int i = 0; i < group->localCount; i++) {
-        used += process->scanAttr.actcLen[group->localNids[i]];
+        used += process->scanAttr.actcLen[group->locals[i].nid];
     }
     return used;
+}
+
+static uint64_t CalcLocalDeficit(ProcessAttr *process, const MigrationGroupAttr *group, int localIdx)
+{
+    int nid = group->locals[localIdx].nid;
+    uint64_t used = process->scanAttr.actcLen[nid];
+    uint64_t reserve = group->locals[localIdx].localReservePages;
+    return used < reserve ? reserve - used : 0;
+}
+
+static uint64_t CalcLocalExcess(ProcessAttr *process, const MigrationGroupAttr *group, int localIdx)
+{
+    int nid = group->locals[localIdx].nid;
+    uint64_t used = process->scanAttr.actcLen[nid];
+    uint64_t reserve = group->locals[localIdx].localReservePages;
+    return used > reserve ? used - reserve : 0;
+}
+
+static uint64_t CalcGroupDeficit(ProcessAttr *process, const MigrationGroupAttr *group)
+{
+    uint64_t deficit = 0;
+    for (int i = 0; i < group->localCount; i++) {
+        deficit += CalcLocalDeficit(process, group, i);
+    }
+    return deficit;
+}
+
+static uint64_t CalcGroupExcess(ProcessAttr *process, const MigrationGroupAttr *group)
+{
+    uint64_t excess = 0;
+    for (int i = 0; i < group->localCount; i++) {
+        excess += CalcLocalExcess(process, group, i);
+    }
+    return excess;
+}
+
+static bool IsGroupLocalSteady(ProcessAttr *process, const MigrationGroupAttr *group)
+{
+    for (int i = 0; i < group->localCount; i++) {
+        int nid = group->locals[i].nid;
+        if (process->scanAttr.actcLen[nid] != group->locals[i].localReservePages) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static uint64_t CalcRemoteUsed(const MigrationGroupAttr *group)
@@ -264,7 +301,7 @@ static int CollectLocalPages(ProcessAttr *process, const MigrationGroupAttr *gro
     }
     uint64_t pos = 0;
     for (int i = 0; i < group->localCount; i++) {
-        int nid = group->localNids[i];
+        int nid = group->locals[i].nid;
         for (uint64_t j = 0; j < process->scanAttr.actcLen[nid]; j++) {
             data[pos].addr = process->scanAttr.actcData[nid][j].addr;
             data[pos].freq = process->scanAttr.actcData[nid][j].freq;
@@ -324,21 +361,6 @@ static int CollectRemotePages(ProcessAttr *process, const MigrationGroupAttr *gr
     return 0;
 }
 
-static int SelectLocalWithMostFreePages(const MigrationGroupAttr *group)
-{
-    int selected = group->localNids[0];
-    uint64_t maxFree = 0;
-    for (int i = 0; i < group->localCount; i++) {
-        int nid = group->localNids[i];
-        uint64_t freePages = GetNrFreeHugePagesByNode(nid);
-        if (i == 0 || freePages > maxFree) {
-            maxFree = freePages;
-            selected = nid;
-        }
-    }
-    return selected;
-}
-
 static int BuildDemoteMigList(ProcessAttr *process, MigrationGroupAttr *group,
                               struct MigList mlist[MAX_NODES][MAX_NODES], uint64_t demoteNeed)
 {
@@ -351,8 +373,32 @@ static int BuildDemoteMigList(ProcessAttr *process, MigrationGroupAttr *group,
     if (ret) {
         return ret;
     }
+    if (nrPages == 0) {
+        return 0;
+    }
+    GroupPageData *selectedPages = calloc(MIN(demoteNeed, nrPages), sizeof(GroupPageData));
+    if (!selectedPages) {
+        free(pages);
+        return -ENOMEM;
+    }
+    uint64_t localSelected[MAX_NODES] = { 0 };
+    uint64_t localExcess[MAX_NODES] = { 0 };
+    for (int i = 0; i < group->localCount; i++) {
+        int nid = group->locals[i].nid;
+        localExcess[nid] = CalcLocalExcess(process, group, i);
+    }
+    uint64_t selected = 0;
+    uint64_t selectLimit = MIN(demoteNeed, nrPages);
+    for (uint64_t i = 0; i < nrPages && selected < selectLimit; i++) {
+        int nid = pages[i].nid;
+        if (localSelected[nid] >= localExcess[nid]) {
+            continue;
+        }
+        selectedPages[selected++] = pages[i];
+        localSelected[nid]++;
+    }
     uint64_t pageOff = 0;
-    uint64_t remaining = MIN(demoteNeed, nrPages);
+    uint64_t remaining = selected;
     for (int i = 0; i < group->targetCount && remaining > 0; i++) {
         int to = group->targets[i].nid;
         uint64_t targetRemaining = CalcRemoteRemaining(group, i);
@@ -360,21 +406,51 @@ static int BuildDemoteMigList(ProcessAttr *process, MigrationGroupAttr *group,
         uint64_t targetMig = MIN(remaining, targetRemaining);
         uint64_t targetEnd = pageOff + targetMig;
         while (pageOff < targetEnd) {
-            int from = pages[pageOff].nid;
+            int from = selectedPages[pageOff].nid;
             uint64_t start = pageOff;
-            while (pageOff < targetEnd && pages[pageOff].nid == from) {
+            while (pageOff < targetEnd && selectedPages[pageOff].nid == from) {
                 pageOff++;
             }
-            ret = AppendMigPages(&mlist[from][to], &pages[start], pageOff - start);
+            ret = AppendMigPages(&mlist[from][to], &selectedPages[start], pageOff - start);
             if (ret) {
+                free(selectedPages);
                 free(pages);
                 return ret;
             }
         }
         remaining -= targetMig;
     }
+    free(selectedPages);
     free(pages);
     return 0;
+}
+
+static int SelectPromoteLocal(ProcessAttr *process, const MigrationGroupAttr *group, uint64_t selectedPerLocal[])
+{
+    int selectedIdx = -1;
+    uint64_t selectedDeficit = 0;
+    uint64_t selectedFree = 0;
+
+    for (int i = 0; i < group->localCount; i++) {
+        int nid = group->locals[i].nid;
+        uint64_t deficit = CalcLocalDeficit(process, group, i);
+        if (deficit <= selectedPerLocal[i]) {
+            continue;
+        }
+        uint64_t freePages = GetNrFreeHugePagesByNode(nid);
+        if (freePages <= selectedPerLocal[i]) {
+            continue;
+        }
+        uint64_t remainingDeficit = deficit - selectedPerLocal[i];
+        uint64_t remainingFree = freePages - selectedPerLocal[i];
+        if (selectedIdx < 0 || remainingDeficit > selectedDeficit ||
+            (remainingDeficit == selectedDeficit && remainingFree > selectedFree)) {
+            selectedIdx = i;
+            selectedDeficit = remainingDeficit;
+            selectedFree = remainingFree;
+        }
+    }
+    return selectedIdx;
 }
 
 static int BuildPromoteMigList(ProcessAttr *process, MigrationGroupAttr *group, uint64_t remoteOffsets[],
@@ -389,53 +465,56 @@ static int BuildPromoteMigList(ProcessAttr *process, MigrationGroupAttr *group, 
     if (ret) {
         return ret;
     }
-    int to = SelectLocalWithMostFreePages(group);
     uint64_t nrMig = MIN(promoteNeed, nrPages);
-    uint64_t selectedPerNode[MAX_NODES] = { 0 };
+    uint64_t selectedPerRemote[MAX_NODES] = { 0 };
+    uint64_t selectedPerLocal[MAX_GROUP_LOCAL_NUMA] = { 0 };
     uint64_t pageOff = 0;
     while (pageOff < nrMig) {
-        int from = pages[pageOff].nid;
-        uint64_t start = pageOff;
-        while (pageOff < nrMig && pages[pageOff].nid == from) {
-            pageOff++;
+        int localIdx = SelectPromoteLocal(process, group, selectedPerLocal);
+        if (localIdx < 0) {
+            break;
         }
-        ret = AppendMigPages(&mlist[from][to], &pages[start], pageOff - start);
+        int to = group->locals[localIdx].nid;
+        int from = pages[pageOff].nid;
+        ret = AppendMigPages(&mlist[from][to], &pages[pageOff], 1);
         if (ret) {
             free(pages);
             return ret;
         }
-        selectedPerNode[from] += pageOff - start;
+        selectedPerRemote[from]++;
+        selectedPerLocal[localIdx]++;
+        pageOff++;
     }
     for (int nid = 0; nid < MAX_NODES; nid++) {
-        remoteOffsets[nid] += selectedPerNode[nid];
+        remoteOffsets[nid] += selectedPerRemote[nid];
     }
     free(pages);
     return 0;
 }
 
-static void FreeSwapBuckets(GroupPageData *promotePages[MAX_NODES],
+static void FreeSwapBuckets(GroupPageData *promotePages[MAX_NODES][MAX_NODES],
                             GroupPageData *demotePages[MAX_NODES][MAX_NODES])
 {
     for (int i = 0; i < MAX_NODES; i++) {
-        free(promotePages[i]);
         for (int j = 0; j < MAX_NODES; j++) {
+            free(promotePages[i][j]);
             free(demotePages[i][j]);
         }
     }
 }
 
-static int AllocSwapBuckets(const uint64_t promoteCnt[MAX_NODES], uint64_t demoteCnt[MAX_NODES][MAX_NODES],
-                            GroupPageData *promotePages[MAX_NODES],
+static int AllocSwapBuckets(uint64_t promoteCnt[MAX_NODES][MAX_NODES], uint64_t demoteCnt[MAX_NODES][MAX_NODES],
+                            GroupPageData *promotePages[MAX_NODES][MAX_NODES],
                             GroupPageData *demotePages[MAX_NODES][MAX_NODES])
 {
     for (int i = 0; i < MAX_NODES; i++) {
-        if (promoteCnt[i] > 0) {
-            promotePages[i] = calloc(promoteCnt[i], sizeof(GroupPageData));
-            if (!promotePages[i]) {
-                return -ENOMEM;
-            }
-        }
         for (int j = 0; j < MAX_NODES; j++) {
+            if (promoteCnt[i][j] > 0) {
+                promotePages[i][j] = calloc(promoteCnt[i][j], sizeof(GroupPageData));
+                if (!promotePages[i][j]) {
+                    return -ENOMEM;
+                }
+            }
             if (demoteCnt[i][j] == 0) {
                 continue;
             }
@@ -448,20 +527,20 @@ static int AllocSwapBuckets(const uint64_t promoteCnt[MAX_NODES], uint64_t demot
     return 0;
 }
 
-static int BuildSwapMigListsFromPairs(const SwapPair *pairs, uint64_t nrPairs, int localTo,
+static int BuildSwapMigListsFromPairs(const SwapPair *pairs, uint64_t nrPairs,
                                       struct MigList mlist[MAX_NODES][MAX_NODES])
 {
-    uint64_t promoteCnt[MAX_NODES] = { 0 };
+    uint64_t promoteCnt[MAX_NODES][MAX_NODES] = { 0 };
     uint64_t demoteCnt[MAX_NODES][MAX_NODES] = { 0 };
-    uint64_t promotePos[MAX_NODES] = { 0 };
+    uint64_t promotePos[MAX_NODES][MAX_NODES] = { 0 };
     uint64_t demotePos[MAX_NODES][MAX_NODES] = { 0 };
-    GroupPageData *promotePages[MAX_NODES] = { NULL };
+    GroupPageData *promotePages[MAX_NODES][MAX_NODES] = { NULL };
     GroupPageData *demotePages[MAX_NODES][MAX_NODES] = { NULL };
 
     for (uint64_t i = 0; i < nrPairs; i++) {
         int remoteNid = pairs[i].remote.nid;
         int localNid = pairs[i].local.nid;
-        promoteCnt[remoteNid]++;
+        promoteCnt[remoteNid][localNid]++;
         demoteCnt[localNid][remoteNid]++;
     }
     int ret = AllocSwapBuckets(promoteCnt, demoteCnt, promotePages, demotePages);
@@ -472,16 +551,16 @@ static int BuildSwapMigListsFromPairs(const SwapPair *pairs, uint64_t nrPairs, i
     for (uint64_t i = 0; i < nrPairs; i++) {
         int remoteNid = pairs[i].remote.nid;
         int localNid = pairs[i].local.nid;
-        promotePages[remoteNid][promotePos[remoteNid]++] = pairs[i].remote;
+        promotePages[remoteNid][localNid][promotePos[remoteNid][localNid]++] = pairs[i].remote;
         demotePages[localNid][remoteNid][demotePos[localNid][remoteNid]++] = pairs[i].local;
     }
     for (int i = 0; i < MAX_NODES; i++) {
-        ret = AppendMigPages(&mlist[i][localTo], promotePages[i], promoteCnt[i]);
-        if (ret) {
-            FreeSwapBuckets(promotePages, demotePages);
-            return ret;
-        }
         for (int j = 0; j < MAX_NODES; j++) {
+            ret = AppendMigPages(&mlist[i][j], promotePages[i][j], promoteCnt[i][j]);
+            if (ret) {
+                FreeSwapBuckets(promotePages, demotePages);
+                return ret;
+            }
             ret = AppendMigPages(&mlist[i][j], demotePages[i][j], demoteCnt[i][j]);
             if (ret) {
                 FreeSwapBuckets(promotePages, demotePages);
@@ -495,13 +574,17 @@ static int BuildSwapMigListsFromPairs(const SwapPair *pairs, uint64_t nrPairs, i
 
 static uint64_t SelectSwapPairs(ProcessAttr *process, const MigrationGroupAttr *group, GroupPageData *localPages,
                                 uint64_t nrLocalPages, GroupPageData *remotePages, uint64_t nrRemotePages,
-                                uint64_t swapCap, int localTo, SwapPair *pairs)
+                                uint64_t swapCap, SwapPair *pairs)
 {
     uint64_t remoteFree[MAX_NODES] = { 0 };
-    uint64_t localFree = GetNrFreeHugePagesByNode(localTo);
+    uint64_t localFree[MAX_NODES] = { 0 };
     uint64_t nrPairs = 0;
     uint64_t localIdx = 0;
 
+    for (int i = 0; i < group->localCount; i++) {
+        int nid = group->locals[i].nid;
+        localFree[nid] = GetNrFreeHugePagesByNode(nid);
+    }
     for (int i = 0; i < group->targetCount; i++) {
         int nid = group->targets[i].nid;
         remoteFree[nid] = GetNrFreeHugePagesByNode(nid);
@@ -509,17 +592,24 @@ static uint64_t SelectSwapPairs(ProcessAttr *process, const MigrationGroupAttr *
     for (uint64_t remoteIdx = 0; remoteIdx < nrRemotePages && localIdx < nrLocalPages && nrPairs < swapCap;
          remoteIdx++) {
         int remoteNid = remotePages[remoteIdx].nid;
+        while (localIdx < nrLocalPages && localFree[localPages[localIdx].nid] == 0) {
+            localIdx++;
+        }
+        if (localIdx >= nrLocalPages) {
+            break;
+        }
         if (!IsSwapBeneficial(process, &localPages[localIdx], &remotePages[remoteIdx])) {
             break;
         }
-        if (localFree == 0 || remoteFree[remoteNid] == 0) {
+        int localNid = localPages[localIdx].nid;
+        if (remoteFree[remoteNid] == 0) {
             continue;
         }
         pairs[nrPairs].local = localPages[localIdx];
         pairs[nrPairs].remote = remotePages[remoteIdx];
         localIdx++;
         nrPairs++;
-        localFree--;
+        localFree[localNid]--;
         remoteFree[remoteNid]--;
     }
     return nrPairs;
@@ -560,13 +650,12 @@ static int BuildSwapMigList(ProcessAttr *process, MigrationGroupAttr *group,
         free(remotePages);
         return -ENOMEM;
     }
-    int localTo = SelectLocalWithMostFreePages(group);
     uint64_t nrPairs = SelectSwapPairs(process, group, localPages, nrLocalPages, remotePages, nrRemotePages, swapCap,
-                                       localTo, pairs);
+                                       pairs);
     if (nrPairs > 0) {
         SMAP_LOGGER_INFO("grouped pid %d swap %llu pages, localUsed %llu remoteUsed %llu.",
                          process->pid, nrPairs, localUsed, remoteUsed);
-        ret = BuildSwapMigListsFromPairs(pairs, nrPairs, localTo, mlist);
+        ret = BuildSwapMigListsFromPairs(pairs, nrPairs, mlist);
         if (!ret) {
             *nrBuilt = nrPairs;
         }
@@ -582,16 +671,14 @@ static int BuildPromoteGroups(ProcessAttr *process, PromoteGroup *groups, int *g
     *groupCnt = 0;
     for (int i = 0; i < process->groupPolicy.groupCount; i++) {
         MigrationGroupAttr *group = &process->groupPolicy.groups[i];
-        uint64_t localUsed = CalcLocalUsed(process, group);
         uint64_t remoteUsed = CalcRemoteUsed(group);
-        if (localUsed >= group->localLimitPages || remoteUsed == 0) {
+        uint64_t deficit = CalcGroupDeficit(process, group);
+        if (deficit == 0 || remoteUsed == 0) {
             continue;
         }
         groups[*groupCnt].groupIdx = i;
-        groups[*groupCnt].localUsed = localUsed;
         groups[*groupCnt].remoteUsed = remoteUsed;
-        groups[*groupCnt].deficit = group->localLimitPages - localUsed;
-        groups[*groupCnt].deficitRatio = (double)groups[*groupCnt].deficit / group->localLimitPages;
+        groups[*groupCnt].deficit = deficit;
         (*groupCnt)++;
     }
     qsort(groups, *groupCnt, sizeof(PromoteGroup), PromoteGroupCmp);
@@ -626,20 +713,19 @@ static int RunDemoteStage(ProcessAttr *process, struct MigList mlist[MAX_NODES][
         MigrationGroupAttr *group = &process->groupPolicy.groups[i];
         uint64_t localUsed = CalcLocalUsed(process, group);
         uint64_t remoteUsed = CalcRemoteUsed(group);
-        SMAP_LOGGER_INFO("grouped pid %d group %d localUsed %llu localLimit %llu remoteUsed %llu.",
-                         process->pid, i, localUsed, group->localLimitPages, remoteUsed);
-        if (localUsed <= group->localLimitPages) {
-            if (localUsed == group->localLimitPages) {
-                SMAP_LOGGER_INFO("grouped pid %d group %d idle.", process->pid, i);
-            }
+        uint64_t deficit = CalcGroupDeficit(process, group);
+        uint64_t excess = CalcGroupExcess(process, group);
+        SMAP_LOGGER_INFO("grouped pid %d group %d localUsed %llu deficit %llu excess %llu remoteUsed %llu.",
+                         process->pid, i, localUsed, deficit, excess, remoteUsed);
+        if (deficit > 0 || excess == 0) {
+            SMAP_LOGGER_INFO("grouped pid %d group %d skip demote.", process->pid, i);
             continue;
         }
-        uint64_t demoteNeed = localUsed - group->localLimitPages;
         uint64_t demoteAllowed = 0;
         for (int j = 0; j < group->targetCount; j++) {
             demoteAllowed += CalcRemoteRemaining(group, j);
         }
-        uint64_t actualDemote = MIN(demoteNeed, demoteAllowed);
+        uint64_t actualDemote = MIN(excess, demoteAllowed);
         SMAP_LOGGER_INFO("grouped pid %d group %d cool-down demote %llu pages, allowed %llu.",
                          process->pid, i, actualDemote, demoteAllowed);
         int ret = BuildDemoteMigList(process, group, mlist, actualDemote);
@@ -659,7 +745,7 @@ static int RunSwapStage(ProcessAttr *process, struct MigList mlist[MAX_NODES][MA
         MigrationGroupAttr *group = &process->groupPolicy.groups[i];
         uint64_t localUsed = CalcLocalUsed(process, group);
         uint64_t remoteUsed = CalcRemoteUsed(group);
-        if (localUsed != group->localLimitPages || remoteUsed == 0 || IsSharedTarget(&process->groupPolicy, i)) {
+        if (!IsGroupLocalSteady(process, group) || remoteUsed == 0 || IsSharedTarget(&process->groupPolicy, i)) {
             group->swapCandidateRounds = 0;
             continue;
         }

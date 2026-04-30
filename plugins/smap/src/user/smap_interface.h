@@ -94,17 +94,16 @@ struct MigrateOutMsg {
     struct MigrateOutPayload payload[MAX_NR_MIGOUT];
 };
 
-struct MigrationTarget {
+struct MigrationNode {
     int nid;
-    uint64_t quotaSize; // 该组允许驻留在此远端NUMA的最大内存，单位KB
+    uint64_t size; // locals: 本地最低保留水线; targets: 远端最大驻留容量, 单位KB
 };
 
 struct MigrationGroup {
     int localCount;
-    int localNids[MAX_GROUP_LOCAL_NUMA];
+    struct MigrationNode locals[MAX_GROUP_LOCAL_NUMA];
     int targetCount;
-    struct MigrationTarget targets[MAX_GROUP_REMOTE_NUMA];
-    uint64_t localMemLimitSize; // 组级本地NUMA最低保留水线，单位KB
+    struct MigrationNode targets[MAX_GROUP_REMOTE_NUMA];
 };
 
 struct GroupedMigrateOutPayload {

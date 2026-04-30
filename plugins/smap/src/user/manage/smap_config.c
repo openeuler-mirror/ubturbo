@@ -582,26 +582,31 @@ static bool IsGroupProcessPayloadValid(struct GroupProcessPayload *payload)
     for (int i = 0; i < payload->groupCount; i++) {
         struct GroupPayload *group = &payload->groups[i];
         if (group->localCount <= 0 || group->localCount > MAX_GROUP_LOCAL_NUMA ||
-            group->targetCount <= 0 || group->targetCount > MAX_GROUP_REMOTE_NUMA ||
-            group->localLimitPages == 0) {
-            SMAP_LOGGER_WARNING("grouped pid %d group %d count or limit invalid.", payload->pid, i);
+            group->targetCount <= 0 || group->targetCount > MAX_GROUP_REMOTE_NUMA) {
+            SMAP_LOGGER_WARNING("grouped pid %d group %d count invalid.", payload->pid, i);
             return false;
         }
-        if (HasDuplicateConfigInt(group->localNids, group->localCount)) {
-            SMAP_LOGGER_WARNING("grouped pid %d group %d local nids duplicate.", payload->pid, i);
-            return false;
-        }
+        int localNids[MAX_GROUP_LOCAL_NUMA] = { 0 };
         for (int j = 0; j < group->localCount; j++) {
-            int nid = group->localNids[j];
+            int nid = group->locals[j].nid;
+            if (group->locals[j].localReservePages == 0) {
+                SMAP_LOGGER_WARNING("grouped pid %d group %d local %d reserve is zero.", payload->pid, i, nid);
+                return false;
+            }
             if (nid < 0 || nid >= nrLocalNuma || nid >= MAX_NODES) {
                 SMAP_LOGGER_WARNING("grouped pid %d group %d local nid %d invalid.", payload->pid, i, nid);
                 return false;
             }
+            localNids[j] = nid;
             if (localUsed[nid]) {
                 SMAP_LOGGER_WARNING("grouped pid %d local nid %d is used by another group.", payload->pid, nid);
                 return false;
             }
             localUsed[nid] = true;
+        }
+        if (HasDuplicateConfigInt(localNids, group->localCount)) {
+            SMAP_LOGGER_WARNING("grouped pid %d group %d local nids duplicate.", payload->pid, i);
+            return false;
         }
 
         int targets[MAX_GROUP_REMOTE_NUMA] = { 0 };
@@ -636,9 +641,9 @@ static int BuildGroupPolicyFromPayload(struct GroupProcessPayload *payload, Grou
         MigrationGroupAttr *attr = &policy->groups[i];
         attr->localCount = group->localCount;
         attr->targetCount = group->targetCount;
-        attr->localLimitPages = group->localLimitPages;
         for (int j = 0; j < group->localCount; j++) {
-            attr->localNids[j] = group->localNids[j];
+            attr->locals[j].nid = group->locals[j].nid;
+            attr->locals[j].localReservePages = group->locals[j].localReservePages;
         }
         for (int j = 0; j < group->targetCount; j++) {
             attr->targets[j].nid = group->targets[j].nid;
@@ -847,9 +852,9 @@ static void AssignGroupProcessPayload(struct GroupProcessPayload *payload, Proce
         struct GroupPayload *groupPayload = &payload->groups[i];
         groupPayload->localCount = group->localCount;
         groupPayload->targetCount = group->targetCount;
-        groupPayload->localLimitPages = group->localLimitPages;
         for (int j = 0; j < group->localCount; j++) {
-            groupPayload->localNids[j] = group->localNids[j];
+            groupPayload->locals[j].nid = group->locals[j].nid;
+            groupPayload->locals[j].localReservePages = group->locals[j].localReservePages;
         }
         for (int j = 0; j < group->targetCount; j++) {
             groupPayload->targets[j].nid = group->targets[j].nid;
