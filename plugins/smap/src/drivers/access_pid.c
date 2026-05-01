@@ -990,13 +990,32 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 int access_add_pid(int len, struct access_add_pid_payload *payload)
 {
 	int i, ret;
-	struct access_pid *ap, *tmp;
+	struct access_pid *ap, *tmp, *existing;
 	LIST_HEAD(tmp_head);
 
+	/* Pre-check: mark completely duplicate pids */
+	down_read(&ap_data.lock);
 	for (i = 0; i < len; i++) {
-		if (payload[i].pid == NON_EXIST_PID) {
+		if (payload[i].pid < 0)
 			continue;
+		list_for_each_entry(existing, &ap_data.list, node) {
+			if (payload[i].pid == existing->pid &&
+			    payload[i].numa_nodes == existing->numa_nodes &&
+			    payload[i].scan_time == existing->scan_time &&
+			    payload[i].type == existing->type &&
+			    payload[i].ntimes == existing->ntimes) {
+				pr_info("pid %d is completely duplicate, skip processing\n",
+					payload[i].pid);
+				payload[i].pid = DUPLICATE_PID;
+				break;
+			}
 		}
+	}
+	up_read(&ap_data.lock);
+
+	for (i = 0; i < len; i++) {
+		if (payload[i].pid < 0)
+			continue;
 		/* check if payload has duplicate pid */
 		list_for_each_entry(tmp, &tmp_head, node) {
 			if (unlikely(payload[i].pid == tmp->pid)) {
