@@ -1104,6 +1104,37 @@ TEST_F(InterfaceTest, TestCheckSmapRemoveMsgWithIsPidTypeValidFailed)
     EXPECT_EQ(-EINVAL, ret);
 }
 
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgIgnoresNidFields)
+{
+    struct RemoveMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 0;
+    msg.payload[0].nid[0] = -1;
+    int pidType = VM_TYPE;
+
+    MOCKER(IsCountValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+
+    int ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgRejectsDuplicatePid)
+{
+    struct RemoveMsg msg = {};
+    msg.count = 2;
+    msg.payload[0].pid = 1024;
+    msg.payload[1].pid = 1024;
+    int pidType = VM_TYPE;
+
+    MOCKER(IsCountValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+
+    int ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
 TEST_F(InterfaceTest, TestSmapRemoveWithSmapIsNotRunning)
 {
     EnvAtomicSet(&g_status, 0);

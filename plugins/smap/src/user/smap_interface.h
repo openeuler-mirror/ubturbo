@@ -131,8 +131,8 @@ struct MigrateBackMsg {
 
 struct RemovePayload {
     pid_t pid;
-    int count;
-    int nid[REMOTE_NUMA_NUM];
+    int count; // 保留兼容字段，当前 remove 按 PID 整体删除并忽略该字段
+    int nid[REMOTE_NUMA_NUM]; // 保留兼容字段，当前 remove 按 PID 整体删除并忽略该字段
 };
 
 struct RemoveMsg {

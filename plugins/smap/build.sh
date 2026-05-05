@@ -75,7 +75,7 @@ N_CPUS=$(grep processor /proc/cpuinfo | wc -l)
 echo "$N_CPUS processors detected."
 
 CMAKE_CMD="cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE $PROJ_DIR"
-BUILD_CMD="$BUILD_TOOL -j $((N_CPUS)) install"
+BUILD_CMD="$BUILD_TOOL -j $((N_CPUS-2)) install"
 
 echo $CMAKE_CMD
 $CMAKE_CMD || {
