@@ -333,7 +333,7 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 	if (*ppos + cnt <= total_len)
 		*ppos += len;
 out_free:
-	kfree(freq);
+	kvfree(freq);
 out:
 	if (len < 0) {
 		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ |
