@@ -542,10 +542,32 @@ static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType)
     return ret;
 }
 
+static void RollbackInvalidPid(pid_t *failedPids, int failedCount)
+{
+    if (failedCount <= 0) {
+        return;
+    }
+
+    struct AccessRemovePidPayload *removePayload = calloc(failedCount, sizeof(struct AccessRemovePidPayload));
+    if (!removePayload) {
+        SMAP_LOGGER_ERROR("Calloc remove payload failed.");
+        return;
+    }
+
+    for (int i = 0; i < failedCount; i++) {
+        removePayload[i].pid = failedPids[i];
+    }
+    int ret = AccessIoctlRemovePid(failedCount, removePayload);
+    SMAP_LOGGER_INFO("Rollback kernel invalid pids, ret is %d.", ret);
+    free(removePayload);
+}
+
 static int AddProcessesToGlobalManager(struct MigrateOutMsg *msg, int pidType,
                                        uint32_t *nodeBitmap, bool *hasInvalidPid)
 {
     int ret = 0;
+    int failedCount = 0;
+    pid_t failedPids[MAX_NR_MIGOUT] = { 0 };
     uint32_t *nodeBitmapTmp;
     for (int i = 0; i < msg->count; ++i) {
         nodeBitmapTmp = nodeBitmap ? &nodeBitmap[i] : NULL;
@@ -564,16 +586,17 @@ static int AddProcessesToGlobalManager(struct MigrateOutMsg *msg, int pidType,
 
         ret = ProcessAddManage(&param, nodeBitmapTmp);
         if (ret) {
+            failedPids[failedCount++] = param.pid;
             SMAP_LOGGER_ERROR("add process %d failed: %d.", msg->payload[i].pid, ret);
             if (ret == -ESRCH) {
                 *hasInvalidPid = true;
                 ret = 0;
-                continue;
             }
-            return ret;
+            continue;
         }
         SMAP_LOGGER_INFO("add process %d done.", param.pid);
     }
+    RollbackInvalidPid(failedPids, failedCount);
     return ret;
 }
 
