@@ -31,6 +31,7 @@
 
 #define _IOC_TYPECHECK(t) (sizeof(t))
 #define _IOW(type, nr, size)	_IOC(_IOC_WRITE, (type), (nr), (_IOC_TYPECHECK(size)))
+#define _IOR(type, nr, size)	_IOC(_IOC_WRITE, (type), (nr), (_IOC_TYPECHECK(size)))
 #define _IO(type, nr)		_IOC(_IOC_NONE, (type), (nr), 0)
 #define _IOC_NR(nr)		(((nr) >> _IOC_NRSHIFT) & _IOC_NRMASK)
 #define _IOC_TYPE(nr)		(((nr) >> _IOC_TYPESHIFT) & _IOC_TYPEMASK)

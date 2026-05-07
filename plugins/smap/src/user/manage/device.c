@@ -139,38 +139,36 @@ static bool IsLocalNuma(unsigned long nid)
     return c == '0';
 }
 
-static int SetNrLocalNuma(struct ProcessManager *manager)
+static int GetNrLocalNumaFromKernel(struct ProcessManager *manager)
 {
-    DIR *dir = opendir(SYS_NODE_PATH);
-    if (!dir) {
-        SMAP_LOGGER_ERROR("Failed to open node directory: %d.", -errno);
-        return -ENODEV;
+    if (manager->fds.access < 0) {
+        SMAP_LOGGER_ERROR("access device fd is invalid: %d", manager->fds.access);
+        return -EINVAL;
     }
 
-#define NODE_LITERAL_LEN 4
-    struct dirent *entry;
-    manager->nrLocalNuma = 0;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strncmp(entry->d_name, "node", NODE_LITERAL_LEN) == 0) {
-            char *numStr = entry->d_name + NODE_LITERAL_LEN;
-            char *endPtr;
-            unsigned long num = strtoul(numStr, &endPtr, DECIMAL);
-            if (*numStr != '\0' && *endPtr == '\0' && IsLocalNuma(num) && num >= manager->nrLocalNuma) {
-                manager->nrLocalNuma = num + 1;
-            }
-        }
+    int nrLocalNuma = 0;
+    int ret = ioctl(manager->fds.access, SMAP_ACCESS_GET_NR_LOCAL_NUMA, 
+                &nrLocalNuma);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("failed to get nr_local_numa from kernel: %d, errno: %d",
+                          ret, errno);
+        return ret;
     }
-    closedir(dir);
-#undef NODE_LITERAL_LEN
-
+    if (nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM) {
+        SMAP_LOGGER_ERROR("get nr_local_numa invalid :%d", nrLocalNuma);
+        return -EINVAL;
+    }
+    manager->nrLocalNuma = nrLocalNuma;
+    SMAP_LOGGER_INFO("get nr_local_numa %d from kernel successfully",
+                     manager->nrLocalNuma);
     return 0;
 }
 
 int ConfigureTrackingDevices(struct ProcessManager *manager)
 {
-    int ret = SetNrLocalNuma(manager);
+    int ret = GetNrLocalNumaFromKernel(manager);
     if (ret) {
-        SMAP_LOGGER_ERROR("Unable to set local NUMA num: %d.", ret);
+        SMAP_LOGGER_ERROR("Unable to get nr_local_numa from kernel: %d.", ret);
         return ret;
     }
 

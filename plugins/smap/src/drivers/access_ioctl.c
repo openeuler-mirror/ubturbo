@@ -554,6 +554,16 @@ out_free_payload:
 	return ret;
 }
 
+static long ioctl_get_nr_local_numa(void __user *argp)
+{
+    if (copy_to_user(argp, &nr_local_numa, sizeof(int))) {
+		pr_err("copy_to_user nr_local_numa failed\n");
+        return -EFAULT;
+	}
+    pr_info("passed nr_local_numa %d to user space\n", nr_local_numa);
+    return 0;
+}
+
 static long smap_access_ioctl(struct file *file, unsigned int cmd,
 			      unsigned long arg)
 {
@@ -577,6 +587,8 @@ static long smap_access_ioctl(struct file *file, unsigned int cmd,
 		return ioctl_get_tracking(argp);
 	case SMAP_ACCESS_CREATE_PROCFS:
 		return ioctl_create_smap_procfs(argp);
+	case SMAP_ACCESS_GET_NR_LOCAL_NUMA:
+    	return ioctl_get_nr_local_numa(argp);
 	default:
 		rc = -ENOTTY;
 	}

@@ -538,8 +538,6 @@ static void clear_statistic_tracking_info(pid_t pid)
 
 static void update_statistic_scan_freq_mm(u64 *vaddr, u64 page_cnt, int pid)
 {
-	int i;
-	int j;
 	u32 wins_index;
 	u64 vaddr_idx, l1_idx, l2_idx;
 	struct statistics_tracking_info *tmp;
