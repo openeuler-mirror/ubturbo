@@ -269,139 +269,11 @@ TEST_F(DeviceTest, TestIsLocalNumaReadLocal)
     EXPECT_TRUE(ret);
 }
 
-extern "C" int SetNrLocalNuma(struct ProcessManager *manager);
-TEST_F(DeviceTest, TestSetNrLocalNumaOpenDirFailed)
-{
-    int ret;
-    struct ProcessManager manager = { .nrLocalNuma = 99 };
-
-    MOCKER(static_cast<DIR *(*)(const char *)>(opendir)).stubs().will(returnValue(static_cast<DIR *>(nullptr)));
-    ret = SetNrLocalNuma(&manager);
-    EXPECT_EQ(-ENODEV, ret);
-    EXPECT_EQ(99, manager.nrLocalNuma);
-}
-
-TEST_F(DeviceTest, TestSetNrLocalNumaNoNodeDir)
-{
-    int ret;
-    DIR *dirp;
-    struct ProcessManager manager = { .nrLocalNuma = 99 };
-
-    MOCKER(static_cast<DIR *(*)(const char *)>(opendir)).stubs().will(returnValue(dirp));
-    MOCKER(static_cast<struct dirent *(*)(DIR *)>(readdir))
-        .stubs()
-        .will(returnValue(static_cast<struct dirent *>(nullptr)));
-    MOCKER(static_cast<int (*)(DIR *)>(closedir)).stubs().will(returnValue(0));
-    ret = SetNrLocalNuma(&manager);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(0, manager.nrLocalNuma);
-}
-
-TEST_F(DeviceTest, TestSetNrLocalNumaFourNode)
-{
-    int ret;
-    DIR *dirp;
-    struct dirent entry1 = { .d_name = { "node0" } };
-    struct dirent entry2 = { .d_name = { "node3" } };
-    struct ProcessManager manager = { .nrLocalNuma = 99 };
-
-    MOCKER(static_cast<DIR *(*)(const char *)>(opendir)).stubs().will(returnValue(dirp));
-    MOCKER(static_cast<struct dirent *(*)(DIR *)>(readdir))
-        .stubs()
-        .will(returnValue(&entry1))
-        .then(returnValue(&entry2))
-        .then(returnValue(static_cast<struct dirent *>(nullptr)));
-    MOCKER(static_cast<int (*)(DIR *)>(closedir)).stubs().will(returnValue(0));
-    MOCKER(IsLocalNuma).stubs().will(returnValue(true));
-    ret = SetNrLocalNuma(&manager);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(4, manager.nrLocalNuma);
-}
-
-TEST_F(DeviceTest, TestSetNrLocalNumaFourNodeReversed)
-{
-    int ret;
-    DIR *dirp;
-    struct dirent entry1 = { .d_name = { "node3" } };
-    struct dirent entry2 = { .d_name = { "node0" } };
-    struct ProcessManager manager = { .nrLocalNuma = 99 };
-
-    MOCKER(static_cast<DIR *(*)(const char *)>(opendir)).stubs().will(returnValue(dirp));
-    MOCKER(static_cast<struct dirent *(*)(DIR *)>(readdir))
-        .stubs()
-        .will(returnValue(&entry1))
-        .then(returnValue(&entry2))
-        .then(returnValue(static_cast<struct dirent *>(nullptr)));
-    MOCKER(static_cast<int (*)(DIR *)>(closedir)).stubs().will(returnValue(0));
-    MOCKER(IsLocalNuma).stubs().will(returnValue(true));
-    ret = SetNrLocalNuma(&manager);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(4, manager.nrLocalNuma);
-}
-
-TEST_F(DeviceTest, TestSetNrLocalNumaFiveNode)
-{
-    int ret;
-    DIR *dirp;
-    struct dirent entry1 = { .d_name = { "node0" } };
-    struct dirent entry2 = { .d_name = { "node1" } };
-    struct dirent entry3 = { .d_name = { "node2" } };
-    struct dirent entry4 = { .d_name = { "node3" } };
-    struct dirent entry5 = { .d_name = { "node4" } };
-    struct ProcessManager manager = { .nrLocalNuma = 99 };
-
-    MOCKER(static_cast<DIR *(*)(const char *)>(opendir)).stubs().will(returnValue(dirp));
-    MOCKER(static_cast<struct dirent *(*)(DIR *)>(readdir))
-        .stubs()
-        .will(returnValue(&entry1))
-        .then(returnValue(&entry2))
-        .then(returnValue(&entry3))
-        .then(returnValue(&entry4))
-        .then(returnValue(&entry5))
-        .then(returnValue(static_cast<struct dirent *>(nullptr)));
-    MOCKER(static_cast<int (*)(DIR *)>(closedir)).stubs().will(returnValue(0));
-    MOCKER(IsLocalNuma).stubs().with(eq(0)).will(returnValue(true));
-    MOCKER(IsLocalNuma).stubs().with(eq(1)).will(returnValue(true));
-    MOCKER(IsLocalNuma).stubs().with(eq(2)).will(returnValue(true));
-    MOCKER(IsLocalNuma).stubs().with(eq(3)).will(returnValue(true));
-    MOCKER(IsLocalNuma).stubs().with(eq(4)).will(returnValue(false));
-    ret = SetNrLocalNuma(&manager);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(4, manager.nrLocalNuma);
-}
-
-TEST_F(DeviceTest, TestSetNrLocalNumaTwoNode)
-{
-    int ret;
-    DIR *dirp;
-    struct dirent entry1 = { .d_name = { "node0" } };
-    struct dirent entry2 = { .d_name = { "node1" } };
-    struct dirent entry3 = { .d_name = { "node2" } };
-    struct dirent entry4 = { .d_name = { "node3" } };
-    struct ProcessManager manager = { .nrLocalNuma = 99 };
-
-    MOCKER(static_cast<DIR *(*)(const char *)>(opendir)).stubs().will(returnValue(dirp));
-    MOCKER(static_cast<struct dirent *(*)(DIR *)>(readdir))
-        .stubs()
-        .will(returnValue(&entry1))
-        .then(returnValue(&entry2))
-        .then(returnValue(&entry3))
-        .then(returnValue(&entry4))
-        .then(returnValue(static_cast<struct dirent *>(nullptr)));
-    MOCKER(static_cast<int (*)(DIR *)>(closedir)).stubs().will(returnValue(0));
-    MOCKER(IsLocalNuma).stubs().with(eq(0)).will(returnValue(true));
-    MOCKER(IsLocalNuma).stubs().with(eq(1)).will(returnValue(true));
-    MOCKER(IsLocalNuma).stubs().with(eq(2)).will(returnValue(false));
-    MOCKER(IsLocalNuma).stubs().with(eq(3)).will(returnValue(false));
-    ret = SetNrLocalNuma(&manager);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(2, manager.nrLocalNuma);
-}
-
+extern "C" int GetNrLocalNumaFromKernel(struct ProcessManager *manager);
 TEST_F(DeviceTest, TestConfigureTrackingDevicesSetNrLocalNumaFailed)
 {
     struct ProcessManager manager;
-    MOCKER(SetNrLocalNuma).stubs().will(returnValue(-1));
+    MOCKER(GetNrLocalNumaFromKernel).stubs().will(returnValue(-1));
     int ret = ConfigureTrackingDevices(&manager);
     EXPECT_EQ(-1, ret);
 }
@@ -409,7 +281,7 @@ TEST_F(DeviceTest, TestConfigureTrackingDevicesSetNrLocalNumaFailed)
 TEST_F(DeviceTest, TestConfigureTrackingDevicesConfigTrackingDevFailed)
 {
     struct ProcessManager manager;
-    MOCKER(SetNrLocalNuma).stubs().will(returnValue(0));
+    MOCKER(GetNrLocalNumaFromKernel).stubs().will(returnValue(0));
     MOCKER(ConfigTrackingDev).stubs().will(returnValue(-1));
     int ret = ConfigureTrackingDevices(&manager);
     EXPECT_EQ(-1, ret);
@@ -418,7 +290,7 @@ TEST_F(DeviceTest, TestConfigureTrackingDevicesConfigTrackingDevFailed)
 TEST_F(DeviceTest, TestConfigureTrackingDevicesSuccess)
 {
     struct ProcessManager manager;
-    MOCKER(SetNrLocalNuma).stubs().will(returnValue(0));
+    MOCKER(GetNrLocalNumaFromKernel).stubs().will(returnValue(0));
     MOCKER(ConfigTrackingDev).stubs().will(returnValue(0));
     int ret = ConfigureTrackingDevices(&manager);
     EXPECT_EQ(0, ret);

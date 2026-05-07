@@ -62,4 +62,15 @@ struct acpi_srat_mem_affinity {
 #define ACPI_SRAT_MEM_ENABLED       (1)	/* 00: Use affinity structure */
 #define ACPI_SRAT_MEM_HOT_PLUGGABLE (1<<1)	/* 01: Memory region is hot pluggable */
 
+struct acpi_srat_gicc_affinity {
+    struct acpi_subtable_header header;
+    u16 reserved;
+    u32 proximity_domain;      /* NUMA node ID */
+    u32 acpi_processor_uid;    /* Processor UID */
+    u32 flags;
+    u32 clock_domain;
+};
+
+#define ACPI_SRAT_GICC_ENABLED      (1)    /* 00: Use affinity structure */
+
 #endif
