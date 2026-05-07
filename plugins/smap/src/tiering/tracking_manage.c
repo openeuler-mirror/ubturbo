@@ -155,15 +155,17 @@ next:
 	task = prev_task;
 	list_for_each_entry(subtask, &task->subtask, task_list) {
 		if (node_is_critical_err(subtask->src_nid)) {
-			pr_err_ratelimited("migrate back is critical error node %d, stop migrate\n",
-				subtask->src_nid);
+			pr_err_ratelimited("critical error on node %d\n",
+					   subtask->src_nid);
 			subtask->status = MB_SUBTASK_ERR;
 		} else {
 			for (i = 0; i < SUBTASK_RETRY_TIME; i++) {
 				if (is_smap_pg_huge())
-					smap_handle_migrate_back_subtask(subtask);
+					smap_handle_migrate_back_subtask(
+						subtask);
 				else
-					smap_handle_migrate_back_subtask_4k(subtask);
+					smap_handle_migrate_back_subtask_4k(
+						subtask);
 				if (subtask->status != MB_SUBTASK_ERR) {
 					break;
 				}

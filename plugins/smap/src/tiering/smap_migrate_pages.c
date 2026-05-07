@@ -511,6 +511,7 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 #ifdef DEBUG
 	ktime_t start_time, end_time;
 	s64 delta_time_ms;
+	unsigned int nr_folios_backup = 0;
 #endif
 
 	if (!check_addr_range_valid(task)) {
@@ -525,6 +526,8 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 
 	nr_pre_migrate_fail = nr_migrate_fail = 0;
 	unsigned int nr_folios = 0;
+	unsigned int nr_folios_min = 0;
+	unsigned int cnt = 0;
 	unsigned long max_nr_folios =
 		(task->pa_end - task->pa_start + 1) / page_size;
 	struct folio **migrate_folios =
@@ -575,14 +578,26 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 
 #ifdef DEBUG
 	start_time = ktime_get();
+	nr_folios_backup = nr_folios;
 #endif
-	nr_migrate_fail =
-		smap_migrate(migrate_folios, nr_folios, task->src_nid, MIGRATE_TYPE_BACK);
+	do {
+		if (node_is_critical_err(task->src_nid)) {
+			pr_err_ratelimited("critical error on node %d\n",
+					   task->src_nid);
+			break;
+		}
+		nr_folios_min = MIN(nr_folios, NR_BATCHED_MIGRATION);
+		nr_migrate_fail += smap_migrate(
+			&migrate_folios[cnt * NR_BATCHED_MIGRATION],
+			nr_folios_min, task->src_nid, MIGRATE_TYPE_BACK);
+		nr_folios -= nr_folios_min;
+		cnt++;
+	} while (nr_folios != 0);
 
 #ifdef DEBUG
 	end_time = ktime_get();
 	delta_time_ms = ktime_to_ms(ktime_sub(end_time, start_time));
-	pr_debug("migrate back total %lu pages, use %lldms\n", nr_folios,
+	pr_debug("migrate back total %lu pages, use %lldms\n", nr_folios_backup,
 		 delta_time_ms);
 #endif
 	vfree(migrate_folios);
@@ -644,8 +659,8 @@ static void process_pages_for_migration(struct migrate_back_subtask *task,
 
 void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 {
-	int i, j;
-	unsigned int nr_migrate_fail, nr_fail;
+	int i, j, cnt;
+	unsigned int nr_migrate_fail, nr_fail, nr_folios_min;
 	unsigned int mig_pages_cnt[SMAP_MAX_LOCAL_NUMNODES] = { 0 };
 	struct folio **migrate_folios[SMAP_MAX_LOCAL_NUMNODES] = { NULL };
 	unsigned long nr_pre_migrate_fail;
@@ -681,8 +696,22 @@ void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 #ifdef DEBUG
 		start_time = ktime_get();
 #endif
-		nr_fail = smap_migrate(migrate_folios[i], mig_pages_cnt[i], i,
-				       MIGRATE_TYPE_BACK);
+		cnt = 0;
+		nr_fail = 0;
+		do {
+			if (node_is_critical_err(i)) {
+				pr_err_ratelimited(
+					"critical error on node %d\n", i);
+				break;
+			}
+			nr_folios_min =
+				MIN(mig_pages_cnt[i], NR_BATCHED_MIGRATION);
+			nr_fail += smap_migrate(
+				&migrate_folios[i][cnt * NR_BATCHED_MIGRATION],
+				nr_folios_min, i, MIGRATE_TYPE_BACK);
+			mig_pages_cnt[i] -= nr_folios_min;
+			cnt++;
+		} while (mig_pages_cnt[i] != 0);
 #ifdef DEBUG
 		end_time = ktime_get();
 		delta_time_ms = ktime_to_ms(ktime_sub(end_time, start_time));
@@ -759,8 +788,6 @@ static inline bool is_filter_anon(struct page *page)
 	return !PageAnon(page) || page_mapcount(page) > 1;
 }
 
-#define NR_BATCHED_MIGRATION 512
-
 int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 {
 	int i;
@@ -819,13 +846,13 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 		}
 		pre_migrate_failed = 0;
 		pre_migrate_num = 0;
-		tmp_pre_migrate_nr = 0;
 
 		nr_remain_folios = mig_list[i].nr;
 		mig_list[i].failed_pre_migrated_nr = 0;
 		mig_list[i].failed_mig_nr = 0;
 
 again:
+		tmp_pre_migrate_nr = 0;
 		if (node_is_critical_err(mig_list[i].from) ||
 		    node_is_critical_err(mig_list[i].to)) {
 			continue;
@@ -971,11 +998,13 @@ static int smap_pre_migrate_range(struct folio **folios,
 
 static unsigned int smap_migrate_range(int nid, u64 start_pa, u64 end_pa)
 {
-	int nr_pre_migrate;
-	unsigned nr_migrate_fail;
+	int nr_pre_migrate_cnt;
+	int cnt = 0;
+	unsigned nr_migrate_fail = 0;
 	unsigned long start_pfn = PHYS_PFN(start_pa);
 	unsigned long end_pfn = PHYS_PFN(end_pa);
 	unsigned int nr_folios = 0;
+	unsigned int nr_folios_min = 0;
 	struct folio **migrate_folios;
 
 	if (!pfn_valid(start_pfn) || !pfn_valid(end_pfn)) {
@@ -993,13 +1022,23 @@ static unsigned int smap_migrate_range(int nid, u64 start_pa, u64 end_pa)
 		pr_err("unable to allocate memory for migrate folio list\n");
 		return -ENOMEM;
 	}
-	nr_pre_migrate = smap_pre_migrate_range(migrate_folios, &nr_folios,
+	nr_pre_migrate_cnt = smap_pre_migrate_range(migrate_folios, &nr_folios,
 						start_pfn, end_pfn);
-	nr_migrate_fail = smap_migrate(migrate_folios, nr_folios, nid, MIGRATE_TYPE_REMOTE);
-	if (nr_migrate_fail) {
-		pr_err("migrate pre_migrate cnt: %d, mig failed %d pages in pfn range %#lx-%#lx\n",
-		       nr_pre_migrate, nr_migrate_fail, start_pfn, end_pfn);
-	}
+	do {
+		nr_folios_min = MIN(nr_pre_migrate_cnt, NR_BATCHED_MIGRATION);
+		nr_migrate_fail += smap_migrate(
+			&migrate_folios[cnt * NR_BATCHED_MIGRATION],
+			nr_folios_min, nid, MIGRATE_TYPE_REMOTE);
+		if (nr_migrate_fail) {
+			pr_err("migrate pre_migrate cnt: %d, mig failed %d pages in pfn range %#lx-%#lx\n",
+			       nr_folios_min, nr_migrate_fail, start_pfn,
+			       end_pfn);
+			vfree(migrate_folios);
+			return nr_migrate_fail;
+		}
+		nr_pre_migrate_cnt -= nr_folios_min;
+		cnt++;
+	} while (nr_pre_migrate_cnt != 0);
 	vfree(migrate_folios);
 	return nr_migrate_fail;
 }
@@ -1011,8 +1050,8 @@ unsigned int smap_migrate_numa(struct migrate_numa_inner_msg *msg)
 	int nid = msg->dest_nid;
 
 	if (node_is_critical_err(msg->src_nid) || node_is_critical_err(msg->dest_nid)) {
-		pr_err_ratelimited("migrate numa is trouble numa(%d-%d), stop migrate.\n",
-			msg->src_nid, msg->dest_nid);
+		pr_err_ratelimited("critical error on node %d or %d\n",
+				   msg->src_nid, msg->dest_nid);
 		return -EINVAL;
 	}
 	for (i = 0; i < msg->count; i++) {
@@ -1025,6 +1064,12 @@ unsigned int smap_migrate_numa(struct migrate_numa_inner_msg *msg)
 				break;
 			pr_info("migrate range to %d failed %d pages\n", nid,
 				ret);
+			if (node_is_critical_err(msg->src_nid) || node_is_critical_err(msg->dest_nid)) {
+				pr_err_ratelimited(
+					"critical error on node %d or %d\n",
+					msg->src_nid, msg->dest_nid);
+				return -EINVAL;
+			}
 		} while (retry--);
 		if (retry == 0)
 			return ret;
