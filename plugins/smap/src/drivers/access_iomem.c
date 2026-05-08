@@ -278,6 +278,32 @@ int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size)
 	return 0;
 }
 
+int calc_paddr_acidx_iomem_known_nid(u64 pa, int nid, u64 *index, int page_size)
+{
+	struct ram_segment *seg;
+	int shift = __builtin_ctz(page_size);
+	u64 idx = 0;
+
+	read_lock(&rem_ram_list_lock);
+	list_for_each_entry(seg, &remote_ram_list, node) {
+		if (seg->numa_node != nid) {
+			continue;
+		}
+		if (pa < seg->start) {
+			break;
+		}
+		if (pa <= seg->end) {
+			idx += ((pa - seg->start) >> shift);
+			*index = idx;
+			read_unlock(&rem_ram_list_lock);
+			return 0;
+		}
+		idx += ((seg->end - seg->start + 1) >> shift);
+	}
+	read_unlock(&rem_ram_list_lock);
+	return -ERANGE;
+}
+
 int calc_acidx_paddr_iomem(int nid, u64 acidx, u64 *paddr, int page_size)
 {
 	struct ram_segment *seg;

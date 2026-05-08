@@ -248,6 +248,28 @@ int calc_paddr_acidx_acpi(u64 paddr, int *nid, u64 *index, int page_size)
 	return 0;
 }
 
+int calc_paddr_acidx_acpi_known_nid(u64 paddr, int nid, u64 *index, int page_size)
+{
+	struct acpi_mem_segment *mem;
+	u64 offset = 0;
+	int shift = __builtin_ctz(page_size);
+
+	list_for_each_entry(mem, &acpi_mem.mem, segment) {
+		if (mem->node != nid) {
+			continue;
+		}
+		if (paddr > mem->end) {
+			offset += mem->end - mem->start + 1;
+			continue;
+		} else if (unlikely(paddr < mem->start))
+			break;
+		offset += paddr - mem->start;
+		*index = offset >> shift;
+		return 0;
+	}
+	return -ERANGE;
+}
+
 int calc_acidx_paddr_acpi(int nid, u64 acidx, u64 *paddr, int page_size)
 {
 	struct acpi_mem_segment *mem;

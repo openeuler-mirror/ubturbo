@@ -379,9 +379,9 @@ static int calc_paddr_nid_idx(u64 paddr, int page_size, int *nid, u64 *pa_idx,
 		return -ERANGE;
 
 	if (*nid < nr_local_numa)
-		ret = calc_paddr_acidx_acpi(paddr, nid, pa_idx, page_size);
+		ret = calc_paddr_acidx_acpi_known_nid(paddr, *nid, pa_idx, page_size);
 	else
-		ret = calc_paddr_acidx_iomem(paddr, nid, pa_idx, page_size);
+		ret = calc_paddr_acidx_iomem_known_nid(paddr, *nid, pa_idx, page_size);
 
 	if (unlikely(ret))
 		return ret;
@@ -415,9 +415,9 @@ static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
 		return;
 
 	if (nid < nr_local_numa) {
-		ret = calc_paddr_acidx_acpi(paddr, &nid, &pa_index, page_size);
+		ret = calc_paddr_acidx_acpi_known_nid(paddr, nid, &pa_index, page_size);
 	} else {
-		ret = calc_paddr_acidx_iomem(paddr, &nid, &pa_index, page_size);
+		ret = calc_paddr_acidx_iomem_known_nid(paddr, nid, &pa_index, page_size);
 	}
 
 	if (unlikely(ret))
@@ -483,9 +483,9 @@ static void ham_actc_data_add(int pid, phys_addr_t paddr, u32 page_size)
 		return;
 
 	if (node_id < nr_local_numa) {
-		ret = calc_paddr_acidx_acpi(paddr, &node_id, &pa_index, page_size);
+		ret = calc_paddr_acidx_acpi_known_nid(paddr, node_id, &pa_index, page_size);
 	} else {
-		ret = calc_paddr_acidx_iomem(paddr, &node_id, &pa_index, page_size);
+		ret = calc_paddr_acidx_iomem_known_nid(paddr, node_id, &pa_index, page_size);
 	}
 
 	if (unlikely(ret))
