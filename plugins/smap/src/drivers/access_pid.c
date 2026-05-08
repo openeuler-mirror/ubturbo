@@ -958,7 +958,7 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 		 * if cur_times + SCAN_TIMES_NEEDED_BY_NEW_PID < ap->ntimes, no need to call submit_one_work
 		 */
 		if (list_empty(&ap_data.list)) {
-			ap->cur_times = ap->ntimes;
+			ap->cur_times = 0;
 		} else {
 			struct access_pid *ap_head = list_first_entry(
 				&ap_data.list, struct access_pid, node);
