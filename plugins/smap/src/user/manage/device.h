@@ -22,12 +22,10 @@
 #define DECIMAL 10
 #define MS_PER_SEC 1000
 #define US_PER_MSEC 1000
-#define NS_PER_USEC 1000
 #define US_PER_SEC (US_PER_MSEC * MS_PER_SEC)
 #define SCAN_TIME_4K LIGHT_STABLE_SCAN_CYCLE
 #define SCAN_TIME_2M LIGHT_STABLE_SCAN_CYCLE
 #define SCAN_PERIOD_UNIT_MS 50
-#define SMAP_LOCK_PERM (S_IRUSR | S_IWUSR | S_IRGRP)
 
 int EnableTracking(struct ProcessManager *manager);
 

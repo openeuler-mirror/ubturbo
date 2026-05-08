@@ -18,16 +18,17 @@
 #define PAGE_SIZE_64K (1UL << 16)
 #define PAGE_SIZE_2M (1UL << 21)
 
-
+#ifndef MAX
 #define MAX(a, b) ((a) >= (b) ? (a) : (b))
+#endif
+
+#ifndef MIN
 #define MIN(a, b) ((a) <= (b) ? (a) : (b))
+#endif
 
 #define SMAP_MAX_LOCAL_NUMNODES 4
 #define SMAP_MAX_REMOTE_NUMNODES 18
 #define SMAP_MAX_NUMNODES (SMAP_MAX_LOCAL_NUMNODES + SMAP_MAX_REMOTE_NUMNODES)
-
-#define MAX_SIZE_PER_NUMA (1UL << 40)
-#define MAX_NR_PAGE_PER_NUMA (MAX_SIZE_PER_NUMA >> PAGE_SHIFT)
 
 enum node_level { L1, L2, NR_LEVEL };
 

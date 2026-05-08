@@ -15,11 +15,7 @@ extern unsigned int smap_pgsize;
 extern unsigned int smap_mode;
 extern unsigned int smap_scene;
 
-#define DEFAULT_L1_NODE (0)
-#define DEFAULT_L2_NODE (1)
 #define INVALID_DATA_MODE (-1)
-
-#define MN_HISTORY_SIZE 4
 
 enum data_mode_args {
 	ACTC_MODE = 0,

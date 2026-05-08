@@ -27,12 +27,6 @@ struct ksm_stable_node {
 		unsigned long kpfn;
 		unsigned long chain_prune_time;
 	};
-	/*
-	 * STABLE_NODE_CHAIN can be any negative number in
-	 * rmap_hlist_len negative range, but better not -1 to be able
-	 * to reliably detect underflows.
-	 */
-#define STABLE_NODE_CHAIN (-1024)
 	int rmap_hlist_len;
 #ifdef CONFIG_NUMA
 	int nid;

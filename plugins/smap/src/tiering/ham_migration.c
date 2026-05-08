@@ -31,7 +31,6 @@
 #undef pr_fmt
 #define pr_fmt(fmt) "HAM: " fmt
 #define HAM_DEV_COUNT 1
-#define HAM_4k_to_2M 9
 #define DECIMAL 10
 
 #define TIME_LENTH (msecs_to_jiffies(2000))

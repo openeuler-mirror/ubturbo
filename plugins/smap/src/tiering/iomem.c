@@ -27,12 +27,9 @@
 #undef pr_fmt
 #define pr_fmt(fmt) "SMAP_iomem: " fmt
 
-#define REMOTE_RAM_NAME "System RAM (Remote)"
-#define MEMID_IORES_PREFIX "MEMID_"
 #define OBMM_SYS_DIR "/sys/devices/obmm"
 #define OBMM_SHM_DIR "obmm_shmdev"
 #define OBMM_FILE_SIZE 128
-#define HEAD_MEMID 0
 #define WAIT_MEMID_MS 500
 #define MAX_MEMID_RETRY 2
 #define HEX 16

@@ -26,7 +26,6 @@
 #define pr_fmt(fmt) "access_pid: " fmt
 
 #define NODE_PATH "/dev/smap_node%d"
-#define NODE_PATH_MAX 100
 
 #define VM_MEMSLOT_PRIOR_THRE (3 * (1 << GB_TO_4K_SHIFT))
 #define SEC_TO_MS 1000

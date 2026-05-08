@@ -33,15 +33,6 @@
 #define SIZE_32M (32 * MB)
 #define SHIFT_32M 25
 
-#define SIZE_16G (16 * GB)
-#define SHIFT_16G 34
-
-#define SIZE_128M (128 * MB)
-#define SHIFT_128M 27
-
-#define SIZE_64G (64 * GB)
-#define SHIFT_64G 36
-
 enum ub_hist_sts_size {
 	STS_SIZE_4K = 0,
 	STS_SIZE_2M = 1,

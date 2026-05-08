@@ -22,7 +22,6 @@ extern "C" {
 
 #define PAGE_SIZE_2M (1UL << 21)
 #define PAGE_SIZE_4K (1UL << 12)
-#define MAX_MIGRATE_RETRY 10
 
 struct ram_block_info {
 	int rmt_numa_id;

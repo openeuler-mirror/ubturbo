@@ -16,8 +16,6 @@
 #include "manage.h"
 #include "thread.h"
 
-#define CHECK_THREAD_INTERVAL 2000
-
 static void *ThreadMain(void *args)
 {
     ThreadCtx *ctx = args;
