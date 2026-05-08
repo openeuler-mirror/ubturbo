@@ -218,33 +218,33 @@ static void CalcMemInfo(ProcessAttr *process)
     SMAP_LOGGER_INFO("L2 nrPage %u, nrHot %u.", p->nrL2Page, p->nrL2Hot);
 }
 
-int GetProcessSceneAttr(Scene scene, SceneInfo *info)
+int GetProcessSceneAttr(Scene scene, SceneInfo *info, PidType type)
 {
     if (scene >= SCENE_MAX || !info) {
         return -EINVAL;
     }
 
     if (scene == UNSTABLE_SCENE) {
-        info->cycles.scanCycle = UNSTABLE_SCAN_CYCLE;
+        info->cycles.scanCycle = type == PROCESS_TYPE ? PROCESS_UNSTABLE_SCAN_CYCLE : VM_UNSTABLE_SCAN_CYCLE;
         info->cycles.migCycle = UNSTABLE_MIGRATE_CYCLE;
     } else if (scene == HEAVY_STABLE_SCENE) {
-        info->cycles.scanCycle = HEAVY_STABLE_SCAN_CYCLE;
+        info->cycles.scanCycle = type == PROCESS_TYPE ? PROCESS_HEAVY_STABLE_SCAN_CYCLE : VM_HEAVY_STABLE_SCAN_CYCLE;
         info->cycles.migCycle = HEAVY_STABLE_MIGRATE_CYCLE;
     } else {
-        info->cycles.scanCycle = LIGHT_STABLE_SCAN_CYCLE;
+        info->cycles.scanCycle = type == PROCESS_TYPE ? PROCESS_LIGHT_STABLE_SCAN_CYCLE : VM_LIGHT_STABLE_SCAN_CYCLE;
         info->cycles.migCycle = LIGHT_STABLE_MIGRATE_CYCLE;
     }
 
     return 0;
 }
 
-int InitSceneInfo(SceneInfo *info)
+int InitSceneInfo(SceneInfo *info, PidType type)
 {
     if (!info) {
         return -EINVAL;
     }
     info->currScene = info->lastScene = LIGHT_STABLE_SCENE;
-    GetProcessSceneAttr(info->currScene, info);
+    GetProcessSceneAttr(info->currScene, info, type);
     info->pageInfoIndex = 0;
 
     return 0;

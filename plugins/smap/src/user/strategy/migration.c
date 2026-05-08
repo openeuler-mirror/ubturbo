@@ -548,11 +548,6 @@ static void UpdateScene(struct ProcessManager *manager)
     EnvMutexLock(&manager->lock);
     ProcessAttr *current = manager->processes;
     while (current) {
-        if (current->type != VM_TYPE) {
-            current = current->next;
-            continue;
-        }
-        // 更新虚机的场景
         if (current->scanType == NORMAL_SCAN) {
             SetProcessSceneAttr(current);
         }
@@ -566,12 +561,13 @@ static int HandleScene(ThreadCtx *ctx)
     int ret = 0;
     Scene worstScene = LIGHT_STABLE_SCENE, scene;
     struct ProcessManager *manager = ctx->processManager;
+    PidType type = GetPidType(manager);
     EnvMutexLock(&manager->lock);
     ProcessAttr *current = manager->processes;
     while (current) {
-        // 更新虚机的场景
+        // 更新进程的场景
         SceneInfo *info = &current->sceneInfo;
-        GetProcessSceneAttr(info->currScene, info);
+        GetProcessSceneAttr(info->currScene, info, current->type);
         if (info->currScene != info->lastScene) {
             ret = UpdateScanTime(current);
             SMAP_LOGGER_INFO("Update pid %d scan cycle to %dms.", current->pid, current->sceneInfo.cycles.scanCycle);
@@ -590,7 +586,7 @@ static int HandleScene(ThreadCtx *ctx)
     if (manager->sceneInfo.currScene != worstScene) {
         SMAP_LOGGER_INFO("Manager changed scene from %d to %d.", manager->sceneInfo.currScene, worstScene);
         manager->sceneInfo.currScene = worstScene;
-        GetProcessSceneAttr(worstScene, &manager->sceneInfo);
+        GetProcessSceneAttr(worstScene, &manager->sceneInfo, type);
         SceneCycle *cycles = &manager->sceneInfo.cycles;
         ctx->period = cycles->migCycle;
     }

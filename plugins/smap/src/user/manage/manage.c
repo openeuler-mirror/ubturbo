@@ -131,7 +131,7 @@ int ProcessManagerInit(uint32_t pageType)
     RemoteNumaInfoInit();
     EnvMutexInit(&g_processManager.lock);
     EnvMutexInit(&g_processManager.threadLock);
-    InitSceneInfo(&g_processManager.sceneInfo);
+    InitSceneInfo(&g_processManager.sceneInfo, pageType == PAGETYPE_HUGE);
     g_runMode = WATERLINE_MODE;
     return 0;
 }
