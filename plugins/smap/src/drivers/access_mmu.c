@@ -75,9 +75,6 @@ static int set_non_anon_bm(struct access_pid *ap, u64 acidx, u64 paddr, int nid)
 	unsigned long pfn;
 	struct page *p_page = NULL;
 
-	if (nid >= nr_local_numa) {
-		return 0;
-	}
 	pfn = PHYS_PFN(paddr);
 	if (!pfn_valid(pfn)) {
 		return -EINVAL;
@@ -115,6 +112,25 @@ int add_to_bm_page(u64 paddr, struct access_pid *ap)
 	if (ret) {
 		return ret;
 	}
+	set_bit(acidx, ap->paddr_bm[nid]);
+	ap->page_num[nid]++;
+	return 0;
+}
+
+int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap)
+{
+	int nid_pos;
+	unsigned long numa_nodes;
+
+	nid_pos = convert_nid_to_pos(nid);
+	numa_nodes = ap->numa_nodes;
+	if (unlikely(!test_bit(nid_pos, &numa_nodes)))
+		return -EINVAL;
+
+	if (BIT_WORD(acidx) >= ap->bm_len[nid])
+		return -ERANGE;
+
+	set_non_anon_bm(ap, acidx, paddr, nid);
 	set_bit(acidx, ap->paddr_bm[nid]);
 	ap->page_num[nid]++;
 	return 0;
@@ -280,7 +296,7 @@ static int add_to_bm(unsigned long vaddr, pagemap_entry_t *pme,
 		if (is_access_hugepage())
 			add_to_bm_huge(vaddr, paddr, pm->ap);
 		else
-			add_to_bm_normal(paddr, pm->ap);
+			add_to_bm_page(paddr, pm->ap);
 	}
 
 inc_pm_pos:

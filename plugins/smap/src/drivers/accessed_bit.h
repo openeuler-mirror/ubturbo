@@ -62,6 +62,7 @@ struct pte_walk {
 	u64 statistic_cnt;
 	u64 *statistic_vaddr;
 	struct access_pid *ap;
+	bool group_hot;
 };
 
 struct freq_info {
