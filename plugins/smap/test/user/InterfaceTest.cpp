@@ -551,6 +551,7 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgMigOutCount)
 {
     struct MigrateOutMsg msg = {.count = 1};
     msg.payload[0].pid = 1234;
+    msg.payload[0].count = 1;
     int pidType = PAGETYPE_HUGE;
     int pidCount = 0;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
@@ -682,6 +683,7 @@ TEST_F(InterfaceTest, TestSmapMigrateOut)
     int ret;
     struct MigrateOutMsg msg;
     msg.payload[0].pid = 1234;
+    msg.payload[0].count = 1;
     msg.count = 1;
     EnvAtomicSet(&g_status, 1);
     MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
@@ -724,6 +726,7 @@ TEST_F(InterfaceTest, TestSmapMigrateOutFour)
     struct MigrateOutMsg msgc;
     msgc.count = 1;
     msgc.payload[0].pid = 1234;
+    msgc.payload[0].count = 1;
     EnvAtomicSet(&g_status, 1);
     MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-EBADF));
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
