@@ -483,7 +483,12 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType)
         if (msg->payload[i].count <= 0 || msg->payload[i].count > REMOTE_NUMA_NUM) {
             SMAP_LOGGER_ERROR("pid: %d, migrate out payload count:%d is invalid.",
                               msg->payload[i].pid, msg->payload[i].count);
-            return false;
+            return -EINVAL;
+        }
+
+        if (pidType == PAGETYPE_NORMAL && msg->payload[i].count > 1) {
+            SMAP_LOGGER_ERROR("4K process migration: Migration to multiple remote NUMA nodes is unsupported.");
+            return -EINVAL;
         }
 
         for (int j = 0; j < msg->payload[i].count; j++) {

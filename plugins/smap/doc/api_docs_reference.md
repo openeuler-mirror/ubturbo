@@ -180,6 +180,8 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType);
 * 远端NUMA被禁用时无法配置迁出（调用SmapMigrateBack接口时会默认禁用远端NUMA）。
 * 如果已配置某虚机的远端NUMA，后续配置不能改变虚机的远端NUMA，只能通过SmapMigratePidRemoteNuma接口改变远端NUMA。
 * 配置pid内存迁出后，由SMAP线程异步迁移，在迁移周期到来时才会执行迁移操作。
+* 4K进程迁移不支持远端多NUMA。
+* 迁移会过滤掉共享页。
 
 ## 附注 NOTES
 
