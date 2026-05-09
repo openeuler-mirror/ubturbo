@@ -270,18 +270,9 @@ static int CleanStrategyAttribute(struct ProcessManager *manager)
 static int PerformMigrationPreparation(struct ProcessManager *manager)
 {
     int ret = 0;
-    int isRamChanged = 0;
     bool found = false;
     ProcessAttr *current = manager->processes;
 
-    ret = GetRamIsChange(manager, &isRamChanged);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Get ram change failed! ret: %d.", ret);
-        return ret;
-    }
-    if (isRamChanged) {
-        return -EBUSY;
-    }
     while (current) {
         if (current->scanType == NORMAL_SCAN) {
             found = true;

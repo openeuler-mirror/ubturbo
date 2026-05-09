@@ -21,8 +21,6 @@
 
 #define SMAP_IOCTL_PAGE_SIZE_SET_CMD _IOW('N', 4, unsigned long)
 
-#define SMAP_IOCTL_RAM_CHANGE _IOW('N', 5, int)
-
 enum node_tracking_cmd {
 	TRACKING_DISABLED,
 	TRACKING_ENABLED,

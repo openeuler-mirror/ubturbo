@@ -61,12 +61,11 @@ static int memory_notifier_cb(struct memory_notify *mnb, unsigned long action)
 	pr_info("update remote memory info on remote NUMA node: %d successfully\n",
 		nid);
 
-	ret = tracking_core_reinit_actc_buffer(nid);
-	if (ret)
-		pr_err("unable to reinit ACTC buffer of NUMA node: %d, ret: %d\n",
-		       nid, ret);
+	/* set delayed reinit flag instead of immediate reinit */
+	set_reinit_pending_flag(nid);
+	pr_info("set reinit pending flag for NUMA node: %d\n", nid);
 
-	return ret;
+	return 0;
 }
 
 static int pre_offline_notifier_cb(struct memory_notify *mnb,

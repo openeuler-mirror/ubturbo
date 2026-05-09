@@ -139,32 +139,6 @@ static long handle_page_size_set_cmd(struct tracking_node_dev *node_dev,
 	return 0;
 }
 
-int node_ram_change_cmd(struct tracking_node_dev *node_dev, void __user *argp)
-{
-	struct tracking_dev *trk_dev;
-	int ret = 0;
-	list_for_each_entry(trk_dev, &node_dev->dev_list, list) {
-		if (trk_dev->ops && trk_dev->ops->tracking_ram_change)
-			ret = trk_dev->ops->tracking_ram_change(trk_dev->dev,
-								argp);
-		if (ret)
-			return ret;
-	}
-	return 0;
-}
-
-static long handle_ram_change_cmd(struct tracking_node_dev *node_dev,
-				  void __user *argp)
-{
-	int ret = node_ram_change_cmd(node_dev, argp);
-	if (ret) {
-		pr_err("failed to synchron remote ram changed info, ret: %d\n",
-		       ret);
-		return ret;
-	}
-	return 0;
-}
-
 static long node_cdev_user_ioctl(struct file *file, unsigned int cmd,
 				 unsigned long arg)
 {
@@ -178,8 +152,6 @@ static long node_cdev_user_ioctl(struct file *file, unsigned int cmd,
 		return handle_mode_set_cmd(node_dev, arg);
 	case SMAP_IOCTL_PAGE_SIZE_SET_CMD:
 		return handle_page_size_set_cmd(node_dev, arg);
-	case SMAP_IOCTL_RAM_CHANGE:
-		return handle_ram_change_cmd(node_dev, argp);
 	default:
 		pr_err("invalid command type: %d passed to ioctl\n", cmd);
 		return -EINVAL;
@@ -306,40 +278,29 @@ init_ok:
 	return 0;
 }
 
-static int node_tracking_reinit_actc_buffer(struct tracking_node_dev *node_dev,
-					    int nid)
+static void node_tracking_set_reinit_pending(struct tracking_node_dev *node_dev,
+					      int nid)
 {
 	struct tracking_dev *trk_dev;
-	int ret = 0;
 	list_for_each_entry(trk_dev, &node_dev->dev_list, list) {
 		if (trk_dev->target_node != nid)
 			continue;
-		if (trk_dev->ops && trk_dev->ops->tracking_reinit_actc_buffer)
-			ret = trk_dev->ops->tracking_reinit_actc_buffer(
-				trk_dev->dev);
-		if (ret)
-			return ret;
+		if (trk_dev->ops && trk_dev->ops->tracking_set_reinit_pending)
+			trk_dev->ops->tracking_set_reinit_pending(trk_dev->dev);
 	}
-	return ret;
 }
 
-int tracking_core_reinit_actc_buffer(int nid)
+void set_reinit_pending_flag(int nid)
 {
 	struct tracking_node_dev *node_device;
-	int ret = 0;
 
 	list_for_each_entry(node_device, &trk_core_ctrl->node_cdev, list) {
 		if (node_device->target_node == nid) {
-			ret = node_tracking_reinit_actc_buffer(node_device,
-							       nid);
-			if (ret)
-				return ret;
+			node_tracking_set_reinit_pending(node_device, nid);
 		}
 	}
-	return 0;
 }
-
-EXPORT_SYMBOL(tracking_core_reinit_actc_buffer);
+EXPORT_SYMBOL(set_reinit_pending_flag);
 
 static void tracking_device_remove(struct tracking_dev *dev)
 {
