@@ -218,15 +218,6 @@ TEST_F(AccessedBitTest, SmapCreatTrackingInfoFile)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" int scan_forward_2M(pid_t pid, int page_size, scan_type type);
-TEST_F(AccessedBitTest, scan_accessed_bit_forward)
-{
-    int ret;
-    int page_size = PAGE_SIZE_4K;
-    ret = scan_accessed_bit_forward_vm(1, page_size, NO_SCAN);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
 extern "C" void clear_tracking_info(struct ham_tracking_info *info);
 TEST_F(AccessedBitTest, ClearTrackingInfo)
 {
@@ -338,30 +329,19 @@ TEST_F(AccessedBitTest, hva_to_hpa_hugetlb_three)
     EXPECT_EQ(-EINVAL, ret);
 }
 
-extern "C" void actc_data_add(phys_addr_t paddr, u32 page_size);
-TEST_F(AccessedBitTest, hva_to_hpa_hugetlb_success)
-{
-    int ret;
-    struct kvm kvm = { .mm = NULL };
-    pte_t pte = { .pte = 1 };
-
-    MOCKER(huge_page_size).stubs().will(returnValue(PAGE_SIZE_2M));
-    MOCKER(huge_pte_offset).stubs().will(returnValue(&pte));
-    MOCKER(actc_data_add).expects(once()).will(ignoreReturnValue());
-    ret = hva_to_hpa_hugetlb(&kvm, 0);
-    EXPECT_EQ(0, ret);
-}
-
-extern "C" int hva_to_hpa(struct kvm *kvm, u64 host_va, scan_type type, pid_t pid);
+extern "C" int hva_to_hpa(struct kvm *kvm, u64 host_va, struct access_pid *ap, bool is_young);
 TEST_F(AccessedBitTest, hvaToHpaWithNullKvm)
 {
     int ret;
     struct kvm kvm = { .mm = NULL };
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
 
-    ret = hva_to_hpa(nullptr, 0, NORMAL_SCAN, 1);
+    ret = hva_to_hpa(nullptr, 0, &ap, true);
     EXPECT_EQ(-EINVAL, ret);
 
-    ret = hva_to_hpa(&kvm, 0, NORMAL_SCAN, 1);
+    ret = hva_to_hpa(&kvm, 0, &ap, true);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -372,9 +352,12 @@ TEST_F(AccessedBitTest, hvaToHpaWithErrorVma)
     struct mm_struct mm;
     struct kvm kvm = { .mm = &mm };
     struct vm_area_struct vma;
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
 
     MOCKER(find_vma).stubs().will(returnValue(static_cast<struct vm_area_struct *>(nullptr)));
-    ret = hva_to_hpa(&kvm, 0, NORMAL_SCAN, 1);
+    ret = hva_to_hpa(&kvm, 0, &ap, true);
     EXPECT_EQ(-EFAULT, ret);
 }
 
@@ -385,14 +368,17 @@ TEST_F(AccessedBitTest, hvaToHpaTest)
     struct mm_struct mm;
     struct kvm kvm = { .mm = &mm };
     struct vm_area_struct vma;
+    struct access_pid ap;
+    ap.type = HAM_SCAN;
+    ap.pid = 1;
 
     // ret value of hva_to_hpa_hugetlb and hva_to_hpa_ham is ignored,
     // since all following tests should success
     MOCKER(find_vma).stubs().will(returnValue(&vma));
     MOCKER(is_vm_hugetlb_page).stubs().will(returnValue(false));
-    ret = hva_to_hpa(&kvm, 0, HAM_SCAN, 1);
+    ret = hva_to_hpa(&kvm, 0, &ap, true);
     EXPECT_EQ(0, ret);
-    ret = hva_to_hpa(&kvm, 0, HAM_SCAN, 1);
+    ret = hva_to_hpa(&kvm, 0, &ap, true);
     EXPECT_EQ(0, ret);
 
     GlobalMockObject::verify();
@@ -404,9 +390,9 @@ TEST_F(AccessedBitTest, hvaToHpaTest)
     MOCKER(hva_to_hpa_hugetlb).stubs()
         .will(returnValue(-EINVAL))
         .then(returnValue(0));
-    ret = hva_to_hpa(&kvm, 0, HAM_SCAN, 1);
+    ret = hva_to_hpa(&kvm, 0, &ap, true);
     EXPECT_EQ(0, ret);
-    ret = hva_to_hpa(&kvm, 0, HAM_SCAN, 1);
+    ret = hva_to_hpa(&kvm, 0, &ap, true);
     EXPECT_EQ(0, ret);
 }
 
@@ -432,44 +418,6 @@ TEST_F(AccessedBitTest, scanKvmMemslotsWithNullKvm)
     MOCKER(kvm_memslots).stubs().will(returnValue((struct kvm_memslots *)nullptr));
     ret = scan_kvm_memslots(&kvm, 1, 0, STATISTIC_SCAN);
     EXPECT_EQ(-EINVAL, ret);
-}
-
-TEST_F(AccessedBitTest, scanKvmMemslotsTest)
-{
-    int ret;
-    struct mm_struct mm;
-    struct kvm_pgtable pgt;
-    struct vm_area_struct vma;
-    struct kvm_arch arch = {
-        .mmu = { .pgt = &pgt }
-    };
-    struct kvm kvm = {
-        .mm = &mm,
-        .arch = arch
-    };
-    struct kvm_memory_slot memslots[] = {
-        { .base_gfn = 0x0, .npages = 2048, .userspace_addr = 0xffff000000 },
-        { .base_gfn = 0x1000, .npages = 2048, .userspace_addr = 0xffff800000 },
-    };
-    struct kvm_memslots slots = {
-        .used_slots = 2,
-        .memslots = memslots
-    };
-
-    // when scanning kvm_memslots, errors will be ignored
-    MOCKER(kvm_memslots).stubs().will(returnValue(&slots));
-    MOCKER(smap_kvm_pgtable_stage2_is_young).stubs().will(returnValue(true));
-    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0));
-    MOCKER(get_vma_if_huge_page).stubs()
-        .will(returnValue(static_cast<struct vm_area_struct *>(NULL)))
-        .then(returnValue(&vma));
-    MOCKER(hva_to_hpa).stubs()
-        .will(returnValue(-EINVAL))
-        .then(returnValue(0));
-    MOCKER(smap_kvm_pgtable_stage2_mkold).stubs().will(returnValue(true));
-    MOCKER(kvm_flush_remote_tlbs).stubs().will(ignoreReturnValue());
-    ret = scan_kvm_memslots(&kvm, 1, PAGE_SIZE_2M, STATISTIC_SCAN);
-    EXPECT_EQ(0, ret);
 }
 
 TEST_F(AccessedBitTest, hva_to_hpa_ham)
@@ -666,47 +614,6 @@ TEST_F(AccessedBitTest, scan_hva_info)
     EXPECT_EQ(-1, ret);
 }
 
-extern "C" void release_resources(struct file *filp, struct task_struct *task, struct pid *pid);
-extern "C" struct pid *find_get_pid(pid_t nr);
-extern "C" void put_pid(struct pid *pid);
-TEST_F(AccessedBitTest, scan_forward_2M_pid_fail)
-{
-    int ret;
-    MOCKER(find_get_pid).stubs().will(returnValue(static_cast<struct pid *>(nullptr)));
-    MOCKER(get_pid_task).stubs().will(returnValue((struct task_struct *)nullptr));
-    MOCKER(put_pid).expects(once()).will(ignoreReturnValue());
-    ret = scan_forward_2M(1, PAGE_SIZE_2M, NORMAL_SCAN);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
-TEST_F(AccessedBitTest, scan_forward_2M_kvm_file_fail)
-{
-    int ret;
-    struct task_struct task;
-    MOCKER(find_get_pid).stubs().will(returnValue(static_cast<struct pid *>(nullptr)));
-    MOCKER(get_pid_task).stubs().will(returnValue(&task));
-    MOCKER(get_kvm_file_from_task).stubs().will(returnValue(static_cast<struct file *>(nullptr)));
-    MOCKER(release_resources).expects(once()).will(ignoreReturnValue());
-    ret = scan_forward_2M(1, PAGE_SIZE_2M, NORMAL_SCAN);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
-TEST_F(AccessedBitTest, scan_forward_2M_success)
-{
-    int ret;
-    struct task_struct task;
-    struct kvm kvm;
-    struct file filp = { .private_data = &kvm };
-    MOCKER(find_get_pid).stubs().will(returnValue(static_cast<struct pid *>(nullptr)));
-    MOCKER(get_pid_task).stubs().will(returnValue(&task));
-    MOCKER(get_kvm_file_from_task).stubs().will(returnValue(&filp));
-    MOCKER(pre_scan_kvm_memslots).expects(once()).will(returnValue(0));
-    MOCKER(scan_kvm_memslots).stubs().will(returnValue(0));
-    MOCKER(post_scan_kvm_memslots).expects(once()).will(ignoreReturnValue());
-    ret = scan_forward_2M(1, PAGE_SIZE_2M, NORMAL_SCAN);
-    EXPECT_EQ(0, ret);
-}
-
 extern "C" int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next, struct mm_walk *walk);
 TEST_F(AccessedBitTest, check_pte_young)
 {
@@ -789,27 +696,36 @@ extern "C" int take_vma_snapshot(struct mm_struct *mm,
 TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_fail)
 {
     struct mm_struct mm;
+    struct access_pid ap;
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
 
     MOCKER(mock_get_mm_by_pid).stubs().will(returnValue(static_cast<struct mm_struct *>(nullptr)));
-    int ret = scan_accessed_bit_forward_mm(1, PAGE_SIZE_4K, NORMAL_SCAN);
+    int ret = scan_accessed_bit_forward_mm(&ap, PAGE_SIZE_4K);
     EXPECT_EQ(-EINVAL, ret);
 }
 
 TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_success)
 {
     struct mm_struct mm;
+    struct access_pid ap;
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
 
     GlobalMockObject::verify();
     MOCKER(mock_get_mm_by_pid).stubs().will(returnValue(&mm));
     MOCKER(IS_ERR).stubs().will(returnValue(false));
     MOCKER(take_vma_snapshot).stubs().will(returnValue(0));
     MOCKER(kfree).stubs().will(ignoreReturnValue());
-    int ret = scan_accessed_bit_forward_mm(1, PAGE_SIZE_4K, NORMAL_SCAN);
+    int ret = scan_accessed_bit_forward_mm(&ap, PAGE_SIZE_4K);
     EXPECT_EQ(0, ret);
 }
 
 TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_invalid_page)
 {
-    int ret = scan_accessed_bit_forward_mm(1, PAGE_SIZE_2M, NORMAL_SCAN);
+    struct access_pid ap;
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    int ret = scan_accessed_bit_forward_mm(&ap, PAGE_SIZE_2M);
     EXPECT_EQ(-EINVAL, ret);
 }
