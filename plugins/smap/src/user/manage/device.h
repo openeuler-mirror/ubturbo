@@ -35,6 +35,4 @@ int InitTrackingDev(struct ProcessManager *manager);
 
 void DeinitTrackingDev(struct ProcessManager *manager);
 
-int GetRamIsChange(struct ProcessManager *manager, int *change);
-
 #endif /* __DEVICE_H__ */

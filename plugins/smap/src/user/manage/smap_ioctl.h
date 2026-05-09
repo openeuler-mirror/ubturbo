@@ -31,8 +31,6 @@
 
 #define SMAP_IOCTL_PAGE_SIZE_SET_CMD _IOW('N', 4, unsigned long)
 
-#define SMAP_IOCTL_RAM_CHANGE _IOW('N', 5, int)
-
 #define SMAP_MIG_MAGIC 0xB9
 #define SMAP_MIG_MIGRATE _IOW(SMAP_MIG_MAGIC, 0, struct MigrateMsg)
 #define SMAP_CHECK_PAGESIZE _IOW(SMAP_MIG_MAGIC, 1, uint32_t)

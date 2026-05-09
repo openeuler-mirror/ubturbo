@@ -165,21 +165,6 @@ void release_remote_ram(void)
 	write_unlock(&rem_ram_list_lock);
 }
 
-bool ram_changed(void)
-{
-	bool flag;
-
-	if (smap_scene == UB_QEMU_SCENE)
-		return false;
-
-	write_lock(&rem_ram_list_lock);
-	flag = remote_ram_changed;
-	remote_ram_changed = false;
-	write_unlock(&rem_ram_list_lock);
-	return flag;
-}
-EXPORT_SYMBOL(ram_changed);
-
 int refresh_remote_ram(void)
 {
 	LIST_HEAD(tmp_head);

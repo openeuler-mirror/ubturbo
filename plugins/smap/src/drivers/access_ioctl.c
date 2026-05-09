@@ -346,12 +346,6 @@ static ssize_t read_bitmap(char __user *buf, size_t cnt, loff_t *loff)
 	smap_bitmap_buf = tmp_buf;
 
 copy_data:
-	/* ram_changed indicate user space hasn't fetch the newest iomem range */
-	if (ram_changed()) {
-		len = -EAGAIN;
-		goto free_buf;
-	}
-
 	if (unlikely(*loff >= smap_buf_len)) {
 		len = 0;
 		goto free_buf;

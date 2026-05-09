@@ -158,24 +158,14 @@ static inline void init_actc_data(struct access_tracking_dev *adev)
 		memset(adev->access_bit_actc_data, 0, len);
 }
 
-static void access_tracking_enable(struct device *ldev)
+static void access_print_acpi_mem(void)
 {
-	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
-	if (adev->is_hist)
-		return;
-	down_write(&adev->buffer_lock);
-	init_actc_data(adev);
-	up_write(&adev->buffer_lock);
-	submit_scan_works(adev);
-}
-
-static int access_tracking_disable(struct device *ldev)
-{
-	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
-	if (adev->is_hist)
-		return 0;
-
-	return check_scan_works_status(adev);
+#ifdef DEBUG
+	struct acpi_mem_segment *mem;
+	list_for_each_entry(mem, &acpi_mem.mem, segment) {
+		pr_debug("[%d] %#llx-%#llx\n", mem->node, mem->start, mem->end);
+	}
+#endif
 }
 
 static u64 calc_access_len_v2(struct access_tracking_dev *adev)
@@ -191,31 +181,6 @@ static u64 calc_access_len_v2(struct access_tracking_dev *adev)
 		 page_count);
 
 	return page_count;
-}
-
-static int access_tracking_mode_set(struct device *ldev, u8 mode)
-{
-	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
-
-	if (!(mode == ACCESS_MODE_AND || mode == ACCESS_MODE_SUM ||
-	      mode == ACCESS_MODE_OR)) {
-		pr_err("invalid access mode %u passed to access tracking set tracking mode\n",
-		       mode);
-		return -EPERM;
-	}
-
-	init_actc_data(adev);
-	return 0;
-}
-
-static void access_print_acpi_mem(void)
-{
-#ifdef DEBUG
-	struct acpi_mem_segment *mem;
-	list_for_each_entry(mem, &acpi_mem.mem, segment) {
-		pr_debug("[%d] %#llx-%#llx\n", mem->node, mem->start, mem->end);
-	}
-#endif
 }
 
 static void actc_buffer_deinit(struct access_tracking_dev *adev)
@@ -253,14 +218,48 @@ static int actc_buffer_reinit(struct access_tracking_dev *adev)
 	return 0;
 }
 
-static int access_tracking_reinit_actc_buffer(struct device *ldev)
+static void access_tracking_enable(struct device *ldev)
 {
 	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
-	int ret;
+	if (adev->is_hist)
+		return;
 	down_write(&adev->buffer_lock);
-	ret = actc_buffer_reinit(adev);
+	if (adev->need_reinit_actc) {
+		if (actc_buffer_reinit(adev)) {
+			pr_err("unable to reinit ACTC buffer\n");
+			up_write(&adev->buffer_lock);
+			return;
+		}
+		adev->need_reinit_actc = false;
+	} else {
+		init_actc_data(adev);
+	}
 	up_write(&adev->buffer_lock);
-	return ret;
+	submit_scan_works(adev);
+}
+
+static int access_tracking_disable(struct device *ldev)
+{
+	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
+	if (adev->is_hist)
+		return 0;
+
+	return check_scan_works_status(adev);
+}
+
+static int access_tracking_mode_set(struct device *ldev, u8 mode)
+{
+	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
+
+	if (!(mode == ACCESS_MODE_AND || mode == ACCESS_MODE_SUM ||
+	      mode == ACCESS_MODE_OR)) {
+		pr_err("invalid access mode %u passed to access tracking set tracking mode\n",
+		       mode);
+		return -EPERM;
+	}
+
+	init_actc_data(adev);
+	return 0;
 }
 
 static int access_tracking_set_page_size(struct device *ldev,
@@ -284,24 +283,23 @@ static int access_tracking_set_page_size(struct device *ldev,
 	return 0;
 }
 
-static int access_tracking_ram_change(struct device *ldev, void __user *argp)
+static void access_tracking_set_reinit_pending(struct device *ldev)
 {
-	int is_change = (ram_changed()) ? 1 : 0;
-
-	if (copy_to_user(argp, &is_change, sizeof(int))) {
-		pr_err("unable to copy ram changed info to user space\n");
-		return -EFAULT;
-	}
-	return 0;
+	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
+	if (adev->is_hist)
+		return;
+	down_write(&adev->buffer_lock);
+	adev->need_reinit_actc = true;
+	up_write(&adev->buffer_lock);
+	pr_debug("set reinit pending flag for node %d\n", adev->node);
 }
 
 static struct tracking_operations access_tracking_ops = {
 	.tracking_enable = access_tracking_enable,
 	.tracking_disable = access_tracking_disable,
-	.tracking_ram_change = access_tracking_ram_change,
-	.tracking_reinit_actc_buffer = access_tracking_reinit_actc_buffer,
 	.tracking_set_page_size = access_tracking_set_page_size,
 	.tracking_mode_set = access_tracking_mode_set,
+	.tracking_set_reinit_pending = access_tracking_set_reinit_pending,
 };
 
 int calc_access_len(struct access_tracking_dev *adev)
