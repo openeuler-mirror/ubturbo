@@ -15,6 +15,7 @@
 #include <linux/device.h>
 #include <linux/workqueue.h>
 #include <linux/container_of.h>
+#include <linux/vmalloc.h>
 
 #include "check.h"
 #include "bus.h"
@@ -224,6 +225,18 @@ TEST_F(HistTrackingTest, actc_buffer_init)
     EXPECT_EQ(1, dev.page_count);
 }
 
+TEST_F(HistTrackingTest, actc_buffer_init_alloc_fail)
+{
+    int ret;
+    struct access_tracking_dev dev = {};
+
+    MOCKER(drivers_calc_access_len).stubs().will(returnValue((u64)2));
+    MOCKER(vzalloc).stubs().will(returnValue((void *)nullptr));
+    ret = drivers_actc_buffer_init(&dev);
+    EXPECT_EQ(-ENOMEM, ret);
+    EXPECT_EQ(0, dev.page_count);
+}
+
 static void fetch_hist_actc_buf_call(u16 *dst_buf, struct addr_seg *seg)
 {
     dst_buf[0] = 1;
@@ -294,6 +307,17 @@ TEST_F(HistTrackingTest, hist_tracking_init_two)
     GlobalMockObject::verify();
     MOCKER(drivers_actc_buffer_init).stubs().will(returnValue(0));
     MOCKER(tracking_dev_add).stubs().will(returnValue((struct tracking_dev *)nullptr));
+    ret = hist_tracking_init();
+    EXPECT_EQ(-ENODEV, ret);
+}
+
+TEST_F(HistTrackingTest, hist_tracking_init_device_setup_fail)
+{
+    int ret;
+
+    INIT_LIST_HEAD(&access_dev);
+    MOCKER(drivers_actc_buffer_init).stubs().will(returnValue(0));
+    MOCKER(device_add).stubs().will(returnValue(-1));
     ret = hist_tracking_init();
     EXPECT_EQ(-ENODEV, ret);
 }

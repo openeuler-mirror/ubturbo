@@ -911,7 +911,8 @@ TEST_F(ManageTest, TestFillPidDataReadError)
 {
     int ret;
     struct ProcessMemBitmap pmb = { 0 };
-    ProcessAttr attr;
+    ProcessAttr attr = {};
+    attr.pid = 1;
 
     MOCKER(InitPidActcData).stubs().will(returnValue(0));
     MOCKER(ReadPidFreq).stubs().will(returnValue(-EINVAL));
@@ -924,7 +925,8 @@ TEST_F(ManageTest, TestFillPidDataFillError)
 {
     int ret;
     struct ProcessMemBitmap pmb = { 0 };
-    ProcessAttr attr;
+    ProcessAttr attr = {};
+    attr.pid = 1;
 
     MOCKER(InitPidActcData).stubs().will(returnValue(0));
     MOCKER(ReadPidFreq).stubs().will(returnValue(0));
@@ -939,7 +941,8 @@ TEST_F(ManageTest, TestFillPidDataFillOK)
 {
     int ret;
     struct ProcessMemBitmap pmb = { 0 };
-    ProcessAttr attr;
+    ProcessAttr attr = {};
+    attr.pid = 1;
 
     MOCKER(InitPidActcData).stubs().will(returnValue(0));
     MOCKER(ReadPidFreq).stubs().will(returnValue(0));
