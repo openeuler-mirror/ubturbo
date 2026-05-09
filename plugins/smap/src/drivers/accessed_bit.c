@@ -670,14 +670,64 @@ static bool memslot_is_mem(struct kvm_memory_slot *memslot)
 	return true;
 }
 
+static int collect_statistic_vaddr(struct kvm *kvm, struct kvm_memory_slot *memslot,
+				   struct access_pid *ap, int page_size,
+				   u64 *vaddr, u64 nr_pages, u64 *cur_index)
+{
+	gpa_t gpa;
+	unsigned long hva;
+	bool is_young;
+
+	for (gpa = memslot->base_gfn << PAGE_SHIFT;
+	     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
+	     gpa += (gpa_t)page_size) {
+		is_young = smap_kvm_pgtable_stage2_mkold(kvm->arch.mmu.pgt, gpa);
+		if (!is_young && !access_pid_cur_last_scanning(ap))
+			continue;
+		hva = gfn_to_hva_memslot(memslot, gpa_to_gfn(gpa));
+		if (!get_vma_if_huge_page(kvm, hva))
+			continue;
+		if (is_young) {
+			vaddr[*cur_index++] = hva;
+			if (*cur_index >= nr_pages)
+				return 0;
+		}
+	}
+	return 0;
+}
+
+static int process_memslot_pages(struct kvm *kvm, struct kvm_memory_slot *memslot,
+				 struct access_pid *ap, int page_size)
+{
+	gpa_t gpa;
+	unsigned long hva;
+	bool is_young;
+	int ret;
+
+	for (gpa = memslot->base_gfn << PAGE_SHIFT;
+	     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
+	     gpa += (gpa_t)page_size) {
+		is_young = smap_kvm_pgtable_stage2_mkold(kvm->arch.mmu.pgt, gpa);
+		if (!is_young && !access_pid_cur_last_scanning(ap))
+			continue;
+		hva = gfn_to_hva_memslot(memslot, gpa_to_gfn(gpa));
+		if (!get_vma_if_huge_page(kvm, hva))
+			continue;
+		ret = hva_to_hpa(kvm, hva, ap, is_young);
+		if (ret)
+			continue;
+	}
+	return 0;
+}
+
 static int scan_kvm_memslots(struct kvm *kvm, struct access_pid *ap, int page_size)
 {
 	struct kvm_memslots *slots;
 	struct kvm_memory_slot *memslot;
-	gpa_t gpa;
 	int bkt;
 	u64 nr_pages, cur_index;
 	u64 *vaddr;
+
 	if (!kvm || !kvm->arch.mmu.pgt) {
 		pr_err("invalid kvm passed to scan kvm memslots\n");
 		return -EINVAL;
@@ -699,42 +749,24 @@ static int scan_kvm_memslots(struct kvm *kvm, struct access_pid *ap, int page_si
 		if (!vaddr)
 			return -ENOMEM;
 		cur_index = 0;
-	}
-
-	kvm_for_each_memslot(memslot, bkt, slots) {
-		unsigned long hva;
-		bool is_young;
-		int ret;
-		if (!memslot_is_mem(memslot))
-			continue;
-		for (gpa = memslot->base_gfn << PAGE_SHIFT;
-		     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
-		     gpa += (gpa_t)page_size) {
-			is_young = smap_kvm_pgtable_stage2_mkold(kvm->arch.mmu.pgt, gpa);
-			if (!is_young && !access_pid_cur_last_scanning(ap))
+		kvm_for_each_memslot(memslot, bkt, slots) {
+			if (!memslot_is_mem(memslot))
 				continue;
-			hva = gfn_to_hva_memslot(memslot, gpa_to_gfn(gpa));
-			if (!get_vma_if_huge_page(kvm, hva))
-				continue;
-			if (ap->type == STATISTIC_SCAN) {
-				if (is_young) {
-					vaddr[cur_index++] = hva;
-					if (cur_index >= nr_pages)
-						break;
-				}
-			} else {
-				ret = hva_to_hpa(kvm, hva, ap, is_young);
-				if (ret)
-					continue;
-			}
+			collect_statistic_vaddr(kvm, memslot, ap, page_size,
+						vaddr, nr_pages, &cur_index);
 		}
-	}
-	kvm_flush_remote_tlbs(kvm);
-	if (ap->type == STATISTIC_SCAN) {
+		kvm_flush_remote_tlbs(kvm);
 		clear_statistic_tracking_info(ap->pid);
 		update_statistic_scan_freq_mm(vaddr, cur_index, ap->pid);
 		update_statistic_scan_num(ap->pid);
 		kfree(vaddr);
+	} else {
+		kvm_for_each_memslot(memslot, bkt, slots) {
+			if (!memslot_is_mem(memslot))
+				continue;
+			process_memslot_pages(kvm, memslot, ap, page_size);
+		}
+		kvm_flush_remote_tlbs(kvm);
 	}
 	return 0;
 }
@@ -1435,10 +1467,30 @@ static void update_and_cleanup_statistic(int pid, struct pte_walk *pte_walk,
 	}
 }
 
+static int walk_all_vmas(struct mm_struct *mm, struct smap_vma_struct *vma_array,
+			 int vma_count, struct pte_walk *pte_walk, int pid)
+{
+	int i, ret;
+
+	for (i = 0; i < vma_count; i++) {
+		if (vma_array[i].end_vaddr - vma_array[i].start_vaddr < MMAPLOCK_BATCH_SIZE) {
+			ret = small_vma_walk(mm, vma_array[i].start_vaddr,
+					     vma_array[i].end_vaddr, pte_walk,
+					     &pte_range_ops);
+		} else {
+			ret = huge_vma_walk(mm, &vma_array[i], pte_walk, &pte_range_ops);
+		}
+		if (ret) {
+			pr_err("failed to walk VMA, pid: %d, ret: %d\n", pid, ret);
+			return ret;
+		}
+	}
+	return 0;
+}
+
 static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 {
 	int ret;
-	int i = 0;
 	int vma_count = 0;
 	struct mm_struct *mm;
 	struct smap_vma_struct *vma_array = NULL;
@@ -1468,32 +1520,12 @@ static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 		return -EINVAL;
 	}
 
-	for (i = 0; i < vma_count; i++) {
-		if (vma_array[i].end_vaddr - vma_array[i].start_vaddr <
-		    MMAPLOCK_BATCH_SIZE) {
-			ret = small_vma_walk(mm, vma_array[i].start_vaddr,
-					     vma_array[i].end_vaddr, &pte_walk,
-					     &pte_range_ops);
-			if (ret) {
-				pr_err("failed to walk VMA, pid: %d, ret: %d\n",
-				       ap->pid, ret);
-				break;
-			}
-		} else {
-			ret = huge_vma_walk(mm, &vma_array[i], &pte_walk,
-					    &pte_range_ops);
-			if (ret) {
-				pr_err("failed to walk VMA, pid: %d, ret: %d\n",
-				       ap->pid, ret);
-				break;
-			}
-		}
-	}
+	ret = walk_all_vmas(mm, vma_array, vma_count, &pte_walk, ap->pid);
 
 	update_and_cleanup_statistic(ap->pid, &pte_walk, mm, vma_array);
 	mmput(mm);
 
-	return 0;
+	return ret;
 }
 
 static int pte_pure_clear(pte_t *pte, unsigned long addr, unsigned long next,

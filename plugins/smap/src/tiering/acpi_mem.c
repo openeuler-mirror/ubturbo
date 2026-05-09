@@ -205,12 +205,37 @@ static void merge_acpi_mem_segments(void)
 	}
 }
 
+static int setup_acpi_mem_cache(void)
+{
+	int last_node = -1;
+	struct acpi_mem_segment *mem;
+
+	list_for_each_entry(mem, &acpi_mem.mem, segment) {
+		if (mem->node >= ARRAY_SIZE(acpi_mem_cached))
+			return -ERANGE;
+		/*
+		 * mem->node equals last_node indicates the NUMA's address is
+		 * splitted, in this case, don't use cache
+		 */
+		if (mem->node == last_node) {
+			acpi_mem_cached[mem->node].start = 0;
+			acpi_mem_cached[mem->node].end = 0;
+		} else {
+			acpi_mem_cached[mem->node].online = true;
+			acpi_mem_cached[mem->node].start = mem->start;
+			acpi_mem_cached[mem->node].end = mem->end;
+			last_node = mem->node;
+		}
+		pr_info("node: %d PXM: %d [%#llx-%#llx]\n", mem->node, mem->pxm,
+			mem->start, mem->end);
+	}
+	return 0;
+}
+
 int init_acpi_mem(void)
 {
 	int count;
-	int last_node = -1;
 	acpi_status status;
-	struct acpi_mem_segment *mem;
 	struct acpi_table_header *table_header = NULL;
 	unsigned long table_size = sizeof(struct acpi_table_srat);
 
@@ -248,25 +273,9 @@ int init_acpi_mem(void)
 
 	merge_acpi_mem_segments();
 
-	list_for_each_entry(mem, &acpi_mem.mem, segment) {
-		if (mem->node >= ARRAY_SIZE(acpi_mem_cached))
-			return -ERANGE;
-		/*
-		 * mem->node equals last_node indicates the NUMA's address is
-		 * splitted, in this case, don't use cache
-		 */
-		if (mem->node == last_node) {
-			acpi_mem_cached[mem->node].start = 0;
-			acpi_mem_cached[mem->node].end = 0;
-		} else {
-			acpi_mem_cached[mem->node].online = true;
-			acpi_mem_cached[mem->node].start = mem->start;
-			acpi_mem_cached[mem->node].end = mem->end;
-			last_node = mem->node;
-		}
-		pr_info("node: %d PXM: %d [%#llx-%#llx]\n", mem->node, mem->pxm,
-			mem->start, mem->end);
-	}
+	if (setup_acpi_mem_cache())
+		return -ERANGE;
+
 	calc_node_distance();
 
 	return 0;

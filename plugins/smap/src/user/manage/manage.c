@@ -869,9 +869,44 @@ static void CalcActcStats(ProcessAttr *attr)
             count->freqMin = MIN(count->freqMin, freq);
         }
 
-        SMAP_LOGGER_INFO("Node%d actcLen %llu, freqMax %u, freqMin %u, freqNum %llu, freqSum %llu, remoteHotNum %llu, whiteNum %llu",
-                         nid, actcLen, count->freqMax, count->freqMin, count->freqNum, count->freqSum, count->remoteHotNum, count->whiteNum);
+        SMAP_LOGGER_INFO("Node%d actcLen %llu, freqMax %u, freqMin %u, freqNum %llu, "
+                         "freqSum %llu, remoteHotNum %llu, whiteNum %llu",
+                         nid, actcLen, count->freqMax, count->freqMin,
+                         count->freqNum, count->freqSum, count->remoteHotNum, count->whiteNum);
     }
+}
+
+/**
+ * DistributeActcData - 将读取的数据分配到各node的actcData
+ * @attr: ProcessAttr结构体指针
+ * @pmb: ProcessMemBitmap结构体指针
+ * @buf: 读取的数据缓冲区
+ *
+ * 返回: 成功返回0，失败返回负错误码
+ */
+static int DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf)
+{
+    size_t actc_offset = 0;
+
+    for (int nid = 0; nid < MAX_NODES; nid++) {
+        attr->scanAttr.actcLen[nid] = pmb->nrPages[nid];
+        if (pmb->nrPages[nid] == 0) {
+            attr->scanAttr.actcData[nid] = NULL;
+            continue;
+        }
+        attr->scanAttr.actcData[nid] = malloc(pmb->nrPages[nid] * sizeof(ActcData));
+        if (!attr->scanAttr.actcData[nid]) {
+            SMAP_LOGGER_ERROR("malloc actcData[%d] failed for pid %d", nid, attr->pid);
+            for (int i = 0; i < nid; i++) {
+                free(attr->scanAttr.actcData[i]);
+                attr->scanAttr.actcData[i] = NULL;
+            }
+            return -ENOMEM;
+        }
+        memcpy(attr->scanAttr.actcData[nid], buf + actc_offset, pmb->nrPages[nid] * sizeof(ActcData));
+        actc_offset += pmb->nrPages[nid];
+    }
+    return 0;
 }
 
 /**
@@ -884,12 +919,11 @@ static void CalcActcStats(ProcessAttr *attr)
 static int ReadPidActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
 {
     char path[FREQ_FILE_PATH_LEN];
-    int fd;
+    int fd, ret;
     size_t total_actc = 0;
     size_t shm_size;
     ActcData *buf;
     ssize_t read_len;
-    size_t actc_offset = 0;
 
     snprintf(path, sizeof(path), "/proc/smap/%d/mem_freq", attr->pid);
 
@@ -899,7 +933,6 @@ static int ReadPidActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
         return -ENODEV;
     }
 
-    /* 计算总actc_data数量 */
     for (int nid = 0; nid < MAX_NODES; nid++) {
         total_actc += pmb->nrPages[nid];
     }
@@ -918,7 +951,6 @@ static int ReadPidActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
         return -ENOMEM;
     }
 
-    /* read完整的actc_data数组 */
     read_len = read(fd, buf, shm_size);
     close(fd);
 
@@ -928,29 +960,13 @@ static int ReadPidActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
         return -EIO;
     }
 
-    /* 分配各node的actcData内存并拷贝 */
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        attr->scanAttr.actcLen[nid] = pmb->nrPages[nid];
-        if (pmb->nrPages[nid] == 0) {
-            attr->scanAttr.actcData[nid] = NULL;
-            continue;
-        }
-        attr->scanAttr.actcData[nid] = malloc(pmb->nrPages[nid] * sizeof(ActcData));
-        if (!attr->scanAttr.actcData[nid]) {
-            SMAP_LOGGER_ERROR("malloc actcData[%d] failed for pid %d", nid, attr->pid);
-            /* 释放之前已分配的 actcData */
-            for (int i = 0; i < nid; i++) {
-                free(attr->scanAttr.actcData[i]);
-                attr->scanAttr.actcData[i] = NULL;
-            }
-            free(buf);
-            return -ENOMEM;
-        }
-        memcpy(attr->scanAttr.actcData[nid], buf + actc_offset, pmb->nrPages[nid] * sizeof(ActcData));
-        actc_offset += pmb->nrPages[nid];
+    ret = DistributeActcData(attr, pmb, buf);
+    free(buf);
+
+    if (ret) {
+        return ret;
     }
 
-    free(buf);
     SMAP_LOGGER_INFO("read pid %d success, total_actc %zu", attr->pid, total_actc);
     return 0;
 }
