@@ -997,26 +997,6 @@ static int BuildBitmapBuf(size_t *len, char **buf)
     return 0;
 }
 
-static inline void FreePmbData(struct ProcessMemBitmap *pmb)
-{
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        if (pmb->data[nid]) {
-            free(pmb->data[nid]);
-            pmb->data[nid] = NULL;
-        }
-    }
-}
-
-static inline void FreeWhiteListBm(struct ProcessMemBitmap *pmb)
-{
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        if (pmb->whiteListBm[nid]) {
-            free(pmb->whiteListBm[nid]);
-            pmb->whiteListBm[nid] = NULL;
-        }
-    }
-}
-
 static int ParseBitmapPid(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
 {
     int ret;
@@ -1047,113 +1027,8 @@ static int ParseBitmapNrPages(struct ProcessMemBitmap *pmb, char *buf, size_t *o
     return 0;
 }
 
-static int ParseBitmapLen(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
-{
-    int ret;
-    size_t lenSize = sizeof(pmb->len[0]);
-    size_t tmpOffset = 0;
-
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        ret = memcpy_s(&pmb->len[nid], lenSize, buf + tmpOffset, lenSize);
-        if (ret) {
-            return -ret;
-        }
-        tmpOffset += lenSize;
-        SMAP_LOGGER_DEBUG("pid %d Node%d bmLen %zu.", pmb->pid, nid, pmb->len[nid]);
-    }
-    *offset += tmpOffset;
-    return 0;
-}
-
-static int ParseBitmapVmSize(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
-{
-    int ret;
-    size_t vmSize = sizeof(pmb->vmSize);
-
-    ret = memcpy_s(&pmb->vmSize, vmSize, buf, vmSize);
-    if (ret) {
-        return -ret;
-    }
-    *offset += vmSize;
-    return 0;
-}
-
-static int ParseBitmapData(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
-{
-    int ret;
-    size_t bitmapSize = sizeof(*pmb->data[0]);
-    size_t tmpOffset = 0;
-
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        if (pmb->len[nid] == 0) {
-            continue;
-        }
-        ret = memcpy_s(pmb->data[nid], bitmapSize * pmb->len[nid], buf + tmpOffset, bitmapSize * pmb->len[nid]);
-        if (ret) {
-            FreePmbData(pmb);
-            return -ret;
-        }
-        tmpOffset += bitmapSize * pmb->len[nid];
-    }
-    *offset += tmpOffset;
-    return 0;
-}
-
-static int ParseWhiteListBitmap(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
-{
-    int ret;
-    size_t bitmapSize = sizeof(*pmb->data[0]);
-    size_t tmpOffset = 0;
-
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        if (pmb->len[nid] == 0) {
-            continue;
-        }
-        ret = memcpy_s(pmb->whiteListBm[nid], bitmapSize * pmb->len[nid], buf + tmpOffset, bitmapSize * pmb->len[nid]);
-        if (ret) {
-            FreePmbData(pmb);
-            FreeWhiteListBm(pmb);
-            return -ret;
-        }
-        tmpOffset += bitmapSize * pmb->len[nid];
-    }
-    *offset += tmpOffset;
-    return 0;
-}
-
-static int InitPmbData(struct ProcessMemBitmap *pmb)
-{
-    int nid;
-    size_t bitmapSize = sizeof(*pmb->data[0]);
-
-    for (nid = 0; nid < MAX_NODES; nid++) {
-        pmb->data[nid] = NULL;
-    }
-    for (nid = 0; nid < MAX_NODES; nid++) {
-        SMAP_LOGGER_DEBUG("Node%d data size %zu.", nid, bitmapSize * pmb->len[nid]);
-        if (pmb->len[nid] == 0) {
-            continue;
-        }
-        pmb->data[nid] = malloc(bitmapSize * pmb->len[nid]);
-        if (!pmb->data[nid]) {
-            FreePmbData(pmb);
-            return -ENOMEM;
-        }
-        pmb->whiteListBm[nid] = malloc(bitmapSize * pmb->len[nid]);
-        if (!pmb->whiteListBm[nid]) {
-            SMAP_LOGGER_ERROR("pmb whiteListBm[%d] malloc failed.", nid);
-            FreePmbData(pmb);
-            FreeWhiteListBm(pmb);
-            return -ENOMEM;
-        }
-    }
-    return 0;
-}
-
 static int ParseBitmap(size_t bufLen, char *buf, size_t *offset, struct ProcessMemBitmap *pmb)
 {
-    size_t mappingSize = sizeof(*pmb->mapping);
-    int nid;
     size_t newOffset = *offset;
 
     int ret = ParseBitmapPid(pmb, buf + newOffset, &newOffset);
@@ -1168,42 +1043,6 @@ static int ParseBitmap(size_t bufLen, char *buf, size_t *offset, struct ProcessM
         return ret;
     }
 
-    ret = ParseBitmapLen(pmb, buf + newOffset, &newOffset);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ParseBitmapLen err: %d.", ret);
-        return ret;
-    }
-
-    ret = ParseBitmapVmSize(pmb, buf + newOffset, &newOffset);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ParseBitmapVmSize err: %d.", ret);
-        return ret;
-    }
-    if (pmb->vmSize) {
-        SMAP_LOGGER_INFO("pid %d vm size %u.", pmb->pid, pmb->vmSize);
-    }
-
-    ret = InitPmbData(pmb);
-    if (ret) {
-        SMAP_LOGGER_ERROR("InitPmbData err: %d.", ret);
-        return ret;
-    }
-
-    ret = ParseBitmapData(pmb, buf + newOffset, &newOffset);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ParseBitmapData err: %d.", ret);
-        return ret;
-    }
-
-    ret = ParseWhiteListBitmap(pmb, buf + newOffset, &newOffset);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ParseWhiteListBitmap err: %d.", ret);
-        return ret;
-    }
-    if (pmb->vmSize) {
-        pmb->mapping = (uint32_t *)((char *)buf + newOffset);
-        newOffset += mappingSize * pmb->vmSize;
-    }
     SMAP_LOGGER_INFO("read continue %zu %zu.", newOffset, bufLen);
 
     *offset = newOffset;
@@ -1619,8 +1458,6 @@ int BuildAllPidData(void)
         if (ret < 0) {
             SMAP_LOGGER_ERROR("parse bitmap failed.");
             failedCount++;
-            FreePmbData(&pmb);
-            FreeWhiteListBm(&pmb);
             break;
         }
         ProcessAttr *current = GetProcessAttrLocked(pmb.pid);
@@ -1634,8 +1471,6 @@ int BuildAllPidData(void)
                 failedCount++;
             }
         }
-        FreePmbData(&pmb);
-        FreeWhiteListBm(&pmb);
     }
     CalcMigrateNrPagesPerPIDMuiltNuma();
     free(buf);
