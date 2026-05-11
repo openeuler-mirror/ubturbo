@@ -27,16 +27,13 @@
  * | VER | HEADER_LEN | TOTAL_LEN | = 2B + 2B + 4B
  * | NUMA_PAYLOAD_LEN | NUMA_PAYLOAD | = 4B + 4B * nrLocalNuma * REMOTE_NUMA_NUM
  * | PROCESS_PAYLOAD_LEN | PROCESS_PAYLOAD | = 4B + CONFIG_PROC_SIZE * N
- * | GROUP_PROCESS_PAYLOAD_LEN | GROUP_PROCESS_PAYLOAD | = 4B + CONFIG_GROUP_PROC_SIZE * N
  */
 #define SMAP_CONFIG_VER_V1 1
-#define SMAP_CONFIG_VER_V2 2
-#define SMAP_CONFIG_VER SMAP_CONFIG_VER_V2
+#define SMAP_CONFIG_VER SMAP_CONFIG_VER_V1
 #define CONFIG_HEADER_LEN sizeof(struct SmapConfigHeader)
 #define PAYLOAD_HEADER_LEN sizeof(struct PayloadHeader)
 #define CONFIG_NUMA_LEN sizeof(struct NumaPayload)
 #define CONFIG_PROC_LEN sizeof(struct ProcessPayload)
-#define CONFIG_GROUP_PROC_LEN sizeof(struct GroupProcessPayload)
 
 struct SmapConfigHeader {
     uint8_t ver;
@@ -83,36 +80,6 @@ struct ProcessPayload {
         uint8_t ratio; // remote ratio set by upstream component
         uint64_t memSize;
     } migrateParam[REMOTE_NUMA_NUM];
-};
-
-struct GroupTargetPayload {
-    int nid;
-    uint64_t quotaPages;
-};
-
-struct GroupLocalPayload {
-    int nid;
-    uint64_t localReservePages;
-};
-
-struct GroupPayload {
-    int localCount;
-    struct GroupLocalPayload locals[MAX_GROUP_LOCAL_NUMA];
-    int targetCount;
-    struct GroupTargetPayload targets[MAX_GROUP_REMOTE_NUMA];
-};
-
-struct GroupProcessPayload {
-    pid_t pid;
-    uint8_t scanType;
-    uint8_t type;
-    uint8_t state;
-    uint8_t migrateMode;
-    uint32_t numaNodes;
-    uint32_t scanTime;
-    uint32_t duration;
-    int groupCount;
-    struct GroupPayload groups[MAX_MIGRATION_GROUP_NUM];
 };
 
 int RecoverFromConfig(void);

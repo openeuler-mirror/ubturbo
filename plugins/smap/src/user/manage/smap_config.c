@@ -56,21 +56,15 @@ static inline size_t CalcProcessConfigLen(int nrProcess)
     return PAYLOAD_HEADER_LEN + (nrProcess * CONFIG_PROC_LEN);
 }
 
-static inline size_t CalcGroupProcessConfigLen(int nrProcess)
-{
-    return PAYLOAD_HEADER_LEN + (nrProcess * CONFIG_GROUP_PROC_LEN);
-}
-
 /* GetProcessConfigLen - Get process config length from process payload header */
 static inline size_t GetProcessConfigLen(struct PayloadHeader *header)
 {
     return PAYLOAD_HEADER_LEN + header->len;
 }
 
-static inline size_t CalcConfigLen(int nrProcess, int nrGroupProcess)
+static inline size_t CalcConfigLen(int nrProcess)
 {
-    return CONFIG_HEADER_LEN + CalcNumaConfigLen() + CalcProcessConfigLen(nrProcess) +
-           CalcGroupProcessConfigLen(nrGroupProcess);
+    return CONFIG_HEADER_LEN + CalcNumaConfigLen() + CalcProcessConfigLen(nrProcess);
 }
 
 /* JumpToNumaConfig - jump to numa config from config base addr */
@@ -89,11 +83,6 @@ static inline char *JumpToNumaPayload(char *numaBase)
 static inline char *JumpToProcessConfig(char *base)
 {
     return JumpToNumaConfig(base) + CalcNumaConfigLen();
-}
-
-static inline char *JumpToGroupProcessConfig(char *processBase)
-{
-    return processBase + GetProcessConfigLen((struct PayloadHeader *)processBase);
 }
 
 /* JumpToProcessPayload - jump to process payload from process config base addr */
@@ -219,11 +208,8 @@ static void WriteEmptyProcessConfigs(char *base)
 {
     char *processBase = JumpToProcessConfig(base);
     struct PayloadHeader *processHeader = (struct PayloadHeader *)processBase;
-    char *groupBase = JumpToGroupProcessConfig(processBase);
-    struct PayloadHeader *groupHeader = (struct PayloadHeader *)groupBase;
 
     processHeader->len = 0;
-    groupHeader->len = 0;
 }
 
 /*
@@ -235,7 +221,7 @@ static int InitSmapConfig(int fd)
 {
     int ret;
     char *addr;
-    size_t mapLen = CalcConfigLen(0, 0);
+    size_t mapLen = CalcConfigLen(0);
     RunMode runMode = GetRunMode();
 
     // Set config file length
@@ -271,7 +257,7 @@ static inline bool IsRunModeValid(RunMode runMode)
 
 static bool IsConfigHeaderValid(struct SmapConfigHeader *header)
 {
-    if (header->ver != SMAP_CONFIG_VER_V1 && header->ver != SMAP_CONFIG_VER_V2) {
+    if (header->ver != SMAP_CONFIG_VER_V1) {
         SMAP_LOGGER_ERROR("Wrong smap config header ver: %hd.", header->ver);
         return false;
     }
@@ -284,9 +270,6 @@ static bool IsConfigHeaderValid(struct SmapConfigHeader *header)
         return false;
     }
     uint32_t minLen = CONFIG_HEADER_LEN + CalcNumaConfigLen();
-    if (header->ver == SMAP_CONFIG_VER_V2) {
-        minLen += PAYLOAD_HEADER_LEN + PAYLOAD_HEADER_LEN;
-    }
     if (header->totalLen < minLen) {
         SMAP_LOGGER_ERROR("Wrong smap config total len: %d.", header->totalLen);
         return false;
@@ -459,20 +442,6 @@ static bool IsProcessConfigValid(char *processBase, size_t totalLen)
     return (CONFIG_HEADER_LEN + CalcNumaConfigLen() + processConfigLen) <= totalLen;
 }
 
-static bool IsGroupProcessConfigValid(char *groupBase, char *addr, size_t totalLen)
-{
-    struct PayloadHeader *header = (struct PayloadHeader *)groupBase;
-    size_t groupOffset = groupBase - addr;
-    size_t groupConfigLen;
-
-    if (header->len % CONFIG_GROUP_PROC_LEN != 0) {
-        SMAP_LOGGER_ERROR("Group process config has wrong length: %u.", header->len);
-        return false;
-    }
-    groupConfigLen = GetProcessConfigLen(header);
-    return groupOffset + groupConfigLen == totalLen;
-}
-
 static inline bool HasProcessConfig(size_t totalLen)
 {
     SMAP_LOGGER_DEBUG("HasProcessConfig, totalLen %zu.", totalLen);
@@ -530,207 +499,6 @@ static int RecoverProcessConfig(char *processBase)
     return 0;
 }
 
-static void ClearRecoveredProcesses(struct ProcessManager *manager)
-{
-    ProcessAttr *attr = manager->processes;
-
-    while (attr) {
-        LinkedListRemove(&attr, &manager->processes);
-        attr = manager->processes;
-    }
-    manager->nr[VM_TYPE] = 0;
-    manager->nr[PROCESS_TYPE] = 0;
-}
-
-static bool HasRecoveredProcessPid(struct ProcessManager *manager, pid_t pid)
-{
-    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
-        if (attr->pid == pid) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool HasDuplicateConfigInt(const int *arr, int count)
-{
-    for (int i = 0; i < count; i++) {
-        for (int j = i + 1; j < count; j++) {
-            if (arr[i] == arr[j]) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-static inline bool IsRecoveredGroupTargetValid(int nid, int nrLocalNuma)
-{
-    return nid >= nrLocalNuma && nid < nrLocalNuma + REMOTE_NUMA_NUM && nid < MAX_NODES;
-}
-
-static bool IsGroupProcessPayloadValid(struct GroupProcessPayload *payload)
-{
-    bool localUsed[MAX_NODES] = { 0 };
-
-    if (payload->groupCount <= 0 || payload->groupCount > MAX_MIGRATION_GROUP_NUM) {
-        SMAP_LOGGER_WARNING("grouped pid %d group count %d invalid.", payload->pid, payload->groupCount);
-        return false;
-    }
-
-    int nrLocalNuma = GetNrLocalNuma();
-    for (int i = 0; i < payload->groupCount; i++) {
-        struct GroupPayload *group = &payload->groups[i];
-        if (group->localCount <= 0 || group->localCount > MAX_GROUP_LOCAL_NUMA ||
-            group->targetCount <= 0 || group->targetCount > MAX_GROUP_REMOTE_NUMA) {
-            SMAP_LOGGER_WARNING("grouped pid %d group %d count invalid.", payload->pid, i);
-            return false;
-        }
-        int localNids[MAX_GROUP_LOCAL_NUMA] = { 0 };
-        for (int j = 0; j < group->localCount; j++) {
-            int nid = group->locals[j].nid;
-            if (group->locals[j].localReservePages == 0) {
-                SMAP_LOGGER_WARNING("grouped pid %d group %d local %d reserve is zero.", payload->pid, i, nid);
-                return false;
-            }
-            if (nid < 0 || nid >= nrLocalNuma || nid >= MAX_NODES) {
-                SMAP_LOGGER_WARNING("grouped pid %d group %d local nid %d invalid.", payload->pid, i, nid);
-                return false;
-            }
-            localNids[j] = nid;
-            if (localUsed[nid]) {
-                SMAP_LOGGER_WARNING("grouped pid %d local nid %d is used by another group.", payload->pid, nid);
-                return false;
-            }
-            localUsed[nid] = true;
-        }
-        if (HasDuplicateConfigInt(localNids, group->localCount)) {
-            SMAP_LOGGER_WARNING("grouped pid %d group %d local nids duplicate.", payload->pid, i);
-            return false;
-        }
-
-        int targets[MAX_GROUP_REMOTE_NUMA] = { 0 };
-        for (int j = 0; j < group->targetCount; j++) {
-            int nid = group->targets[j].nid;
-            if (!IsRecoveredGroupTargetValid(nid, nrLocalNuma) || group->targets[j].quotaPages == 0) {
-                SMAP_LOGGER_WARNING("grouped pid %d group %d target nid %d invalid.", payload->pid, i, nid);
-                return false;
-            }
-            targets[j] = nid;
-        }
-        if (HasDuplicateConfigInt(targets, group->targetCount)) {
-            SMAP_LOGGER_WARNING("grouped pid %d group %d target nids duplicate.", payload->pid, i);
-            return false;
-        }
-    }
-    return true;
-}
-
-static int BuildGroupPolicyFromPayload(struct GroupProcessPayload *payload, GroupMigrationPolicy *policy)
-{
-    uint64_t numaPages[MAX_NODES] = { 0 };
-
-    if (!IsGroupProcessPayloadValid(payload)) {
-        return -EINVAL;
-    }
-
-    policy->enabled = true;
-    policy->groupCount = payload->groupCount;
-    for (int i = 0; i < payload->groupCount; i++) {
-        struct GroupPayload *group = &payload->groups[i];
-        MigrationGroupAttr *attr = &policy->groups[i];
-        attr->localCount = group->localCount;
-        attr->targetCount = group->targetCount;
-        for (int j = 0; j < group->localCount; j++) {
-            attr->locals[j].nid = group->locals[j].nid;
-            attr->locals[j].localReservePages = group->locals[j].localReservePages;
-        }
-        for (int j = 0; j < group->targetCount; j++) {
-            attr->targets[j].nid = group->targets[j].nid;
-            attr->targets[j].quotaPages = group->targets[j].quotaPages;
-            attr->targets[j].usedPages = 0;
-        }
-    }
-
-    int ret = GetPidNumaPagesFromNumaMaps(payload->pid, numaPages);
-    if (ret) {
-        SMAP_LOGGER_WARNING("Get grouped pid %d numa pages from config failed: %d.", payload->pid, ret);
-        return ret;
-    }
-    return InitGroupedUsedPages(payload->pid, policy, numaPages);
-}
-
-static void AssignGroupProcessAttr(ProcessAttr *attr, struct GroupProcessPayload *payload,
-                                   GroupMigrationPolicy *policy)
-{
-    attr->pid = payload->pid;
-    attr->scanType = payload->scanType;
-    attr->type = payload->type;
-    attr->state = payload->state;
-    attr->migrateMode = payload->migrateMode;
-    attr->numaAttr.numaNodes = payload->numaNodes;
-    attr->scanTime = payload->scanTime;
-    attr->duration = payload->duration;
-    attr->remoteNumaCnt = GetL2Count(payload->numaNodes);
-    attr->enableSwap = true;
-    attr->initLocalMemRatio = HUNDRED;
-    attr->groupPolicy = *policy;
-    if (time(&attr->scanStart) == (time_t)-1) {
-        SMAP_LOGGER_ERROR("get time error.");
-    }
-}
-
-static int RecoverGroupProcessConfig(char *groupBase)
-{
-    struct PayloadHeader *header = (struct PayloadHeader *)groupBase;
-    struct ProcessManager *manager = GetProcessManager();
-    struct GroupProcessPayload *payload;
-    uint32_t nrPayload = header->len / CONFIG_GROUP_PROC_LEN;
-    bool errFlag = false;
-
-    SMAP_LOGGER_DEBUG("Enter RecoverGroupProcessConfig.");
-    payload = (struct GroupProcessPayload *)(groupBase + PAYLOAD_HEADER_LEN);
-    for (uint32_t i = 0; i < nrPayload; i++, payload++) {
-        if (payload->type != GetPidType(manager)) {
-            SMAP_LOGGER_WARNING("Grouped pid %d type %d is different from %d.", payload->pid, payload->type,
-                                GetPidType(manager));
-            continue;
-        }
-        if (!PidIsValid(payload->pid)) {
-            SMAP_LOGGER_WARNING("Grouped pid %d from config doesn't exist.", payload->pid);
-            continue;
-        }
-        if (HasRecoveredProcessPid(manager, payload->pid)) {
-            SMAP_LOGGER_WARNING("Grouped pid %d from config is duplicated.", payload->pid);
-            continue;
-        }
-
-        GroupMigrationPolicy policy = { 0 };
-        int ret = BuildGroupPolicyFromPayload(payload, &policy);
-        if (ret) {
-            SMAP_LOGGER_WARNING("Recover grouped pid %d policy failed: %d.", payload->pid, ret);
-            continue;
-        }
-
-        ProcessAttr *attr = calloc(1, sizeof(ProcessAttr));
-        if (!attr) {
-            SMAP_LOGGER_ERROR("Malloc for grouped process %d failed.", payload->pid);
-            errFlag = true;
-            break;
-        }
-        AssignGroupProcessAttr(attr, payload, &policy);
-        LinkedListAdd(&manager->processes, &attr);
-        manager->nr[attr->type]++;
-        SMAP_LOGGER_INFO("Recover grouped pid %d success, group count %d.", payload->pid, payload->groupCount);
-    }
-    if (errFlag) {
-        ClearRecoveredProcesses(manager);
-        return -ENOMEM;
-    }
-    SMAP_LOGGER_DEBUG("Exit RecoverGroupProcessConfig.");
-    return 0;
-}
-
 static int WriteProcessConfig(char *processBase, struct ProcessPayload *p, int nrPayload)
 {
     int ret;
@@ -747,25 +515,6 @@ static int WriteProcessConfig(char *processBase, struct ProcessPayload *p, int n
     ret = memcpy_s(payload, header->len, p, header->len);
     if (ret) {
         SMAP_LOGGER_ERROR("WriteProcessConfig memcpy_s failed: %d.", -ret);
-    }
-    return -ret;
-}
-
-static int WriteGroupProcessConfig(char *groupBase, struct GroupProcessPayload *p, int nrPayload)
-{
-    int ret;
-    struct PayloadHeader *header = (struct PayloadHeader *)groupBase;
-    struct GroupProcessPayload *payload;
-
-    SMAP_LOGGER_DEBUG("Enter WriteGroupProcessConfig.");
-    header->len = CONFIG_GROUP_PROC_LEN * nrPayload;
-    if (header->len == 0) {
-        return 0;
-    }
-    payload = (struct GroupProcessPayload *)(groupBase + PAYLOAD_HEADER_LEN);
-    ret = memcpy_s(payload, header->len, p, header->len);
-    if (ret) {
-        SMAP_LOGGER_ERROR("WriteGroupProcessConfig memcpy_s failed: %d.", -ret);
     }
     return -ret;
 }
@@ -836,79 +585,11 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
     return 0;
 }
 
-static void AssignGroupProcessPayload(struct GroupProcessPayload *payload, ProcessAttr *attr)
-{
-    payload->pid = attr->pid;
-    payload->scanType = attr->scanType;
-    payload->type = attr->type;
-    payload->state = attr->state;
-    payload->migrateMode = attr->migrateMode;
-    payload->numaNodes = attr->numaAttr.numaNodes;
-    payload->scanTime = attr->scanTime;
-    payload->duration = attr->duration;
-    payload->groupCount = attr->groupPolicy.groupCount;
-    for (int i = 0; i < attr->groupPolicy.groupCount; i++) {
-        MigrationGroupAttr *group = &attr->groupPolicy.groups[i];
-        struct GroupPayload *groupPayload = &payload->groups[i];
-        groupPayload->localCount = group->localCount;
-        groupPayload->targetCount = group->targetCount;
-        for (int j = 0; j < group->localCount; j++) {
-            groupPayload->locals[j].nid = group->locals[j].nid;
-            groupPayload->locals[j].localReservePages = group->locals[j].localReservePages;
-        }
-        for (int j = 0; j < group->targetCount; j++) {
-            groupPayload->targets[j].nid = group->targets[j].nid;
-            groupPayload->targets[j].quotaPages = group->targets[j].quotaPages;
-        }
-    }
-}
-
-static int BuildAllGroupProcessPayload(struct GroupProcessPayload **payload, int *len)
-{
-    struct ProcessManager *manager = GetProcessManager();
-    struct GroupProcessPayload *p, *tmp;
-    int nrPayload = 0;
-
-    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
-        if (attr->groupPolicy.enabled && attr->groupPolicy.groupCount > 0) {
-            nrPayload++;
-        }
-    }
-
-    SMAP_LOGGER_DEBUG("BuildAllGroupProcessPayload nrPayload %d.", nrPayload);
-    if (nrPayload == 0) {
-        *payload = NULL;
-        *len = 0;
-        return 0;
-    }
-
-    p = calloc(nrPayload, CONFIG_GROUP_PROC_LEN);
-    if (!p) {
-        SMAP_LOGGER_ERROR("BuildAllGroupProcessPayload calloc failed.");
-        return -ENOMEM;
-    }
-
-    tmp = p;
-    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
-        if (!attr->groupPolicy.enabled || attr->groupPolicy.groupCount <= 0) {
-            continue;
-        }
-        AssignGroupProcessPayload(tmp, attr);
-        tmp++;
-    }
-
-    *payload = p;
-    *len = nrPayload;
-    return 0;
-}
-
-static int MapAndWriteProcessConfig(int fd, size_t mapLen, struct ProcessPayload *payload, int nrPayload,
-                                    struct GroupProcessPayload *groupPayload, int nrGroupPayload)
+static int MapAndWriteProcessConfig(int fd, size_t mapLen, struct ProcessPayload *payload, int nrPayload)
 {
     int ret;
     char *addr;
     char *processBase;
-    char *groupBase;
     RunMode runMode = GetRunMode();
 
     addr = MapConfig(fd, mapLen, PROT_WRITE, MAP_SHARED);
@@ -921,13 +602,6 @@ static int MapAndWriteProcessConfig(int fd, size_t mapLen, struct ProcessPayload
     ret = WriteProcessConfig(processBase, payload, nrPayload);
     if (ret) {
         SMAP_LOGGER_ERROR("Write process config failed: %d.", ret);
-        UnmapConfig(addr, mapLen);
-        return ret;
-    }
-    groupBase = JumpToGroupProcessConfig(processBase);
-    ret = WriteGroupProcessConfig(groupBase, groupPayload, nrGroupPayload);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Write group process config failed: %d.", ret);
         UnmapConfig(addr, mapLen);
         return ret;
     }
@@ -944,9 +618,7 @@ static int ChangeProcessConfig(int fd)
     int nrPayload;
     size_t oldConfigLen, newConfigLen;
     struct ProcessPayload *payload = NULL;
-    struct GroupProcessPayload *groupPayload = NULL;
     struct SmapConfigHeader header;
-    int nrGroupPayload;
 
     SMAP_LOGGER_DEBUG("Enter ReadConfig.");
     ret = ParseHeader(fd, &header);
@@ -961,14 +633,8 @@ static int ChangeProcessConfig(int fd)
         SMAP_LOGGER_ERROR("Build all process payload failed: %d.", ret);
         return ret;
     }
-    ret = BuildAllGroupProcessPayload(&groupPayload, &nrGroupPayload);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Build all group process payload failed: %d.", ret);
-        free(payload);
-        return ret;
-    }
 
-    newConfigLen = CalcConfigLen(nrPayload, nrGroupPayload);
+    newConfigLen = CalcConfigLen(nrPayload);
     SMAP_LOGGER_DEBUG("New config length with %d processes: %d.", nrPayload, newConfigLen);
 
     // Extend config before writing process config
@@ -978,16 +644,14 @@ static int ChangeProcessConfig(int fd)
         if (ret) {
             SMAP_LOGGER_ERROR("Extend smap config to %zu failed: %d.", newConfigLen, ret);
             free(payload);
-            free(groupPayload);
             return ret;
         }
     }
 
-    ret = MapAndWriteProcessConfig(fd, newConfigLen, payload, nrPayload, groupPayload, nrGroupPayload);
+    ret = MapAndWriteProcessConfig(fd, newConfigLen, payload, nrPayload);
     if (ret) {
         SMAP_LOGGER_ERROR("Map and write process config failed: %d.", ret);
         free(payload);
-        free(groupPayload);
         return ret;
     }
 
@@ -1001,7 +665,6 @@ static int ChangeProcessConfig(int fd)
     }
 
     free(payload);
-    free(groupPayload);
     return ret;
 }
 
@@ -1011,7 +674,6 @@ static int ParseConfig(int fd, struct SmapConfigHeader *header)
     char *addr;
     char *numaBase;
     char *processBase;
-    char *groupBase;
     size_t mapLen = header->totalLen;
 
     SMAP_LOGGER_DEBUG("Enter ParseConfig.");
@@ -1043,31 +705,12 @@ static int ParseConfig(int fd, struct SmapConfigHeader *header)
         return ret;
     }
 
-    if (header->ver == SMAP_CONFIG_VER_V1) {
-        // Parse v1 ProcessConfig
-        if (!HasProcessConfig(mapLen)) {
-            UnmapConfig(addr, mapLen);
-            SMAP_LOGGER_DEBUG("Exit ParseConfig.");
-            return 0;
-        }
-        processBase = JumpToProcessConfig(addr);
-        if (!IsProcessConfigValid(processBase, mapLen)) {
-            SMAP_LOGGER_ERROR("Detected invalid process config.");
-            UnmapConfig(addr, mapLen);
-            return -EINVAL;
-        }
-        ret = RecoverProcessConfig(processBase);
-        if (ret) {
-            SMAP_LOGGER_ERROR("Parse process config failed: %d.", ret);
-            UnmapConfig(addr, mapLen);
-            return ret;
-        }
+    // Parse ProcessConfig
+    if (!HasProcessConfig(mapLen)) {
         UnmapConfig(addr, mapLen);
         SMAP_LOGGER_DEBUG("Exit ParseConfig.");
         return 0;
     }
-
-    // Parse v2 ProcessConfig and GroupProcessConfig
     processBase = JumpToProcessConfig(addr);
     if (!IsProcessConfigValid(processBase, mapLen)) {
         SMAP_LOGGER_ERROR("Detected invalid process config.");
@@ -1077,24 +720,6 @@ static int ParseConfig(int fd, struct SmapConfigHeader *header)
     ret = RecoverProcessConfig(processBase);
     if (ret) {
         SMAP_LOGGER_ERROR("Parse process config failed: %d.", ret);
-        UnmapConfig(addr, mapLen);
-        return ret;
-    }
-
-    groupBase = JumpToGroupProcessConfig(processBase);
-    if ((size_t)(groupBase - addr) + PAYLOAD_HEADER_LEN > mapLen) {
-        SMAP_LOGGER_ERROR("Detected missing group process config.");
-        UnmapConfig(addr, mapLen);
-        return -EINVAL;
-    }
-    if (!IsGroupProcessConfigValid(groupBase, addr, mapLen)) {
-        SMAP_LOGGER_ERROR("Detected invalid group process config.");
-        UnmapConfig(addr, mapLen);
-        return -EINVAL;
-    }
-    ret = RecoverGroupProcessConfig(groupBase);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Parse group process config failed: %d.", ret);
         UnmapConfig(addr, mapLen);
         return ret;
     }
