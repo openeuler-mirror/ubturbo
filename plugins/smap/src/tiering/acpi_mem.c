@@ -180,12 +180,62 @@ void print_acpi_mem(void)
 	}
 }
 
+static void merge_acpi_mem_segments(void)
+{
+	struct acpi_mem_segment *cur, *next, *tmp;
+
+	if (list_empty(&acpi_mem.mem))
+		return;
+
+	cur = list_first_entry(&acpi_mem.mem, struct acpi_mem_segment, segment);
+	while (cur) {
+		next = list_next_entry(cur, segment);
+		if (list_entry_is_head(next, &acpi_mem.mem, segment))
+			break;
+		if (cur->node == next->node && cur->end + 1 == next->start) {
+			cur->end = next->end;
+			list_del(&next->segment);
+			acpi_mem.len--;
+			kfree(next);
+			tmp = cur;
+		} else {
+			tmp = next;
+		}
+		cur = tmp;
+	}
+}
+
+static int setup_acpi_mem_cache(void)
+{
+	int last_node = -1;
+	struct acpi_mem_segment *mem;
+
+	list_for_each_entry(mem, &acpi_mem.mem, segment) {
+		if (mem->node >= ARRAY_SIZE(acpi_mem_cached))
+			return -ERANGE;
+		/*
+		 * mem->node equals last_node indicates the NUMA's address is
+		 * splitted, in this case, don't use cache
+		 */
+		if (mem->node == last_node) {
+			acpi_mem_cached[mem->node].start = 0;
+			acpi_mem_cached[mem->node].end = 0;
+		} else {
+			acpi_mem_cached[mem->node].online = true;
+			acpi_mem_cached[mem->node].start = mem->start;
+			acpi_mem_cached[mem->node].end = mem->end;
+			last_node = mem->node;
+		}
+		pr_info("node: %d PXM: %d [%#llx-%#llx]\n", mem->node, mem->pxm,
+			mem->start, mem->end);
+	}
+	return 0;
+}
+
 int init_acpi_mem(void)
 {
 	int count;
-	int last_node = -1;
 	acpi_status status;
-	struct acpi_mem_segment *mem;
 	struct acpi_table_header *table_header = NULL;
 	unsigned long table_size = sizeof(struct acpi_table_srat);
 
@@ -221,25 +271,11 @@ int init_acpi_mem(void)
 
 	acpi_put_table(table_header);
 
-	list_for_each_entry(mem, &acpi_mem.mem, segment) {
-		if (mem->node >= ARRAY_SIZE(acpi_mem_cached))
-			return -ERANGE;
-		/*
-		 * mem->node equals last_node indicates the NUMA's address is
-		 * splitted, in this case, don't use cache
-		 */
-		if (mem->node == last_node) {
-			acpi_mem_cached[mem->node].start = 0;
-			acpi_mem_cached[mem->node].end = 0;
-		} else {
-			acpi_mem_cached[mem->node].online = true;
-			acpi_mem_cached[mem->node].start = mem->start;
-			acpi_mem_cached[mem->node].end = mem->end;
-			last_node = mem->node;
-		}
-		pr_info("node: %d PXM: %d [%#llx-%#llx]\n", mem->node, mem->pxm,
-			mem->start, mem->end);
-	}
+	merge_acpi_mem_segments();
+
+	if (setup_acpi_mem_cache())
+		return -ERANGE;
+
 	calc_node_distance();
 
 	return 0;

@@ -27,12 +27,9 @@
 #undef pr_fmt
 #define pr_fmt(fmt) "SMAP_iomem: " fmt
 
-#define REMOTE_RAM_NAME "System RAM (Remote)"
-#define MEMID_IORES_PREFIX "MEMID_"
 #define OBMM_SYS_DIR "/sys/devices/obmm"
 #define OBMM_SHM_DIR "obmm_shmdev"
 #define OBMM_FILE_SIZE 128
-#define HEAD_MEMID 0
 #define WAIT_MEMID_MS 500
 #define MAX_MEMID_RETRY 2
 #define HEX 16
@@ -63,6 +60,31 @@ static void copy_remote_ram(struct list_head *dst, struct list_head *src)
 	struct ram_segment *seg, *tmp;
 	list_for_each_entry_safe(seg, tmp, src, node) {
 		list_move_tail(&seg->node, dst);
+	}
+}
+
+static void merge_ram_segments(struct list_head *head)
+{
+	struct ram_segment *cur, *next, *tmp;
+
+	if (list_empty(head))
+		return;
+
+	cur = list_first_entry(head, struct ram_segment, node);
+	while (cur) {
+		next = list_next_entry(cur, node);
+		if (list_entry_is_head(next, head, node))
+			break;
+		if (cur->numa_node == next->numa_node &&
+		    cur->end + 1 == next->start) {
+			cur->end = next->end;
+			list_del(&next->node);
+			kfree(next);
+			tmp = cur;
+		} else {
+			tmp = next;
+		}
+		cur = tmp;
 	}
 }
 
@@ -451,6 +473,7 @@ int refresh_remote_ram(void)
 	if (ret) {
 		return ret;
 	}
+	merge_ram_segments(&tmp_head);
 	free_remote_ram(&remote_ram_list);
 	copy_remote_ram(&remote_ram_list, &tmp_head);
 	free_remote_ram(&tmp_head);

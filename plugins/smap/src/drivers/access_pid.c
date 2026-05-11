@@ -26,7 +26,6 @@
 #define pr_fmt(fmt) "access_pid: " fmt
 
 #define NODE_PATH "/dev/smap_node%d"
-#define NODE_PATH_MAX 100
 
 #define VM_MEMSLOT_PRIOR_THRE (3 * (1 << GB_TO_4K_SHIFT))
 #define SEC_TO_MS 1000
@@ -166,7 +165,7 @@ static inline void post_scan_kvm_gfn(struct kvm *kvm, int idx)
 	srcu_read_unlock(&kvm->srcu, idx);
 }
 
-static int init_vm_mapping(struct vm_mapping_info *info)
+int init_vm_mapping(struct vm_mapping_info *info)
 {
 	if (info->vm_size) {
 		info->mapping = vmalloc(info->vm_size * sizeof(u32));
@@ -237,6 +236,101 @@ static int mem_freq_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
+/**
+ * fill_actc_data_by_bitmap - 根据bitmap生成actc_data数组
+ * @ap: access_pid结构体指针
+ * @actc: actc_data数组指针（需要预先分配足够空间）
+ * @actc_len: actc数组长度（输出）
+ * @mapping_offset: mapping数组的偏移量（用于获取prior）
+ *
+ * 遍历bitmap，结合频次数据、mapping和white_list_bm，生成actc_data结构体数组。
+ */
+static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
+				     struct actc_data *actc, u32 *actc_len,
+				     u32 mapping_offset)
+{
+	u32 len_cnt = 0;
+	size_t acidx, bm_len;
+	struct access_tracking_dev *adev;
+
+	if (ap->page_num[nid] == 0 || !ap->paddr_bm[nid]) {
+		*actc_len = 0;
+		return;
+	}
+
+	list_for_each_entry(adev, &access_dev, list) {
+		if (adev->node == nid) {
+			break;
+		}
+	}
+	if (list_entry_is_head(adev, &access_dev, list)) {
+		*actc_len = 0;
+		return;
+	}
+
+	down_read(&adev->buffer_lock);
+	bm_len = BITS_PER_TYPE(long) * ap->bm_len[nid];
+	acidx = 0;
+	while (len_cnt < ap->page_num[nid]) {
+		acidx = find_next_bit(ap->paddr_bm[nid], bm_len, acidx);
+		if (acidx >= bm_len)
+			break;
+		if (unlikely(acidx >= adev->page_count)) {
+			pr_warn("exceeds total page amount: %llu when lookup access index: %zu on access device: %d\n",
+				adev->page_count, acidx, nid);
+			break;
+		}
+
+		/* 填充addr - 使用相对索引 */
+		actc[len_cnt].addr = len_cnt;
+
+		/* 填充freq */
+		actc[len_cnt].freq = adev->access_bit_actc_data[acidx];
+
+		/* 填充prior - 从mapping获取 */
+		if (ap->info.vm_size && ap->info.mapping) {
+			actc[len_cnt].prior = ap->info.mapping[mapping_offset + len_cnt] & 0xff;
+		} else {
+			actc[len_cnt].prior = 0;
+		}
+
+		/* 填充is_white_list */
+		if (ap->white_list_bm[nid] && test_bit(acidx, ap->white_list_bm[nid])) {
+			actc[len_cnt].is_white_list = 1;
+		} else {
+			actc[len_cnt].is_white_list = 0;
+		}
+
+		len_cnt++;
+		acidx++;
+	}
+	up_read(&adev->buffer_lock);
+	*actc_len = len_cnt;
+}
+
+/**
+ * fill_pid_actc_data - 为整个pid生成actc_data数组（遍历所有node）
+ * @ap: access_pid结构体指针
+ * @actc: actc_data数组指针（连续存储各node数据）
+ * @actc_len: 各node的actc_len数组（输出）
+ *
+ * 对每个node调用fill_actc_data_by_bitmap生成actc_data。
+ */
+static void fill_pid_actc_data(struct access_pid *ap, struct actc_data *actc,
+			       u32 actc_len[SMAP_MAX_NUMNODES])
+{
+	int nid;
+	u32 mapping_offset = 0;
+	size_t actc_offset = 0;
+
+	for (nid = 0; nid < SMAP_MAX_NUMNODES; nid++) {
+		fill_actc_data_by_bitmap(ap, nid, actc + actc_offset,
+				 &actc_len[nid], mapping_offset);
+		mapping_offset += actc_len[nid];
+		actc_offset += ap->page_num[nid];
+	}
+}
+
 static inline size_t calc_process_page_number(struct access_pid *ap)
 {
 	int i;
@@ -247,54 +341,14 @@ static inline size_t calc_process_page_number(struct access_pid *ap)
 	return ret_len;
 }
 
-static void read_pid_freq(struct access_pid *ap, actc_t *freq, size_t freq_len)
-{
-	int i;
-	u32 len_cnt = 0;
-	size_t acidx, bm_len;
-	struct access_tracking_dev *adev;
-
-	pr_debug("start writing pid %d freq\n", ap->pid);
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
-		if (ap->page_num[i] == 0 || !ap->paddr_bm[i]) {
-			continue;
-		}
-		list_for_each_entry(adev, &access_dev, list) {
-			if (adev->node == i) {
-				break;
-			}
-		}
-		if (list_entry_is_head(adev, &access_dev, list)) {
-			continue;
-		}
-
-		down_read(&adev->buffer_lock);
-		bm_len = BITS_PER_TYPE(long) * ap->bm_len[i];
-		for (acidx = 0; acidx < bm_len && len_cnt < freq_len; acidx++) {
-			if (!test_bit(acidx, ap->paddr_bm[i])) {
-				continue;
-			}
-			if (unlikely(acidx >= adev->page_count)) {
-				pr_warn("exceeds total page amount: %llu when lookup access index: %zu on access device: %d\n",
-					adev->page_count, acidx, i);
-				break;
-			}
-			pr_debug("node:%d acidx:%zu value:%hu len_cnt:%u\n", i,
-				   acidx, adev->access_bit_actc_data[acidx],
-				   len_cnt);
-			freq[len_cnt++] = adev->access_bit_actc_data[acidx];
-		}
-		up_read(&adev->buffer_lock);
-	}
-}
-
 static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 			     loff_t *ppos)
 {
-	actc_t *freq;
+	struct actc_data *actc;
 	struct access_pid *ap = file->private_data;
 	ssize_t len;
 	size_t total_len;
+	u32 actc_len[SMAP_MAX_NUMNODES];
 
 	pr_debug("enter mem_freq_read\n");
 	if (!check_and_clear_ap_state(&ap_data, AP_STATE_FREQ)) {
@@ -302,18 +356,17 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 		goto out;
 	}
 
-	total_len = calc_process_page_number(ap) * sizeof(actc_t);
-	freq = kvmalloc(total_len, GFP_KERNEL);
-	if (!freq) {
+	total_len = calc_process_page_number(ap) * sizeof(struct actc_data);
+	actc = kvmalloc(total_len, GFP_KERNEL);
+	if (!actc) {
 		len = -ENOMEM;
 		goto out;
 	}
 
 	len = -EINVAL;
-	if (*ppos % sizeof(actc_t)) {
+	if (*ppos % sizeof(struct actc_data)) {
 		goto out_free;
 	}
-
 
 	len = 0;
 	if (!cnt || *ppos >= total_len) {
@@ -325,15 +378,15 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 	else
 		len = cnt;
 
-	read_pid_freq(ap, freq, total_len / sizeof(actc_t));
-	if (copy_to_user(buf, freq + (*ppos / sizeof(actc_t)), len)) {
+	fill_pid_actc_data(ap, actc, actc_len);
+	if (copy_to_user(buf, actc + (*ppos / sizeof(struct actc_data)), len)) {
 		len = -EFAULT;
 		goto out_free;
 	}
 	if (*ppos + cnt <= total_len)
 		*ppos += len;
 out_free:
-	kvfree(freq);
+	kvfree(actc);
 out:
 	if (len < 0) {
 		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ |
@@ -449,9 +502,14 @@ int init_access_pid(struct access_add_pid_payload *payload,
 			return -EINVAL;
 		}
 	}
-	ret = create_procfs(ap);
+	ret = access_walk_pagemap_prepare(ap);
 	if (ret) {
 		kfree(ap);
+		return ret;
+	}
+	ret = create_procfs(ap);
+	if (ret) {
+		destroy_access_pid(ap);
 		return ret;
 	}
 	*elem = ap;
@@ -900,7 +958,7 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 		 * if cur_times + SCAN_TIMES_NEEDED_BY_NEW_PID < ap->ntimes, no need to call submit_one_work
 		 */
 		if (list_empty(&ap_data.list)) {
-			ap->cur_times = ap->ntimes;
+			ap->cur_times = 0;
 		} else {
 			struct access_pid *ap_head = list_first_entry(
 				&ap_data.list, struct access_pid, node);
@@ -931,13 +989,32 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 int access_add_pid(int len, struct access_add_pid_payload *payload)
 {
 	int i, ret;
-	struct access_pid *ap, *tmp;
+	struct access_pid *ap, *tmp, *existing;
 	LIST_HEAD(tmp_head);
 
+	/* Pre-check: mark completely duplicate pids */
+	down_read(&ap_data.lock);
 	for (i = 0; i < len; i++) {
-		if (payload[i].pid == NON_EXIST_PID) {
+		if (payload[i].pid < 0)
 			continue;
+		list_for_each_entry(existing, &ap_data.list, node) {
+			if (payload[i].pid == existing->pid &&
+			    payload[i].numa_nodes == existing->numa_nodes &&
+			    payload[i].scan_time == existing->scan_time &&
+			    payload[i].type == existing->type &&
+			    payload[i].ntimes == existing->ntimes) {
+				pr_info("pid %d is completely duplicate, skip processing\n",
+					payload[i].pid);
+				payload[i].pid = DUPLICATE_PID;
+				break;
+			}
 		}
+	}
+	up_read(&ap_data.lock);
+
+	for (i = 0; i < len; i++) {
+		if (payload[i].pid < 0)
+			continue;
 		/* check if payload has duplicate pid */
 		list_for_each_entry(tmp, &tmp_head, node) {
 			if (unlikely(payload[i].pid == tmp->pid)) {
@@ -1013,36 +1090,46 @@ void access_remove_pid(int len, struct access_remove_pid_payload *payload)
 {
 	int i;
 	struct access_pid *ap, *tmp;
+	bool found;
 
-	down_write(&ap_data.lock);
 	for (i = 0; i < len; i++) {
+		found = false;
+		down_write(&ap_data.lock);
 		list_for_each_entry_safe(ap, tmp, &ap_data.list, node) {
 			if (ap->pid == payload[i].pid) {
 				list_del(&ap->node);
-				cancel_ap_scan_work(ap);
-				destroy_access_pid(ap);
+				found = true;
 				break;
 			}
 		}
+		up_write(&ap_data.lock);
+		if (found) {
+			cancel_ap_scan_work(ap);
+			destroy_access_pid(ap);
+		}
 	}
-	up_write(&ap_data.lock);
 }
 
 void access_remove_all_pid(void)
 {
-	struct access_pid *ap, *tmp;
+	struct access_pid *ap;
 	struct ham_tracking_info *ap_ham, *tmp_ham;
 	struct statistics_tracking_info *ap_statistic, *tmp_statistic;
 	char path[MAX_PATH_LENGTH];
 
 	pr_info("remove all pid\n");
-	down_write(&ap_data.lock);
-	list_for_each_entry_safe(ap, tmp, &ap_data.list, node) {
+	while (true) {
+		down_write(&ap_data.lock);
+		if (list_empty(&ap_data.list)) {
+			up_write(&ap_data.lock);
+			break;
+		}
+		ap = list_first_entry(&ap_data.list, struct access_pid, node);
 		list_del(&ap->node);
+		up_write(&ap_data.lock);
 		cancel_ap_scan_work(ap);
 		destroy_access_pid(ap);
 	}
-	up_write(&ap_data.lock);
 
 	int ret;
 	spin_lock(&ham_lock);
@@ -1094,7 +1181,7 @@ static void free_ap_white_list_bm(struct access_pid *ap)
 	}
 }
 
-static int init_ap_bm(int node_len, u64 *node_page_count, struct access_pid *ap)
+int init_ap_bm(int node_len, u64 *node_page_count, struct access_pid *ap)
 {
 	size_t nr_bytes = sizeof(unsigned long);
 	int i;
@@ -1157,12 +1244,11 @@ void clean_last_ap_data(struct access_pid *ap)
 	}
 }
 
-int access_walk_pagemap(struct access_pid *ap)
+int access_walk_pagemap_prepare(struct access_pid *ap)
 {
 	int ret;
 	struct access_tracking_dev *adev;
 	u64 nodes_page_count[SMAP_MAX_NUMNODES] = { 0 };
-	struct pagemapread pm = { 0 };
 	if (!ap) {
 		return -EINVAL;
 	}
@@ -1181,6 +1267,20 @@ int access_walk_pagemap(struct access_pid *ap)
 		return ret;
 	}
 	ret = init_vm_mapping(&ap->info);
+	return ret;
+}
+
+int access_walk_pagemap(struct access_pid *ap)
+{
+	int ret;
+	struct pagemapread pm = { 0 };
+	if (!ap) {
+		return -EINVAL;
+	}
+	if (ap->type != NORMAL_SCAN) {
+		return 0;
+	}
+	ret = access_walk_pagemap_prepare(ap);
 	if (ret)
 		return ret;
 	pm.ap = ap;

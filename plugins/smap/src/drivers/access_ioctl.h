@@ -22,6 +22,13 @@
 
 #define SMAP_PROC_ROOT "smap"
 
+struct actc_data {
+	u64 addr;          /* 相对索引位置 */
+	actc_t freq;       /* 访问频次 */
+	u8 prior;          /* 优先级 */
+	u8 is_white_list;  /* 是否白名单页 */
+} __attribute__((packed));
+
 typedef enum {
 	NO_SCAN = -1,
 	HAM_SCAN,

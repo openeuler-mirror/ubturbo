@@ -213,22 +213,6 @@ TEST_F(AccessMMUTest, CalcVaddrAcidx)
     EXPECT_EQ(-ERANGE, ret);
 }
 
-extern "C" void add_to_bm_normal(u64 paddr, struct access_pid *ap);
-TEST_F(AccessMMUTest, AddToBMNormal)
-{
-    MOCKER(add_to_bm_page).stubs().will(ignoreReturnValue());
-
-    struct access_pid ap = {
-        .numa_nodes = 0x11,
-    };
-    ap.bm_len[0] = 2;
-    ap.paddr_bm[0] = (unsigned long *)malloc(sizeof(unsigned long) * 2);
-
-    add_to_bm_normal((u64)0x00005000, &ap);
-
-    free(ap.paddr_bm[0]);
-}
-
 extern "C" bool is_paddr_belong_remote_node(u64 pa, int nid);
 TEST_F(AccessMMUTest, PaddrBelongRemoteNote)
 {
@@ -324,13 +308,6 @@ TEST_F(AccessMMUTest, AddToBMTwo)
     MOCKER(add_to_bm_page).stubs();
     int ret = add_to_bm(0, &pe, &pm);
     EXPECT_EQ(1, ret);
-
-    GlobalMockObject::verify();
-    MOCKER(is_access_hugepage).stubs().will(returnValue(false));
-    MOCKER(add_to_bm_normal).stubs();
-    pm.pos = 0;
-    ret = add_to_bm(0, &pe, &pm);
-    EXPECT_EQ(0, ret);
 }
 
 extern "C" pagemap_entry_t pte_to_pagemap_entry(struct pagemapread *pm,

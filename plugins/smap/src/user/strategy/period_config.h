@@ -19,6 +19,14 @@
 extern "C" {
 #endif
 
+#define MAX_SCAN_PERIOD 60000
+#define DEFAULT_SCAN_PERIOD 200
+#define MIN_SCAN_PERIOD 50
+
+#define MAX_MIGRATE_PERIOD 60000
+#define DEFAULT_MIGRATE_PERIOD 2000
+#define MIN_MIGRATE_PERIOD 500
+
 uint32_t GetScanPeriodConfig(void);
 
 uint32_t GetMigratePeriodConfig(void);

@@ -450,15 +450,18 @@ static void work_func(struct work_struct *work)
 	start_time = ktime_get();
 	scan_work = to_delay_work(work);
 	ap = delay_work_to_ap(scan_work);
+	if (access_pid_cur_last_scanning(ap))
+		access_walk_pagemap_prepare(ap);
+
 	adev_buffer_down_read();
+	down_read(&ap_data.lock);
 	page_size = get_page_size(adev);
 	if (page_size == g_pagesize_huge) {
-		ret = scan_accessed_bit_forward_vm(ap->pid, page_size,
-						   ap->type);
+		ret = scan_accessed_bit_forward_vm(ap, page_size);
 	} else {
-		ret = scan_accessed_bit_forward_mm(ap->pid, page_size,
-						   ap->type);
+		ret = scan_accessed_bit_forward_mm(ap, page_size);
 	}
+	up_read(&ap_data.lock);
 	adev_buffer_up_read();
 	end_time = ktime_get();
 	scan_time = ktime_to_us(ktime_sub(end_time, start_time));
@@ -479,10 +482,6 @@ static void work_func(struct work_struct *work)
 		queue_delayed_work(adev->scanq, &ap->scan_work, msecs_to_jiffies(scan_delay_ms));
 		ap->last_scan_end = ktime_get();
 	} else {
-		pr_debug("pid[%d] start to walk pagemap\n", ap->pid);
-		if (ap->type != STATISTIC_SCAN) {
-			access_walk_pagemap(ap);
-		}
 		complete(&ap->work_done);
 	}
 }

@@ -548,11 +548,6 @@ static void UpdateScene(struct ProcessManager *manager)
     EnvMutexLock(&manager->lock);
     ProcessAttr *current = manager->processes;
     while (current) {
-        if (current->type != VM_TYPE) {
-            current = current->next;
-            continue;
-        }
-        // 更新虚机的场景
         if (current->scanType == NORMAL_SCAN) {
             SetProcessSceneAttr(current);
         }
@@ -566,12 +561,13 @@ static int HandleScene(ThreadCtx *ctx)
     int ret = 0;
     Scene worstScene = LIGHT_STABLE_SCENE, scene;
     struct ProcessManager *manager = ctx->processManager;
+    PidType type = GetPidType(manager);
     EnvMutexLock(&manager->lock);
     ProcessAttr *current = manager->processes;
     while (current) {
-        // 更新虚机的场景
+        // 更新进程的场景
         SceneInfo *info = &current->sceneInfo;
-        GetProcessSceneAttr(info->currScene, info);
+        GetProcessSceneAttr(info->currScene, info, current->type);
         if (info->currScene != info->lastScene) {
             ret = UpdateScanTime(current);
             SMAP_LOGGER_INFO("Update pid %d scan cycle to %dms.", current->pid, current->sceneInfo.cycles.scanCycle);
@@ -590,7 +586,7 @@ static int HandleScene(ThreadCtx *ctx)
     if (manager->sceneInfo.currScene != worstScene) {
         SMAP_LOGGER_INFO("Manager changed scene from %d to %d.", manager->sceneInfo.currScene, worstScene);
         manager->sceneInfo.currScene = worstScene;
-        GetProcessSceneAttr(worstScene, &manager->sceneInfo);
+        GetProcessSceneAttr(worstScene, &manager->sceneInfo, type);
         SceneCycle *cycles = &manager->sceneInfo.cycles;
         ctx->period = cycles->migCycle;
     }
@@ -614,6 +610,38 @@ static void UpdateAllProcessScanTime(ThreadCtx *ctx)
             SMAP_LOGGER_INFO("Update pid %d scan cycle to %u.", current->pid, GetScanPeriodConfig());
         }
         current = current->next;
+    }
+    EnvMutexUnlock(&manager->lock);
+}
+
+static void RestoreNewPidScanTime(ThreadCtx *ctx)
+{
+    int ret;
+    struct ProcessManager *manager = ctx->processManager;
+    ProcessAttr *current;
+    uint32_t scanPeriod;
+    struct AccessAddPidPayload payload;
+
+    EnvMutexLock(&manager->lock);
+    for (current = manager->processes; current; current = current->next) {
+        if (!current->isFirstScan) {
+            continue;
+        }
+        scanPeriod = GetFileConfSwitchConfig() ?
+            GetScanPeriodConfig() : current->sceneInfo.cycles.scanCycle;
+        payload.pid = current->pid;
+        payload.numaNodes = current->numaAttr.numaNodes;
+        payload.type = current->scanType;
+        payload.duration = current->duration;
+        payload.scanTime = scanPeriod;
+        ret = AccessIoctlAddPid(1, &payload);
+        if (ret) {
+            SMAP_LOGGER_WARNING("Restore pid %d scan cycle failed, ret=%d.", current->pid, ret);
+        } else {
+            current->scanTime = scanPeriod;
+            SMAP_LOGGER_INFO("Restore pid %d scan cycle to %ums.", current->pid, scanPeriod);
+            current->isFirstScan = false;
+        }
     }
     EnvMutexUnlock(&manager->lock);
 }
@@ -679,6 +707,10 @@ int ScanMigrateWork(ThreadCtx *ctx)
     }
     ret = PerformMigration(manager);
     SMAP_LOGGER_INFO("Migration result: %d.", ret);
+    // 只在迁移成功时恢复新PID的扫描周期
+    if (ret == 0) {
+        RestoreNewPidScanTime(ctx);
+    }
 out:
     // 启动扫描
     EnableTracking(manager);

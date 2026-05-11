@@ -109,8 +109,8 @@ typedef struct {
     uint64_t addr;
     actc_t freq;
     uint8_t prior;
-    bool isWhiteListPage;
-} ActcData;
+    uint8_t isWhiteListPage;
+} __attribute__((packed)) ActcData;
 
 typedef struct {
     uint64_t addr;
@@ -218,6 +218,7 @@ struct ProcessAttribute {
     int remoteNumaCnt; // 远端numa数量
     bool isLowMem; // 多numa虚机场景，表示目的端内存不够
     bool enableSwap; // 控制是否开启交换，默认开启
+    bool isFirstScan; // 标记首次扫描，需要恢复扫描周期
     struct { // 迁移相关参数
         int nid;
         uint64_t memSize; // 迁移内存大小,单位为KB
@@ -335,12 +336,6 @@ struct ProcessManager {
 struct ProcessMemBitmap {
     pid_t pid;
     size_t nrPages[MAX_NODES];
-    size_t len[MAX_NODES];
-    unsigned long *data[MAX_NODES];
-    unsigned long *whiteListBm[MAX_NODES];
-    uint32_t vmSize;
-    uint32_t *mapping;
-    uint32_t mappingOffset;
 };
 
 typedef struct {

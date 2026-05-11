@@ -131,7 +131,7 @@ int ProcessManagerInit(uint32_t pageType)
     RemoteNumaInfoInit();
     EnvMutexInit(&g_processManager.lock);
     EnvMutexInit(&g_processManager.threadLock);
-    InitSceneInfo(&g_processManager.sceneInfo);
+    InitSceneInfo(&g_processManager.sceneInfo, pageType == PAGETYPE_HUGE);
     g_runMode = WATERLINE_MODE;
     return 0;
 }
@@ -198,13 +198,6 @@ void LinkedListAdd(ProcessAttr **head, ProcessAttr **add)
     *head = *add;
 }
 
-static void LinkedListAddSafe(ProcessAttr **head, ProcessAttr **add, EnvMutex *lock)
-{
-    EnvMutexLock(lock);
-    (*add)->next = *head;
-    *head = *add;
-    EnvMutexUnlock(lock);
-}
 
 static void ResetActcData(ActcData *actcData[], int len)
 {
@@ -254,36 +247,6 @@ void LinkedListRemove(ProcessAttr **remove, ProcessAttr **head)
     }
 }
 
-static void ResetActcDataForPid(ProcessAttr *attr)
-{
-    ResetActcData(attr->scanAttr.actcData, MAX_NODES);
-}
-
-static int InitPidActcData(ProcessAttr *attr)
-{
-    if (attr->walkPage.nrPage == 0) {
-        SMAP_LOGGER_ERROR("Get pid %d nr pages failed.", attr->pid);
-        return -EINVAL;
-    }
-    ActcData *actc[MAX_NODES] = { 0 };
-    for (int i = 0; i < MAX_NODES; i++) {
-        if (attr->walkPage.nrPages[i] == 0) {
-            continue;
-        }
-        actc[i] = calloc(attr->walkPage.nrPages[i], sizeof(ActcData));
-        if (!actc[i]) {
-            ResetActcData(actc, MAX_NODES);
-            return -ENOMEM;
-        }
-    }
-
-    ResetActcDataForPid(attr);
-    for (int i = 0; i < MAX_NODES; i++) {
-        attr->scanAttr.actcData[i] = actc[i];
-    }
-    attr->isLowMem = false;
-    return 0;
-}
 
 static unsigned long ProcessSmapsFile(pid_t pid, const char *targetLinePrefix, size_t prefixLength, size_t divisor)
 {
@@ -391,105 +354,6 @@ bool IsHugeAligned(uint64_t addr)
 int IsHugePageRange(const char *line)
 {
     return strstr(line, "hugepage") != NULL;
-}
-
-static inline void ClearActcInfo(ProcessAttr *attr, int nid)
-{
-    attr->scanAttr.actcLen[nid] = 0;
-    (void)memset_s(&attr->scanAttr.actCount[nid], sizeof(ActCount), 0, sizeof(ActCount));
-}
-
-static int FillActcByBitmap(ProcessAttr *attr, int nid, struct ProcessMemBitmap *pmb, struct AccessPidFreq *apf)
-{
-    size_t i, nrFreq, nrBit, acidx = 0;
-    uint16_t freqMax = 0, freqMin = UINT16_MAX;
-    uint64_t actcLen, paddr, freqSum = 0, remoteHotNum = 0, white = 0;
-    uint32_t remoteHotThreshold = GetRemoteHotThreshold();
-    size_t len = pmb->len[nid];
-    unsigned long *bitmap = pmb->data[nid];
-    unsigned long *whiteListBitmap = pmb->whiteListBm[nid];
-    if (attr->walkPage.nrPages[nid] == 0) {
-        ClearActcInfo(attr, nid);
-        return 0;
-    }
-    ActcData *actc = attr->scanAttr.actcData[nid];
-
-    nrFreq = nrBit = actcLen = remoteHotNum = 0;
-    for (acidx = 0; acidx < BITS_PER_LONG * len; acidx++) {
-        if (actcLen >= attr->walkPage.nrPages[nid] || actcLen >= apf->len[nid]) {
-            break;
-        }
-        if (!TestBit(acidx, bitmap)) {
-            continue;
-        }
-        nrBit++;
-        if (pmb->vmSize && pmb->mapping) {
-            actc[actcLen].prior = pmb->mapping[pmb->mappingOffset + actcLen] & 0xff;
-        } else {
-            actc[actcLen].prior = 0;
-        }
-        if (TestBit(acidx, whiteListBitmap)) {
-            actc[actcLen].isWhiteListPage = true;
-            white++;
-        }
-        actc[actcLen].freq = apf->freq[nid][actcLen];
-        if (actc[actcLen].freq != 0) {
-            nrFreq++;
-            freqSum += actc[actcLen].freq;
-        }
-        if (actc[actcLen].freq >= remoteHotThreshold) {
-            remoteHotNum++;
-        }
-        actc[actcLen].addr = actcLen;
-        freqMax = MAX(freqMax, actc[actcLen].freq);
-        freqMin = MIN(freqMin, actc[actcLen].freq);
-        actcLen++;
-    }
-    attr->scanAttr.actcLen[nid] = actcLen;
-    attr->scanAttr.actCount[nid].freqMax = freqMax;
-    attr->scanAttr.actCount[nid].freqMin = freqMin;
-    attr->scanAttr.actCount[nid].freqNum = nrFreq;
-    attr->scanAttr.actCount[nid].freqSum = freqSum;
-    attr->scanAttr.actCount[nid].remoteHotNum = remoteHotNum;
-    attr->scanAttr.actCount[nid].whiteNum = white;
-    attr->scanAttr.actCount[nid].pageNum = attr->scanAttr.actcLen[nid];
-    attr->scanAttr.actCount[nid].freqZero = attr->scanAttr.actcLen[nid] - nrFreq;
-    SMAP_LOGGER_INFO(
-        "Node%d actcLen %llu, nrFreq %zu, nrBit %zu, freqMax %d, freqMin %d, freqSum %lu, remoteHotNum %lu, white %lu",
-                      nid, actcLen, nrFreq, nrBit, freqMax, freqMin, freqSum, remoteHotNum, white);
-    return 0;
-}
-
-static int MappingAscFunc(const void *map1, const void *map2)
-{
-    uint32_t m1 = *(uint32_t *)map1;
-    uint32_t m2 = *(uint32_t *)map2;
-
-    if (m1 == m2) {
-        return 0;
-    }
-    return m1 < m2 ? -1 : 1;
-}
-
-static int FillActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, struct AccessPidFreq *apf)
-{
-    int ret;
-    if (!pmb) {
-        SMAP_LOGGER_ERROR("FillActcData pmb is null.");
-        return -EINVAL;
-    }
-    if (pmb->mapping) {
-        qsort(pmb->mapping, pmb->vmSize, sizeof(*pmb->mapping), MappingAscFunc);
-    }
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        attr->scanAttr.actcLen[nid] = 0;
-        ret = FillActcByBitmap(attr, nid, pmb, apf);
-        if (ret) {
-            return ret;
-        }
-        pmb->mappingOffset += attr->scanAttr.actcLen[nid];
-    }
-    return 0;
 }
 
 static int CheckPid(pid_t pid)
@@ -623,7 +487,7 @@ static void SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
     }
 }
 
-int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
+static int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
 {
     int ret;
     if (g_processManager.nr[type] >= GetCurrentMaxNrPid()) {
@@ -657,7 +521,9 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
     }
 
     attr->type = type;
+    attr->isFirstScan = true; // 标记新PID首次扫描
     SetProcessConfig(attr, param);
+    attr->scanTime = MIN_SCAN_PERIOD; // 首次扫描使用高频周期
     LinkedListAdd(&g_processManager.processes, &attr);
     SMAP_LOGGER_INFO("Set pid %d scan cycle to %ums.", attr->pid, attr->scanTime);
     g_processManager.nr[type]++;
@@ -785,26 +651,6 @@ int SetProcessLocalNuma(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag)
     return ret1 & ret2;
 }
 
-static void PrintProcessNuma(ProcessAttr *attr)
-{
-    int i;
-    int ret;
-    char output[MAX_LINE_LENGTH] = { 0 };
-    int len = sizeof(output) / sizeof(char);
-    char *result = output;
-    char *tmpl = "Node00 ";
-
-    for (i = 0; i < MAX_NODES; i++) {
-        if (InAttrL1(attr, i) || InAttrL2(attr, i)) {
-            ret = snprintf_s(result, len, strlen(tmpl), "Node%2d ", i);
-            if (ret > 0) {
-                len -= strlen(tmpl);
-                result += strlen(tmpl);
-            }
-        }
-    }
-    SMAP_LOGGER_INFO("pid %d is using %s.", attr->pid, output);
-}
 
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
 {
@@ -974,129 +820,169 @@ static void SetPidNrPages(ProcessAttr *attr, size_t *nrPages, int len)
     SMAP_LOGGER_INFO("Pid %d nrPage %llu.", attr->pid, attr->walkPage.nrPage);
 }
 
-static void FreePidFreq(struct AccessPidFreq *apf)
-{
-    for (int i = 0; i < MAX_NODES; i++) {
-        free(apf->freq[i]);
-        apf->freq[i] = NULL;
-        apf->len[i] = 0;
-    }
-}
+#define FREQ_FILE_PATH_LEN 50
 
-static int InitPidFreq(ProcessAttr *attr, struct AccessPidFreq *apf)
+/**
+ * CalcActcStats - 从actc_data数组计算统计数据
+ * @attr: ProcessAttr结构体指针
+ *
+ * 遍历actc_data数组，计算freqMax、freqMin、freqNum、freqSum等统计数据。
+ */
+static void CalcActcStats(ProcessAttr *attr)
 {
-    int i;
+    uint16_t remoteHotThreshold = GetRemoteHotThreshold();
 
-    apf->pid = attr->pid;
-    for (i = 0; i < MAX_NODES; i++) {
-        apf->freq[i] = NULL;
-    }
-    for (i = 0; i < MAX_NODES; i++) {
-        apf->len[i] = attr->walkPage.nrPages[i];
-        if (apf->len[i] == 0) {
+    for (int nid = 0; nid < MAX_NODES; nid++) {
+        uint64_t actcLen = attr->scanAttr.actcLen[nid];
+        ActcData *actc = attr->scanAttr.actcData[nid];
+        ActCount *count = &attr->scanAttr.actCount[nid];
+
+        if (actcLen == 0 || !actc) {
+            memset(count, 0, sizeof(*count));
             continue;
         }
-        /* Use calloc to ensure freq[i] is zeroed */
-        apf->freq[i] = calloc(apf->len[i], sizeof(actc_t));
-        if (!apf->freq[i]) {
-            SMAP_LOGGER_ERROR("Alloc pid %d data memory failed\n", apf->pid);
-            FreePidFreq(apf);
+
+        count->freqMax = 0;
+        count->freqMin = UINT16_MAX;
+        count->freqNum = 0;
+        count->freqSum = 0;
+        count->remoteHotNum = 0;
+        count->whiteNum = 0;
+        count->pageNum = actcLen;
+        count->freqZero = 0;
+
+        for (uint64_t i = 0; i < actcLen; i++) {
+            actc_t freq = actc[i].freq;
+            if (freq != 0) {
+                count->freqNum++;
+                count->freqSum += freq;
+            } else {
+                count->freqZero++;
+            }
+            if (freq >= remoteHotThreshold) {
+                count->remoteHotNum++;
+            }
+            if (actc[i].isWhiteListPage) {
+                count->whiteNum++;
+            }
+            count->freqMax = MAX(count->freqMax, freq);
+            count->freqMin = MIN(count->freqMin, freq);
+        }
+
+        SMAP_LOGGER_INFO("Node%d actcLen %llu, freqMax %u, freqMin %u, freqNum %llu, "
+                         "freqSum %llu, remoteHotNum %llu, whiteNum %llu",
+                         nid, actcLen, count->freqMax, count->freqMin,
+                         count->freqNum, count->freqSum, count->remoteHotNum, count->whiteNum);
+    }
+}
+
+/**
+ * DistributeActcData - 将读取的数据分配到各node的actcData
+ * @attr: ProcessAttr结构体指针
+ * @pmb: ProcessMemBitmap结构体指针
+ * @buf: 读取的数据缓冲区
+ *
+ * 返回: 成功返回0，失败返回负错误码
+ */
+static int DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf)
+{
+    size_t actc_offset = 0;
+
+    for (int nid = 0; nid < MAX_NODES; nid++) {
+        attr->scanAttr.actcLen[nid] = pmb->nrPages[nid];
+        if (pmb->nrPages[nid] == 0) {
+            attr->scanAttr.actcData[nid] = NULL;
+            continue;
+        }
+        attr->scanAttr.actcData[nid] = malloc(pmb->nrPages[nid] * sizeof(ActcData));
+        if (!attr->scanAttr.actcData[nid]) {
+            SMAP_LOGGER_ERROR("malloc actcData[%d] failed for pid %d", nid, attr->pid);
+            for (int i = 0; i < nid; i++) {
+                free(attr->scanAttr.actcData[i]);
+                attr->scanAttr.actcData[i] = NULL;
+            }
             return -ENOMEM;
         }
+        memcpy(attr->scanAttr.actcData[nid], buf + actc_offset, pmb->nrPages[nid] * sizeof(ActcData));
+        actc_offset += pmb->nrPages[nid];
     }
     return 0;
 }
 
-static int ReadPidFreqInner(struct AccessPidFreq *apf, int numaNum, FILE *file)
+/**
+ * ReadPidActcData - 从内核态read完整的actc_data数组
+ * @attr: ProcessAttr结构体指针
+ * @pmb: ProcessMemBitmap结构体指针（包含nrPages信息）
+ *
+ * read连续的actc_data数组，按nrPages分段分配到actcData[nid]。
+ */
+static int ReadPidActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
 {
-    if (fread(apf->freq[numaNum], sizeof(uint16_t), apf->len[numaNum], file) != apf->len[numaNum]) {
-        SMAP_LOGGER_WARNING("Read freq numa(%d) failed.", numaNum);
-        return -EINVAL;
+    char path[FREQ_FILE_PATH_LEN];
+    int fd, ret;
+    size_t total_actc = 0;
+    size_t shm_size;
+    ActcData *buf;
+    ssize_t read_len;
+
+    snprintf(path, sizeof(path), "/proc/smap/%d/mem_freq", attr->pid);
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        SMAP_LOGGER_ERROR("open mem_freq file failed for pid %d: %d", attr->pid, errno);
+        return -ENODEV;
     }
+
+    for (int nid = 0; nid < MAX_NODES; nid++) {
+        total_actc += pmb->nrPages[nid];
+    }
+
+    if (total_actc == 0) {
+        SMAP_LOGGER_INFO("pid %d has no pages, skip read", attr->pid);
+        close(fd);
+        return 0;
+    }
+
+    shm_size = total_actc * sizeof(ActcData);
+    buf = malloc(shm_size);
+    if (!buf) {
+        SMAP_LOGGER_ERROR("malloc failed for pid %d, size %zu", attr->pid, shm_size);
+        close(fd);
+        return -ENOMEM;
+    }
+
+    read_len = read(fd, buf, shm_size);
+    close(fd);
+
+    if (read_len < 0 || read_len != shm_size) {
+        SMAP_LOGGER_ERROR("read failed for pid %d, expected %zu, got %zd", attr->pid, shm_size, read_len);
+        free(buf);
+        return -EIO;
+    }
+
+    ret = DistributeActcData(attr, pmb, buf);
+    free(buf);
+
+    if (ret) {
+        return ret;
+    }
+
+    SMAP_LOGGER_INFO("read pid %d success, total_actc %zu", attr->pid, total_actc);
     return 0;
 }
 
-#define FREQ_FILE_PATH_LEN 50
-#define FREQ_FILE_RETRY 20
-#define FREQ_FILE_RETRY_DELAY 10000
-
-static int ReadPidFreq(struct AccessPidFreq *apf)
-{
-    FILE *file;
-    char filePath[FREQ_FILE_PATH_LEN];
-    int retryCount = 0;
-
-    int ret = snprintf_s(filePath, sizeof(filePath), sizeof(filePath), "/proc/smap/%d/mem_freq", (int)apf->pid);
-    if (ret == -1) {
-        SMAP_LOGGER_ERROR("snprintf freq file path failed.");
-        return -EINVAL;
-    }
-
-    do {
-        file = fopen(filePath, "rb");
-        if (!file) {
-            SMAP_LOGGER_ERROR("open freq file failed. errorcode:%d", errno);
-            return -ENODEV;
-        }
-
-        bool allSuccess = true;
-        for (int numaNum = 0; numaNum < MAX_NODES; numaNum++) {
-            if (apf->len[numaNum] == 0) {
-                continue;
-            }
-            ret = ReadPidFreqInner(apf, numaNum, file);
-            if (ret) {
-                allSuccess = false;
-                break;
-            }
-        }
-
-        if (allSuccess) {
-            fclose(file);
-            return 0;
-        }
-
-        if (fclose(file) == EOF) {
-            return -EBADF;
-        }
-        usleep(FREQ_FILE_RETRY_DELAY);
-        SMAP_LOGGER_INFO("read process page freq, retry count:%d", retryCount);
-        retryCount++;
-    } while (retryCount < FREQ_FILE_RETRY);
-
-    SMAP_LOGGER_ERROR("read freq data from file failed.");
-    return -EIO;
-}
 
 static int FillPidData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
 {
     int ret;
-    struct AccessPidFreq apf = { 0 }; // Make sure apf len and freq is zeroed
 
-    ret = InitPidActcData(attr);
+    ret = ReadPidActcData(attr, pmb);
     if (ret) {
-        SMAP_LOGGER_ERROR("Init pid %d actc data failed.", attr->pid);
+        SMAP_LOGGER_ERROR("Read pid %d actc data failed: %d", attr->pid, ret);
         return ret;
     }
-    ret = InitPidFreq(attr, &apf);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Init pid %d freq failed: %d\n", attr->pid, ret);
-        return ret;
-    }
-    ret = ReadPidFreq(&apf);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Read pid %d freq failed\n", attr->pid);
-        FreePidFreq(&apf);
-        return ret;
-    }
-    ret = FillActcData(attr, pmb, &apf);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Fill pid %d actc data failed.", attr->pid);
-        ResetActcDataForPid(attr);
-        FreePidFreq(&apf);
-        return ret;
-    }
-    FreePidFreq(&apf);
+
+    CalcActcStats(attr);
     return 0;
 }
 
@@ -1125,26 +1011,6 @@ static int BuildBitmapBuf(size_t *len, char **buf)
     *buf = tmpBuf;
 
     return 0;
-}
-
-static inline void FreePmbData(struct ProcessMemBitmap *pmb)
-{
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        if (pmb->data[nid]) {
-            free(pmb->data[nid]);
-            pmb->data[nid] = NULL;
-        }
-    }
-}
-
-static inline void FreeWhiteListBm(struct ProcessMemBitmap *pmb)
-{
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        if (pmb->whiteListBm[nid]) {
-            free(pmb->whiteListBm[nid]);
-            pmb->whiteListBm[nid] = NULL;
-        }
-    }
 }
 
 static int ParseBitmapPid(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
@@ -1177,113 +1043,8 @@ static int ParseBitmapNrPages(struct ProcessMemBitmap *pmb, char *buf, size_t *o
     return 0;
 }
 
-static int ParseBitmapLen(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
-{
-    int ret;
-    size_t lenSize = sizeof(pmb->len[0]);
-    size_t tmpOffset = 0;
-
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        ret = memcpy_s(&pmb->len[nid], lenSize, buf + tmpOffset, lenSize);
-        if (ret) {
-            return -ret;
-        }
-        tmpOffset += lenSize;
-        SMAP_LOGGER_DEBUG("pid %d Node%d bmLen %zu.", pmb->pid, nid, pmb->len[nid]);
-    }
-    *offset += tmpOffset;
-    return 0;
-}
-
-static int ParseBitmapVmSize(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
-{
-    int ret;
-    size_t vmSize = sizeof(pmb->vmSize);
-
-    ret = memcpy_s(&pmb->vmSize, vmSize, buf, vmSize);
-    if (ret) {
-        return -ret;
-    }
-    *offset += vmSize;
-    return 0;
-}
-
-static int ParseBitmapData(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
-{
-    int ret;
-    size_t bitmapSize = sizeof(*pmb->data[0]);
-    size_t tmpOffset = 0;
-
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        if (pmb->len[nid] == 0) {
-            continue;
-        }
-        ret = memcpy_s(pmb->data[nid], bitmapSize * pmb->len[nid], buf + tmpOffset, bitmapSize * pmb->len[nid]);
-        if (ret) {
-            FreePmbData(pmb);
-            return -ret;
-        }
-        tmpOffset += bitmapSize * pmb->len[nid];
-    }
-    *offset += tmpOffset;
-    return 0;
-}
-
-static int ParseWhiteListBitmap(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
-{
-    int ret;
-    size_t bitmapSize = sizeof(*pmb->data[0]);
-    size_t tmpOffset = 0;
-
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        if (pmb->len[nid] == 0) {
-            continue;
-        }
-        ret = memcpy_s(pmb->whiteListBm[nid], bitmapSize * pmb->len[nid], buf + tmpOffset, bitmapSize * pmb->len[nid]);
-        if (ret) {
-            FreePmbData(pmb);
-            FreeWhiteListBm(pmb);
-            return -ret;
-        }
-        tmpOffset += bitmapSize * pmb->len[nid];
-    }
-    *offset += tmpOffset;
-    return 0;
-}
-
-static int InitPmbData(struct ProcessMemBitmap *pmb)
-{
-    int nid;
-    size_t bitmapSize = sizeof(*pmb->data[0]);
-
-    for (nid = 0; nid < MAX_NODES; nid++) {
-        pmb->data[nid] = NULL;
-    }
-    for (nid = 0; nid < MAX_NODES; nid++) {
-        SMAP_LOGGER_DEBUG("Node%d data size %zu.", nid, bitmapSize * pmb->len[nid]);
-        if (pmb->len[nid] == 0) {
-            continue;
-        }
-        pmb->data[nid] = malloc(bitmapSize * pmb->len[nid]);
-        if (!pmb->data[nid]) {
-            FreePmbData(pmb);
-            return -ENOMEM;
-        }
-        pmb->whiteListBm[nid] = malloc(bitmapSize * pmb->len[nid]);
-        if (!pmb->whiteListBm[nid]) {
-            SMAP_LOGGER_ERROR("pmb whiteListBm[%d] malloc failed.", nid);
-            FreePmbData(pmb);
-            FreeWhiteListBm(pmb);
-            return -ENOMEM;
-        }
-    }
-    return 0;
-}
-
 static int ParseBitmap(size_t bufLen, char *buf, size_t *offset, struct ProcessMemBitmap *pmb)
 {
-    size_t mappingSize = sizeof(*pmb->mapping);
-    int nid;
     size_t newOffset = *offset;
 
     int ret = ParseBitmapPid(pmb, buf + newOffset, &newOffset);
@@ -1298,42 +1059,6 @@ static int ParseBitmap(size_t bufLen, char *buf, size_t *offset, struct ProcessM
         return ret;
     }
 
-    ret = ParseBitmapLen(pmb, buf + newOffset, &newOffset);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ParseBitmapLen err: %d.", ret);
-        return ret;
-    }
-
-    ret = ParseBitmapVmSize(pmb, buf + newOffset, &newOffset);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ParseBitmapVmSize err: %d.", ret);
-        return ret;
-    }
-    if (pmb->vmSize) {
-        SMAP_LOGGER_INFO("pid %d vm size %u.", pmb->pid, pmb->vmSize);
-    }
-
-    ret = InitPmbData(pmb);
-    if (ret) {
-        SMAP_LOGGER_ERROR("InitPmbData err: %d.", ret);
-        return ret;
-    }
-
-    ret = ParseBitmapData(pmb, buf + newOffset, &newOffset);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ParseBitmapData err: %d.", ret);
-        return ret;
-    }
-
-    ret = ParseWhiteListBitmap(pmb, buf + newOffset, &newOffset);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ParseWhiteListBitmap err: %d.", ret);
-        return ret;
-    }
-    if (pmb->vmSize) {
-        pmb->mapping = (uint32_t *)((char *)buf + newOffset);
-        newOffset += mappingSize * pmb->vmSize;
-    }
     SMAP_LOGGER_INFO("read continue %zu %zu.", newOffset, bufLen);
 
     *offset = newOffset;
@@ -1749,8 +1474,6 @@ int BuildAllPidData(void)
         if (ret < 0) {
             SMAP_LOGGER_ERROR("parse bitmap failed.");
             failedCount++;
-            FreePmbData(&pmb);
-            FreeWhiteListBm(&pmb);
             break;
         }
         ProcessAttr *current = GetProcessAttrLocked(pmb.pid);
@@ -1764,8 +1487,6 @@ int BuildAllPidData(void)
                 failedCount++;
             }
         }
-        FreePmbData(&pmb);
-        FreeWhiteListBm(&pmb);
     }
     CalcMigrateNrPagesPerPIDMuiltNuma();
     free(buf);
@@ -1773,24 +1494,6 @@ int BuildAllPidData(void)
     return failedCount;
 }
 
-static bool IsInPidArr(pid_t *pidArr, int len, pid_t pid)
-{
-    int i;
-    if (len <= 0 || len > GetCurrentMaxNrPid()) {
-        SMAP_LOGGER_ERROR("pidArr invalid len %d.", len);
-        return false;
-    }
-    if (!pidArr) {
-        SMAP_LOGGER_ERROR("pidArr is null.");
-        return false;
-    }
-    for (i = 0; i < len; i++) {
-        if (pidArr[i] == pid) {
-            return true;
-        }
-    }
-    return false;
-}
 
 struct ProcessManager *GetProcessManager(void)
 {

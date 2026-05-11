@@ -121,6 +121,31 @@ static int acpi_parse_gicc_affinity(union acpi_subtable_headers *header,
 	return 0;
 }
 
+static void merge_acpi_mem_segments(void)
+{
+	struct acpi_mem_segment *cur, *next, *tmp;
+
+	if (list_empty(&acpi_mem.mem))
+		return;
+
+	cur = list_first_entry(&acpi_mem.mem, struct acpi_mem_segment, segment);
+	while (cur) {
+		next = list_next_entry(cur, segment);
+		if (list_entry_is_head(next, &acpi_mem.mem, segment))
+			break;
+		if (cur->node == next->node && cur->end + 1 == next->start) {
+			cur->end = next->end;
+			list_del(&next->segment);
+			acpi_mem.len--;
+			kfree(next);
+			tmp = cur;
+		} else {
+			tmp = next;
+		}
+		cur = tmp;
+	}
+}
+
 int init_acpi_mem(void)
 {
 	int count;
@@ -160,6 +185,8 @@ int init_acpi_mem(void)
 	acpi_put_table(table_header);
 
 	pr_info("init_acpi_mem: nr_local_numa = %d\n", nr_local_numa);
+	merge_acpi_mem_segments();
+
 	return 0;
 }
 
@@ -171,7 +198,7 @@ void reset_acpi_mem(void)
 		kfree(mem);
 	}
 	acpi_mem.len = 0;
-	nr_local_numa = 0; 
+	nr_local_numa = 0;
 }
 
 u64 get_node_actc_len(int node_id, int page_size)
@@ -219,6 +246,28 @@ int calc_paddr_acidx_acpi(u64 paddr, int *nid, u64 *index, int page_size)
 	*nid = mem->node;
 	*index = acidx;
 	return 0;
+}
+
+int calc_paddr_acidx_acpi_known_nid(u64 paddr, int nid, u64 *index, int page_size)
+{
+	struct acpi_mem_segment *mem;
+	u64 offset = 0;
+	int shift = __builtin_ctz(page_size);
+
+	list_for_each_entry(mem, &acpi_mem.mem, segment) {
+		if (mem->node != nid) {
+			continue;
+		}
+		if (paddr > mem->end) {
+			offset += mem->end - mem->start + 1;
+			continue;
+		} else if (unlikely(paddr < mem->start))
+			break;
+		offset += paddr - mem->start;
+		*index = offset >> shift;
+		return 0;
+	}
+	return -ERANGE;
 }
 
 int calc_acidx_paddr_acpi(int nid, u64 acidx, u64 *paddr, int page_size)
