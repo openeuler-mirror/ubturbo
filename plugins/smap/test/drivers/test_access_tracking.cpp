@@ -155,15 +155,6 @@ TEST_F(AccessTrackingTest, actc_buffer_reinit_two)
     vfree(adev.access_bit_actc_data);
 }
 
-extern "C" int access_tracking_reinit_actc_buffer(struct device *ldev);
-TEST_F(AccessTrackingTest, access_tracking_reinit_actc_buffer)
-{
-    struct access_tracking_dev adev;
-    MOCKER(actc_buffer_reinit).stubs().will(returnValue(0));
-    int ret = access_tracking_reinit_actc_buffer(&adev.ldev);
-    EXPECT_EQ(0, ret);
-}
-
 extern "C" int access_tracking_set_page_size(struct device *ldev, u8 page_size_index);
 TEST_F(AccessTrackingTest, access_tracking_set_page_size)
 {
@@ -181,21 +172,6 @@ TEST_F(AccessTrackingTest, access_tracking_set_page_size_two)
     struct access_tracking_dev adev;
     MOCKER(actc_buffer_reinit).stubs().will(returnValue(0));
     int ret = access_tracking_set_page_size(&adev.ldev, PAGE_MODE_2M);
-    EXPECT_EQ(0, ret);
-}
-
-extern "C" int access_tracking_ram_change(struct device *ldev, void __user *argp);
-TEST_F(AccessTrackingTest, access_tracking_ram_change)
-{
-    MOCKER(drivers_ram_changed).stubs().will(returnValue(true));
-    MOCKER(copy_to_user).stubs().will(returnValue(1UL));
-    int ret = access_tracking_ram_change(nullptr, nullptr);
-    EXPECT_EQ(-EFAULT, ret);
-
-    GlobalMockObject::verify();
-    MOCKER(drivers_ram_changed).stubs().will(returnValue(true));
-    MOCKER(copy_to_user).stubs().will(returnValue(0UL));
-    ret = access_tracking_ram_change(nullptr, nullptr);
     EXPECT_EQ(0, ret);
 }
 

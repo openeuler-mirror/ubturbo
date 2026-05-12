@@ -285,40 +285,6 @@ TEST_F(DriversCoreTest, HandPageSizeSetCmd)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" int stub_tracking_ram_change(struct device *ldev, void __user *argp);
-extern "C" int node_ram_change_cmd(struct tracking_node_dev *node_dev, void __user *argp);
-TEST_F(DriversCoreTest, NodeRamChangeCmd)
-{
-    void __user *argp = NULL;
-    int ret;
-    trk_dev->ops = &stub_tracking_ops;
-    stub_tracking_ops.tracking_ram_change = stub_tracking_ram_change;
-    MOCKER(stub_tracking_ram_change).stubs().will(returnValue(-EINVAL));
-    ret = node_ram_change_cmd(node_dev, argp);
-    EXPECT_EQ(-EINVAL, ret);
-    GlobalMockObject::verify();
-
-    MOCKER(stub_tracking_ram_change).stubs().will(returnValue(0));
-    ret = node_ram_change_cmd(node_dev, argp);
-    EXPECT_EQ(0, ret);
-}
-
-extern "C" long handle_ram_change_cmd(struct tracking_node_dev *node_dev, void __user *argp);
-TEST_F(DriversCoreTest, HandleRamChangeCmd)
-{
-    struct tracking_node_dev node_dev;
-    void __user *argp = NULL;
-    long ret = 0;
-
-    MOCKER(node_ram_change_cmd).stubs().will(returnValue(-EINVAL));
-    ret = handle_ram_change_cmd(&node_dev, argp);
-    EXPECT_EQ(-EINVAL, ret);
-    GlobalMockObject::verify();
-
-    MOCKER(node_ram_change_cmd).stubs().will(returnValue(0));
-    ret = handle_ram_change_cmd(&node_dev, argp);
-    EXPECT_EQ(0, ret);
-}
 
 extern "C" long node_cdev_user_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 TEST_F(DriversCoreTest, NodeCdevUserIoctlTra)
@@ -360,18 +326,6 @@ TEST_F(DriversCoreTest, NodeCdevUserIoctlPgSize)
     EXPECT_EQ(0, ret);
 }
 
-TEST_F(DriversCoreTest, NodeCdevUserIoctlRamChange)
-{
-    struct file file;
-    unsigned int cmd = 0;
-    unsigned long arg = 0;
-    int ret;
-
-    cmd = SMAP_IOCTL_RAM_CHANGE;
-    MOCKER(handle_ram_change_cmd).stubs().will(returnValue(0));
-    ret = node_cdev_user_ioctl(&file, cmd, arg);
-    EXPECT_EQ(0, ret);
-}
 
 extern "C" int node_trk_data_read(struct tracking_node_dev *node_dev, void *buffer, u32 length);
 TEST_F(DriversCoreTest, NodeTrkDataRead)

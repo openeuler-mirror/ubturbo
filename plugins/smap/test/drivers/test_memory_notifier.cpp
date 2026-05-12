@@ -60,7 +60,7 @@ TEST_F(MemNotifierTest, memory_notifier_cb)
     MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(page_to_nid).stubs().will(returnValue(0));
     MOCKER(refresh_remote_ram).stubs().will(returnValue(0));
-    MOCKER(tracking_core_reinit_actc_buffer).stubs().will(returnValue(0));
+    MOCKER(set_reinit_pending_flag).stubs().will(ignoreReturnValue());
     ret = memory_notifier_cb(&mnb, MEM_ONLINE);
     EXPECT_EQ(0, ret);
 
@@ -85,11 +85,7 @@ TEST_F(MemNotifierTest, memory_notifier_cb_two)
     MOCKER(refresh_remote_ram).stubs()
         .will(returnValue(-EINVAL))
         .then(returnValue(0));
-    MOCKER(tracking_core_reinit_actc_buffer).stubs()
-        .will(returnValue(-EINVAL))
-        .then(returnValue(0));
-    ret = memory_notifier_cb(&mnb, MEM_OFFLINE);
-    EXPECT_EQ(-EINVAL, ret);
+    MOCKER(set_reinit_pending_flag).stubs().will(ignoreReturnValue());
     ret = memory_notifier_cb(&mnb, MEM_OFFLINE);
     EXPECT_EQ(-EINVAL, ret);
     ret = memory_notifier_cb(&mnb, MEM_OFFLINE);

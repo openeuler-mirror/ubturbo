@@ -423,33 +423,3 @@ TEST_F(DeviceTest, TestConfigureTrackingDevicesSuccess)
     int ret = ConfigureTrackingDevices(&manager);
     EXPECT_EQ(0, ret);
 }
-
-extern "C" int GetRamIsChange(struct ProcessManager *manager, int *change);
-TEST_F(DeviceTest, TestGetRamIsChangeOne)
-{
-    struct ProcessManager manager;
-    int *change;
-    MOCKER(FindFdByNode).stubs().will(returnValue(-1));
-    int ret = GetRamIsChange(&manager, change);
-    EXPECT_EQ(-1, ret);
-}
-
-TEST_F(DeviceTest, TestGetRamIsChangeTwo)
-{
-    struct ProcessManager manager;
-    int *change;
-    MOCKER(FindFdByNode).stubs().will(returnValue(0));
-    MOCKER(reinterpret_cast<int (*)(int, int, int *)>(ioctl)).stubs().will(returnValue(-1));
-    int ret = GetRamIsChange(&manager, change);
-    EXPECT_EQ(-1, ret);
-}
-
-TEST_F(DeviceTest, TestGetRamIsChangeThree)
-{
-    struct ProcessManager manager;
-    int *change;
-    MOCKER(FindFdByNode).stubs().will(returnValue(0));
-    MOCKER(reinterpret_cast<int (*)(int, int, int *)>(ioctl)).stubs().will(returnValue(0));
-    int ret = GetRamIsChange(&manager, change);
-    EXPECT_EQ(0, ret);
-}
