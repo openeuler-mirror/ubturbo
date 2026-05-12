@@ -53,7 +53,7 @@ static inline size_t CalcNumaConfigLen(void)
 /* CalcProcessConfigLen - Calculate process config length */
 static inline size_t CalcProcessConfigLen(int nrProcess)
 {
-    return nrProcess > 0 ? PAYLOAD_HEADER_LEN + (nrProcess * CONFIG_PROC_LEN) : 0;
+    return PAYLOAD_HEADER_LEN + (nrProcess * CONFIG_PROC_LEN);
 }
 
 /* GetProcessConfigLen - Get process config length from process payload header */
@@ -204,6 +204,14 @@ static void WriteNumaConfig(char *base)
     }
 }
 
+static void WriteEmptyProcessConfigs(char *base)
+{
+    char *processBase = JumpToProcessConfig(base);
+    struct PayloadHeader *processHeader = (struct PayloadHeader *)processBase;
+
+    processHeader->len = 0;
+}
+
 /*
  * InitSmapConfig - initialize smap config, including header and numa config
  *
@@ -213,7 +221,7 @@ static int InitSmapConfig(int fd)
 {
     int ret;
     char *addr;
-    size_t mapLen = CONFIG_HEADER_LEN + CalcNumaConfigLen();
+    size_t mapLen = CalcConfigLen(0);
     RunMode runMode = GetRunMode();
 
     // Set config file length
@@ -236,6 +244,7 @@ static int InitSmapConfig(int fd)
 
     // Initialize NumaConfig
     WriteNumaConfig(JumpToNumaConfig(addr));
+    WriteEmptyProcessConfigs(addr);
 
     UnmapConfig(addr, mapLen);
     return 0;
@@ -248,7 +257,7 @@ static inline bool IsRunModeValid(RunMode runMode)
 
 static bool IsConfigHeaderValid(struct SmapConfigHeader *header)
 {
-    if (header->ver != SMAP_CONFIG_VER) {
+    if (header->ver != SMAP_CONFIG_VER_V1) {
         SMAP_LOGGER_ERROR("Wrong smap config header ver: %hd.", header->ver);
         return false;
     }
@@ -260,7 +269,8 @@ static bool IsConfigHeaderValid(struct SmapConfigHeader *header)
         SMAP_LOGGER_ERROR("Wrong smap config header len: %hd.", header->headerLen);
         return false;
     }
-    if (header->totalLen < CONFIG_HEADER_LEN + CalcNumaConfigLen()) {
+    uint32_t minLen = CONFIG_HEADER_LEN + CalcNumaConfigLen();
+    if (header->totalLen < minLen) {
         SMAP_LOGGER_ERROR("Wrong smap config total len: %d.", header->totalLen);
         return false;
     }
@@ -497,6 +507,9 @@ static int WriteProcessConfig(char *processBase, struct ProcessPayload *p, int n
 
     SMAP_LOGGER_DEBUG("Enter WriteProcessConfig.");
     header->len = CONFIG_PROC_LEN * nrPayload;
+    if (header->len == 0) {
+        return 0;
+    }
     payload = (struct ProcessPayload *)JumpToProcessPayload(processBase);
     // memcpy_s return value is positive, so we use -ret
     ret = memcpy_s(payload, header->len, p, header->len);
@@ -522,8 +535,13 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
 {
     struct ProcessManager *manager = GetProcessManager();
     struct ProcessPayload *p, *tmp;
-    PidType type = GetPidType(manager);
-    int nrPayload = manager->nr[type];
+    int nrPayload = 0;
+
+    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
+        if (!attr->groupPolicy.enabled || attr->groupPolicy.groupCount <= 0) {
+            nrPayload++;
+        }
+    }
 
     SMAP_LOGGER_DEBUG("BuildAllProcessPayload nrPayload %d.", nrPayload);
     if (nrPayload == 0) {
@@ -541,6 +559,9 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
 
     tmp = p;
     for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
+        if (attr->groupPolicy.enabled && attr->groupPolicy.groupCount > 0) {
+            continue;
+        }
         tmp->pid = attr->pid;
         tmp->scanType = attr->scanType;
         tmp->type = attr->type;
@@ -576,16 +597,15 @@ static int MapAndWriteProcessConfig(int fd, size_t mapLen, struct ProcessPayload
         SMAP_LOGGER_ERROR("Map smap config failed.");
         return -EBADF;
     }
-    if (nrPayload > 0) {
-        processBase = JumpToProcessConfig(addr);
-        ret = WriteProcessConfig(processBase, payload, nrPayload);
-        if (ret) {
-            SMAP_LOGGER_ERROR("Write process config failed: %d.", ret);
-            UnmapConfig(addr, mapLen);
-            return ret;
-        }
-        SMAP_LOGGER_INFO("All process config written.");
+
+    processBase = JumpToProcessConfig(addr);
+    ret = WriteProcessConfig(processBase, payload, nrPayload);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Write process config failed: %d.", ret);
+        UnmapConfig(addr, mapLen);
+        return ret;
     }
+    SMAP_LOGGER_INFO("All process config written.");
 
     WriteHeader(addr, runMode, mapLen);
     UnmapConfig(addr, mapLen);
@@ -597,8 +617,6 @@ static int ChangeProcessConfig(int fd)
     int ret, err;
     int nrPayload;
     size_t oldConfigLen, newConfigLen;
-    char *addr;
-    char *processBase;
     struct ProcessPayload *payload = NULL;
     struct SmapConfigHeader header;
 
@@ -656,7 +674,6 @@ static int ParseConfig(int fd, struct SmapConfigHeader *header)
     char *addr;
     char *numaBase;
     char *processBase;
-    uint32_t *payloadLen;
     size_t mapLen = header->totalLen;
 
     SMAP_LOGGER_DEBUG("Enter ParseConfig.");
@@ -689,19 +706,22 @@ static int ParseConfig(int fd, struct SmapConfigHeader *header)
     }
 
     // Parse ProcessConfig
-    if (HasProcessConfig(mapLen)) {
-        processBase = JumpToProcessConfig(addr);
-        if (!IsProcessConfigValid(processBase, mapLen)) {
-            SMAP_LOGGER_ERROR("Detected invalid process config.");
-            UnmapConfig(addr, mapLen);
-            return -EINVAL;
-        }
-        ret = RecoverProcessConfig(processBase);
-        if (ret) {
-            SMAP_LOGGER_ERROR("Parse process config failed: %d.", ret);
-            UnmapConfig(addr, mapLen);
-            return ret;
-        }
+    if (!HasProcessConfig(mapLen)) {
+        UnmapConfig(addr, mapLen);
+        SMAP_LOGGER_DEBUG("Exit ParseConfig.");
+        return 0;
+    }
+    processBase = JumpToProcessConfig(addr);
+    if (!IsProcessConfigValid(processBase, mapLen)) {
+        SMAP_LOGGER_ERROR("Detected invalid process config.");
+        UnmapConfig(addr, mapLen);
+        return -EINVAL;
+    }
+    ret = RecoverProcessConfig(processBase);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Parse process config failed: %d.", ret);
+        UnmapConfig(addr, mapLen);
+        return ret;
     }
 
     UnmapConfig(addr, mapLen);

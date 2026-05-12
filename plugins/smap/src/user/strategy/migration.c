@@ -25,6 +25,7 @@
 #include "manage/smap_ioctl.h"
 #include "manage/device.h"
 #include "strategy.h"
+#include "grouped_strategy.h"
 #include "period_config.h"
 #include "securec.h"
 #include "smap_env.h"
@@ -155,6 +156,11 @@ void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager)
         fromNid = mMsg->migList[i].from;
         toNid = mMsg->migList[i].to;
         successMigCount = mMsg->migList[i].nr - mMsg->migList[i].failedMigNr;
+
+        if (current->groupPolicy.enabled) {
+            UpdateGroupedMigrationResult(current, fromNid, toNid, successMigCount);
+            continue;
+        }
 
         if (toNid >= manager->nrLocalNuma) {
             toNid = mMsg->migList[i].to - manager->nrLocalNuma;

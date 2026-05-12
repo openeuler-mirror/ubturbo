@@ -88,6 +88,57 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutHandlerEncodeResponseFailed)
     EXPECT_EQ(1, ret);
 }
 
+TEST_F(TestTurboModuleSmap, SmapMigrateOutGroupedHandlerTest)
+{
+    TurboByteBuffer inputBuffer;
+    TurboByteBuffer outputBuffer;
+    GroupedMigrateOutMsg msg = { 0 };
+    msg.count = 1;
+    msg.payload[0].pid = 1;
+    msg.payload[0].groupCount = 1;
+    msg.payload[0].groups[0].localCount = 1;
+    msg.payload[0].groups[0].locals[0].nid = 0;
+    msg.payload[0].groups[0].locals[0].size = 2048;
+    msg.payload[0].groups[0].targetCount = 1;
+    msg.payload[0].groups[0].targets[0].nid = 4;
+    msg.payload[0].groups[0].targets[0].size = 4096;
+    int pidType = 1;
+
+    StubSmapPtr();
+    SmapMigrateOutGroupedCodec codec;
+    codec.EncodeRequest(inputBuffer, &msg, pidType);
+    RetCode result = SmapMigrateOutGroupedHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(result, TURBO_OK);
+
+    int ret = codec.DecodeResponse(outputBuffer);
+    EXPECT_EQ(ret, 0);
+}
+
+TEST_F(TestTurboModuleSmap, SmapMigrateOutGroupedHandlerEncodeResponseFailed)
+{
+    int ret;
+    TurboByteBuffer inputBuffer;
+    TurboByteBuffer outputBuffer;
+
+    StubSmapPtr();
+    MOCKER_CPP(&SmapMigrateOutGroupedCodec::DecodeRequest, int(*)(const TurboByteBuffer &buffer,
+        GroupedMigrateOutMsg &msg, int &pidType))
+        .stubs()
+        .will(returnValue(0))
+        .then(returnValue(1));
+
+    MOCKER_CPP(&SmapMigrateOutGroupedCodec::EncodeResponse, int(*)(TurboByteBuffer &buffer,
+        int returnValue))
+        .stubs()
+        .will(returnValue(1));
+
+    ret = SmapMigrateOutGroupedHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(1, ret);
+
+    ret = SmapMigrateOutGroupedHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(1, ret);
+}
+
 TEST_F(TestTurboModuleSmap, SmapMigrateBackHandlerTest)
 {
     TurboByteBuffer inputBuffer;

@@ -94,6 +94,62 @@ int SmapMigrateOutCodec::DecodeResponse(TurboByteBuffer &buffer)
     return *static_cast<int *>(static_cast<void *>(buffer.data));
 }
 
+int SmapMigrateOutGroupedCodec::EncodeRequest(TurboByteBuffer &buffer, GroupedMigrateOutMsg *msg, int pidType)
+{
+    size_t size = sizeof(int) + sizeof(GroupedMigrateOutMsg);
+    buffer.data = new (std::nothrow) uint8_t[size];
+    if (!buffer.data) {
+        return -EINVAL;
+    }
+    int ret = memcpy_s(buffer.data, size, &pidType, sizeof(int));
+    if (ret) {
+        SmapResetBuf(&buffer);
+        return ret;
+    }
+    ret = memcpy_s(buffer.data + sizeof(int), size - sizeof(int), msg, sizeof(GroupedMigrateOutMsg));
+    if (ret) {
+        SmapResetBuf(&buffer);
+        return ret;
+    }
+    buffer.len = size;
+    return ret;
+}
+
+int SmapMigrateOutGroupedCodec::DecodeRequest(const TurboByteBuffer &buffer, GroupedMigrateOutMsg &msg, int &pidType)
+{
+    if (buffer.len < sizeof(int) + sizeof(GroupedMigrateOutMsg) || !buffer.data) {
+        return -EINVAL;
+    }
+    pidType = *static_cast<int *>(static_cast<void *>(buffer.data));
+    msg = *static_cast<GroupedMigrateOutMsg *>(static_cast<void *>(buffer.data + sizeof(int)));
+    return 0;
+}
+
+int SmapMigrateOutGroupedCodec::EncodeResponse(TurboByteBuffer &buffer, int returnValue)
+{
+    size_t size = sizeof(int);
+    buffer.data = new (std::nothrow) uint8_t[size];
+    if (!buffer.data) {
+        return -EINVAL;
+    }
+    int ret = memcpy_s(buffer.data, size, &returnValue, sizeof(int));
+    if (ret) {
+        SmapResetBuf(&buffer);
+        return ret;
+    }
+    buffer.len = size;
+    buffer.freeFunc = SmapDeleteData;
+    return ret;
+}
+
+int SmapMigrateOutGroupedCodec::DecodeResponse(TurboByteBuffer &buffer)
+{
+    if (buffer.len < sizeof(int)) {
+        return IPC_ERROR;
+    }
+    return *static_cast<int *>(static_cast<void *>(buffer.data));
+}
+
 int SmapMigrateBackCodec::EncodeRequest(TurboByteBuffer &buffer, MigrateBackMsg *msg)
 {
     size_t size = sizeof(MigrateBackMsg);

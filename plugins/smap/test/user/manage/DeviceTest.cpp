@@ -5,6 +5,7 @@
 
 #include <cstdlib>
 #include <cerrno>
+#include <cstdio>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <dirent.h>
@@ -18,6 +19,14 @@
 
 
 using namespace std;
+
+static struct dirent MakeDirent(const char *name)
+{
+    struct dirent entry = {};
+
+    (void)snprintf(entry.d_name, sizeof(entry.d_name), "%s", name);
+    return entry;
+}
 
 
 class DeviceTest : public ::testing::Test {

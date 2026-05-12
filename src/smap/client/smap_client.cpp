@@ -49,6 +49,35 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
     return ret;
 }
 
+int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType)
+{
+    TurboByteBuffer send;
+    TurboByteBuffer recv;
+    SmapMigrateOutGroupedCodec handler;
+    if (!msg) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] Migrate out grouped msg is null.\n");
+        return -EINVAL;
+    }
+    int ret = handler.EncodeRequest(send, msg, pidType);
+    if (ret) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_migrate_out_grouped Encode request error %d.\n", ret);
+        return IPC_ERROR;
+    }
+    uint32_t ipcRet = UBTurboFunctionCaller("ubturbo_smap_migrate_out_grouped", send, recv);
+    if (ipcRet != IPC_OK) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] Call ubturbo_smap_migrate_out_grouped error %u.\n", ipcRet);
+        delete[] send.data;
+        return ipcRet;
+    }
+    ret = handler.DecodeResponse(recv);
+    if (ret == IPC_ERROR) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_migrate_out_grouped Decode response error %d.\n", ret);
+    }
+    delete[] send.data;
+    delete[] recv.data;
+    return ret;
+}
+
 int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
 {
     TurboByteBuffer send;

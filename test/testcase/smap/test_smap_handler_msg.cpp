@@ -89,6 +89,55 @@ TEST_F(TestSmapHandlerMsg, SmapMigrateOutCodecEncodeResponseFailed)
     EXPECT_EQ(result, 1);
 }
 
+TEST_F(TestSmapHandlerMsg, SmapMigrateOutGroupedCodecEncodeRequestFailed)
+{
+    TurboByteBuffer inputBuffer;
+    GroupedMigrateOutMsg msg = {0};
+    int pidType;
+
+    SmapMigrateOutGroupedCodec codec;
+    g_mock_new_should_fail = true;
+    int result = codec.EncodeRequest(inputBuffer, &msg, pidType);
+    EXPECT_EQ(result, -EINVAL);
+    g_mock_new_should_fail = false;
+
+    MOCKER(memcpy_s).stubs().will(returnValue(1)).then(returnValue(0)).then(returnValue(NUM_2));
+
+    result = codec.EncodeRequest(inputBuffer, &msg, pidType);
+    EXPECT_EQ(result, 1);
+
+    result = codec.EncodeRequest(inputBuffer, &msg, pidType);
+    EXPECT_EQ(result, NUM_2);
+}
+
+TEST_F(TestSmapHandlerMsg, SmapMigrateOutGroupedCodecDecodeRequestFailed)
+{
+    TurboByteBuffer inputBuffer;
+    GroupedMigrateOutMsg msg = {0};
+    int pidType;
+
+    SmapMigrateOutGroupedCodec codec;
+    int result = codec.DecodeRequest(inputBuffer, msg, pidType);
+    EXPECT_EQ(result, -EINVAL);
+}
+
+TEST_F(TestSmapHandlerMsg, SmapMigrateOutGroupedCodecEncodeResponseFailed)
+{
+    TurboByteBuffer inputBuffer;
+    int ret;
+
+    SmapMigrateOutGroupedCodec codec;
+    g_mock_new_should_fail = true;
+    int result = codec.EncodeResponse(inputBuffer, ret);
+    EXPECT_EQ(result, -EINVAL);
+    g_mock_new_should_fail = false;
+
+    MOCKER(memcpy_s).stubs().will(returnValue(1));
+
+    result = codec.EncodeResponse(inputBuffer, ret);
+    EXPECT_EQ(result, 1);
+}
+
 TEST_F(TestSmapHandlerMsg, SmapMigrateBackCodecEncodeRequestFailed)
 {
     TurboByteBuffer inputBuffer;

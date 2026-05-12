@@ -136,6 +136,7 @@ list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/period_config.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/migration.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/separate_strategy.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/strategy.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/grouped_strategy.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/advanced-strategy/scene.c)
 list(APPEND TEST_SRC ${CMAKE_CURRENT_LIST_DIR}/smap_main.cpp)
 

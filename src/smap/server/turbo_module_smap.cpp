@@ -36,6 +36,7 @@ constexpr const char *LIB_SMAP_PATH = "/usr/lib64/libsmap.so";
 
 static void *g_smapHandler = nullptr;
 static SmapMigrateOutFunc g_smapMigrateOut = nullptr;
+static SmapMigrateOutGroupedFunc g_smapMigrateOutGrouped = nullptr;
 static SmapMigrateBackFunc g_smapMigrateBack = nullptr;
 static SmapRemoveFunc g_smapRemove = nullptr;
 static SmapEnableNodeFunc g_smapEnableNode = nullptr;
@@ -69,6 +70,27 @@ RetCode SmapMigrateOutHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffe
     ret = codec.EncodeResponse(outputBuffer, result);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] ubturbo_smap_migrate_out EncodeResponse error " << ret;
+        return TURBO_ERROR;
+    }
+    return TURBO_OK;
+}
+
+RetCode SmapMigrateOutGroupedHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
+{
+    int pidType;
+    GroupedMigrateOutMsg msg{};
+    SmapMigrateOutGroupedCodec codec;
+    int ret = codec.DecodeRequest(inputBuffer, msg, pidType);
+    if (ret) {
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
+            << "[Smap] ubturbo_smap_migrate_out_grouped DecodeRequest error " << ret;
+        return TURBO_ERROR;
+    }
+    int result = g_smapMigrateOutGrouped(&msg, pidType);
+    ret = codec.EncodeResponse(outputBuffer, result);
+    if (ret) {
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
+            << "[Smap] ubturbo_smap_migrate_out_grouped EncodeResponse error " << ret;
         return TURBO_ERROR;
     }
     return TURBO_OK;
@@ -483,6 +505,11 @@ int StubSmapMigrateOut(struct MigrateOutMsg *msg, int pidType)
     return 0;  // 模拟成功
 }
 
+int StubSmapMigrateOutGrouped(struct GroupedMigrateOutMsg *msg, int pidType)
+{
+    return 0;
+}
+
 int StubSmapMigrateBack(struct MigrateBackMsg *msg)
 {
     return 0;
@@ -576,6 +603,7 @@ int StubSmapQueryRemoteNumaFreq(uint16_t *numa, uint64_t *freq, uint16_t length)
 void StubSmapPtr()
 {
     g_smapMigrateOut = StubSmapMigrateOut;
+    g_smapMigrateOutGrouped = StubSmapMigrateOutGrouped;
     g_smapMigrateBack = StubSmapMigrateBack;
     g_smapRemove = StubSmapRemove;
     g_smapEnableNode = StubSmapEnableNode;
@@ -607,6 +635,8 @@ int OpenSmapHandler()
     }
 
     g_smapMigrateOut = (SmapMigrateOutFunc)dlsym(g_smapHandler, "ubturbo_smap_migrate_out");
+    g_smapMigrateOutGrouped = (SmapMigrateOutGroupedFunc)dlsym(g_smapHandler,
+                                                               "ubturbo_smap_migrate_out_grouped");
     g_smapMigrateBack = (SmapMigrateBackFunc)dlsym(g_smapHandler, "ubturbo_smap_migrate_back");
     g_smapRemove = (SmapRemoveFunc)dlsym(g_smapHandler, "ubturbo_smap_remove");
     g_smapEnableNode = (SmapEnableNodeFunc)dlsym(g_smapHandler, "ubturbo_smap_node_enable");
@@ -629,11 +659,12 @@ int OpenSmapHandler()
     g_smapQueryProcessConfig = (SmapQueryProcessConfigFunc)dlsym(g_smapHandler, "ubturbo_smap_process_config_query");
     g_smapQueryRemoteNumaFreq = (SmapQueryRemoteNumaFreqFunc)dlsym(g_smapHandler,
                                                                    "ubturbo_smap_remote_numa_freq_query");
-    flag = !g_smapMigrateOut || !g_smapMigrateBack || !g_smapRemove || !g_smapEnableNode || !g_smapInit ||
-           !g_smapStop || !g_smapUrgentMigrateOut || !g_setSmapRemoteNumaInfo || !g_smapQueryVmFreq ||
-           !g_setSmapRunMode || !g_smapIsRunning || !g_smapMigrateOutSync || !g_smapAddProcessTracking ||
-           !g_smapRemoveProcessTracking || !g_smapEnableProcessMigrate || !g_smapMigrateRemoteNuma ||
-           !g_smapMigratePidRemoteNuma || !g_smapQueryProcessConfig || !g_smapQueryRemoteNumaFreq;
+    flag = !g_smapMigrateOut || !g_smapMigrateOutGrouped || !g_smapMigrateBack || !g_smapRemove ||
+           !g_smapEnableNode || !g_smapInit || !g_smapStop || !g_smapUrgentMigrateOut ||
+           !g_setSmapRemoteNumaInfo || !g_smapQueryVmFreq || !g_setSmapRunMode || !g_smapIsRunning ||
+           !g_smapMigrateOutSync || !g_smapAddProcessTracking || !g_smapRemoveProcessTracking ||
+           !g_smapEnableProcessMigrate || !g_smapMigrateRemoteNuma || !g_smapMigratePidRemoteNuma ||
+           !g_smapQueryProcessConfig || !g_smapQueryRemoteNumaFreq;
     if (flag) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] Smap function not found";
         return -EINVAL;
@@ -653,6 +684,7 @@ void CloseSmapHandler()
 void RegSmapHandler()
 {
     uint32_t ret = UBTurboRegIpcService("ubturbo_smap_migrate_out", SmapMigrateOutHandler);
+    ret |= UBTurboRegIpcService("ubturbo_smap_migrate_out_grouped", SmapMigrateOutGroupedHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_migrate_back", SmapMigrateBackHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_remove", SmapRemoveHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_node_enable", SmapEnableNodeHandler);
@@ -679,6 +711,7 @@ void RegSmapHandler()
 void UnRegSmapHandler()
 {
     uint32_t ret = UBTurboUnRegIpcService("ubturbo_smap_migrate_out");
+    ret |= UBTurboUnRegIpcService("ubturbo_smap_migrate_out_grouped");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_migrate_back");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_remove");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_node_enable");

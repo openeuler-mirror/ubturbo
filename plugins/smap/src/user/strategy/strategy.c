@@ -17,6 +17,7 @@
 #include "smap_user_log.h"
 #include "manage/manage.h"
 #include "separate_strategy.h"
+#include "grouped_strategy.h"
 #include "strategy.h"
 
 uint64_t GetNrFreePagesByNode(int nid)
@@ -110,6 +111,9 @@ int RunStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]
         return -EINVAL;
     }
     if (IsHugeMode()) {
+        if (process->groupPolicy.enabled) {
+            return GroupedMigrationStrategy(process, mlist);
+        }
         if (IsMultiNumaVm(process)) {
             return SeparateStrategyMultiNumaVm(process, mlist);
         } else {

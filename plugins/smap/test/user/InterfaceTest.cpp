@@ -755,6 +755,191 @@ TEST_F(InterfaceTest, TestSmapMigrateOutFive)
     EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
 }
 
+extern "C" int BuildGroupPolicy(const struct GroupedMigrateOutPayload *payload,
+    const uint64_t numaPages[MAX_NODES], GroupMigrationPolicy *policy);
+TEST_F(InterfaceTest, TestBuildGroupPolicyInitSharedTargetUsedPages)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    GroupMigrationPolicy policy = {};
+    uint64_t numaPages[MAX_NODES] = { 0 };
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    payload.pid = 1234;
+    payload.groupCount = 2;
+    payload.groups[0].localCount = 1;
+    payload.groups[0].locals[0].nid = 0;
+    payload.groups[0].locals[0].size = 2048;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 4;
+    payload.groups[0].targets[0].size = 4096;
+    payload.groups[1].localCount = 1;
+    payload.groups[1].locals[0].nid = 1;
+    payload.groups[1].locals[0].size = 2048;
+    payload.groups[1].targetCount = 1;
+    payload.groups[1].targets[0].nid = 4;
+    payload.groups[1].targets[0].size = 8192;
+    numaPages[4] = 3;
+
+    int ret = BuildGroupPolicy(&payload, numaPages, &policy);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ((uint64_t)1, policy.groups[0].targets[0].usedPages);
+    EXPECT_EQ((uint64_t)2, policy.groups[1].targets[0].usedPages);
+}
+
+TEST_F(InterfaceTest, TestBuildGroupPolicyRejectUnmanagedRemotePages)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    GroupMigrationPolicy policy = {};
+    uint64_t numaPages[MAX_NODES] = { 0 };
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    payload.pid = 1234;
+    payload.groupCount = 1;
+    payload.groups[0].localCount = 1;
+    payload.groups[0].locals[0].nid = 0;
+    payload.groups[0].locals[0].size = 2048;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 4;
+    payload.groups[0].targets[0].size = 4096;
+    numaPages[5] = 1;
+
+    int ret = BuildGroupPolicy(&payload, numaPages, &policy);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestBuildGroupPolicyRejectRemotePagesExceedQuota)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    GroupMigrationPolicy policy = {};
+    uint64_t numaPages[MAX_NODES] = { 0 };
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    payload.pid = 1234;
+    payload.groupCount = 1;
+    payload.groups[0].localCount = 1;
+    payload.groups[0].locals[0].nid = 0;
+    payload.groups[0].locals[0].size = 2048;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 4;
+    payload.groups[0].targets[0].size = 2048;
+    numaPages[4] = 2;
+
+    int ret = BuildGroupPolicy(&payload, numaPages, &policy);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int CheckGroupedTarget(const struct MigrationGroup *group, int payloadIdx, int groupIdx);
+extern "C" bool IsRemoteNidValid(int nid);
+TEST_F(InterfaceTest, TestCheckGroupedTargetRejectForbiddenTarget)
+{
+    struct MigrationGroup group = {};
+
+    group.targetCount = 1;
+    group.targets[0].nid = 4;
+    group.targets[0].size = 2048;
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    EnvAtomicSet(&g_forbiddenNodes[4], 1);
+
+    int ret = CheckGroupedTarget(&group, 0, 0);
+    EXPECT_EQ(-EAGAIN, ret);
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+extern "C" int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int payloadIdx);
+TEST_F(InterfaceTest, TestCheckGroupedPayloadAcceptsHigherLocalNid)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    int oldNrLocalNuma = g_processManager.nrLocalNuma;
+
+    g_processManager.nrLocalNuma = 6;
+    payload.pid = 1234;
+    payload.groupCount = 1;
+    payload.groups[0].localCount = 1;
+    payload.groups[0].locals[0].nid = 5;
+    payload.groups[0].locals[0].size = 2048;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 6;
+    payload.groups[0].targets[0].size = 2048;
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+
+    int ret = CheckGroupedPayload(&payload, 0);
+    EXPECT_EQ(0, ret);
+    g_processManager.nrLocalNuma = oldNrLocalNuma;
+}
+
+extern "C" int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pidType);
+extern "C" int BuildGroupedPolicies(struct GroupedMigrateOutMsg *msg,
+                                    GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT]);
+extern "C" int ProcessAddGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap);
+extern "C" int AddGroupedProcessesToGlobalManager(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                                  GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT],
+                                                  bool keepTracking[MAX_NR_GROUPED_MIGOUT]);
+TEST_F(InterfaceTest, TestGroupedMigrateOutRollsBackTrackingWhenManageFailed)
+{
+    struct GroupedMigrateOutMsg msg = {};
+
+    msg.count = 1;
+    msg.payload[0].pid = 1234;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckGroupedMigrateOutMsg).stubs().will(returnValue(0));
+    MOCKER(BuildGroupedPolicies).stubs().will(returnValue(0));
+    MOCKER(ProcessAddGroupedTrackingManage).stubs().will(returnValue(0));
+    MOCKER(AddGroupedProcessesToGlobalManager).stubs().will(returnValue(-ENOMEM));
+    MOCKER(AccessIoctlRemovePid).expects(once()).will(returnValue(0));
+
+    int ret = ubturbo_smap_migrate_out_grouped(&msg, VM_TYPE);
+    EXPECT_EQ(-ENOMEM, ret);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+    EnvAtomicSet(&g_status, 0);
+}
+
+TEST_F(InterfaceTest, TestGroupedManageFailureKeepsExistingPidTracking)
+{
+    struct GroupedMigrateOutMsg msg = {};
+    uint32_t nodeBitmap[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT] = {};
+    bool keepTracking[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    ProcessAttr existing = {};
+
+    msg.count = 2;
+    msg.payload[0].pid = 1234;
+    msg.payload[1].pid = 5678;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&existing)).then(returnValue((ProcessAttr *)nullptr));
+    MOCKER(ProcessAddGroupedManage).stubs().will(returnValue(0)).then(returnValue(-ENOMEM));
+
+    int ret = AddGroupedProcessesToGlobalManager(&msg, nodeBitmap, policies, keepTracking);
+    EXPECT_EQ(-ENOMEM, ret);
+    EXPECT_TRUE(keepTracking[0]);
+    EXPECT_FALSE(keepTracking[1]);
+}
+
+extern "C" void RollbackGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, const bool *keepTracking);
+static int CheckGroupedRollbackRemovePayload(int len, struct AccessRemovePidPayload *payload)
+{
+    EXPECT_EQ(1, len);
+    EXPECT_EQ(5678, payload[0].pid);
+    return 0;
+}
+
+TEST_F(InterfaceTest, TestGroupedTrackingRollbackSkipsKeptPid)
+{
+    struct GroupedMigrateOutMsg msg = {};
+    bool keepTracking[MAX_NR_GROUPED_MIGOUT] = { 0 };
+
+    msg.count = 2;
+    msg.payload[0].pid = 1234;
+    msg.payload[1].pid = 5678;
+    keepTracking[0] = true;
+    keepTracking[1] = false;
+    MOCKER(AccessIoctlRemovePid).expects(once()).will(invoke(CheckGroupedRollbackRemovePayload));
+
+    RollbackGroupedTrackingManage(&msg, keepTracking);
+}
+
 TEST_F(InterfaceTest, TestSmapMigrateBackWithSmapIsNotRunning)
 {
     int ret;
@@ -783,6 +968,7 @@ TEST_F(InterfaceTest, TestSmapMigrateBackWithMessageCheckFailed)
 }
 extern "C" bool CheckProcessIdle(int nid);
 extern "C" bool IsAllL2NodePidInState(ProcessState state, int l2Node);
+extern "C" int CheckMigrateBackReadyMsg(struct MigrateBackMsg *msg);
 TEST_F(InterfaceTest, TestCheckProcessIdle)
 {
     MOCKER(IsAllL2NodePidInState).stubs().will(returnValue(true));
@@ -804,11 +990,16 @@ TEST_F(InterfaceTest, TestSmapMigrateBackWithProcessIdleCheckFailed)
     int ret;
     struct MigrateBackMsg msg = {};
     msg.count = 1;
+    msg.payload[0].srcNid = 4;
     EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
     MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(0));
     MOCKER(CheckProcessIdle).stubs().will(returnValue(false));
     ret = ubturbo_smap_migrate_back(&msg);
     EXPECT_EQ(-EAGAIN, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_USER, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
 }
 
 TEST_F(InterfaceTest, TestSmapMigrateBackSuccess)
@@ -821,12 +1012,74 @@ TEST_F(InterfaceTest, TestSmapMigrateBackSuccess)
     };
 
     EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
     MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
-    MOCKER(SetNodeForbidden).stubs().will(ignoreReturnValue());
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(0));
+    MOCKER(CheckProcessIdle).stubs().will(returnValue(true));
     MOCKER(IoctlHandler).stubs().will(returnValue(0));
     ret = ubturbo_smap_migrate_back(&msgc);
     EXPECT_EQ(0, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_MIGBACK_DONE, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
     EnvAtomicSet(&g_status, 0);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateBackReadyFailedClearBusyOnly)
+{
+    struct MigrateBackMsg msg = {
+        .taskID = 1,
+        .count = 1,
+        .payload = { { 4, 5, 1 } }
+    };
+
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
+    MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(-EAGAIN));
+
+    int ret = ubturbo_smap_migrate_back(&msg);
+    EXPECT_EQ(-EAGAIN, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_USER, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateBackIoctlFailedClearBusyOnly)
+{
+    struct MigrateBackMsg msg = {
+        .taskID = 1,
+        .count = 1,
+        .payload = { { 4, 5, 1 } }
+    };
+
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
+    MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(0));
+    MOCKER(CheckProcessIdle).stubs().will(returnValue(true));
+    MOCKER(IoctlHandler).stubs().will(returnValue(-EBADF));
+
+    int ret = ubturbo_smap_migrate_back(&msg);
+    EXPECT_EQ(-EBADF, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_USER, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateBackRejectBusyNode)
+{
+    struct MigrateBackMsg msg = {
+        .taskID = 1,
+        .count = 1,
+        .payload = { { 4, 5, 1 } }
+    };
+
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_MIGBACK_BUSY);
+    MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+
+    int ret = ubturbo_smap_migrate_back(&msg);
+    EXPECT_EQ(-EAGAIN, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_MIGBACK_BUSY, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
 }
 
 extern "C" int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType);
@@ -848,6 +1101,37 @@ TEST_F(InterfaceTest, TestCheckSmapRemoveMsgWithIsPidTypeValidFailed)
     MOCKER(IsCountValid).stubs().will(returnValue(true));
     MOCKER(IsPidTypeValid).stubs().will(returnValue(false));
     ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgIgnoresNidFields)
+{
+    struct RemoveMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 0;
+    msg.payload[0].nid[0] = -1;
+    int pidType = VM_TYPE;
+
+    MOCKER(IsCountValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+
+    int ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgRejectsDuplicatePid)
+{
+    struct RemoveMsg msg = {};
+    msg.count = 2;
+    msg.payload[0].pid = 1024;
+    msg.payload[1].pid = 1024;
+    int pidType = VM_TYPE;
+
+    MOCKER(IsCountValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+
+    int ret = CheckSmapRemoveMsg(&msg, pidType);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -938,6 +1222,7 @@ TEST_F(InterfaceTest, TestSmapEnableNodeWithEnable)
     msg.nid = 4;
     msg.enable = ENABLE_NUMA_MIG;
     EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER | NODE_FORBIDDEN_MIGBACK_DONE);
     ret = ubturbo_smap_node_enable(&msg);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(g_forbiddenNodes[4].counter, 0);
@@ -953,6 +1238,23 @@ TEST_F(InterfaceTest, TestSmapEnableNodeWithDisable)
     ret = ubturbo_smap_node_enable(&msg);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(g_forbiddenNodes[4].counter, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+TEST_F(InterfaceTest, TestSmapEnableNodeRejectMigrateBackBusy)
+{
+    int ret;
+    struct EnableNodeMsg msg = {};
+    msg.nid = 4;
+    msg.enable = ENABLE_NUMA_MIG;
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4],
+                 NODE_FORBIDDEN_USER | NODE_FORBIDDEN_MIGBACK_DONE | NODE_FORBIDDEN_MIGBACK_BUSY);
+    ret = ubturbo_smap_node_enable(&msg);
+    EXPECT_EQ(-EAGAIN, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_USER | NODE_FORBIDDEN_MIGBACK_DONE | NODE_FORBIDDEN_MIGBACK_BUSY,
+              EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
 }
 
 TEST_F(InterfaceTest, TestSmapEnableNodeWithInvalidEnable)

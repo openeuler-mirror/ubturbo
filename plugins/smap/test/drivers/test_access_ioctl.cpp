@@ -868,4 +868,3 @@ TEST_F(AccessIoctlTestKernel, AccessIoctlInit)
     int ret = access_ioctl_init();
     EXPECT_EQ(ret, 0);
 }
-

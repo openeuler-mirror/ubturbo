@@ -68,7 +68,7 @@ TEST_F(SmapConfigTest, TestCalcProcessConfigLen)
     int nrProcess = 4;
 
     ret = CalcProcessConfigLen(0);
-    EXPECT_EQ(0, ret);
+    EXPECT_EQ(PAYLOAD_HEADER_LEN, ret);
 
     ret = CalcProcessConfigLen(nrProcess);
     EXPECT_EQ(PAYLOAD_HEADER_LEN + (nrProcess * CONFIG_PROC_LEN), ret);
@@ -304,6 +304,7 @@ TEST_F(SmapConfigTest, TestWriteNumaConfig)
 }
 
 extern "C" void UnmapConfig(char *addr, size_t len);
+extern "C" void WriteEmptyProcessConfigs(char *base);
 extern "C" int InitSmapConfig(int fd);
 TEST_F(SmapConfigTest, TestInitSmapConfigErrOne)
 {
@@ -339,6 +340,7 @@ TEST_F(SmapConfigTest, TestInitSmapConfig)
     MOCKER(MapConfig).stubs().will(returnValue(&addr));
     MOCKER(WriteHeader).stubs().will(ignoreReturnValue());
     MOCKER(WriteNumaConfig).stubs().will(ignoreReturnValue());
+    MOCKER(WriteEmptyProcessConfigs).stubs().will(ignoreReturnValue());
     MOCKER(UnmapConfig).stubs().will(ignoreReturnValue());
     ret = InitSmapConfig(fd);
     EXPECT_EQ(0, ret);
@@ -692,6 +694,8 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
 
     ASSERT_NE(nullptr, attr1);
     ASSERT_NE(nullptr, attr2);
+    memset(attr1, 0, sizeof(*attr1));
+    memset(attr2, 0, sizeof(*attr2));
 
     attr1->type = VM_TYPE;
     attr1->pid = 1025;
@@ -744,6 +748,8 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
 
     ASSERT_NE(nullptr, attr1);
     ASSERT_NE(nullptr, attr2);
+    memset(attr1, 0, sizeof(*attr1));
+    memset(attr2, 0, sizeof(*attr2));
 
     attr1->type = PROCESS_TYPE;
     attr1->pid = 1234;
@@ -802,6 +808,15 @@ TEST_F(SmapConfigTest, TestMapAndWriteProcessConfig)
     MOCKER(WriteProcessConfig).stubs().will(returnValue(-EINVAL));
     ret = MapAndWriteProcessConfig(fd, mapLen, &payload, nrPayload);
     EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(MapConfig).stubs().will(returnValue(&addr));
+    MOCKER(JumpToProcessConfig).stubs().will(returnValue(&processBase));
+    MOCKER(WriteProcessConfig).stubs().will(returnValue(0));
+    MOCKER(WriteHeader).stubs().will(ignoreReturnValue());
+    MOCKER(UnmapConfig).stubs().will(ignoreReturnValue());
+    ret = MapAndWriteProcessConfig(fd, mapLen, &payload, nrPayload);
+    EXPECT_EQ(0, ret);
 }
 
 TEST_F(SmapConfigTest, TestMapAndWriteProcessConfigZeroPayload)
@@ -810,11 +825,13 @@ TEST_F(SmapConfigTest, TestMapAndWriteProcessConfigZeroPayload)
     int fd;
     int nrPayload = 0;
     char addr;
+    char processBase;
     size_t mapLen;
     struct ProcessPayload payload;
 
     MOCKER(MapConfig).stubs().will(returnValue(&addr));
-    MOCKER(JumpToProcessConfig).expects(never()).will(returnValue(static_cast<char *>(nullptr)));
+    MOCKER(JumpToProcessConfig).stubs().will(returnValue(&processBase));
+    MOCKER(WriteProcessConfig).stubs().will(returnValue(0));
     MOCKER(WriteHeader).stubs().will(ignoreReturnValue());
     MOCKER(UnmapConfig).stubs().will(ignoreReturnValue());
     ret = MapAndWriteProcessConfig(fd, mapLen, &payload, nrPayload);
@@ -878,7 +895,7 @@ TEST_F(SmapConfigTest, TestParseConfigOne)
     int fd;
     char base;
     char numaBase;
-    struct SmapConfigHeader header;
+    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER_V1 };
 
     MOCKER(MapConfig).stubs().will(returnValue(static_cast<char *>(nullptr)));
     ret = ParseConfig(fd, &header);
@@ -904,7 +921,7 @@ TEST_F(SmapConfigTest, TestParseConfigTwo)
     char base;
     char numaBase;
     char processBase;
-    struct SmapConfigHeader header;
+    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER_V1 };
 
     MOCKER(MapConfig).stubs().will(returnValue(reinterpret_cast<char *>(&base)));
     MOCKER(IsRunModeValid).stubs().will(returnValue(true));
@@ -941,7 +958,7 @@ TEST_F(SmapConfigTest, TestParseConfigThree)
     int fd;
     char base;
     char numaBase;
-    struct SmapConfigHeader header;
+    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER_V1 };
     MOCKER(MapConfig).stubs().will(returnValue(reinterpret_cast<char *>(&base)));
     MOCKER(IsRunModeValid).stubs().will(returnValue(false));
     ret = ParseConfig(fd, &header);

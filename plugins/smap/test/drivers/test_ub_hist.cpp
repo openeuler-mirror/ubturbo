@@ -43,6 +43,13 @@ static uint64_t reg_base_cpp_addrs[] = {
 extern "C" int ub_hist_ba_init(struct ub_hist_ba_device *ba_dev);
 extern "C" int ub_hist_probe(struct platform_device *pdev);
 extern "C" int ub_hist_remove(struct platform_device *pdev);
+extern "C" int ub_hist_init(void);
+extern "C" void ub_hist_exit(void);
+extern "C" int ub_hist_query_ba_count(void);
+extern "C" int ub_hist_query_ba_tags(uint64_t *p_tags, int count);
+extern "C" int ub_hist_set_state(struct ub_hist_ba_config *config, uint64_t ba_tag);
+extern "C" int ub_hist_get_state(struct ub_hist_ba_config *config, uint64_t ba_tag);
+extern "C" int ub_hist_get_statistic_result(struct ub_hist_ba_result *result);
 class DriversUbHistMidTest : public ::testing::Test {
 protected:
     void SetUp() override
@@ -66,12 +73,14 @@ protected:
     }
 };
 
+extern "C" int ub_hist_query_ba_info(uint64_t ba_tag, struct ub_hist_ba_info *ba_info);
+
 TEST_F(DriversUbHistMidTest, QueryCountAndTags)
 {
     uint64_t tags[DEFAULT_NUMA_NODE] = {};
 
     EXPECT_EQ(0, ub_hist_query_ba_count());
-    EXPECT_EQ(-EINVAL, ub_hist_query_ba_tags(tags, DEFAULT_NUMA_NODE - 1));
+    EXPECT_EQ(-EINVAL, ub_hist_query_ba_tags(tags, DEFAULT_NUMA_NODE));
 }
 
 TEST_F(DriversUbHistMidTest, ValidateStateApisInvalidArgs)

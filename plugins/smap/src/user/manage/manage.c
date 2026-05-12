@@ -11,7 +11,9 @@
  */
 #define _GNU_SOURCE
 #include <fcntl.h>
+#include <errno.h>
 #include <inttypes.h>
+#include <stdint.h>
 #include <time.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -32,6 +34,8 @@
 #include "strategy/strategy.h"
 #include "strategy/migration.h"
 #include "manage.h"
+
+#define MAX_GROUP_TARGET_ENTRY (MAX_MIGRATION_GROUP_NUM * MAX_GROUP_REMOTE_NUMA)
 
 static struct ProcessManager g_processManager;
 
@@ -487,7 +491,26 @@ static void SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
     }
 }
 
-static int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
+static void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeBitmap,
+                                    const GroupMigrationPolicy *policy)
+{
+    attr->pid = pid;
+    attr->scanTime = SCAN_TIME_2M;
+    attr->duration = 0;
+    attr->scanType = NORMAL_SCAN;
+    attr->type = VM_TYPE;
+    attr->migrateMode = MIG_MEMSIZE_MODE;
+    attr->remoteNumaCnt = GetL2Count(nodeBitmap);
+    attr->enableSwap = true;
+    attr->initLocalMemRatio = HUNDRED;
+    attr->numaAttr.numaNodes = nodeBitmap;
+    attr->groupPolicy = *policy;
+    if (time(&attr->scanStart) == (time_t)-1) {
+        SMAP_LOGGER_ERROR("get time error");
+    }
+}
+
+int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
 {
     int ret;
     if (g_processManager.nr[type] >= GetCurrentMaxNrPid()) {
@@ -583,6 +606,167 @@ FILE *OpenNumaMaps(pid_t pid)
         SMAP_LOGGER_ERROR("OpenNumaMaps fopen failed: %d.", -errno);
     }
     return fp;
+}
+
+static int AddNumaPagesFromLine(char *line, uint64_t numaPages[MAX_NODES])
+{
+    char pattern[NUMA_MAPS_MAX_PATTERN_LEN];
+
+    for (int nid = 0; nid < MAX_NODES; nid++) {
+        int ret = snprintf_s(pattern, sizeof(pattern), sizeof(pattern) - 1, " N%d=", nid);
+        if (ret < 0) {
+            SMAP_LOGGER_ERROR("Set numa maps pattern failed, nid %d.", nid);
+            return -EINVAL;
+        }
+
+        char *substr = strstr(line, pattern);
+        if (!substr) {
+            continue;
+        }
+
+        char *value = substr + strlen(pattern);
+        char *end = NULL;
+        errno = 0;
+        uint64_t pages = strtoull(value, &end, 10);
+        if (value == end || errno == ERANGE || UINT64_MAX - numaPages[nid] < pages) {
+            SMAP_LOGGER_ERROR("Parse numa maps pages failed, nid %d, line %s.", nid, line);
+            return -EINVAL;
+        }
+        numaPages[nid] += pages;
+    }
+    return 0;
+}
+
+int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES])
+{
+    char line[MAX_LINE_LENGTH];
+    FILE *fp = OpenNumaMaps(pid);
+    if (!fp) {
+        SMAP_LOGGER_ERROR("Open pid %d numa maps failed.", pid);
+        return -EINVAL;
+    }
+
+    int ret = 0;
+    while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
+        if (!IsNumaMapLineHuge(line)) {
+            continue;
+        }
+        ret = AddNumaPagesFromLine(line, numaPages);
+        if (ret) {
+            break;
+        }
+    }
+    if (pclose(fp)) {
+        SMAP_LOGGER_WARNING("Close numa maps failed, pid=%d.", pid);
+    }
+    return ret;
+}
+
+static int CollectGroupedTargetEntries(GroupMigrationPolicy *policy, int targetNid,
+                                       int groupIdx[MAX_GROUP_TARGET_ENTRY],
+                                       int targetIdx[MAX_GROUP_TARGET_ENTRY])
+{
+    int count = 0;
+    for (int i = 0; i < policy->groupCount; i++) {
+        MigrationGroupAttr *group = &policy->groups[i];
+        for (int j = 0; j < group->targetCount; j++) {
+            if (group->targets[j].nid != targetNid) {
+                continue;
+            }
+            if (count >= MAX_GROUP_TARGET_ENTRY) {
+                SMAP_LOGGER_ERROR("Grouped target entry count exceeds limit.");
+                return -EINVAL;
+            }
+            groupIdx[count] = i;
+            targetIdx[count] = j;
+            count++;
+        }
+    }
+    return count;
+}
+
+static int InitGroupedTargetUsedPages(pid_t pid, GroupMigrationPolicy *policy,
+                                      int targetNid, uint64_t residentPages)
+{
+    int groupIdx[MAX_GROUP_TARGET_ENTRY] = { 0 };
+    int targetIdx[MAX_GROUP_TARGET_ENTRY] = { 0 };
+    int entryCount = CollectGroupedTargetEntries(policy, targetNid, groupIdx, targetIdx);
+    if (entryCount <= 0) {
+        SMAP_LOGGER_ERROR("pid %d has unmanaged remote node %d resident pages %llu.",
+                          pid, targetNid, residentPages);
+        return -EINVAL;
+    }
+
+    uint64_t quotaSum = 0;
+    for (int i = 0; i < entryCount; i++) {
+        GroupTargetAttr *target = &policy->groups[groupIdx[i]].targets[targetIdx[i]];
+        if (UINT64_MAX - quotaSum < target->quotaPages) {
+            SMAP_LOGGER_ERROR("pid %d remote node %d quota sum overflow.", pid, targetNid);
+            return -EINVAL;
+        }
+        quotaSum += target->quotaPages;
+    }
+    if (quotaSum == 0) {
+        SMAP_LOGGER_ERROR("pid %d remote node %d quota sum is zero.", pid, targetNid);
+        return -EINVAL;
+    }
+    if (residentPages > quotaSum) {
+        SMAP_LOGGER_ERROR("pid %d remote node %d resident pages %llu exceed quota sum %llu.",
+                          pid, targetNid, residentPages, quotaSum);
+        return -EINVAL;
+    }
+
+    uint64_t assignedPages = 0;
+    for (int i = 0; i < entryCount; i++) {
+        GroupTargetAttr *target = &policy->groups[groupIdx[i]].targets[targetIdx[i]];
+        target->usedPages = (__uint128_t)residentPages * target->quotaPages / quotaSum;
+        assignedPages += target->usedPages;
+    }
+
+    uint64_t remainingPages = residentPages - assignedPages;
+    while (remainingPages > 0) {
+        bool progressed = false;
+        for (int i = 0; i < entryCount && remainingPages > 0; i++) {
+            GroupTargetAttr *target = &policy->groups[groupIdx[i]].targets[targetIdx[i]];
+            if (target->usedPages >= target->quotaPages) {
+                continue;
+            }
+            target->usedPages++;
+            remainingPages--;
+            progressed = true;
+        }
+        if (!progressed) {
+            SMAP_LOGGER_ERROR("pid %d remote node %d used pages cannot fit quota.", pid, targetNid);
+            return -EINVAL;
+        }
+    }
+
+    for (int i = 0; i < entryCount; i++) {
+        GroupTargetAttr *target = &policy->groups[groupIdx[i]].targets[targetIdx[i]];
+        if (target->usedPages > target->quotaPages) {
+            SMAP_LOGGER_ERROR("pid %d remote node %d used pages %llu exceed quota %llu.",
+                              pid, targetNid, target->usedPages, target->quotaPages);
+            return -EINVAL;
+        }
+        SMAP_LOGGER_INFO("pid %d remote node %d group %d target used pages %llu.",
+                         pid, targetNid, groupIdx[i], target->usedPages);
+    }
+    return 0;
+}
+
+int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[MAX_NODES])
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int nid = nrLocalNuma; nid < MAX_NODES; nid++) {
+        if (numaPages[nid] == 0) {
+            continue;
+        }
+        int ret = InitGroupedTargetUsedPages(pid, policy, nid, numaPages[nid]);
+        if (ret) {
+            return ret;
+        }
+    }
+    return 0;
 }
 
 static void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag)
@@ -683,6 +867,57 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
         SMAP_LOGGER_INFO("Add pid %d to list done.", param->pid);
     }
 
+    return 0;
+}
+
+int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy)
+{
+    int ret = CheckPid(pid);
+    if (ret) {
+        SMAP_LOGGER_ERROR("grouped pid %d check failed: %d.", pid, ret);
+        return ret;
+    }
+    if (!policy || !policy->enabled) {
+        SMAP_LOGGER_ERROR("grouped policy of pid %d is invalid.", pid);
+        return -EINVAL;
+    }
+
+    ProcessAttr *current = GetProcessAttrLocked(pid);
+    if (current) {
+        SetGroupedProcessConfig(current, pid, nodeBitmap, policy);
+        SMAP_LOGGER_INFO("Update grouped pid %d success, group count %d.", pid, policy->groupCount);
+        ret = SyncAllProcessConfig();
+        if (ret) {
+            SMAP_LOGGER_WARNING("Synchronize grouped pid %d config maybe failed: %d.", pid, ret);
+        }
+        return 0;
+    }
+
+    if (g_processManager.nr[VM_TYPE] >= GetCurrentMaxNrPid()) {
+        SMAP_LOGGER_ERROR("nr of grouped vm pid is out of limit.");
+        return -EINVAL;
+    }
+
+    ProcessAttr *attr = calloc(1, sizeof(ProcessAttr));
+    if (!attr) {
+        SMAP_LOGGER_ERROR("Alloc memory for grouped process failed.");
+        return -ENOMEM;
+    }
+    attr->numaAttr.numaNodes = nodeBitmap;
+    ret = VMPreprocess(pid, attr);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Preprocess grouped VM process %d failed: %d.", pid, ret);
+        free(attr);
+        return ret;
+    }
+    SetGroupedProcessConfig(attr, pid, nodeBitmap, policy);
+    LinkedListAdd(&g_processManager.processes, &attr);
+    g_processManager.nr[VM_TYPE]++;
+    SMAP_LOGGER_INFO("Add grouped pid %d success, group count %d.", pid, policy->groupCount);
+    ret = SyncAllProcessConfig();
+    if (ret) {
+        SMAP_LOGGER_WARNING("Synchronize grouped pid %d config maybe failed: %d.", pid, ret);
+    }
     return 0;
 }
 
