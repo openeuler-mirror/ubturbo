@@ -223,6 +223,152 @@ int main(void)
 }
 ```
 
+# ubturbo_smap_migrate_out_grouped: 配置组级迁出策略
+
+## 库 LIBRARY
+
+SMAP库 (libsmap.so)
+
+## 摘要 SYNOPSIS
+
+```c
+#include "smap_interface.h"
+int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType);
+```
+
+## 描述 DESCRIPTION
+
+为大规格弹性虚机场景配置组级内存迁出策略。同一PID可配置多个migration group，每个group包含source local NUMA集合、target remote NUMA集合、每个target的quota以及group级本地保留水线。
+
+## 参数 Parameters
+
+| name | IN/OUT | description |
+| --- | --- | --- |
+| msg | IN | 配置参数。 |
+| msg.count | IN | 配置PID数量，取值范围为1到MAX_NR_GROUPED_MIGOUT。 |
+| msg.payload | IN | grouped配置数组。 |
+| msg.payload.pid | IN | 虚机PID。 |
+| msg.payload.groupCount | IN | PID下的group数量，取值范围为1到MAX_MIGRATION_GROUP_NUM。 |
+| msg.payload.groups | IN | migration group数组。 |
+| msg.payload.groups.localCount | IN | 当前group的source local NUMA数量，取值范围为1到MAX_GROUP_LOCAL_NUMA。 |
+| msg.payload.groups.locals | IN | 当前group的source local NUMA数组。 |
+| msg.payload.groups.locals.nid | IN | source local NUMA ID。 |
+| msg.payload.groups.locals.size | IN | 当前local NUMA的本地保留水线，单位KB。 |
+| msg.payload.groups.targetCount | IN | 当前group的target remote NUMA数量，取值范围为1到MAX_GROUP_REMOTE_NUMA。 |
+| msg.payload.groups.targets | IN | 当前group的target remote NUMA数组。 |
+| msg.payload.groups.targets.nid | IN | target remote NUMA ID。 |
+| msg.payload.groups.targets.size | IN | 当前target remote NUMA的最大驻留容量quota，单位KB。 |
+| pidType | IN | 进程页面类型，仅支持1：2M虚机。 |
+
+grouped迁出ABI结构如下：
+
+```c
+struct MigrationNode {
+    int nid;
+    uint64_t size; // locals: 本地最低保留水线; targets: 远端最大驻留容量, 单位KB
+};
+
+struct MigrationGroup {
+    int localCount;
+    struct MigrationNode locals[MAX_GROUP_LOCAL_NUMA];
+    int targetCount;
+    struct MigrationNode targets[MAX_GROUP_REMOTE_NUMA];
+};
+
+struct GroupedMigrateOutPayload {
+    pid_t pid;
+    int groupCount;
+    struct MigrationGroup groups[MAX_MIGRATION_GROUP_NUM];
+};
+
+struct GroupedMigrateOutMsg {
+    int count;
+    struct GroupedMigrateOutPayload payload[MAX_NR_GROUPED_MIGOUT];
+};
+```
+
+## 返回值 RETURN VALUE
+
+返回 `0` 表示成功，返回其他值表示失败，请见`错误 ERRORS`
+
+## 错误 ERRORS
+
+| Error | Description |
+| --- | --- |
+| -EPERM | SMAP未初始化 |
+| -EAGAIN | 远端NUMA被禁用，或已有grouped PID处于非IDLE状态暂不能更新 |
+| -ESRCH | PID不存在，本接口会回滚已添加配置，不提供部分成功语义 |
+| -ENOMEM | 内存申请失败 |
+| -EINVAL | 参数错误 |
+
+## 约束 CONSTRAINTS
+
+* SMAP初始化后才能调用。
+* 仅支持2M huge page虚机，不支持4K进程或普通进程。
+* pidType需要和当前2M虚机场景匹配。
+* UB代际远端NUMA最大值为21。
+* 远端NUMA被禁用时无法配置为grouped target（调用ubturbo_smap_migrate_back接口时会默认禁用远端NUMA）。
+* 同一次调用内不能传入重复PID。
+* group policy不能和普通ubturbo_smap_migrate_out policy混用；已按普通迁出接口管理的PID，不能再配置grouped policy。
+* 已存在grouped policy的PID只有在进程状态为IDLE时才能更新配置。
+* 同一PID内不同group之间不能复用同一个local NUMA。
+* 同一个group内不能配置重复target NUMA。
+* 每个target quota至少为2MB，小于2MB会返回-EINVAL。
+* group policy配置时会基于/proc/&lt;pid&gt;/numa_maps初始化远端target的usedPages账本。
+* 如果管理前PID已经使用remote NUMA，该remote NUMA必须被当前grouped policy的target管理，且remote resident pages不能超过对应target quota或shared target的quota总和，否则返回-EINVAL。
+* 允许多个group共享同一个remote target；当前只维护容量级账本，不保证页级ownership。
+* 配置PID内存迁出后，由SMAP线程异步迁移，在迁移周期到来时才会执行迁移操作。
+* grouped policy当前不支持smap_config持久化与恢复，SMAP重启后需要重新下发配置。
+* 页面迁移会过滤掉共享页。
+
+## 附注 NOTES
+
+暂无
+
+## 样例 EXAMPLES
+
+以下程序为PID 10253配置两个migration group：group 0从本地NUMA0迁往远端NUMA4，group 1从本地NUMA1迁往远端NUMA5。
+
+```c
+#include <stdio.h>
+#include "smap_interface.h"
+
+int main(void)
+{
+    int ret;
+    struct GroupedMigrateOutMsg msg = {
+        .count = 1,
+        .payload = {
+            {
+                .pid = 10253,
+                .groupCount = 2,
+                .groups = {
+                    {
+                        .localCount = 1,
+                        .locals = { { .nid = 0, .size = 1048576 } },
+                        .targetCount = 1,
+                        .targets = { { .nid = 4, .size = 2097152 } },
+                    },
+                    {
+                        .localCount = 1,
+                        .locals = { { .nid = 1, .size = 1048576 } },
+                        .targetCount = 1,
+                        .targets = { { .nid = 5, .size = 2097152 } },
+                    },
+                },
+            },
+        },
+    };
+
+    ret = ubturbo_smap_migrate_out_grouped(&msg, 1);
+    if (ret != 0) {
+        return ret;
+    }
+
+    return 0;
+}
+```
+
 # ubturbo_smap_remote_numa_info_set: 设置远端NUMA内存可用量
 
 ## 库 LIBRARY

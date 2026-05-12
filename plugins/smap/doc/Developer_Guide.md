@@ -113,6 +113,90 @@ struct MigrateOutMsg {
 * 4K进程迁移不支持远端多NUMA。
 * 迁移会过滤掉共享页。
 
+### ubturbo_smap_migrate_out_grouped
+
+#### 函数定义
+
+配置大规格弹性虚机场景的组级迁出策略。同一PID可配置多个migration group，每个group包含source local NUMA集合、target remote NUMA集合、每个target的quota以及group级本地保留水线。
+
+#### 实现方法
+
+<pre class="screen"><p class="p" id="pGroupedMigrateOut">int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType);</p></pre>
+
+#### 参数说明
+
+| 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
+| --- | --- | --- | --- | --- |
+| msg | struct GroupedMigrateOutMsg\* | 单次最多配置MAX_NR_GROUPED_MIGOUT个PID；同一次调用内PID不能重复。 | 入参 | grouped迁出配置。 |
+| msg.count | int | 1到MAX_NR_GROUPED_MIGOUT的整数。 | 入参 | 配置PID数量。 |
+| msg.payload[].pid | pid\_t | 有效虚机PID。 | 入参 | 虚机PID。 |
+| msg.payload[].groupCount | int | 1到MAX_MIGRATION_GROUP_NUM的整数，当前最大为8。 | 入参 | 当前PID的group数量。 |
+| msg.payload[].groups[].localCount | int | 1到MAX_GROUP_LOCAL_NUMA的整数，当前最大为4。 | 入参 | 当前group的source local NUMA数量。 |
+| msg.payload[].groups[].locals[].nid | int | 当前机器有效local NUMA。 | 入参 | source local NUMA ID。 |
+| msg.payload[].groups[].locals[].size | uint64\_t | 大于0，单位KB。 | 入参 | 当前local NUMA的本地保留水线。 |
+| msg.payload[].groups[].targetCount | int | 1到MAX_GROUP_REMOTE_NUMA的整数。 | 入参 | 当前group的target remote NUMA数量。 |
+| msg.payload[].groups[].targets[].nid | int | 当前机器有效remote NUMA，且未被禁用。 | 入参 | target remote NUMA ID。 |
+| msg.payload[].groups[].targets[].size | uint64\_t | 单位KB，至少为2MB。 | 入参 | 当前target remote NUMA的最大驻留容量quota。 |
+| pidType | int | 1 | 入参 | 进程pid类型，仅支持虚机2M页类型。 |
+
+```
+#define MAX_NR_GROUPED_MIGOUT MAX_NR_MIGOUT
+#define MAX_MIGRATION_GROUP_NUM 8
+#define MAX_GROUP_LOCAL_NUMA 4
+#define MAX_GROUP_REMOTE_NUMA REMOTE_NUMA_NUM
+
+struct MigrationNode {
+    int nid;
+    uint64_t size;
+};
+
+struct MigrationGroup {
+    int localCount;
+    struct MigrationNode locals[MAX_GROUP_LOCAL_NUMA];
+    int targetCount;
+    struct MigrationNode targets[MAX_GROUP_REMOTE_NUMA];
+};
+
+struct GroupedMigrateOutPayload {
+    pid_t pid;
+    int groupCount;
+    struct MigrationGroup groups[MAX_MIGRATION_GROUP_NUM];
+};
+
+struct GroupedMigrateOutMsg {
+    int count;
+    struct GroupedMigrateOutPayload payload[MAX_NR_GROUPED_MIGOUT];
+};
+```
+
+#### 返回值
+
+* 成功返回0。
+* SMAP未初始化返回-1。
+* 远端NUMA被禁用，或已有grouped PID处于非IDLE状态暂不能更新时返回-11。
+* PID不存在返回-3，本接口会回滚已添加配置，不提供部分成功语义。
+* 内存申请失败返回-12。
+* 参数错误返回-22。
+
+#### 约束和注意事项
+
+* SMAP初始化后才能调用。
+* 仅支持2M huge page虚机，不支持4K进程或普通进程。
+* pidType需要和当前2M虚机场景匹配。
+* UB代际远端NUMA最大值为21。
+* 远端NUMA被禁用时无法配置为grouped target（调用ubturbo_smap_migrate_back接口时会默认禁用远端NUMA）。
+* group policy不能和普通ubturbo_smap_migrate_out policy混用；已按普通迁出接口管理的PID，不能再配置grouped policy。
+* 已存在grouped policy的PID只有在进程状态为IDLE时才能更新配置。
+* 同一PID内不同group之间不能复用同一个local NUMA。
+* 同一个group内不能配置重复target NUMA。
+* 每个target quota至少为2MB。
+* group policy配置时会基于/proc/&lt;pid&gt;/numa_maps初始化远端target的usedPages账本。
+* 如果管理前PID已经使用remote NUMA，该remote NUMA必须被当前grouped policy的target管理，且remote resident pages不能超过对应target quota或shared target的quota总和，否则返回-22。
+* 允许多个group共享同一个remote target；当前只维护容量级账本，不保证页级ownership。
+* 配置PID内存迁出后，由SMAP线程异步迁移，在迁移周期到来时才会执行迁移操作。
+* grouped policy当前不支持smap_config持久化与恢复，SMAP重启后需要重新下发配置。
+* 页面迁移会过滤掉共享页。
+
 ### ubturbo_smap_remote_numa_info_set
 
 #### 函数定义
