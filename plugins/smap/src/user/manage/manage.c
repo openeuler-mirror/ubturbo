@@ -889,6 +889,10 @@ static int DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, A
     size_t actc_offset = 0;
 
     for (int nid = 0; nid < MAX_NODES; nid++) {
+        if (attr->scanAttr.actcData[nid]) {
+            free(attr->scanAttr.actcData[nid]);
+            attr->scanAttr.actcData[nid] = NULL;
+        }
         attr->scanAttr.actcLen[nid] = pmb->nrPages[nid];
         if (pmb->nrPages[nid] == 0) {
             attr->scanAttr.actcData[nid] = NULL;
