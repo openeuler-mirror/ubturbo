@@ -274,14 +274,22 @@ static int AppendMigPages(struct MigList *list, const GroupPageData *pages, uint
     }
     uint64_t oldNr = list->nr;
     uint64_t newNr = oldNr + nr;
-    uint64_t *addr = realloc(list->addr, sizeof(uint64_t) * newNr);
+    uint64_t *addr = malloc(sizeof(uint64_t) * newNr);
     if (!addr) {
         return -ENOMEM;
     }
-    list->addr = addr;
-    for (uint64_t i = 0; i < nr; i++) {
-        list->addr[oldNr + i] = pages[i].addr;
+    if (oldNr > 0) {
+        int ret = memcpy_s(addr, sizeof(uint64_t) * newNr, list->addr, sizeof(uint64_t) * oldNr);
+        if (ret) {
+            free(addr);
+            return -ret;
+        }
     }
+    for (uint64_t i = 0; i < nr; i++) {
+        addr[oldNr + i] = pages[i].addr;
+    }
+    free(list->addr);
+    list->addr = addr;
     list->nr = newNr;
     return 0;
 }
