@@ -562,7 +562,6 @@ TEST_F(AccessIoctlTestKernel, ReadBitmapZeroCnt)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" bool drivers_ram_changed(void);
 extern "C" void write_bitmap_buffer(char **buffer);
 
 TEST_F(AccessIoctlTestKernel, ReadBitmapZeroLoff)
@@ -578,31 +577,11 @@ TEST_F(AccessIoctlTestKernel, ReadBitmapZeroLoff)
         .stubs()
         .with()
         .will(invoke(write_bitmap_buffer_stub));
-    MOCKER(drivers_ram_changed).stubs().will(returnValue(false));
     ret = read_bitmap(buf, BITMAP_BUF_LEN, &loff);
     EXPECT_EQ(EXPECTED_LEN, ret);
     EXPECT_EQ(nullptr, smap_bitmap_buf);
     EXPECT_EQ(0, smap_buf_len);
     EXPECT_TRUE(strcmp(bitmapBuf, buf) == 0);
-}
-
-TEST_F(AccessIoctlTestKernel, ReadBitmapZeroLoffRamChanged)
-{
-    int ret;
-    char buf[BITMAP_BUF_LEN] = { 0 };
-    char bitmapBuf[BITMAP_BUF_LEN] = "ABCDEFGHI";
-    loff_t loff = 0;
-
-    MOCKER(calc_bitmap_len).stubs().will(returnValue(sizeof(buf)));
-    MOCKER(write_bitmap_buffer)
-        .stubs()
-        .with()
-        .will(invoke(write_bitmap_buffer_stub));
-    MOCKER(drivers_ram_changed).stubs().will(returnValue(true));
-    ret = read_bitmap(buf, BITMAP_BUF_LEN, &loff);
-    EXPECT_EQ(-EAGAIN, ret);
-    EXPECT_EQ(nullptr, smap_bitmap_buf);
-    EXPECT_EQ(0, smap_buf_len);
 }
 
 TEST_F(AccessIoctlTestKernel, ReadBitmapNonZeroLoff)
@@ -614,7 +593,6 @@ TEST_F(AccessIoctlTestKernel, ReadBitmapNonZeroLoff)
     loff_t loff = TEMP_LOFF;
     char *tmp;
 
-    MOCKER(drivers_ram_changed).stubs().will(returnValue(false));
     smap_buf_len = BITMAP_BUF_LEN;
 
     // alloc mem for smap_bitmap_buf and write 'ABCDEFGHI'
@@ -644,7 +622,6 @@ TEST_F(AccessIoctlTestKernel, ReadBitmapNonZeroLoffPartial)
     char *tmp;
     constexpr int EXPECTED_LEN = BITMAP_BUF_LEN;
 
-    MOCKER(drivers_ram_changed).stubs().will(returnValue(false));
     smap_buf_len = BITMAP_BUF_LEN;
 
     // alloc mem for smap_bitmap_buf and write 'ABCDEFGHI'
@@ -677,7 +654,6 @@ TEST_F(AccessIoctlTestKernel, ReadBitmapNonZeroLoffBeyond)
     size_t cnt = BITMAP_BUF_LEN - TEMP_LOFF + 1;
     char *tmp;
 
-    MOCKER(drivers_ram_changed).stubs().will(returnValue(false));
     smap_buf_len = BITMAP_BUF_LEN;
 
     // alloc mem for smap_bitmap_buf and write 'ABCDEFGHI'

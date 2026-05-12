@@ -183,24 +183,8 @@ TEST_F(AccessIomemTest, release_remote_ram)
     drivers_release_remote_ram();
 }
 
-extern "C" bool drivers_ram_changed(void);
 extern bool drivers_remote_ram_changed;
 extern unsigned int drivers_smap_scene;
-TEST_F(AccessIomemTest, drivers_ram_changed)
-{
-    bool ret;
-
-    drivers_remote_ram_changed = true;
-    drivers_smap_scene = UB_QEMU_SCENE;
-    ret = drivers_ram_changed();
-    EXPECT_FALSE(ret);
-
-    drivers_smap_scene = NORMAL_SCENE;
-    ret = drivers_ram_changed();
-    EXPECT_TRUE(ret);
-}
-
-extern "C" int drivers_refresh_remote_ram(void);
 TEST_F(AccessIomemTest, refresh_remote_ram_normal_scene)
 {
     int ret;

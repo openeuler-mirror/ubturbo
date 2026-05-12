@@ -322,7 +322,6 @@ TEST_F(MigrationTest, TestInitMigrateMsg)
 }
 
 extern "C" int PerformMigrationPreparation(struct ProcessManager *manager);
-extern "C" int GetRamIsChange(struct ProcessManager *manager, int *change);
 extern "C" int BuildAllPidData(void);
 extern "C" int CleanStrategyAttribute(struct ProcessManager *manager);
 TEST_F(MigrationTest, TestPerformMigrationPreparationOK)
@@ -333,7 +332,6 @@ TEST_F(MigrationTest, TestPerformMigrationPreparationOK)
     ctx->processManager->processes = (ProcessAttr *)malloc(sizeof(ProcessAttr));
     ctx->processManager->processes->next = NULL;
 
-    MOCKER(GetRamIsChange).stubs().will(returnValue(0));
     MOCKER(BuildAllPidData).stubs().will(returnValue(0));
     MOCKER(CleanStrategyAttribute).stubs().will(returnValue(0));
     ret = PerformMigrationPreparation(ctx->processManager);
@@ -347,10 +345,8 @@ TEST_F(MigrationTest, TestPerformMigrationPreparationOK)
 TEST_F(MigrationTest, TestPerformMigrationPreparationEmptyProcesses)
 {
     int ret;
-    int change = 0;
     struct ProcessManager manager = { .processes = nullptr };
 
-    MOCKER(GetRamIsChange).stubs().with(any(), outBoundP(&change, sizeof(change))).will(returnValue(0));
     MOCKER(CleanStrategyAttribute).stubs().will(returnValue(0));
     MOCKER(BuildAllPidData).stubs().will(returnValue(0));
     ret = PerformMigrationPreparation(&manager);
@@ -360,36 +356,13 @@ TEST_F(MigrationTest, TestPerformMigrationPreparationEmptyProcesses)
 TEST_F(MigrationTest, TestPerformMigrationPreparationBuildError)
 {
     int ret;
-    int change = 0;
     ProcessAttr process;
     struct ProcessManager manager = { .processes = &process };
 
-    MOCKER(GetRamIsChange).stubs().with(any(), outBoundP(&change, sizeof(change))).will(returnValue(0));
     MOCKER(CleanStrategyAttribute).stubs().will(returnValue(0));
     MOCKER(BuildAllPidData).stubs().will(returnValue(-ENOMEM));
     ret = PerformMigrationPreparation(&manager);
     EXPECT_EQ(-ENOMEM, ret);
-}
-
-TEST_F(MigrationTest, TestPerformMigrationPreparationGetChangedError)
-{
-    int ret;
-    struct ProcessManager manager;
-
-    MOCKER(GetRamIsChange).stubs().will(returnValue(-1));
-    ret = PerformMigrationPreparation(&manager);
-    EXPECT_EQ(-1, ret);
-}
-
-TEST_F(MigrationTest, TestPerformMigrationPreparationRamChanged)
-{
-    int ret;
-    int change = 1;
-    struct ProcessManager manager;
-
-    MOCKER(GetRamIsChange).stubs().with(any(), outBoundP(&change, sizeof(change))).will(returnValue(0));
-    ret = PerformMigrationPreparation(&manager);
-    EXPECT_EQ(-EBUSY, ret);
 }
 
 extern "C" int ScanMigrateWork(ThreadCtx *ctx);

@@ -183,20 +183,6 @@ TEST_F(HistTrackingTest, actc_buffer_reinit_three)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" int hist_tracking_reinit_actc_buffer(struct device *ldev);
-TEST_F(HistTrackingTest, hist_tracking_reinit_actc_buffer)
-{
-    struct access_tracking_dev hdev;
-    MOCKER(drivers_actc_buffer_reinit).stubs().will(returnValue(1));
-    int ret = hist_tracking_reinit_actc_buffer(&hdev.ldev);
-    EXPECT_EQ(1, ret);
-
-    GlobalMockObject::verify();
-    MOCKER(drivers_actc_buffer_reinit).stubs().will(returnValue(0));
-    ret = hist_tracking_reinit_actc_buffer(&hdev.ldev);
-    EXPECT_EQ(0, ret);
-}
-
 extern "C" int hist_tracking_set_page_size(struct device *ldev, u8 pgsize);
 TEST_F(HistTrackingTest, hist_tracking_set_page_size)
 {
