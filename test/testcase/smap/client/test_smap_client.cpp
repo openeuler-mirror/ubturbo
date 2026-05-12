@@ -141,6 +141,88 @@ TEST_F(TestSmapClient, SmapMigrateOutDecodeResponseFailed)
     EXPECT_EQ(1, ret);
 }
 
+TEST_F(TestSmapClient, SmapMigrateOutGroupedTest)
+{
+    struct GroupedMigrateOutMsg msg = { 0 };
+
+    msg.count = 1;
+    msg.payload[0].pid = 1;
+    msg.payload[0].groupCount = 1;
+    msg.payload[0].groups[0].localCount = 1;
+    msg.payload[0].groups[0].locals[0].nid = 0;
+    msg.payload[0].groups[0].locals[0].size = 2048;
+    msg.payload[0].groups[0].targetCount = 1;
+    msg.payload[0].groups[0].targets[0].nid = 4;
+    msg.payload[0].groups[0].targets[0].size = 4096;
+
+    MOCKER_CPP(&UBTurboFunctionCaller, uint32_t(*)(const std::string &function, const TurboByteBuffer &params,
+        TurboByteBuffer &result))
+        .stubs()
+        .will(invoke(Test_UBTurboFunctionCaller));
+    int ret = ubturbo_smap_migrate_out_grouped(&msg, 1);
+    EXPECT_NE(ret, 0);
+}
+
+TEST_F(TestSmapClient, SmapMigrateOutGroupedNULLMsg)
+{
+    struct GroupedMigrateOutMsg *msg = nullptr;
+    int ret = ubturbo_smap_migrate_out_grouped(msg, 1);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(TestSmapClient, SmapMigrateOutGroupedEncodeRequestFailed)
+{
+    struct GroupedMigrateOutMsg msg = { 0 };
+
+    MOCKER_CPP(&SmapMigrateOutGroupedCodec::EncodeRequest, int(*)(SmapMigrateOutGroupedCodec*, TurboByteBuffer&,
+        struct GroupedMigrateOutMsg*, int))
+        .stubs()
+        .will(returnValue(1));
+
+    int ret = ubturbo_smap_migrate_out_grouped(&msg, 1);
+    EXPECT_EQ(1, ret);
+}
+
+TEST_F(TestSmapClient, SmapMigrateOutGroupedUBTurboFunctionCallerFailed)
+{
+    struct GroupedMigrateOutMsg msg = { 0 };
+
+    MOCKER_CPP(&SmapMigrateOutGroupedCodec::EncodeRequest, int(*)(SmapMigrateOutGroupedCodec*, TurboByteBuffer&,
+        struct GroupedMigrateOutMsg*, int))
+        .stubs()
+        .will(returnValue(0));
+
+    MOCKER_CPP(&UBTurboFunctionCaller, uint32_t(*)(const std::string &function, const TurboByteBuffer &params,
+        TurboByteBuffer &result))
+        .stubs()
+        .will(returnValue(1));
+
+    int ret = ubturbo_smap_migrate_out_grouped(&msg, 1);
+    EXPECT_EQ(1, ret);
+}
+
+TEST_F(TestSmapClient, SmapMigrateOutGroupedDecodeResponseFailed)
+{
+    struct GroupedMigrateOutMsg msg = { 0 };
+
+    MOCKER_CPP(&SmapMigrateOutGroupedCodec::EncodeRequest, int(*)(SmapMigrateOutGroupedCodec*, TurboByteBuffer&,
+        struct GroupedMigrateOutMsg*, int))
+        .stubs()
+        .will(returnValue(0));
+
+    MOCKER_CPP(&UBTurboFunctionCaller, uint32_t(*)(const std::string &function, const TurboByteBuffer &params,
+        TurboByteBuffer &result))
+        .stubs()
+        .will(returnValue(0));
+
+    MOCKER_CPP(&SmapMigrateOutGroupedCodec::DecodeResponse, int(*)(SmapMigrateOutGroupedCodec *, TurboByteBuffer &))
+        .stubs()
+        .will(returnValue(1));
+
+    int ret = ubturbo_smap_migrate_out_grouped(&msg, 1);
+    EXPECT_EQ(1, ret);
+}
+
 TEST_F(TestSmapClient, SmapMigrateBackTest)
 {
     struct MigrateBackMsg msg;

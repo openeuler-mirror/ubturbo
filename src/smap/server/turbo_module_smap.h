@@ -29,6 +29,7 @@ enum class LoggerLevel : uint32_t {
 };
 
 using SmapMigrateOutFunc = int (*)(struct MigrateOutMsg *msg, int pidType);
+using SmapMigrateOutGroupedFunc = int (*)(struct GroupedMigrateOutMsg *msg, int pidType);
 using SmapMigrateBackFunc = int (*)(struct MigrateBackMsg *msg);
 using SmapRemoveFunc = int (*)(struct RemoveMsg *msg, int pidType);
 using SmapEnableNodeFunc = int (*)(struct EnableNodeMsg *msg);
@@ -69,6 +70,7 @@ public:
 };
 
 RetCode SmapMigrateOutHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
+RetCode SmapMigrateOutGroupedHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
 RetCode SmapMigrateBackHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
 RetCode SmapRemoveHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
 RetCode SmapEnableNodeHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);

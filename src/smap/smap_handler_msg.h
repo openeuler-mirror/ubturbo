@@ -29,6 +29,14 @@ public:
     int DecodeResponse(TurboByteBuffer &buffer);
 };
 
+class SmapMigrateOutGroupedCodec {
+public:
+    int EncodeRequest(TurboByteBuffer &buffer, GroupedMigrateOutMsg *msg, int pidType);
+    int DecodeRequest(const TurboByteBuffer &buffer, GroupedMigrateOutMsg &msg, int &pidType);
+    int EncodeResponse(TurboByteBuffer &buffer, int returnValue);
+    int DecodeResponse(TurboByteBuffer &buffer);
+};
+
 class SmapMigrateBackCodec {
 public:
     int EncodeRequest(TurboByteBuffer &buffer, MigrateBackMsg *msg);
