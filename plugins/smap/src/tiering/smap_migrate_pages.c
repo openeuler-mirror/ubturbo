@@ -812,7 +812,7 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 			p_page = pfn_to_online_page(pfn);
 			if (!p_page)
 				continue;
-			if (is_filter_anon(p_page)) {
+			if (mig_list[i].from < nr_local_numa && is_filter_anon(p_page)) {
 				non_anon_num++;
 				continue;
 			}

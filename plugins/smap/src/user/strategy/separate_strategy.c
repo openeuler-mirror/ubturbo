@@ -400,6 +400,7 @@ static void FindThreshold(const SelectionMode mode, uint64_t nrMig, const uint32
 static void CollectPages(const SelectionMode mode, uint64_t offset, uint64_t actcLen, ActcData *currentData,
                          struct MigList *currMlist, uint64_t nrMig, int thresholdFreq, uint32_t takeAtThreshold)
 {
+    int nrLocalNuma = GetNrLocalNuma();
     uint32_t tmp = takeAtThreshold;
     size_t collected_count = 0;
     size_t write_idx = offset;
@@ -413,7 +414,10 @@ static void CollectPages(const SelectionMode mode, uint64_t offset, uint64_t act
             shouldTake = (freq < thresholdFreq) || (freq == thresholdFreq && tmp > 0);
         }
 
-        if (shouldTake && !currentData[i].isWhiteListPage) {
+        if (shouldTake) {
+            if (currMlist->from < nrLocalNuma && currentData[i].isWhiteListPage) {
+                continue;
+            }
             currMlist->addr[collected_count++] = currentData[i].addr;
             if (i != write_idx) {
                 ActcData temp = currentData[i];
@@ -431,6 +435,7 @@ static void CollectPages(const SelectionMode mode, uint64_t offset, uint64_t act
 static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
                                  const uint64_t numaOffset[MAX_NODES], int from, int to, SelectionMode mode)
 {
+    int nrLocalNuma = GetNrLocalNuma();
     uint64_t offset = numaOffset[from];
     uint64_t n = process->scanAttr.actcLen[from];
     ActcData *currentData = process->scanAttr.actcData[from];
@@ -462,7 +467,7 @@ static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_
         return -ENOMEM;
     }
     for (uint64_t i = offset; i < n; ++i) {
-        if (currentData[i].isWhiteListPage) {
+        if (from < nrLocalNuma && currentData[i].isWhiteListPage) {
             continue;
         }
         int freq = currentData[i].freq;
