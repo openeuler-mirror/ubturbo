@@ -478,15 +478,26 @@ static void SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
         if (param->numaParam[0].nid < nrLocalNuma || param->numaParam[0].nid >= nrLocalNuma + REMOTE_NUMA_NUM) {
             return;
         }
+        int l2Index = param->numaParam[0].nid - nrLocalNuma;
+        uint64_t pagesPerNuma[MAX_NODES] = {0};
+        int ret = GetPidNumaPagesFromNumaMaps(attr->pid, pagesPerNuma, false);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Failed to get page count for process %d, ret: %d.", attr->pid, ret);
+            return;
+        }
+        uint64_t remainingPages = IsHugeMode() ? KBToHugePage(param->numaParam[0].memSize) :
+                                                 KBToNormalPage(param->numaParam[0].memSize);
         for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-            attr->strategyAttr.initRemoteMemRatio[i][param->numaParam[0].nid - nrLocalNuma] =
-                param->numaParam[0].ratio;
-            if (EqualToAttrL1(attr, i)) {
-                attr->migrateParam[0].memSize = param->numaParam[0].memSize;
-                attr->migrateParam[0].nid = param->numaParam[0].nid;
-                attr->strategyAttr.memSize[i][param->numaParam[0].nid - nrLocalNuma] = param->numaParam[0].memSize;
+            attr->strategyAttr.initRemoteMemRatio[i][l2Index] = param->numaParam[0].ratio;
+            if (InAttrL1(attr, i)) {
+                uint64_t allocPages = MIN(pagesPerNuma[i], remainingPages);
+                uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
+                attr->strategyAttr.memSize[i][l2Index] = allocPages * (pageSize / KIB);
+                remainingPages -= allocPages;
             }
         }
+        attr->migrateParam[0].memSize = param->numaParam[0].memSize;
+        attr->migrateParam[0].nid = param->numaParam[0].nid;
         SetAttrL2(attr, param->numaParam[0].nid);
     }
 }
@@ -637,7 +648,7 @@ static int AddNumaPagesFromLine(char *line, uint64_t numaPages[MAX_NODES])
     return 0;
 }
 
-int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES])
+int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge)
 {
     char line[MAX_LINE_LENGTH];
     FILE *fp = OpenNumaMaps(pid);
@@ -648,7 +659,7 @@ int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES])
 
     int ret = 0;
     while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
-        if (!IsNumaMapLineHuge(line)) {
+        if (onlyHuge && !IsNumaMapLineHuge(line)) {
             continue;
         }
         ret = AddNumaPagesFromLine(line, numaPages);
