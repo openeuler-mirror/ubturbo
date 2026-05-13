@@ -395,12 +395,12 @@ TEST_F(ManageTest, TestOpenNumaMaps)
     EXPECT_NE(ret, nullptr);
 }
 
-extern "C" int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES]);
+extern "C" int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge);
 TEST_F(ManageTest, TestGetPidNumaPagesFromNumaMapsOpenFailure)
 {
     uint64_t numaPages[MAX_NODES] = { 0 };
     MOCKER(OpenNumaMaps).expects(once()).will(returnValue(static_cast<FILE *>(nullptr)));
-    int ret = GetPidNumaPagesFromNumaMaps(1234, numaPages);
+    int ret = GetPidNumaPagesFromNumaMaps(1234, numaPages, false);
     EXPECT_EQ(-EINVAL, ret);
 }
 
