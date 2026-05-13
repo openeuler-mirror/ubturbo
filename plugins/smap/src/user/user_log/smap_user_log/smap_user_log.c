@@ -13,9 +13,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <errno.h>
-#ifndef USE_DT
-#include "ulog4c.h"
-#endif
+#include "smap_log_core.h"
 #include "securec.h"
 #include "smap_user_log.h"
 
@@ -24,19 +22,7 @@
 
 #define SMAP_LOG_BUF_LEN 512
 
-#define ULOG_TYPE_FILE 1
-
 #define SMAP_LOG_MODULE_NAME "SMAP "
-
-typedef enum {
-    ULOG_LEVEL_TRACE = 0,
-    ULOG_LEVEL_DEBUG = 1,
-    ULOG_LEVEL_INFO = 2,
-    ULOG_LEVEL_WARN = 3,
-    ULOG_LEVEL_ERROR = 4,
-    ULOG_LEVEL_CRITICAL = 5,
-    ULOG_LEVEL_BUTT
-} UlogLevel;
 
 typedef enum {
     EXT_LOGGER_DEBUG = 0,
@@ -58,6 +44,7 @@ int SmapStartULog(const char *ulogPath)
 {
     char logBuf[SMAP_LOG_BUF_LEN];
     int ret;
+    SmapLogConfig config;
 
     if (ulogPath == NULL) {
         return -EINVAL;
@@ -69,7 +56,16 @@ int SmapStartULog(const char *ulogPath)
     }
 
 #ifndef USE_DT
-    ret = ULOG_Init(ULOG_TYPE_FILE, ULOG_LEVEL_DEBUG, logBuf, SMAP_MAX_FILE_SIZE, SMAP_MAX_FILE_NUM);
+    errno_t res = strncpy_s(config.filePath, sizeof(config.filePath), logBuf, sizeof(config.filePath) - 1);
+    if (res != EOK) {
+        SMAP_LOGGER_ERROR("strncpy_s failed, ret(%d).", res);
+        return -1;
+    }
+    config.maxFileSize = SMAP_MAX_FILE_SIZE;
+    config.maxFileCount = SMAP_MAX_FILE_NUM;
+    config.minLogLevel = SMAP_LOG_CORE_DEBUG;
+
+    ret = SmapLogCoreInit(&config);
     if (ret != 0) {
         return -EIO;
     }
@@ -81,14 +77,14 @@ int SmapStartULog(const char *ulogPath)
 static int LogLevelMapping(int logLevel)
 {
     switch (logLevel) {
-        case ULOG_LEVEL_TRACE:
-        case ULOG_LEVEL_DEBUG:
+        case SMAP_LOG_CORE_TRACE:
+        case SMAP_LOG_CORE_DEBUG:
             return EXT_LOGGER_DEBUG;
-        case ULOG_LEVEL_INFO:
+        case SMAP_LOG_CORE_INFO:
             return EXT_LOGGER_INFO;
-        case ULOG_LEVEL_WARN:
+        case SMAP_LOG_CORE_WARN:
             return EXT_LOGGER_WARNING;
-        case ULOG_LEVEL_ERROR:
+        case SMAP_LOG_CORE_ERROR:
         default:
             return EXT_LOGGER_ERROR;
     }
@@ -107,7 +103,7 @@ static void SmapUlogInner(int logLevel, const char *prefix, const char *msg)
         return;
     }
 #ifndef USE_DT
-    ULOG_LogMessage(logLevel, prefix, msg);
+    SmapLogCoreWrite(logLevel, prefix, msg);
 #endif
 }
 
@@ -125,7 +121,7 @@ void SMAP_Ulog(int logLevel, const char *funcName, int funcLine, const char *fil
     ret = vsnprintf_s(data, SMAP_LOG_BUF_LEN, sizeof(data) - 1, format, argPtr);
     if (ret < 0) {
 #ifndef USE_DT
-        ULOG_LogMessage(ULOG_LEVEL_ERROR, head, "vsnprintf_s failed. ");
+        SmapLogCoreWrite(SMAP_LOG_CORE_ERROR, head, "vsnprintf_s failed.");
 #endif
         va_end(argPtr);
         return;
@@ -134,16 +130,16 @@ void SMAP_Ulog(int logLevel, const char *funcName, int funcLine, const char *fil
 
     switch (logLevel) {
         case SMAP_LOG_INFO:
-            SmapUlogInner(ULOG_LEVEL_INFO, head, data);
+            SmapUlogInner(SMAP_LOG_CORE_INFO, head, data);
             break;
         case SMAP_LOG_WARNING:
-            SmapUlogInner(ULOG_LEVEL_WARN, head, data);
+            SmapUlogInner(SMAP_LOG_CORE_WARN, head, data);
             break;
         case SMAP_LOG_ERROR:
-            SmapUlogInner(ULOG_LEVEL_ERROR, head, data);
+            SmapUlogInner(SMAP_LOG_CORE_ERROR, head, data);
             break;
         case SMAP_LOG_DEBUG:
-            SmapUlogInner(ULOG_LEVEL_DEBUG, head, data);
+            SmapUlogInner(SMAP_LOG_CORE_DEBUG, head, data);
             break;
         default:
             break;
@@ -157,4 +153,7 @@ void SmapLoggerExit(void)
     if (g_subscribers != NULL) {
         g_subscribers = NULL;
     }
+#ifndef USE_DT
+    SmapLogCoreExit();
+#endif
 }
