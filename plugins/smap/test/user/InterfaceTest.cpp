@@ -520,6 +520,7 @@ TEST_F(InterfaceTest, TestIsDestNidVaild)
     EXPECT_EQ(true, ret);
 }
 
+extern uint32_t g_pageSizeNormal;
 extern uint32_t g_pageSizeHuge;
 extern "C" int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType, int *pidCount);
 TEST_F(InterfaceTest, TestCheckMigrateOutMsgInvalidPidTypeAndMsgCount)
@@ -848,7 +849,43 @@ TEST_F(InterfaceTest, TestCheckGroupedTargetRejectForbiddenTarget)
     EnvAtomicSet(&g_forbiddenNodes[4], 0);
 }
 
+TEST_F(InterfaceTest, TestCheckGroupedTargetInvalidCases)
+{
+    struct MigrationGroup group = {};
+
+    group.targetCount = 0;
+    int ret = CheckGroupedTarget(&group, 0, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    group.targetCount = 1;
+    group.targets[0].nid = 3;
+    group.targets[0].size = 2048;
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(false));
+    ret = CheckGroupedTarget(&group, 0, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    group.targets[0].nid = 4;
+    group.targets[0].size = 1024;
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+    ret = CheckGroupedTarget(&group, 0, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    group.targetCount = 2;
+    group.targets[0].nid = 4;
+    group.targets[0].size = 2048;
+    group.targets[1].nid = 4;
+    group.targets[1].size = 4096;
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+    ret = CheckGroupedTarget(&group, 0, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
 extern "C" int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int payloadIdx);
+static void FillGroupedPayload(struct GroupedMigrateOutPayload *payload, pid_t pid, int localNid, int targetNid);
 TEST_F(InterfaceTest, TestCheckGroupedPayloadAcceptsHigherLocalNid)
 {
     struct GroupedMigrateOutPayload payload = {};
@@ -871,6 +908,36 @@ TEST_F(InterfaceTest, TestCheckGroupedPayloadAcceptsHigherLocalNid)
     g_processManager.nrLocalNuma = oldNrLocalNuma;
 }
 
+TEST_F(InterfaceTest, TestCheckGroupedPayloadInvalidLocalCases)
+{
+    struct GroupedMigrateOutPayload payload = {};
+
+    payload.pid = 1234;
+    payload.groupCount = 0;
+    int ret = CheckGroupedPayload(&payload, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    FillGroupedPayload(&payload, 1234, 0, 4);
+    payload.groups[0].localCount = 0;
+    ret = CheckGroupedPayload(&payload, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    FillGroupedPayload(&payload, 1234, 0, 4);
+    payload.groups[0].locals[0].size = 0;
+    ret = CheckGroupedPayload(&payload, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    FillGroupedPayload(&payload, 1234, 0, 4);
+    payload.groupCount = 2;
+    payload.groups[1] = payload.groups[0];
+    payload.groups[1].targets[0].nid = 5;
+    g_processManager.nrLocalNuma = 4;
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+    ret = CheckGroupedPayload(&payload, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
 extern "C" int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pidType);
 extern "C" int BuildGroupedPolicies(struct GroupedMigrateOutMsg *msg,
                                     GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT]);
@@ -878,6 +945,112 @@ extern "C" int ProcessAddGroupedTrackingManage(struct GroupedMigrateOutMsg *msg,
 extern "C" int AddGroupedProcessesToGlobalManager(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
                                                   GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT],
                                                   bool keepTracking[MAX_NR_GROUPED_MIGOUT]);
+
+static void FillGroupedPayload(struct GroupedMigrateOutPayload *payload, pid_t pid, int localNid, int targetNid)
+{
+    payload->pid = pid;
+    payload->groupCount = 1;
+    payload->groups[0].localCount = 1;
+    payload->groups[0].locals[0].nid = localNid;
+    payload->groups[0].locals[0].size = 2048;
+    payload->groups[0].targetCount = 1;
+    payload->groups[0].targets[0].nid = targetNid;
+    payload->groups[0].targets[0].size = 4096;
+}
+
+TEST_F(InterfaceTest, TestCheckGroupedMigrateOutMsgValidAndDuplicatePid)
+{
+    struct GroupedMigrateOutMsg msg = {};
+
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.nr[VM_TYPE] = 0;
+    g_processManager.processes = nullptr;
+    msg.count = 2;
+    FillGroupedPayload(&msg.payload[0], 1234, 0, 4);
+    FillGroupedPayload(&msg.payload[1], 5678, 1, 5);
+
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+    int ret = CheckGroupedMigrateOutMsg(&msg, VM_TYPE);
+    EXPECT_EQ(0, ret);
+
+    GlobalMockObject::verify();
+    msg.payload[1].pid = msg.payload[0].pid;
+    ret = CheckGroupedMigrateOutMsg(&msg, VM_TYPE);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckGroupedMigrateOutMsgRejectsInvalidInputs)
+{
+    struct GroupedMigrateOutMsg msg = {};
+
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    int ret = CheckGroupedMigrateOutMsg(nullptr, VM_TYPE);
+    EXPECT_EQ(-EINVAL, ret);
+
+    msg.count = 1;
+    FillGroupedPayload(&msg.payload[0], 1234, 0, 4);
+    ret = CheckGroupedMigrateOutMsg(&msg, PROCESS_TYPE);
+    EXPECT_EQ(-EINVAL, ret);
+
+    msg.count = 0;
+    ret = CheckGroupedMigrateOutMsg(&msg, VM_TYPE);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestBuildGroupedPoliciesForInvalidPidSkipsNumaMaps)
+{
+    struct GroupedMigrateOutMsg msg = {};
+    GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT] = {};
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    msg.count = 1;
+    FillGroupedPayload(&msg.payload[0], 1234, 0, 4);
+    MOCKER(PidIsValid).expects(once()).will(returnValue(false));
+
+    int ret = BuildGroupedPolicies(&msg, policies);
+    EXPECT_EQ(0, ret);
+    EXPECT_TRUE(policies[0].enabled);
+    EXPECT_EQ(1, policies[0].groupCount);
+    EXPECT_EQ(0, policies[0].groups[0].locals[0].nid);
+    EXPECT_EQ((uint64_t)1, policies[0].groups[0].locals[0].localReservePages);
+    EXPECT_EQ(4, policies[0].groups[0].targets[0].nid);
+    EXPECT_EQ((uint64_t)2, policies[0].groups[0].targets[0].quotaPages);
+}
+
+static int CheckGroupedAccessAddPidPayload(int len, struct AccessAddPidPayload *payload)
+{
+    EXPECT_EQ(2, len);
+    EXPECT_EQ(1234, payload[0].pid);
+    EXPECT_EQ(NORMAL_SCAN, payload[0].type);
+    EXPECT_EQ(SCAN_TIME_2M, payload[0].scanTime);
+    EXPECT_EQ((uint32_t)0x11, payload[0].numaNodes);
+    EXPECT_EQ(NON_EXIST_PID, payload[1].pid);
+    EXPECT_EQ((uint32_t)0x22, payload[1].numaNodes);
+    return 0;
+}
+
+TEST_F(InterfaceTest, TestProcessAddGroupedTrackingManageBuildsPayload)
+{
+    struct GroupedMigrateOutMsg msg = {};
+    uint32_t nodeBitmap[MAX_NR_GROUPED_MIGOUT] = { 0x11, 0x22 };
+
+    msg.count = 2;
+    msg.payload[0].pid = 1234;
+    msg.payload[1].pid = 5678;
+    MOCKER(PidIsValid).stubs().will(returnValue(true)).then(returnValue(false));
+    MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckGroupedAccessAddPidPayload));
+
+    int ret = ProcessAddGroupedTrackingManage(&msg, nodeBitmap);
+    EXPECT_EQ(0, ret);
+}
+
 TEST_F(InterfaceTest, TestGroupedMigrateOutRollsBackTrackingWhenManageFailed)
 {
     struct GroupedMigrateOutMsg msg = {};
