@@ -1075,6 +1075,7 @@ TEST_F(InterfaceTest, TestSmapMigrateBackRejectBusyNode)
     EnvAtomicSet(&g_status, 1);
     EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_MIGBACK_BUSY);
     MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(0));
 
     int ret = ubturbo_smap_migrate_back(&msg);
     EXPECT_EQ(-EAGAIN, ret);
