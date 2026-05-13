@@ -52,18 +52,6 @@ static inline void reset_actc_data(struct access_tracking_dev *hdev)
 		memset(hdev->access_bit_actc_data, 0, len);
 }
 
-static void hist_tracking_enable(struct device *ldev)
-{
-	struct access_tracking_dev *hdev;
-
-	hdev = to_access_tracking_dev(ldev);
-	down_write(&hdev->buffer_lock);
-	reset_actc_data(hdev);
-	up_write(&hdev->buffer_lock);
-	hdev->enable_on = true;
-	hist_thread_resume();
-}
-
 static int hist_tracking_disable(struct device *ldev)
 {
 	struct access_tracking_dev *hdev;
@@ -134,18 +122,25 @@ static int actc_buffer_reinit(struct access_tracking_dev *hdev)
 	return 0;
 }
 
-static int hist_tracking_reinit_actc_buffer(struct device *ldev)
+static void hist_tracking_enable(struct device *ldev)
 {
-	int ret;
-	struct access_tracking_dev *hdev = to_access_tracking_dev(ldev);
-	hist_set_iomem();
+	struct access_tracking_dev *hdev;
+
+	hdev = to_access_tracking_dev(ldev);
 	down_write(&hdev->buffer_lock);
-	ret = actc_buffer_reinit(hdev);
-	if (ret) {
-		pr_err("Actc buffer reinit failed. ret:%d\n", ret);
+	if (hdev->need_reinit_actc) {
+		if (actc_buffer_reinit(hdev)) {
+			pr_err("unable to reinit ACTC buffer\n");
+			up_write(&hdev->buffer_lock);
+			return;
+		}
+		hdev->need_reinit_actc = false;
+	} else {
+		reset_actc_data(hdev);
 	}
 	up_write(&hdev->buffer_lock);
-	return ret;
+	hdev->enable_on = true;
+	hist_thread_resume();
 }
 
 static int hist_tracking_set_page_size(struct device *ldev, u8 pgsize)
@@ -172,11 +167,20 @@ static int hist_tracking_set_page_size(struct device *ldev, u8 pgsize)
 	return ret;
 }
 
+static void hist_tracking_set_reinit_pending(struct device *ldev)
+{
+	struct access_tracking_dev *hdev = to_access_tracking_dev(ldev);
+	down_write(&hdev->buffer_lock);
+	hdev->need_reinit_actc = true;
+	up_write(&hdev->buffer_lock);
+	pr_debug("set reinit pending flag for node %d\n", hdev->node);
+}
+
 static struct tracking_operations g_hist_tracking_ops = {
 	.tracking_enable = hist_tracking_enable,
 	.tracking_disable = hist_tracking_disable,
-	.tracking_reinit_actc_buffer = hist_tracking_reinit_actc_buffer,
 	.tracking_set_page_size = hist_tracking_set_page_size,
+	.tracking_set_reinit_pending = hist_tracking_set_reinit_pending,
 };
 
 static int actc_buffer_init(struct access_tracking_dev *hdev)
