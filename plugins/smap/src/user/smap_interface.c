@@ -1191,19 +1191,18 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
         SMAP_LOGGER_ERROR("Smap check mig back msg err: %d.", ret);
         return ret;
     }
+    ret = CheckMigrateBackReadyMsg(msg);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Smap check mig back ready err: %d.", ret);
+        return ret;
+    }
+
     struct ProcessManager *manager = GetProcessManager();
     EnvMutexLock(&manager->lock);
     ret = SetMigrateBackForbiddenLocked(msg);
     EnvMutexUnlock(&manager->lock);
     if (ret) {
         SMAP_LOGGER_ERROR("Smap check grouped pid for mig back err: %d.", ret);
-        return ret;
-    }
-
-    ret = CheckMigrateBackReadyMsg(msg);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Smap check mig back ready err: %d.", ret);
-        ClearMigrateBackBusyForbidden(msg);
         return ret;
     }
 
