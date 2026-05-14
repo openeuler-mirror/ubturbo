@@ -457,7 +457,7 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 
 	pte = smap_huge_ptep_get(ptep);
 	if (!pte_present(pte)) {
-		pr_err("unable to get PTE\n");
+		pr_debug("unable to get PTE\n");
 		return -EINVAL;
 	}
 
@@ -535,7 +535,7 @@ static int hva_to_hpa_ham(struct kvm *kvm, u64 host_va, pid_t pid)
 
 	pte = smap_huge_ptep_get(ptep);
 	if (!pte_present(pte)) {
-		pr_err("unable to get PTE\n");
+		pr_debug("unable to get PTE\n");
 		return -EINVAL;
 	}
 
@@ -688,7 +688,7 @@ static int collect_statistic_vaddr(struct kvm *kvm, struct kvm_memory_slot *mems
 		if (!get_vma_if_huge_page(kvm, hva))
 			continue;
 		if (is_young) {
-			vaddr[*cur_index++] = hva;
+			vaddr[(*cur_index)++] = hva;
 			if (*cur_index >= nr_pages)
 				return 0;
 		}
