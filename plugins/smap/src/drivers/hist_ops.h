@@ -62,7 +62,6 @@ union smap_hist_status {
 	u32 status_all;
 };
 
-typedef void (*flush_actc)(void);
 
 struct smap_hist_dev {
 	struct task_struct *kthread;
@@ -72,12 +71,10 @@ struct smap_hist_dev {
 	u32 scan_wins_num_per_ba;
 	u32 ba_cnt;
 	u32 period;
-	actc_t *buf;
 	u32 pgcount;
 	u32 pgsize;
 	u8 thread_enable;
 	u8 abort_flag;
-	flush_actc flush_actc;
 	union smap_hist_status status;
 	ub_hist_smap_type hw_type;
 	enum hist_4k_scan_mode scan_mode;  /* 4K scan mode */
@@ -92,11 +89,9 @@ struct hist_ops {
 struct smap_hist_dev *get_hist_dev(void);
 int hist_init(u32 pgsize);
 void hist_deinit(void);
-void fetch_hist_actc_buf(actc_t *dst_buf, struct addr_seg *seg);
 void hist_update_pgsize(u32 pgsize);
 void hist_set_iomem(void);
 void hist_thread_pause(void);
 void hist_thread_resume(void);
-void hist_set_flush_actc_cb(flush_actc cb);
 
 #endif
