@@ -438,7 +438,8 @@ int VMPreprocess(pid_t pid, ProcessAttr *attr)
     return 0;
 }
 
-static void SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
+/* Set basic process attributes from param */
+static void SetBasicProcessConfig(ProcessAttr *attr, ProcessParam *param)
 {
     attr->pid = param->pid;
     attr->scanTime = param->scanTime;
@@ -447,58 +448,103 @@ static void SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
     attr->migrateMode = param->numaParam[0].migrateMode;
     attr->remoteNumaCnt = param->count;
     attr->enableSwap = true;
-    attr->initLocalMemRatio = HUNDRED;
+
+    int localRatio = HUNDRED;
     for (int i = 0; i < param->count; i++) {
-        attr->initLocalMemRatio -= param->numaParam[i].ratio;
+        localRatio -= param->numaParam[i].ratio;
     }
+    attr->initLocalMemRatio = localRatio;
+
     if (time(&attr->scanStart) == (time_t)-1) {
         SMAP_LOGGER_ERROR("get time error");
     }
-    int nrLocalNuma = GetNrLocalNuma();
-    SMAP_LOGGER_INFO("attr->scanStart time: %s", ctime(&attr->scanStart));
-    int localNumaCnt = GetL1Count(attr->numaAttr.numaNodes);
-    SMAP_LOGGER_INFO("Pid: %d local numa cnt: %d.", attr->pid, localNumaCnt);
-    SMAP_LOGGER_INFO("Pid: %d remote numa cnt: %d.", attr->pid, attr->remoteNumaCnt);
-    if ((param->count > 1 || localNumaCnt > 1) && GetPidType(&g_processManager) == VM_TYPE) { // multinuma vm
-        for (int i = 0; i < param->count; i++) {
-            attr->migrateParam[i].nid = param->numaParam[i].nid;
-            attr->migrateParam[i].memSize = param->numaParam[i].memSize;
-            SMAP_LOGGER_INFO("Multinuma vm destNid: %d, memSize: %lu", attr->migrateParam[i].nid,
-                             attr->migrateParam[i].memSize);
 
-            for (int j = 0; j < nrLocalNuma && j < LOCAL_NUMA_NUM; j++) {
-                attr->strategyAttr.initRemoteMemRatio[j][param->numaParam[i].nid - nrLocalNuma] =
-                    param->numaParam[i].ratio;
-                SMAP_LOGGER_INFO("Multinuma vm destNid: %d, ratio: %lu", param->numaParam[i].nid,
-                                 param->numaParam[i].ratio);
-            }
-            AddAttrL2(attr, param->numaParam[i].nid);
+    int localNumaCnt = GetL1Count(attr->numaAttr.numaNodes);
+    SMAP_LOGGER_INFO("attr->scanStart time: %s", ctime(&attr->scanStart));
+    SMAP_LOGGER_INFO("Pid: %d local numa cnt: %d, remote numa cnt: %d.",
+                     attr->pid, localNumaCnt, attr->remoteNumaCnt);
+}
+
+/* Handle multi-NUMA VM scenario: VM with multiple local or remote NUMAs */
+static void SetMultiNumaVmConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
+{
+    for (int i = 0; i < param->count; i++) {
+        int remoteNid = param->numaParam[i].nid;
+        int l2Index = remoteNid - nrLocalNuma;
+
+        attr->migrateParam[i].nid = remoteNid;
+        attr->migrateParam[i].memSize = param->numaParam[i].memSize;
+        SMAP_LOGGER_INFO("Multi-NUMA VM destNid: %d, memSize: %lu", remoteNid,
+                         attr->migrateParam[i].memSize);
+
+        /* Set the same ratio for all local NUMAs */
+        for (int j = 0; j < nrLocalNuma && j < LOCAL_NUMA_NUM; j++) {
+            attr->strategyAttr.initRemoteMemRatio[j][l2Index] = param->numaParam[i].ratio;
+            SMAP_LOGGER_INFO("Multi-NUMA VM destNid: %d, ratio: %d", remoteNid,
+                             param->numaParam[i].ratio);
         }
+        AddAttrL2(attr, remoteNid);
+    }
+}
+
+/* Handle single remote NUMA scenario: single local+single remote, or multi-local+single remote */
+static void SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
+{
+    int remoteNid = param->numaParam[0].nid;
+
+    /* Validate remote NUMA node */
+    if (remoteNid < nrLocalNuma || remoteNid >= nrLocalNuma + REMOTE_NUMA_NUM) {
+        SMAP_LOGGER_WARNING("Invalid remote numa %d for pid %d, nrLocalNuma: %d.",
+                            remoteNid, attr->pid, nrLocalNuma);
+        return;
+    }
+
+    int l2Index = remoteNid - nrLocalNuma;
+
+    /* Get page distribution across NUMA nodes */
+    uint64_t pagesPerNuma[MAX_NODES] = {0};
+    int ret = GetPidNumaPagesFromNumaMaps(attr->pid, pagesPerNuma, false);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Failed to get page count for process %d, ret: %d.", attr->pid, ret);
+        return;
+    }
+
+    /* Calculate pages to migrate and distribute by local NUMA */
+    uint64_t remainingPages = IsHugeMode() ? KBToHugePage(param->numaParam[0].memSize) :
+                                             KBToNormalPage(param->numaParam[0].memSize);
+    uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
+
+    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+        attr->strategyAttr.initRemoteMemRatio[i][l2Index] = param->numaParam[0].ratio;
+
+        /* Allocate memSize based on actual page distribution for L1 nodes */
+        if (InAttrL1(attr, i)) {
+            uint64_t allocPages = MIN(pagesPerNuma[i], remainingPages);
+            attr->strategyAttr.memSize[i][l2Index] = allocPages * (pageSize / KIB);
+            remainingPages -= allocPages;
+        }
+    }
+
+    attr->migrateParam[0].memSize = param->numaParam[0].memSize;
+    attr->migrateParam[0].nid = remoteNid;
+    SetAttrL2(attr, remoteNid);
+}
+
+static void SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
+{
+    SetBasicProcessConfig(attr, param);
+
+    int nrLocalNuma = GetNrLocalNuma();
+    int localNumaCnt = GetL1Count(attr->numaAttr.numaNodes);
+    bool isVm = GetPidType(&g_processManager) == VM_TYPE;
+    /* Scenario dispatch:
+     * - Multi-NUMA VM: VM with multiple local or multiple remote NUMAs
+     * - Single remote NUMA: VM/container with single remote NUMA
+     */
+    if (isVm && (param->count > 1 || localNumaCnt > 1)) {
+        SetMultiNumaVmConfig(attr, param, nrLocalNuma);
     } else {
-        if (param->numaParam[0].nid < nrLocalNuma || param->numaParam[0].nid >= nrLocalNuma + REMOTE_NUMA_NUM) {
-            return;
-        }
-        int l2Index = param->numaParam[0].nid - nrLocalNuma;
-        uint64_t pagesPerNuma[MAX_NODES] = {0};
-        int ret = GetPidNumaPagesFromNumaMaps(attr->pid, pagesPerNuma, false);
-        if (ret) {
-            SMAP_LOGGER_ERROR("Failed to get page count for process %d, ret: %d.", attr->pid, ret);
-            return;
-        }
-        uint64_t remainingPages = IsHugeMode() ? KBToHugePage(param->numaParam[0].memSize) :
-                                                 KBToNormalPage(param->numaParam[0].memSize);
-        for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-            attr->strategyAttr.initRemoteMemRatio[i][l2Index] = param->numaParam[0].ratio;
-            if (InAttrL1(attr, i)) {
-                uint64_t allocPages = MIN(pagesPerNuma[i], remainingPages);
-                uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
-                attr->strategyAttr.memSize[i][l2Index] = allocPages * (pageSize / KIB);
-                remainingPages -= allocPages;
-            }
-        }
-        attr->migrateParam[0].memSize = param->numaParam[0].memSize;
-        attr->migrateParam[0].nid = param->numaParam[0].nid;
-        SetAttrL2(attr, param->numaParam[0].nid);
+        SetSingleRemoteNumaConfig(attr, param, nrLocalNuma);
     }
 }
 
