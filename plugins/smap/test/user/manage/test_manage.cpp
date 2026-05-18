@@ -443,13 +443,15 @@ TEST_F(ManageTest, TestProcessAddManageResetPidConfig)
     uint32_t localNodeBitmap = 1;
     ProcessAttr mockProcess;
     mockProcess.pid = pid;
+    mockProcess.duration = 100;
+    mockProcess.scanTime = 50;
     mockProcess.numaAttr.numaNodes = 31;
 
     g_processManager.processes = &mockProcess;
     ProcessParam param = {
         .pid = pid,
-        .scanTime = 50,
-        .duration = 1,
+        .scanTime = 100,
+        .duration = 100,
         .count = 1,
     };
     param.numaParam[0].nid = 5;
@@ -465,8 +467,8 @@ TEST_F(ManageTest, TestProcessAddManageResetPidConfig)
     mockProcess.numaAttr.numaNodes = 47;
     ret = ProcessAddManage(&param, &localNodeBitmap);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(param.scanTime, g_processManager.processes->scanTime);
-    EXPECT_EQ(param.duration, g_processManager.processes->duration);
+    EXPECT_EQ(mockProcess.scanTime, g_processManager.processes->scanTime);
+    EXPECT_EQ(mockProcess.duration, g_processManager.processes->duration);
     EXPECT_EQ(50., g_processManager.processes->initLocalMemRatio);
     g_processManager.processes = nullptr;
 }
