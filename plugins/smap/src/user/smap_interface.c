@@ -193,6 +193,16 @@ static bool IsRemoteNidValid(int nid)
     return IsNidInNumastat(nid);
 }
 
+static bool IsRemoveRemoteNidValid(int nid)
+{
+    struct ProcessManager *pm = GetProcessManager();
+    if (!pm) {
+        SMAP_LOGGER_ERROR("process manager is null.");
+        return false;
+    }
+    return nid >= pm->nrLocalNuma && nid < (REMOTE_NUMA_BITS + pm->nrLocalNuma);
+}
+
 static bool IsPidArrValid(pid_t *pidArr, int len, bool ignoreUnmanaged)
 {
     int i;
@@ -1237,6 +1247,23 @@ static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType)
         return -EINVAL;
     }
     for (int i = 0; i < msg->count; i++) {
+        struct RemovePayload *payload = &msg->payload[i];
+        if (payload->count < 0 || payload->count > REMOTE_NUMA_NUM) {
+            SMAP_LOGGER_ERROR("[%d] smap remove payload nid count %d invalid.", i, payload->count);
+            return -EINVAL;
+        }
+        for (int j = 0; j < payload->count; j++) {
+            if (!IsRemoveRemoteNidValid(payload->nid[j])) {
+                SMAP_LOGGER_ERROR("[%d] pid:%d remote node %d invalid.", i, payload->pid, payload->nid[j]);
+                return -EINVAL;
+            }
+            for (int k = j + 1; k < payload->count; k++) {
+                if (payload->nid[j] == payload->nid[k]) {
+                    SMAP_LOGGER_ERROR("[%d] smap remove duplicate remote node %d.", i, payload->nid[j]);
+                    return -EINVAL;
+                }
+            }
+        }
         for (int j = i + 1; j < msg->count; j++) {
             if (msg->payload[i].pid == msg->payload[j].pid) {
                 SMAP_LOGGER_ERROR("smap remove duplicate pid %d.", msg->payload[i].pid);
@@ -1247,44 +1274,191 @@ static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType)
     return 0;
 }
 
-static int IoctlRemoveWholeProcess(struct RemoveMsg *msg)
+static bool IsRemoveWholeProcess(const struct RemovePayload *payload)
+{
+    return payload->count == 0;
+}
+
+static int AccessRemovePid(pid_t pid)
+{
+    struct AccessRemovePidPayload payload = { .pid = pid };
+    int ret = AccessIoctlRemovePid(1, &payload);
+    if (ret) {
+        SMAP_LOGGER_ERROR("access ioctl remove pid %d error: %d.", pid, ret);
+    }
+    return ret;
+}
+
+static uint32_t ClearRemovePayloadRemoteNodes(ProcessAttr *attr, const struct RemovePayload *payload)
+{
+    uint32_t numaNodes = attr->numaAttr.numaNodes;
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int i = 0; i < payload->count; i++) {
+        ClearNodeBit(&numaNodes, payload->nid[i] + (LOCAL_NUMA_BITS - nrLocalNuma));
+    }
+    return numaNodes;
+}
+
+static int AccessUpdateProcessRemoteNodes(ProcessAttr *attr, uint32_t numaNodes)
+{
+    struct AccessAddPidPayload payload = { .pid = attr->pid };
+    payload.numaNodes = numaNodes;
+    payload.scanTime = attr->scanTime;
+    payload.duration = attr->duration;
+    payload.type = attr->scanType;
+    int ret = AccessIoctlAddPid(1, &payload);
+    if (ret) {
+        SMAP_LOGGER_ERROR("access ioctl update pid %d error: %d.", attr->pid, ret);
+    }
+    return ret;
+}
+
+static int IoctlRemoveProcess(struct RemoveMsg *msg)
 {
     for (int i = 0; i < msg->count; i++) {
-        pid_t pid = msg->payload[i].pid;
-        struct AccessRemovePidPayload payload = { .pid = pid };
-        int ret = AccessIoctlRemovePid(1, &payload);
+        struct RemovePayload *payload = &msg->payload[i];
+        pid_t pid = payload->pid;
+        if (IsRemoveWholeProcess(payload)) {
+            int ret = AccessRemovePid(pid);
+            if (ret) {
+                return ret;
+            }
+            continue;
+        }
+
+        ProcessAttr *attr = GetProcessAttrLocked(pid);
+        if (!attr) {
+            int ret = AccessRemovePid(pid);
+            if (ret) {
+                return ret;
+            }
+            continue;
+        }
+        uint32_t numaNodes = ClearRemovePayloadRemoteNodes(attr, payload);
+        int ret = GetL2Count(numaNodes) == 0 ? AccessRemovePid(pid) : AccessUpdateProcessRemoteNodes(attr, numaNodes);
         if (ret) {
-            SMAP_LOGGER_ERROR("access ioctl remove pid %d error: %d.", pid, ret);
             return ret;
         }
     }
     return 0;
 }
 
+static int CheckSmapRemoveGroupedPidLocked(struct RemoveMsg *msg)
+{
+    for (int i = 0; i < msg->count; i++) {
+        struct RemovePayload *payload = &msg->payload[i];
+        if (IsRemoveWholeProcess(payload)) {
+            continue;
+        }
+        ProcessAttr *attr = GetProcessAttrLocked(payload->pid);
+        if (attr && attr->groupPolicy.enabled) {
+            SMAP_LOGGER_ERROR("partial remove does not support grouped pid %d.", payload->pid);
+            return -EINVAL;
+        }
+    }
+    return 0;
+}
+
+static void ClearManagedWholeProcess(pid_t pid, bool *removed)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    ProcessAttr *attr = manager->processes;
+    while (attr && attr->pid != pid) {
+        attr = attr->next;
+    }
+    if (!attr) {
+        SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", pid);
+        return;
+    }
+
+    PidType type = attr->type;
+    LinkedListRemove(&attr, &manager->processes);
+    if (type >= PROCESS_TYPE && type < TYPE_MAX && manager->nr[type] > 0) {
+        manager->nr[type]--;
+    }
+    *removed = true;
+    SMAP_LOGGER_INFO("Remove pid: %d, from managed process.", pid);
+}
+
+static void ClearRemovedRemoteStrategy(ProcessAttr *attr, int remoteNid)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    int remoteIdx = remoteNid - nrLocalNuma;
+    if (remoteIdx < 0 || remoteIdx >= REMOTE_NUMA_NUM) {
+        return;
+    }
+
+    for (int i = 0; i < LOCAL_NUMA_NUM; i++) {
+        attr->strategyAttr.initRemoteMemRatio[i][remoteIdx] = 0;
+        attr->strategyAttr.l2RemoteMemRatio[i][remoteIdx] = 0;
+        attr->strategyAttr.l3RemoteMemRatio[i][remoteIdx] = 0;
+        attr->strategyAttr.memSize[i][remoteIdx] = 0;
+        attr->strategyAttr.allocRemoteNrPages[i][remoteIdx] = 0;
+        attr->strategyAttr.remoteNrPagesAfterMigrate[i][remoteIdx] = 0;
+    }
+    for (int i = 0; i < MAX_NODES; i++) {
+        attr->strategyAttr.nrMigratePages[i][remoteNid] = 0;
+        attr->strategyAttr.nrMigratePages[remoteNid][i] = 0;
+    }
+}
+
+static void RemoveManagedProcessRemoteNode(ProcessAttr *attr, int remoteNid)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    int remotePos = remoteNid + (LOCAL_NUMA_BITS - nrLocalNuma);
+    ClearNodeBit(&attr->numaAttr.numaNodes, remotePos);
+    ClearRemovedRemoteStrategy(attr, remoteNid);
+
+    int writeIdx = 0;
+    for (int i = 0; i < attr->remoteNumaCnt; i++) {
+        if (attr->migrateParam[i].nid == remoteNid) {
+            continue;
+        }
+        if (writeIdx != i) {
+            attr->migrateParam[writeIdx] = attr->migrateParam[i];
+        }
+        writeIdx++;
+    }
+    for (int i = writeIdx; i < REMOTE_NUMA_NUM; i++) {
+        attr->migrateParam[i].nid = 0;
+        attr->migrateParam[i].memSize = 0;
+    }
+    attr->remoteNumaCnt = GetL2Count(attr->numaAttr.numaNodes);
+}
+
+static void ClearManagedPartialRemoteNodes(struct RemovePayload *payload, bool *removed, bool *changed)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    ProcessAttr *attr = manager->processes;
+    while (attr && attr->pid != payload->pid) {
+        attr = attr->next;
+    }
+    if (!attr) {
+        SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", payload->pid);
+        return;
+    }
+    for (int i = 0; i < payload->count; i++) {
+        RemoveManagedProcessRemoteNode(attr, payload->nid[i]);
+    }
+    *changed = true;
+    if (attr->remoteNumaCnt == 0) {
+        ClearManagedWholeProcess(payload->pid, removed);
+    }
+}
+
 static void ClearManagedProcess(int nr, struct RemovePayload *payload)
 {
     bool removed = false;
-    struct ProcessManager *manager = GetProcessManager();
-    for (int i = 0; i < nr; i++) {
-        ProcessAttr *attr = manager->processes;
-        pid_t pid = payload[i].pid;
-        while (attr && attr->pid != pid) {
-            attr = attr->next;
-        }
-        if (!attr) {
-            SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", pid);
-            continue;
-        }
+    bool changed = false;
 
-        PidType type = attr->type;
-        LinkedListRemove(&attr, &manager->processes);
-        if (type >= PROCESS_TYPE && type < TYPE_MAX && manager->nr[type] > 0) {
-            manager->nr[type]--;
+    for (int i = 0; i < nr; i++) {
+        if (IsRemoveWholeProcess(&payload[i])) {
+            ClearManagedWholeProcess(payload[i].pid, &removed);
+        } else {
+            ClearManagedPartialRemoteNodes(&payload[i], &removed, &changed);
         }
-        removed = true;
-        SMAP_LOGGER_INFO("Remove pid: %d, from managed process.", pid);
     }
-    if (removed) {
+    if (removed || changed) {
         int ret = SyncAllProcessConfig();
         if (ret) {
             SMAP_LOGGER_WARNING("Synchronize process config maybe failed: %d.", ret);
@@ -1312,8 +1486,14 @@ int ubturbo_smap_remove(struct RemoveMsg *msg, int pidType)
 
     struct ProcessManager *manager = GetProcessManager();
     EnvMutexLock(&manager->lock);
+    ret = CheckSmapRemoveGroupedPidLocked(msg);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Check grouped pid for smap remove failed: %d.", ret);
+        EnvMutexUnlock(&manager->lock);
+        return ret;
+    }
     // send ioctl to remove pid
-    ret = IoctlRemoveWholeProcess(msg);
+    ret = IoctlRemoveProcess(msg);
     if (ret) {
         SMAP_LOGGER_ERROR("Ioctl remove pid failed: %d.", ret);
         EnvMutexUnlock(&manager->lock);

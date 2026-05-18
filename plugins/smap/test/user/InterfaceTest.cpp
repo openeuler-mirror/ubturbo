@@ -1294,6 +1294,65 @@ TEST_F(InterfaceTest, TestCheckSmapRemoveMsgIgnoresNidFields)
     EXPECT_EQ(0, ret);
 }
 
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgAcceptsPartialRemoteRemove)
+{
+    struct RemoveMsg msg = {};
+    struct ProcessManager manager = {};
+    manager.nrLocalNuma = 4;
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 2;
+    msg.payload[0].nid[0] = 4;
+    msg.payload[0].nid[1] = 5;
+    int pidType = VM_TYPE;
+
+    MOCKER(IsCountValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+
+    int ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgRejectsInvalidPartialRemoteNid)
+{
+    struct RemoveMsg msg = {};
+    struct ProcessManager manager = {};
+    manager.nrLocalNuma = 4;
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 1;
+    msg.payload[0].nid[0] = 3;
+    int pidType = VM_TYPE;
+
+    MOCKER(IsCountValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+
+    int ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgRejectsDuplicatePartialRemoteNid)
+{
+    struct RemoveMsg msg = {};
+    struct ProcessManager manager = {};
+    manager.nrLocalNuma = 4;
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 2;
+    msg.payload[0].nid[0] = 4;
+    msg.payload[0].nid[1] = 4;
+    int pidType = VM_TYPE;
+
+    MOCKER(IsCountValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+
+    int ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
 TEST_F(InterfaceTest, TestCheckSmapRemoveMsgRejectsDuplicatePid)
 {
     struct RemoveMsg msg = {};
@@ -1307,6 +1366,27 @@ TEST_F(InterfaceTest, TestCheckSmapRemoveMsgRejectsDuplicatePid)
 
     int ret = CheckSmapRemoveMsg(&msg, pidType);
     EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int CheckSmapRemoveGroupedPidLocked(struct RemoveMsg *msg);
+TEST_F(InterfaceTest, TestCheckSmapRemoveGroupedPidLockedRejectsPartialRemove)
+{
+    struct RemoveMsg msg = {};
+    ProcessAttr attr = {};
+    ProcessAttr *oldProcesses = g_processManager.processes;
+
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 1;
+    msg.payload[0].nid[0] = 4;
+    attr.pid = 1024;
+    attr.groupPolicy.enabled = true;
+    g_processManager.processes = &attr;
+
+    int ret = CheckSmapRemoveGroupedPidLocked(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    g_processManager.processes = oldProcesses;
 }
 
 TEST_F(InterfaceTest, TestSmapRemoveWithSmapIsNotRunning)
