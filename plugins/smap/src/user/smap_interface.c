@@ -701,7 +701,7 @@ static int BuildGroupedPolicies(struct GroupedMigrateOutMsg *msg,
         uint64_t numaPages[MAX_NODES] = { 0 };
         pid_t pid = msg->payload[i].pid;
         if (PidIsValid(pid)) {
-            int ret = GetPidNumaPagesFromNumaMaps(pid, numaPages);
+            int ret = GetPidNumaPagesFromNumaMaps(pid, numaPages, true);
             if (ret) {
                 SMAP_LOGGER_ERROR("Get grouped pid %d numa pages failed: %d.", pid, ret);
                 return ret;
