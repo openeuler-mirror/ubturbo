@@ -19,6 +19,7 @@
 
 extern unsigned int smap_scene;
 extern u32 g_pagesize_huge;
+extern unsigned int enable_hist;
 
 enum access_page_mode {
 	PAGE_MODE_4K = 0,
