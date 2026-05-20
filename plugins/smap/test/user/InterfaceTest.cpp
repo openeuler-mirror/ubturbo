@@ -1090,6 +1090,7 @@ TEST_F(InterfaceTest, TestSmapInitWithInitTrackingDevFailed)
     MOCKER(ProcessManagerInit).stubs().will(returnValue(0));
     MOCKER(DestroyProcessManager).stubs().will(ignoreReturnValue());
     MOCKER(InitTrackingDev).stubs().will(returnValue(-EINVAL));
+    MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
     int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -1103,6 +1104,7 @@ TEST_F(InterfaceTest, TestSmapInitWithAccessIoctlRemoveAllPidFailed)
     MOCKER(DestroyProcessManager).stubs().will(ignoreReturnValue());
     MOCKER(InitTrackingDev).stubs().will(returnValue(0));
     MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(-EINVAL));
+    MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
     int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -1118,6 +1120,7 @@ TEST_F(InterfaceTest, TestSmapInitWithInitVirAPIFailed)
     MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(0));
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(InitVirAPI).stubs().will(returnValue(-EINVAL));
+    MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
     int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -1133,6 +1136,7 @@ TEST_F(InterfaceTest, TestSmapInitWithRecoverFailed)
     MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(0));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(Recover).stubs().will(returnValue(-EINVAL));
+    MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
     int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
     EXPECT_EQ(-EBADF, ret);
 }
@@ -1148,6 +1152,7 @@ TEST_F(InterfaceTest, TestSmapInitWithInitAllThreadsFailed)
     MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(0));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(Recover).stubs().will(returnValue(0));
+    MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
     MOCKER(InitAllThreads).stubs().will(returnValue(-EINVAL));
     int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
     EXPECT_EQ(-EINVAL, ret);

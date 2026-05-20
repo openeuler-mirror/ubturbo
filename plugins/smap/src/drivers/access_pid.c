@@ -12,6 +12,8 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 #include <linux/pid.h>
+#include <linux/namei.h>
+#include <linux/sizes.h>
 
 #include "check.h"
 #include "accessed_bit.h"
@@ -29,6 +31,7 @@
 #define VM_MEMSLOT_PRIOR_THRE (3 * (1 << GB_TO_4K_SHIFT))
 #define SEC_TO_MS 1000
 #define SCAN_TIMES_NEEDED_BY_NEW_PID 2
+#define DEFAULT_PERIOD_MS 50
 
 struct access_pid_struct ap_data = {
 	.list = LIST_HEAD_INIT(ap_data.list),
@@ -557,6 +560,7 @@ static int init_access_statistic_pid_4k(struct access_add_pid_payload *payload)
 {
 	struct statistics_tracking_info *tmp, *ap;
 	int l1_node, l2_node, ret;
+	u64 total_pages, total_size_gb, suggested_scan_time;
 	unsigned long numa_nodes;
 
 	if (!payload)
@@ -617,6 +621,12 @@ static int init_access_statistic_pid_4k(struct access_add_pid_payload *payload)
 
 	pr_info("init statistic access tracking, pid: %d, local page number: %llu, remote page number: %llu\n",
 		tmp->pid, tmp->page_num[L1], tmp->page_num[L2]);
+	/* Suggest minimum scan_time for 4K scenario: scan_time = total_size(G) * 50 ms */
+	total_pages = tmp->page_num[L1] + tmp->page_num[L2];
+	total_size_gb = total_pages * PAGE_SIZE / SZ_1G;
+	suggested_scan_time = total_size_gb * DEFAULT_PERIOD_MS;
+	pr_info("STATISTIC_SCAN for 4K scenario: suggested minimum scan_time = %llu ms (total_size = %llu GB)\n",
+			suggested_scan_time, total_size_gb);
 	return 0;
 }
 

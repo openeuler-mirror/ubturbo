@@ -541,37 +541,38 @@ static void update_statistic_scan_freq_mm(u64 *vaddr, u64 page_cnt, int pid)
 	int i;
 	int j;
 	u32 wins_index;
+	u64 vaddr_idx, l1_idx, l2_idx;
 	struct statistics_tracking_info *tmp;
 	down_read(&statistic_lock);
 	list_for_each_entry(tmp, &statistic_pid_list, node) {
 		if (tmp->pid == pid) {
-			i = 0;
-			j = 0;
-			while (i < page_cnt && j < tmp->page_num[L1]) {
-				if (vaddr[i] == tmp->vaddr[L1][j]) {
+			l1_idx = 0;
+			vaddr_idx = 0;
+			while (vaddr_idx < page_cnt && l1_idx < tmp->page_num[L1]) {
+				if (vaddr[vaddr_idx] == tmp->vaddr[L1][l1_idx]) {
 					wins_index = tmp->scan_num;
-					tmp->sliding_windows[wins_index][j] = TRUE_REF;
-					i += 1;
-					j += 1;
-				} else if (vaddr[i] < tmp->vaddr[L1][j]) {
-					i += 1;
+					tmp->sliding_windows[wins_index][l1_idx] = TRUE_REF;
+					l1_idx++;
+					vaddr_idx++;
+				} else if (vaddr[vaddr_idx] < tmp->vaddr[L1][l1_idx]) {
+					vaddr_idx++;
 				} else {
-					j += 1;
+					l1_idx++;
 				}
 			}
 
-			i = 0;
-			j = 0;
-			while (i < page_cnt && j < tmp->page_num[L2]) {
-				if (vaddr[i] == tmp->vaddr[L2][j]) {
+			l2_idx = 0;
+			vaddr_idx = 0;
+			while (vaddr_idx < page_cnt && l2_idx < tmp->page_num[L2]) {
+				if (vaddr[vaddr_idx] == tmp->vaddr[L2][l2_idx]) {
 					wins_index = tmp->scan_num;
-					tmp->sliding_windows[wins_index][j + tmp->page_num[L1]] = TRUE_REF;
-					i += 1;
-					j += 1;
-				} else if (vaddr[i] < tmp->vaddr[L2][j]) {
-					i += 1;
+					tmp->sliding_windows[wins_index][l2_idx + tmp->page_num[L1]] = TRUE_REF;
+					l2_idx++;
+					vaddr_idx++;
+				} else if (vaddr[vaddr_idx] < tmp->vaddr[L2][l2_idx]) {
+					vaddr_idx++;
 				} else {
-					j += 1;
+					l2_idx++;
 				}
 			}
 		}
@@ -622,19 +623,20 @@ static int scan_kvm_memslots(struct kvm *kvm, pid_t pid, int page_size,
 	if (!slots)
 		return -EINVAL;
 
-	nr_pages = 0;
-	kvm_for_each_memslot(memslot, bkt, slots) {
-		if (!memslot_is_mem(memslot))
-			continue;
-		nr_pages += memslot->npages;
+	if (type == STATISTIC_SCAN) {
+		nr_pages = 0;
+		kvm_for_each_memslot(memslot, bkt, slots) {
+			if (!memslot_is_mem(memslot))
+				continue;
+			nr_pages += memslot->npages;
+		}
+		nr_pages >>= (__builtin_ctz(g_pagesize_huge) - PAGE_SHIFT);
+		vaddr = kzalloc(sizeof(u64) * nr_pages, GFP_ATOMIC);
+		if (!vaddr)
+			return -ENOMEM;
+		cur_index = 0;
 	}
-	nr_pages >>= (__builtin_ctz(g_pagesize_huge) - PAGE_SHIFT);
 
-	vaddr = kzalloc(sizeof(u64) * nr_pages, GFP_ATOMIC);
-	if (!vaddr) 
-		return -ENOMEM;
-
-	cur_index = 0;
 	kvm_for_each_memslot(memslot, bkt, slots) {
 		unsigned long hva;
 		int ret;
@@ -648,19 +650,24 @@ static int scan_kvm_memslots(struct kvm *kvm, pid_t pid, int page_size,
 			hva = gfn_to_hva_memslot(memslot, gpa_to_gfn(gpa));
 			if (!get_vma_if_huge_page(kvm, hva))
 				continue;
-			ret = hva_to_hpa(kvm, hva, type, pid);
-			if (ret)
-				continue;
-			vaddr[cur_index++] = hva;
-			if (cur_index >= nr_pages)
-				break;
+			if (type == STATISTIC_SCAN) {
+				vaddr[cur_index++] = hva;
+				if (cur_index >= nr_pages)
+					break;
+			} else {
+				ret = hva_to_hpa(kvm, hva, type, pid);
+				if (ret)
+					continue;
+			}
 		}
 	}
 	kvm_flush_remote_tlbs(kvm);
-	clear_statistic_tracking_info(pid);
-	update_statistic_scan_freq_mm(vaddr, cur_index, pid);
-	update_statistic_scan_num(pid);
-	kfree(vaddr);
+	if (type == STATISTIC_SCAN) {
+		clear_statistic_tracking_info(pid);
+		update_statistic_scan_freq_mm(vaddr, cur_index, pid);
+		update_statistic_scan_num(pid);
+		kfree(vaddr);
+	}
 	return 0;
 }
 
