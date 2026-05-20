@@ -31,6 +31,62 @@
 
 static struct smap_hist_dev g_smap_hist_dev;
 
+/**
+ * hist_4k_scan_mode_set - Callback for setting scan mode parameter
+ * @val: String containing the new scan mode value
+ * @kp: Pointer to kernel_param structure
+ *
+ * When user modifies the parameter via sysfs:
+ * - Update the global device's scan mode
+ * - Reset sequential loop scan offsets (start from index 0 for the new mode)
+ */
+static int hist_4k_scan_mode_set(const char *val, const struct kernel_param *kp)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	unsigned int new_mode;
+	int ret;
+	u32 i;
+
+	/* Parse parameter value */
+	ret = kstrtouint(val, 10, &new_mode);
+	if (ret)
+		return ret;
+
+	/* Validate parameter range */
+	if (new_mode > HIST_4K_SCAN_SEQ_LOOP) {
+		pr_err("invalid scan mode: %u, valid: 0-1\n", new_mode);
+		return -EINVAL;
+	}
+
+	/* If mode unchanged, return directly */
+	if (new_mode == dev->scan_mode)
+		return 0;
+
+	pr_info("hist 4k scan mode changed: %u -> %u\n", dev->scan_mode, new_mode);
+
+	/* Update scan mode */
+	dev->scan_mode = new_mode;
+
+	/* Reset sequential loop scan offsets: start from beginning when switching mode */
+	for (i = 0; i < dev->ba_cnt; ++i) {
+		dev->seq_loop_ba_offset[i] = -1;
+	}
+
+	return 0;
+}
+
+/* Custom parameter operations structure */
+static const struct kernel_param_ops hist_4k_scan_mode_ops = {
+	.set = hist_4k_scan_mode_set,
+	.get = param_get_uint,
+};
+
+/* 4K scan mode kernel parameter: 0=multi-granularity sliding, 1=sequential loop (default) */
+static unsigned int hist_4k_scan_mode_param = HIST_4K_SCAN_SEQ_LOOP;
+module_param_cb(hist_4k_scan_mode_param, &hist_4k_scan_mode_ops,
+		&hist_4k_scan_mode_param, 0644);
+MODULE_PARM_DESC(hist_4k_scan_mode_param, "4K scan mode: 0=multi-granularity, 1=seq-loop (default)");
+
 static inline u64 align_addr(u64 addr, u32 low_bit_len)
 {
 	return (addr >> low_bit_len) << low_bit_len;
@@ -154,9 +210,10 @@ static inline u64 seg_end(struct addr_seg *seg)
 }
 
 static inline bool addr_seg_is_continuous_scan_wins(struct addr_seg *seg1,
-						    struct addr_seg *seg2)
+						    struct addr_seg *seg2,
+						    enum ub_hist_sts_size sts_size)
 {
-	u64 scan_win_size = get_hist_scan_win_size(STS_SIZE_2M);
+	u64 scan_win_size = get_hist_scan_win_size(sts_size);
 	if (seg2->start - seg_end(seg1) <= scan_win_size)
 		return true;
 
@@ -192,12 +249,13 @@ static void align_segments(struct addr_seg *segs, int cnt,
 	}
 }
 
-static int merge_segments(struct addr_seg *segs, int cnt)
+static int merge_segments(struct addr_seg *segs, int cnt,
+			  enum ub_hist_sts_size sts_size)
 {
 	int i, merged_cnt = 0;
 	for (i = 1; i < cnt; i++) {
 		bool is_continuous = addr_seg_is_continuous_scan_wins(
-			&segs[merged_cnt], &segs[i]);
+			&segs[merged_cnt], &segs[i], sts_size);
 		if (is_continuous) {
 			segs[merged_cnt].size =
 				max_t(u64, seg_end(&segs[merged_cnt]),
@@ -260,12 +318,13 @@ static void calc_4k_scan_hot_wins(struct segs_info *info, actc_t *buf,
 	}
 }
 
-static int cut_into_2m_scan_wins(struct addr_seg *segs, int cnt,
-				 struct addr_seg *aligned_segs, int aligned_cnt)
+static int cut_into_scan_wins(struct addr_seg *segs, int cnt,
+			       struct addr_seg *aligned_segs, int aligned_cnt,
+			       enum ub_hist_sts_size sts_size)
 {
 	int i;
 	u32 nr_wins = 0;
-	u64 shift = get_hist_scan_win_size(STS_SIZE_2M);
+	u64 shift = get_hist_scan_win_size(sts_size);
 	for (i = 0; i < cnt; i++) {
 		u64 start = segs[i].start;
 		u64 size = segs[i].size;
@@ -288,8 +347,17 @@ static int cut_into_2m_scan_wins(struct addr_seg *segs, int cnt,
 	return 0;
 }
 
-static int generate_aligned_2m_scan_wins_info(struct segs_info *win_info,
-					      struct segs_info *info)
+/**
+ * generate_aligned_scan_wins_info - Generate aligned scan windows (generic version)
+ * @win_info: Output window information
+ * @info: Input remote memory address segment information
+ * @sts_size: Scan granularity (STS_SIZE_2M or STS_SIZE_4K)
+ *
+ * Generate all scan windows for specified granularity, without hot window filtering
+ */
+static int generate_aligned_scan_wins_info(struct segs_info *win_info,
+					    struct segs_info *info,
+					    enum ub_hist_sts_size sts_size)
 {
 	int merged_cnt, ret;
 	u32 total_wins;
@@ -303,9 +371,9 @@ static int generate_aligned_2m_scan_wins_info(struct segs_info *win_info,
 		return -ENOMEM;
 
 	memcpy(merged_segs, info->segs, info->cnt * sizeof(struct addr_seg));
-	merged_cnt = merge_segments(merged_segs, info->cnt);
-	align_segments(merged_segs, merged_cnt, STS_SIZE_2M);
-	total_wins = count_nr_windows(merged_segs, merged_cnt, STS_SIZE_2M);
+	merged_cnt = merge_segments(merged_segs, info->cnt, sts_size);
+	align_segments(merged_segs, merged_cnt, sts_size);
+	total_wins = count_nr_windows(merged_segs, merged_cnt, sts_size);
 	if (total_wins == 0) {
 		vfree(merged_segs);
 		return -EINVAL;
@@ -316,8 +384,8 @@ static int generate_aligned_2m_scan_wins_info(struct segs_info *win_info,
 		return -ENOMEM;
 	}
 
-	ret = cut_into_2m_scan_wins(merged_segs, merged_cnt, aligned_segs,
-				    total_wins);
+	ret = cut_into_scan_wins(merged_segs, merged_cnt, aligned_segs,
+				  total_wins, sts_size);
 	if (ret) {
 		vfree(aligned_segs);
 	} else {
@@ -483,6 +551,8 @@ static int submit_ba_task(uint64_t ba_tag, u64 start_addr,
 	union hi_upa_smap_cfg_smap_cfg00 *smap_cfg00;
 	struct ub_hist_ba_config cfg = { 0 };
 
+	pr_debug("submit_ba_task: ba_tag=%llu, start_addr=%#llx\n", ba_tag, start_addr);
+
 	base_addr = align_addr_by_sts_size(start_addr, sts_size);
 	shift = get_hist_addr_shift(STS_SIZE_4K);
 	cfg.reg_offset = BA_CTRL_REG_OFFSET;
@@ -579,6 +649,7 @@ static int smap_hist_read_paral(struct segs_info *win_info,
 	int ret = 0, i, ba_cnt;
 	u64 ba_tag;
 	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	bool do_seq_loop = (sts_size == STS_SIZE_4K && dev->scan_mode == HIST_4K_SCAN_SEQ_LOOP);
 	struct ub_hist_ba_result *ba_result =
 		kmalloc(sizeof(*ba_result), GFP_KERNEL);
 	int *offset = kzalloc(sizeof(*offset) * dev->ba_cnt, GFP_KERNEL);
@@ -587,8 +658,14 @@ static int smap_hist_read_paral(struct segs_info *win_info,
 		kfree(offset);
 		return -ENOMEM;
 	}
+
+	/*
+	 * Initialize offsets for each BA:
+	 * - Sequential loop mode with 4K scan: use seq_loop_ba_offset recorded offset
+	 * - Other modes: start from -1 (scan from beginning)
+	 */
 	for (i = 0; i < dev->ba_cnt; ++i) {
-		offset[i] = -1;
+		offset[i] = do_seq_loop ? dev->seq_loop_ba_offset[i] : -1;
 	}
 
 	while (1) {
@@ -614,14 +691,25 @@ static int smap_hist_read_paral(struct segs_info *win_info,
 
 			ret = get_hist_results(dev->ba_info[ba_cnt].ba_tag,
 					       ba_result);
+			/* Regardless of interruption, first update frequency to actc_data */
+			copy_actc_to_buf(rmem_info,
+					 &win_info->segs[offset[ba_cnt]], buf,
+					 ba_result->buffer, buf_len, sts_size);
+
 			if (ret) {
+				/*
+				 * Scan interrupted (abort_flag): save current BA offset,
+				 * continue from here on next scan
+				 */
+				if (do_seq_loop && ret == -EAGAIN) {
+					dev->seq_loop_ba_offset[ba_cnt] = offset[ba_cnt];
+					pr_debug("seq_loop scan paused, ba[%d] offset: %d\n",
+						ba_cnt, offset[ba_cnt]);
+				}
 				kfree(ba_result);
 				kfree(offset);
 				return ret;
 			}
-			copy_actc_to_buf(rmem_info,
-					 &win_info->segs[offset[ba_cnt]], buf,
-					 ba_result->buffer, buf_len, sts_size);
 		}
 	}
 	kfree(ba_result);
@@ -652,18 +740,6 @@ static u32 get_2m_scan_wins_per_ba(struct segs_info *win_info)
 	return max_cnt;
 }
 
-static int generate_aligned_wins_info(struct segs_info *win_info,
-				      struct segs_info *info, actc_t *buf,
-				      enum ub_hist_sts_size sts_size)
-{
-	int ret = 0;
-
-	ret = (sts_size == STS_SIZE_2M) ?
-		      generate_aligned_2m_scan_wins_info(win_info, info) :
-		      generate_aligned_4k_scan_wins_info(win_info, info, buf);
-	return ret;
-}
-
 static int do_hist_scan_sliding(struct segs_info *info, bool do_multi_gran,
 				actc_t *buf, u32 buf_len,
 				enum ub_hist_sts_size sts_size)
@@ -671,30 +747,42 @@ static int do_hist_scan_sliding(struct segs_info *info, bool do_multi_gran,
 	int ret;
 	struct segs_info win_info;
 	u32 scan_time;
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	bool do_seq_loop = (sts_size == STS_SIZE_4K && dev->scan_mode == HIST_4K_SCAN_SEQ_LOOP);
+
 	/*
-	 * First of all, we calculate the least number of windows to
-	 * cover all address segments
+	 * Sequential loop scan mode: generate all windows directly, without hot window filtering
+	 * Multi-granularity scan mode: generate windows based on sts_size, may filter hot windows
 	 */
-	ret = generate_aligned_wins_info(&win_info, info, buf, sts_size);
+	if (do_seq_loop || sts_size == STS_SIZE_2M) {
+		ret = generate_aligned_scan_wins_info(&win_info, info, sts_size);
+	} else {
+		ret = generate_aligned_4k_scan_wins_info(&win_info, info, buf);
+	}
 	if (ret) {
-		pr_err("generate merged segs info failed. ret: %d\n", ret);
+		pr_err("generate aligned segs info failed. ret: %d\n", ret);
 		return ret;
 	}
+
 	/* Secondly, calculate scan period of a single window */
 	if (sts_size == STS_SIZE_2M) {
-		g_smap_hist_dev.scan_wins_num_per_ba =
-			get_2m_scan_wins_per_ba(&win_info);
+		dev->scan_wins_num_per_ba = get_2m_scan_wins_per_ba(&win_info);
 	}
-	scan_time = (do_multi_gran == true) ?
+
+	/*
+	 * Sequential loop scan: fixed 64ms
+	 * Multi-granularity scan: dynamically calculated based on window count
+	 */
+	scan_time = (do_multi_gran || do_seq_loop) ?
 			    HIST_SCAN_DURATION_PER_WIN :
-			    HIST_THREAD_PERIOD /
-				    g_smap_hist_dev.scan_wins_num_per_ba;
-	pr_debug("scan_wins_num_per_win: %u ms\n", scan_time);
+			    HIST_THREAD_PERIOD / dev->scan_wins_num_per_ba;
+	pr_debug("scan_time_per_win: %u ms\n", scan_time);
 
 	/* Finally, launch scan job for every windows */
 	clear_actc_buf();
 	ret = smap_hist_read_paral(&win_info, info, sts_size, buf, scan_time,
 				   buf_len);
+
 	vfree(win_info.segs);
 	return ret;
 }
@@ -703,6 +791,7 @@ static int hist_scan_sliding(struct segs_info *info, u32 scan_time_total,
 			     actc_t *buf, u32 buf_len, u32 pgsize)
 {
 	int ret;
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
 	/*
 	 * For 2M pages, size of a window which consist of 16K pages is as large
 	 * as 32GB, we can finish all windows scan in time and ensure that each
@@ -713,7 +802,8 @@ static int hist_scan_sliding(struct segs_info *info, u32 scan_time_total,
 	 * windows, scan work of a 64MB sliding window will be launched in those
 	 * windows later to get a fine-grained access count of each 4K pages.
 	 */
-	bool do_multi_gran = pgsize == SIZE_4K;
+	bool do_multi_gran = (pgsize == SIZE_4K && dev->scan_mode == HIST_4K_SCAN_MULTI_GRAN);
+	bool do_seq_loop = (pgsize == SIZE_4K && dev->scan_mode == HIST_4K_SCAN_SEQ_LOOP);
 
 	if (!addr_seg_is_valid(info)) {
 		pr_err("invalid address segment passed to sliding scan\n");
@@ -727,21 +817,41 @@ static int hist_scan_sliding(struct segs_info *info, u32 scan_time_total,
 		pr_err("null buffer passed to sliding scan\n");
 		return -EINVAL;
 	}
-	ret = do_hist_scan_sliding(info, do_multi_gran, buf, buf_len,
-				   STS_SIZE_2M);
-	if (ret) {
-		pr_debug("sliding scan on 2M pages failed, ret: %d\n", ret);
-		return ret;
+	/*
+	 * 2M scan: only needed for multi-granularity sliding mode or non-4K pages
+	 * Sequential loop sliding directly scans all 4K windows, no need for 2M pre-scan
+	 */
+	if (do_multi_gran || pgsize == SIZE_2M) {
+		ret = do_hist_scan_sliding(info, do_multi_gran, buf, buf_len,
+					   STS_SIZE_2M);
+		if (ret) {
+			pr_debug("sliding scan on 2M pages failed, ret: %d\n", ret);
+			return ret;
+		}
 	}
-	if (!do_multi_gran) {
+
+	if (pgsize == SIZE_2M)
 		return 0;
-	}
-	/* Rescan for the secondary hierarchy */
-	ret = do_hist_scan_sliding(info, do_multi_gran, buf, buf_len,
-				   STS_SIZE_4K);
-	if (ret) {
-		pr_debug("sliding scan on 4K pages failed, ret: %d\n", ret);
-		return ret;
+
+	/*
+	 * 4K scan: choose method based on scan_mode
+	 * Multi-granularity sliding: first 2M coarse scan to filter hot regions, then 4K fine scan on hot windows
+	 * Sequential loop sliding: directly scan all 4K windows sequentially, fixed 64ms
+	 */
+	if (do_seq_loop) {
+		ret = do_hist_scan_sliding(info, false, buf, buf_len,
+					   STS_SIZE_4K);
+		if (ret) {
+			pr_debug("seq loop scan on 4K pages failed, ret: %d\n", ret);
+			return ret;
+		}
+	} else {
+		ret = do_hist_scan_sliding(info, true, buf, buf_len,
+					   STS_SIZE_4K);
+		if (ret) {
+			pr_debug("sliding scan on 4K pages failed, ret: %d\n", ret);
+			return ret;
+		}
 	}
 	return 0;
 }
@@ -990,8 +1100,16 @@ static int scan_thread_run(void *data)
 		}
 		if (dev->status.status_all) {
 			u32 pgsize = dev->status.flag.new_pgsize ?: dev->pgsize;
+			u32 j;
+
 			pr_info("histogram tracking page info has been reinited, status: %#x\n",
 				dev->status.status_all);
+
+			/* Reset sequential loop scan offsets: start from beginning when memory updated or page size changed */
+			for (j = 0; j < HIST_STS_DEV_CNT; ++j) {
+				dev->seq_loop_ba_offset[j] = -1;
+			}
+
 			ret = hist_pginfo_reinit(dev, pgsize);
 			if (ret) {
 				pr_err("failed to reinit histogram tracking page info, ret: %d\n",
@@ -1014,7 +1132,8 @@ static int scan_thread_run(void *data)
 
 		ret = hist_scan_sliding(&dev->info, dev->period, dev->buf,
 					dev->pgcount, dev->pgsize);
-		if (ret) {
+		/* -EAGAIN indicates scan interrupted, partial scanned data is valid and needs update */
+		if (ret && ret != -EAGAIN) {
 			pr_debug("failed to do scan sliding, ret: %d\n", ret);
 			msleep(THREAD_SLEEP);
 			continue;
@@ -1106,6 +1225,7 @@ int hist_init(u32 pgsize)
 {
 	struct smap_hist_dev *dev = &g_smap_hist_dev;
 	int ret;
+	u32 i;
 
 	ret = ub_hist_init();
 	if (ret)
@@ -1121,6 +1241,14 @@ int hist_init(u32 pgsize)
 		goto exit_hist;
 
 	dev->period = HIST_THREAD_PERIOD;
+
+	/* Initialize scan mode using kernel parameter, default is sequential loop sliding */
+	dev->scan_mode = hist_4k_scan_mode_param;
+
+	/* Initialize sequential loop scan offset for each BA to -1 (start from beginning) */
+	for (i = 0; i < HIST_STS_DEV_CNT; ++i) {
+		dev->seq_loop_ba_offset[i] = -1;
+	}
 
 	ret = addr_segs_init(dev, pgsize);
 	if (ret)
