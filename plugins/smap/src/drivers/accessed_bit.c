@@ -1318,8 +1318,9 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 		if (is_first)
 			pte_walk->group_hot = pte_young(ptent);
 		else if (pte_walk->group_hot) {
+			pte_walk->group_hot_skip_cnt++;
 			if (!is_hist)
-			actc_data_update(nid, pa_idx);
+				actc_data_update(nid, pa_idx);
 			goto skip_scan;
 		}
 	}
@@ -1496,7 +1497,8 @@ static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 	struct smap_vma_struct *vma_array = NULL;
 	struct pte_walk pte_walk = {
 		.flag = false,
-		.ap = ap
+		.ap = ap,
+		.group_hot_skip_cnt = 0
 	};
 	pte_walk.pid = ap->pid;
 	pte_walk.type = ap->type;
@@ -1524,6 +1526,10 @@ static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 
 	update_and_cleanup_statistic(ap->pid, &pte_walk, mm, vma_array);
 	mmput(mm);
+
+	if (pte_walk.type == NORMAL_SCAN)
+		pr_debug("pid %d: group_hot skipped %llu pages\n",
+			 ap->pid, pte_walk.group_hot_skip_cnt);
 
 	return ret;
 }

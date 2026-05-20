@@ -63,6 +63,7 @@ struct pte_walk {
 	u64 *statistic_vaddr;
 	struct access_pid *ap;
 	bool group_hot;
+	u64 group_hot_skip_cnt;
 };
 
 struct freq_info {
