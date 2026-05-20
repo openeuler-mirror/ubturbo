@@ -70,23 +70,31 @@ static int calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
 	return calc_paddr_acidx_iomem(paddr, nid, index, page_size);
 }
 
+static inline struct page *smap_paddr_to_page(phys_addr_t paddr)
+{
+	unsigned long pfn = PHYS_PFN(paddr);
+
+	if (pfn_valid(pfn))
+		return pfn_to_online_page(pfn);
+	return NULL;
+}
+
+bool is_file_or_shared_page(phys_addr_t paddr)
+{
+	struct folio *folio;
+	struct page *page = smap_paddr_to_page(paddr);
+	if (!page)
+		return false;
+	folio = page_folio(page);
+
+	return !folio_test_anon(folio) || folio_test_ksm(folio) ||
+	       page_mapcount(page) > 1 || folio_test_swapcache(folio);
+}
+
 static int set_non_anon_bm(struct access_pid *ap, u64 acidx, u64 paddr, int nid)
 {
-	unsigned long pfn;
-	struct page *p_page = NULL;
-
-	pfn = PHYS_PFN(paddr);
-	if (!pfn_valid(pfn)) {
-		return -EINVAL;
-	}
-	p_page = pfn_to_online_page(pfn);
-	if (!p_page) {
-		return -EINVAL;
-	}
-	if (!PageHuge(p_page)) {
-		if (!PageAnon(p_page) || page_mapcount(p_page) > 1) {
-			set_bit(acidx, ap->white_list_bm[nid]);
-		}
+	if (is_file_or_shared_page(paddr)) {
+		set_bit(acidx, ap->white_list_bm[nid]);
 	}
 	return 0;
 }

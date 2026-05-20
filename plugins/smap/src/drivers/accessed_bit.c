@@ -1318,6 +1318,7 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 		if (is_first)
 			pte_walk->group_hot = pte_young(ptent);
 		else if (pte_walk->group_hot) {
+			if (!is_hist)
 			actc_data_update(nid, pa_idx);
 			goto skip_scan;
 		}
@@ -1327,10 +1328,9 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 		if (pte_walk->type == STATISTIC_SCAN)
 			pte_walk->statistic_vaddr[pte_walk->statistic_cnt++] = addr;
 		actc_data_update(nid, pa_idx);
-		if (pte_walk->type == STATISTIC_SCAN || !is_hist) {
+		if (!is_file_or_shared_page(paddr))
 			__ptep_test_and_clear_young(NULL, 0, pte);
-			pte_walk->flag = true;
-		}
+		pte_walk->flag = true;
 	}
 skip_scan:
 	if (access_pid_cur_last_scanning(pte_walk->ap))

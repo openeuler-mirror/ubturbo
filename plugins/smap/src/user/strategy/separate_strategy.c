@@ -339,11 +339,11 @@ static uint64_t CalcSwapNum4K(ProcessAttr *process, int localNid, int remoteNid,
     ActCount *localActCount = &process->scanAttr.actCount[localNid];
     ActCount *remoteActCount = &process->scanAttr.actCount[remoteNid];
     uint64_t localLen = process->scanAttr.actcLen[localNid] - numaOffset[localNid];
-    uint64_t remoteLen = process->scanAttr.actcLen[remoteNid] - numaOffset[remoteNid];
     uint64_t localFree = localActCount->pageNum - localActCount->whiteNum;
     uint64_t remoteFree = remoteActCount->pageNum - remoteActCount->whiteNum;
-    if (localActCount->freqZero > numaOffset[localNid]) {
-        lastZeroNum = localActCount->freqZero - numaOffset[localNid];
+    uint64_t freqBucketZero = localActCount->freqBuckets[0];
+    if (freqBucketZero > numaOffset[localNid]) {
+        lastZeroNum = freqBucketZero - numaOffset[localNid];
     } else {
         lastZeroNum = 0;
     }
@@ -352,10 +352,8 @@ static uint64_t CalcSwapNum4K(ProcessAttr *process, int localNid, int remoteNid,
     } else {
         lastFreqNum = 0;
     }
-    migrateNum = MIN(localLen, remoteLen);
-    migrateNum = MIN(migrateNum, process->separateParam.maxMigrate);
+    migrateNum = MIN(localLen, process->separateParam.maxMigrate);
     migrateNum = MIN(migrateNum, numaFreePage[localNid]);
-    migrateNum = MIN(migrateNum, numaFreePage[remoteNid]);
     migrateNum = MIN(migrateNum, lastZeroNum);
     migrateNum = MIN(migrateNum, lastFreqNum);
     migrateNum = MIN(migrateNum, localFree);

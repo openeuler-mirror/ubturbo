@@ -53,13 +53,13 @@ static inline bool is_access_hugepage(void)
 
 static inline struct access_tracking_dev *get_access_tracking_dev(int node_id)
 {
-	struct access_tracking_dev *adev = NULL;
+	struct access_tracking_dev *adev;
 	list_for_each_entry(adev, &access_dev, list) {
 		if (adev->node == node_id) {
-			break;
+			return adev;
 		}
 	}
-	return adev;
+	return NULL;
 }
 
 static inline struct access_tracking_dev *get_first_access_dev(void)

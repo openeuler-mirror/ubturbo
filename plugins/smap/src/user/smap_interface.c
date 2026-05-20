@@ -828,7 +828,7 @@ static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType, uint
         SMAP_LOGGER_ERROR("Smap mig out msg is null.");
         return -EINVAL;
     }
-    uint32_t scanPeriod = MIN_SCAN_PERIOD;
+    uint32_t scanPeriod = DEFAULT_SCAN_PERIOD;
     struct AccessAddPidPayload payload[MAX_NR_MIGOUT] = { 0 };
     for (int i = 0; i < msg->count; ++i) {
         payload[i].type = NORMAL_SCAN;

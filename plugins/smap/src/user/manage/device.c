@@ -48,7 +48,7 @@ static int SendCmdToAllNodes(int fds[], unsigned long cmd, int arg)
         if (fds[i] >= 0) {
             if (ioctl(fds[i], cmd, arg) < 0) {
                 SMAP_LOGGER_DEBUG("ioctl for node%d failed: %s, skipped.", i, strerror(errno));
-                ret = -EBADF;
+                return -EBADF;
             }
         }
     }
@@ -147,7 +147,7 @@ static int GetNrLocalNumaFromKernel(struct ProcessManager *manager)
     }
 
     int nrLocalNuma = 0;
-    int ret = ioctl(manager->fds.access, SMAP_ACCESS_GET_NR_LOCAL_NUMA, 
+    int ret = ioctl(manager->fds.access, SMAP_ACCESS_GET_NR_LOCAL_NUMA,
                 &nrLocalNuma);
     if (ret < 0) {
         SMAP_LOGGER_ERROR("failed to get nr_local_numa from kernel: %d, errno: %d",
