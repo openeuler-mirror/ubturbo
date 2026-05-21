@@ -120,14 +120,17 @@ int add_to_bm_page(u64 paddr, struct access_pid *ap)
 	if (ret) {
 		return ret;
 	}
-	set_bit(acidx, ap->paddr_bm[nid]);
-	ap->page_num[nid]++;
+	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly */
+	if (!test_bit(acidx, ap->paddr_bm[nid])) {
+		set_bit(acidx, ap->paddr_bm[nid]);
+		ap->page_num[nid]++;
+	}
 	return 0;
 }
 
 int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap)
 {
-	int nid_pos;
+	int ret, nid_pos;
 	unsigned long numa_nodes;
 
 	nid_pos = convert_nid_to_pos(nid);
@@ -138,9 +141,14 @@ int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap)
 	if (BIT_WORD(acidx) >= ap->bm_len[nid])
 		return -ERANGE;
 
-	set_non_anon_bm(ap, acidx, paddr, nid);
-	set_bit(acidx, ap->paddr_bm[nid]);
-	ap->page_num[nid]++;
+	ret = set_non_anon_bm(ap, acidx, paddr, nid);
+	if (ret)
+		return ret;
+	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly */
+	if (!test_bit(acidx, ap->paddr_bm[nid])) {
+		set_bit(acidx, ap->paddr_bm[nid]);
+		ap->page_num[nid]++;
+	}
 	return 0;
 }
 
@@ -214,9 +222,12 @@ int add_to_bm_hugepage(u64 vaddr, u64 paddr, struct access_pid *ap)
 	if (BIT_WORD(acidx) >= ap->bm_len[nid]) {
 		return -ERANGE;
 	}
-	set_bit(acidx, ap->paddr_bm[nid]);
+	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly */
+	if (!test_bit(acidx, ap->paddr_bm[nid])) {
+		set_bit(acidx, ap->paddr_bm[nid]);
+		ap->page_num[nid]++;
+	}
 	set_pa_prior(ap, vaddr, acidx, nid);
-	ap->page_num[nid]++;
 	return 0;
 }
 
