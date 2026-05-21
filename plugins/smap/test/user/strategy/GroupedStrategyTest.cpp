@@ -259,6 +259,51 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategyPromotePrefersLargerLocalDeficit)
     FreeMigList(mlist);
 }
 
+TEST_F(GroupedStrategyTest, TestGroupedStrategyPromoteOrdersGroupsByDeficit)
+{
+    ProcessAttr process = {};
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    ActcData remote4[1] = {};
+    ActcData remote5[1] = {};
+
+    process.pid = 111;
+    process.groupPolicy.enabled = true;
+    process.groupPolicy.groupCount = 2;
+    process.groupPolicy.groups[0].localCount = 1;
+    process.groupPolicy.groups[0].locals[0].nid = 0;
+    process.groupPolicy.groups[0].locals[0].localReservePages = 1;
+    process.groupPolicy.groups[0].targetCount = 1;
+    process.groupPolicy.groups[0].targets[0].nid = 4;
+    process.groupPolicy.groups[0].targets[0].quotaPages = 10;
+    process.groupPolicy.groups[0].targets[0].usedPages = 1;
+    process.groupPolicy.groups[1].localCount = 1;
+    process.groupPolicy.groups[1].locals[0].nid = 1;
+    process.groupPolicy.groups[1].locals[0].localReservePages = 3;
+    process.groupPolicy.groups[1].targetCount = 1;
+    process.groupPolicy.groups[1].targets[0].nid = 5;
+    process.groupPolicy.groups[1].targets[0].quotaPages = 10;
+    process.groupPolicy.groups[1].targets[0].usedPages = 1;
+
+    remote4[0].addr = 0x4000;
+    remote4[0].freq = 4;
+    process.scanAttr.actcData[4] = remote4;
+    process.scanAttr.actcLen[4] = 1;
+    remote5[0].addr = 0x5000;
+    remote5[0].freq = 5;
+    process.scanAttr.actcData[5] = remote5;
+    process.scanAttr.actcLen[5] = 1;
+
+    MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(1, mlist[5][1].nr);
+    EXPECT_EQ(0x5000, mlist[5][1].addr[0]);
+    EXPECT_EQ(1, mlist[4][0].nr);
+    EXPECT_EQ(0x4000, mlist[4][0].addr[0]);
+
+    FreeMigList(mlist);
+}
+
 TEST_F(GroupedStrategyTest, TestUpdateGroupedMigrationResult)
 {
     ProcessAttr process = {};
@@ -277,6 +322,9 @@ TEST_F(GroupedStrategyTest, TestUpdateGroupedMigrationResult)
 
     UpdateGroupedMigrationResult(&process, 4, 0, 2);
     EXPECT_EQ(1, process.groupPolicy.groups[0].targets[0].usedPages);
+
+    UpdateGroupedMigrationResult(&process, 4, 0, 2);
+    EXPECT_EQ(0, process.groupPolicy.groups[0].targets[0].usedPages);
 }
 
 TEST_F(GroupedStrategyTest, TestGroupedStrategySwapAfterStableRounds)

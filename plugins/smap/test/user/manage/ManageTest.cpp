@@ -41,6 +41,7 @@ protected:
 };
 
 extern "C" struct ProcessManager g_processManager;
+extern "C" uint32_t g_pageSizeHuge;
 extern "C" RunMode g_runMode;
 extern "C" void RemoteNumaInfoInit();
 TEST_F(ManageTest, TestRemoteNumaInfoInit)
@@ -394,6 +395,15 @@ TEST_F(ManageTest, TestOpenNumaMaps)
     EXPECT_NE(ret, nullptr);
 }
 
+extern "C" int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge);
+TEST_F(ManageTest, TestGetPidNumaPagesFromNumaMapsOpenFailure)
+{
+    uint64_t numaPages[MAX_NODES] = { 0 };
+    MOCKER(OpenNumaMaps).expects(once()).will(returnValue(static_cast<FILE *>(nullptr)));
+    int ret = GetPidNumaPagesFromNumaMaps(1234, numaPages, false);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
 extern "C" bool IsNumaMapLineHuge(char *line);
 TEST_F(ManageTest, TestIsNumaMapLineHuge)
 {
@@ -534,6 +544,174 @@ TEST_F(ManageTest, TestProcessAddManageNewPidFailed)
     ret = ProcessAddManage(&param, nullptr);
     EXPECT_EQ(-EINVAL, ret);
     EXPECT_EQ(0, g_processManager.nr[VM_TYPE]);
+}
+
+static void FillPolicyForManageTest(GroupMigrationPolicy *policy)
+{
+    policy->enabled = true;
+    policy->groupCount = 1;
+    policy->groups[0].localCount = 1;
+    policy->groups[0].locals[0].nid = 0;
+    policy->groups[0].locals[0].localReservePages = 2;
+    policy->groups[0].targetCount = 1;
+    policy->groups[0].targets[0].nid = 4;
+    policy->groups[0].targets[0].quotaPages = 8;
+    policy->groups[0].targets[0].usedPages = 3;
+}
+
+extern "C" int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
+TEST_F(ManageTest, TestProcessAddGroupedManageNewPid)
+{
+    GroupMigrationPolicy policy = {};
+    FillPolicyForManageTest(&policy);
+
+    g_processManager.processes = nullptr;
+    g_processManager.nr[VM_TYPE] = 0;
+    MOCKER(CheckPid).stubs().will(returnValue(0));
+    MOCKER(VMPreprocess).stubs().will(returnValue(0));
+    MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
+
+    int ret = ProcessAddGroupedManage(1234, 0x11, &policy);
+    EXPECT_EQ(0, ret);
+    ASSERT_NE(nullptr, g_processManager.processes);
+    EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
+    EXPECT_EQ(1234, g_processManager.processes->pid);
+    EXPECT_EQ((uint32_t)0x11, g_processManager.processes->numaAttr.numaNodes);
+    EXPECT_TRUE(g_processManager.processes->groupPolicy.enabled);
+    EXPECT_EQ((uint64_t)2, g_processManager.processes->groupPolicy.groups[0].locals[0].localReservePages);
+    EXPECT_EQ((uint64_t)3, g_processManager.processes->groupPolicy.groups[0].targets[0].usedPages);
+
+    free(g_processManager.processes);
+    g_processManager.processes = nullptr;
+    g_processManager.nr[VM_TYPE] = 0;
+}
+
+TEST_F(ManageTest, TestProcessAddGroupedManageUpdateExistingPid)
+{
+    ProcessAttr current = {};
+    GroupMigrationPolicy policy = {};
+    FillPolicyForManageTest(&policy);
+    policy.groups[0].targets[0].usedPages = 6;
+
+    current.pid = 1234;
+    current.next = nullptr;
+    g_processManager.processes = &current;
+    MOCKER(CheckPid).stubs().will(returnValue(0));
+    MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
+
+    int ret = ProcessAddGroupedManage(1234, 0x21, &policy);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1234, current.pid);
+    EXPECT_EQ((uint32_t)0x21, current.numaAttr.numaNodes);
+    EXPECT_TRUE(current.groupPolicy.enabled);
+    EXPECT_EQ((uint64_t)6, current.groupPolicy.groups[0].targets[0].usedPages);
+    g_processManager.processes = nullptr;
+}
+
+TEST_F(ManageTest, TestProcessAddGroupedManageRejectsInvalidInputs)
+{
+    GroupMigrationPolicy policy = {};
+    FillPolicyForManageTest(&policy);
+
+    MOCKER(CheckPid).stubs().will(returnValue(-EINVAL));
+    int ret = ProcessAddGroupedManage(1234, 0x11, &policy);
+    EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(CheckPid).stubs().will(returnValue(0));
+    ret = ProcessAddGroupedManage(1234, 0x11, nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    policy.enabled = false;
+    MOCKER(CheckPid).stubs().will(returnValue(0));
+    ret = ProcessAddGroupedManage(1234, 0x11, &policy);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(ManageTest, TestProcessAddGroupedManageRejectsLimitAndPreprocessFailure)
+{
+    GroupMigrationPolicy policy = {};
+    FillPolicyForManageTest(&policy);
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    g_processManager.processes = nullptr;
+    g_processManager.nr[VM_TYPE] = MAX_2M_PROCESSES_CNT;
+    MOCKER(CheckPid).stubs().will(returnValue(0));
+    int ret = ProcessAddGroupedManage(1234, 0x11, &policy);
+    EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    g_processManager.nr[VM_TYPE] = 0;
+    MOCKER(CheckPid).stubs().will(returnValue(0));
+    MOCKER(VMPreprocess).stubs().will(returnValue(-ENOMEM));
+    ret = ProcessAddGroupedManage(1234, 0x11, &policy);
+    EXPECT_EQ(-ENOMEM, ret);
+    EXPECT_EQ(nullptr, g_processManager.processes);
+    EXPECT_EQ(0, g_processManager.nr[VM_TYPE]);
+}
+
+extern "C" void CalcActcStats(ProcessAttr *attr);
+extern "C" uint32_t GetRemoteHotThreshold(void);
+TEST_F(ManageTest, TestCalcActcStats)
+{
+    ProcessAttr attr = {};
+    ActcData data[3] = {};
+
+    data[0].freq = 0;
+    data[1].freq = 3;
+    data[1].isWhiteListPage = true;
+    data[2].freq = 10;
+    attr.scanAttr.actcData[4] = data;
+    attr.scanAttr.actcLen[4] = 3;
+    attr.scanAttr.actCount[1].pageNum = 99;
+    MOCKER(GetRemoteHotThreshold).stubs().will(returnValue((uint32_t)5));
+
+    CalcActcStats(&attr);
+    EXPECT_EQ((uint64_t)0, attr.scanAttr.actCount[1].pageNum);
+    EXPECT_EQ((uint64_t)3, attr.scanAttr.actCount[4].pageNum);
+    EXPECT_EQ((uint16_t)10, attr.scanAttr.actCount[4].freqMax);
+    EXPECT_EQ((uint16_t)0, attr.scanAttr.actCount[4].freqMin);
+    EXPECT_EQ((uint64_t)2, attr.scanAttr.actCount[4].freqNum);
+    EXPECT_EQ((uint64_t)13, attr.scanAttr.actCount[4].freqSum);
+    EXPECT_EQ((uint32_t)1, attr.scanAttr.actCount[4].freqZero);
+    EXPECT_EQ((uint64_t)1, attr.scanAttr.actCount[4].remoteHotNum);
+    EXPECT_EQ((uint64_t)1, attr.scanAttr.actCount[4].whiteNum);
+}
+
+extern "C" int DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf);
+TEST_F(ManageTest, TestDistributeActcData)
+{
+    ProcessAttr attr = {};
+    struct ProcessMemBitmap pmb = {};
+    ActcData oldData[1] = {};
+    ActcData buf[3] = {};
+
+    attr.pid = 1234;
+    attr.scanAttr.actcData[0] = (ActcData *)malloc(sizeof(ActcData));
+    ASSERT_NE(nullptr, attr.scanAttr.actcData[0]);
+    attr.scanAttr.actcData[0][0] = oldData[0];
+    pmb.nrPages[0] = 2;
+    pmb.nrPages[2] = 1;
+    buf[0].addr = 0x1000;
+    buf[1].addr = 0x2000;
+    buf[2].addr = 0x3000;
+
+    int ret = DistributeActcData(&attr, &pmb, buf);
+    EXPECT_EQ(0, ret);
+    ASSERT_NE(nullptr, attr.scanAttr.actcData[0]);
+    ASSERT_NE(nullptr, attr.scanAttr.actcData[2]);
+    EXPECT_EQ((uint64_t)2, attr.scanAttr.actcLen[0]);
+    EXPECT_EQ((uint64_t)1, attr.scanAttr.actcLen[2]);
+    EXPECT_EQ((uint64_t)0x1000, attr.scanAttr.actcData[0][0].addr);
+    EXPECT_EQ((uint64_t)0x2000, attr.scanAttr.actcData[0][1].addr);
+    EXPECT_EQ((uint64_t)0x3000, attr.scanAttr.actcData[2][0].addr);
+
+    free(attr.scanAttr.actcData[0]);
+    free(attr.scanAttr.actcData[2]);
+    attr.scanAttr.actcData[0] = nullptr;
+    attr.scanAttr.actcData[2] = nullptr;
 }
 
 TEST_F(ManageTest, TestCheckAndRemoveInvalidProcess)
