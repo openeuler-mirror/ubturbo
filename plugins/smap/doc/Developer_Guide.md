@@ -110,6 +110,8 @@ struct MigrateOutMsg {
 * 远端NUMA被禁用时无法配置迁出（调用SmapMigrateBack接口时会默认禁用远端NUMA）。
 * 如果已配置某虚机的远端NUMA，后续配置不能改变虚机的远端NUMA，只能通过SmapMigratePidRemoteNuma接口改变远端NUMA。
 * 配置pid内存迁出后，由SMAP线程异步迁移，在迁移周期到来时才会执行迁移操作。
+* 配置PID内存迁出后，PID会被SMAP纳管并参与后续周期冷热迁移；冷热迁移依赖迁移目标NUMA存在可用空闲内存。对于2M huge page虚机场景，本地NUMA和远端NUMA均需要存在可用的空闲2M huge page；若本地NUMA空闲2M huge page不足，远端热页回迁或冷热交换可能无法执行；若远端NUMA空闲2M huge page不足，初始迁出或后续冷页迁出可能无法执行，实际迁移效果会受限。
+* 建议在PID相关的本地NUMA和远端NUMA上均预留不低于计划迁移规模5%~10%的空闲内存；对于2M huge page虚机，该预留量应换算为对应数量的空闲2M huge page。上述预留值为部署建议，不是接口入参校验条件；调用成功仅表示策略配置成功，不保证后续每轮冷热迁移都能实际迁移页面。
 * 4K进程迁移不支持远端多NUMA。
 * 迁移会过滤掉共享页。
 
@@ -117,7 +119,7 @@ struct MigrateOutMsg {
 
 #### 函数定义
 
-配置大规格弹性虚机场景的组级迁出策略。同一PID可配置多个migration group，每个group包含source local NUMA集合、target remote NUMA集合、每个target的quota以及group级本地保留水线。
+配置大规格弹性虚机场景的组级迁出策略。同一PID可配置多个migration group，每个group包含source local NUMA集合、target remote NUMA集合、每个target的quota以及每个source local NUMA的本地保留水线。
 
 #### 实现方法
 
@@ -194,6 +196,11 @@ struct GroupedMigrateOutMsg {
 * 如果管理前PID已经使用remote NUMA，该remote NUMA必须被当前grouped policy的target管理，且remote resident pages不能超过对应target quota或shared target的quota总和，否则返回-22。
 * 允许多个group共享同一个remote target；当前只维护容量级账本，不保证页级ownership。
 * 配置PID内存迁出后，由SMAP线程异步迁移，在迁移周期到来时才会执行迁移操作。
+* grouped policy配置后，PID会被SMAP纳管并参与后续周期冷热迁移；每个group的source local NUMA集合和target remote NUMA集合都需要存在可用空闲内存。若source local NUMA空闲2M huge page不足，远端热页回迁、冷热交换或group内promote可能无法执行；若target remote NUMA空闲2M huge page不足，初始迁出、冷页迁出或group内demote可能无法执行。
+* 建议每个group的source local NUMA集合和target remote NUMA集合均预留不低于该group target quota总量5%~10%的空闲内存；对于2M huge page虚机，该预留量应换算为对应数量的空闲2M huge page。
+* group内target remote NUMA还受groups[].targets[].size quota约束；即使target remote NUMA存在物理空闲内存，如果该group在对应target上的quota已满，也不会继续向该target迁入页面。
+* groups[].locals[].size表示对应source local NUMA的本地保留水线，不代表系统实际可用空闲内存；部署或调度侧仍需保证对应local NUMA有足够空闲内存。
+* 上述预留值为部署建议，不是接口入参校验条件；调用成功仅表示策略配置成功，不保证后续每轮冷热迁移都能实际迁移页面。
 * grouped policy当前不支持smap_config持久化与恢复，SMAP重启后需要重新下发配置。
 * 页面迁移会过滤掉共享页。
 
@@ -665,6 +672,8 @@ struct EnableNodeMsg {
 
 * 只支持在虚拟化场景调用。
 * 只支持内存池化场景。
+* 本接口同步完成初始迁出后，PID仍会被SMAP纳管并参与后续周期冷热迁移；冷热迁移依赖迁移目标NUMA存在可用空闲内存。对于2M huge page虚机场景，本地NUMA和远端NUMA均需要存在可用的空闲2M huge page；若本地NUMA空闲2M huge page不足，远端热页回迁或冷热交换可能无法执行；若远端NUMA空闲2M huge page不足，后续冷页迁出可能无法执行。
+* 建议在PID相关的本地NUMA和远端NUMA上均预留不低于计划迁移规模5%~10%的空闲内存；对于2M huge page虚机，该预留量应换算为对应数量的空闲2M huge page。上述预留值为部署建议，不是接口入参校验条件；调用成功仅表示策略配置成功，不保证后续每轮冷热迁移都能实际迁移页面。
 
 ### ubturbo_smap_process_config_query
 
