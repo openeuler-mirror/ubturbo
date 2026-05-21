@@ -23,6 +23,7 @@
 #define pr_fmt(fmt) "access_ioctl: " fmt
 #define MAX_NR_MIGOUT 40
 #define MAX_NR_REMOVE MAX_NR_MIGOUT
+#define SCHEDULE_INTERVAL (100000)
 
 static dev_t ioctl_access_dev;
 static struct class *access_class;
@@ -518,15 +519,24 @@ static void update_tracking_data(actc_t *tracking_data,
 				 struct tracking_info_payload *payload_info)
 {
 	u64 j;
-	u32 i;
+	u32 i, idx;
 	payload_info->length =
 		payload_info->length > (stat_info->page_num[L1] +
 					stat_info->page_num[L2]) ?
 			(stat_info->page_num[L1] + stat_info->page_num[L2]) :
 			payload_info->length;
-	for (i = 0; i < payload_info->length; i++) {
+
+	for (idx = 0; idx + SCHEDULE_INTERVAL <= payload_info->length; idx += SCHEDULE_INTERVAL) {
+		for (i = 0; i < SCHEDULE_INTERVAL; i++) {
+			for (j = 0; j < stat_info->window_num; j++)
+				tracking_data[idx + i] += stat_info->sliding_windows[j][idx + i];
+		}
+		cond_resched();
+	}
+
+	for (; idx < payload_info->length; idx++) {
 		for (j = 0; j < stat_info->window_num; j++)
-			tracking_data[i] += stat_info->sliding_windows[j][i];
+			tracking_data[idx] += stat_info->sliding_windows[j][idx];
 	}
 }
 

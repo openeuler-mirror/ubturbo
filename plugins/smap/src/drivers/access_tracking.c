@@ -33,7 +33,6 @@
 #include "hist_ops.h"
 #include "access_tracking.h"
 
-#define DEFAULT_PERIOD_MS 50
 #define MAX_SCAN_TIME 100000 /* 100s */
 #define MS_TO_US 1000
 #define DELAY_BUFFER_MS 8
