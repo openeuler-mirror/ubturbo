@@ -29,7 +29,7 @@
 
 #define INVALID_PADDR 0
 
-#define MIGRATE_PAGES_DMA_OFFLOADING 10
+unsigned int remote_migrate_mode = MIGRATE_ASYNC;
 
 #undef pr_fmt
 #define pr_fmt(fmt) "SMAP_migrate: " fmt
@@ -66,6 +66,14 @@ static struct migrate_node {
 	int next_nid;
 	unsigned long nr[SMAP_MAX_NUMNODES];
 } migrate_node;
+
+void set_remote_migrate_mode(unsigned int mode)
+{
+	if (mode) {
+		remote_migrate_mode = MIGRATE_ASYNC_DMA_OFFLOADING;
+	}
+	pr_info("set remote migrate mode: %u\n", remote_migrate_mode);
+}
 
 static int smap_check_huge_page_for_migration(struct page *page, pid_t pid)
 {
@@ -327,7 +335,7 @@ unsigned int smap_migrate(struct folio **folios, unsigned int nr_folios,
 	} else if (MIGRATE_TYPE_REMOTE == type) {
 		err = smap_isolate_and_migrate_folios(folios, nr_folios,
 						 smap_alloc_new_node_page, NULL,
-						 to_node, MIGRATE_PAGES_DMA_OFFLOADING,
+						 to_node, remote_migrate_mode,
 						 &nr_succeeded);
 		if (err > 0)
 			pr_warn("isolat or migrate remote range err: %d\n", err);

@@ -2057,8 +2057,10 @@ TEST_F(InterfaceTest, TestSmapEnableProcessMigrateInvalidPidType)
 {
     pid_t pidArr[] = { 1 };
     EnvAtomicSet(&g_status, 1);
+    MOCKER(IsPidArrValid).stubs().will(returnValue(false));
     int ret = ubturbo_smap_process_migrate_enable(pidArr, 1, DISABLE_PROCESS_MIGRATE, 0);
     EXPECT_EQ(-EINVAL, ret);
+    GlobalMockObject::verify();
 }
 
 TEST_F(InterfaceTest, TestSmapEnableProcessMigrateInvalidEnable)

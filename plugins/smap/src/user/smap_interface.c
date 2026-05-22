@@ -43,6 +43,8 @@
 #define LOCAL_NUMA_BIT_MAP_MASK 0xF
 #define MIN_GROUP_QUOTA_SIZE_KB KB_PER_2MB
 
+#define UB_URMA_CTP_ROI_MASK (1 << 19)
+
 static EnvAtomic g_status;
 
 inline bool ubturbo_smap_is_running(void)
@@ -1499,6 +1501,58 @@ static int CreateProcfs(void)
     return AccessIoctlCreateProcfs(&ui);
 }
 
+static bool CheckUbFeatureUbDma(void)
+{
+    FILE *fp;
+    unsigned long features = 0;
+    char line[BUFFER_SIZE];
+
+    fp = fopen("/sys/bus/ub/ub_feature", "r");
+    if (!fp) {
+        SMAP_LOGGER_WARNING("ub_feature file not found, ub dma unavailable");
+        return false;
+    }
+
+    if (!fgets(line, sizeof(line), fp)) {
+        fclose(fp);
+        SMAP_LOGGER_WARNING("failed to read ub_feature");
+        return false;
+    }
+    fclose(fp);
+
+    features = strtoul(line, NULL, 16); // 16 is hex string
+    SMAP_LOGGER_INFO("ub_feature: 0x%lx", features);
+
+    if (features & UB_URMA_CTP_ROI_MASK) {
+        SMAP_LOGGER_INFO("UB_URMA_CTP_ROI detected, ub dma available");
+        return true;
+    }
+
+    return false;
+}
+
+static void IoctlSetUbDmaAvail(void)
+{
+    int fd;
+    unsigned int val = CheckUbFeatureUbDma() ? 1 : 0;
+    int ret;
+
+    fd = open(TIERING_PATH, O_RDWR);
+    if (fd < 0) {
+        SMAP_LOGGER_ERROR("cannot open migrate dev for ub dma config");
+        return;
+    }
+
+    ret = ioctl(fd, SMAP_SET_UB_DMA_AVAIL, &val);
+    close(fd);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("ioctl set ub dma avail failed: %d, errno %d", ret, errno);
+        return;
+    }
+
+    SMAP_LOGGER_INFO("ioctl set ub dma avail=%u", val);
+}
+
 int ubturbo_smap_start(uint32_t pageType, Logfunc extlog)
 {
     int ret = 0;
@@ -1513,8 +1567,9 @@ int ubturbo_smap_start(uint32_t pageType, Logfunc extlog)
     if (ret) {
         goto EXIT_ENV;
     }
-
     SMAP_LOGGER_INFO("Log init success.");
+    IoctlSetUbDmaAvail();
+
     ret = CheckPidtype(pageType);
     if (ret) {
         SMAP_LOGGER_ERROR("check pid type error %d.", ret);
