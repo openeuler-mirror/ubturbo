@@ -1313,7 +1313,7 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 	if (is_young) {
 		if (pte_walk->type == STATISTIC_SCAN)
 			pte_walk->statistic_vaddr[pte_walk->statistic_cnt++] = addr;
-		if (!is_file_or_shared_page(paddr))
+		if (!is_file_or_shared_page(page))
 			__ptep_test_and_clear_young(NULL, 0, pte);
 		pte_walk->flag = true;
 	}
