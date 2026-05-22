@@ -110,6 +110,8 @@ struct MigrateOutMsg {
 * 远端NUMA被禁用时无法配置迁出（调用SmapMigrateBack接口时会默认禁用远端NUMA）。
 * 如果已配置某虚机的远端NUMA，后续配置不能改变虚机的远端NUMA，只能通过SmapMigratePidRemoteNuma接口改变远端NUMA。
 * 配置pid内存迁出后，由SMAP线程异步迁移，在迁移周期到来时才会执行迁移操作。
+* 配置PID内存迁出后，PID会被SMAP纳管并参与后续周期冷热迁移；冷热迁移依赖迁移目标NUMA存在可用空闲内存。对于2M huge page虚机场景，本地NUMA和远端NUMA均需要存在可用的空闲2M huge page；若本地NUMA空闲2M huge page不足，远端热页回迁或冷热交换可能无法执行；若远端NUMA空闲2M huge page不足，初始迁出或后续冷页迁出可能无法执行，实际迁移效果会受限。
+* 建议在PID相关的本地NUMA和远端NUMA上均预留不低于计划迁移规模5%~10%的空闲内存；对于2M huge page虚机，该预留量应换算为对应数量的空闲2M huge page。上述预留值为部署建议，不是接口入参校验条件；调用成功仅表示策略配置成功，不保证后续每轮冷热迁移都能实际迁移页面。
 
 ### ubturbo_smap_remote_numa_info_set
 
@@ -579,6 +581,8 @@ struct EnableNodeMsg {
 
 * 只支持在虚拟化场景调用。
 * 只支持内存池化场景。
+* 本接口同步完成初始迁出后，PID仍会被SMAP纳管并参与后续周期冷热迁移；冷热迁移依赖迁移目标NUMA存在可用空闲内存。对于2M huge page虚机场景，本地NUMA和远端NUMA均需要存在可用的空闲2M huge page；若本地NUMA空闲2M huge page不足，远端热页回迁或冷热交换可能无法执行；若远端NUMA空闲2M huge page不足，后续冷页迁出可能无法执行。
+* 建议在PID相关的本地NUMA和远端NUMA上均预留不低于计划迁移规模5%~10%的空闲内存；对于2M huge page虚机，该预留量应换算为对应数量的空闲2M huge page。上述预留值为部署建议，不是接口入参校验条件；调用成功仅表示策略配置成功，不保证后续每轮冷热迁移都能实际迁移页面。
 
 ### ubturbo_smap_process_config_query
 
