@@ -36,11 +36,33 @@ static inline bool folio_test_hugetlb(struct folio *folio)
     return false;
 }
 
+static inline bool folio_test_anon(struct folio *folio)
+{
+    return false;
+}
+
+static inline bool folio_test_ksm(struct folio *folio)
+{
+    return false;
+}
+
+static inline bool folio_test_swapcache(struct folio *folio)
+{
+    return false;
+}
+
 #define PF_POISONED_CHECK(page) ({ page; })
 
+#ifdef __cplusplus
+static inline struct folio *page_folio(struct page *page)
+{
+    return (struct folio *)_compound_head(page);
+}
+#else
 #define page_folio(p)		(_Generic((p),				\
-	const struct page *:	(const struct folio *)_compound_head(p), \
-	struct page *:		(struct folio *)_compound_head(p)))
+		const struct page *:	(const struct folio *)_compound_head(p), \
+		struct page *:		(struct folio *)_compound_head(p)))
+#endif
 
 #ifdef __cplusplus
 }

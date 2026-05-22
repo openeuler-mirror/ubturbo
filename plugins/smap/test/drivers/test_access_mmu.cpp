@@ -16,9 +16,11 @@
 #include "access_iomem.h"
 #include "access_tracking.h"
 #include "access_mmu.h"
+#include "access_acpi_mem.h"
 
 #define PM_PRESENT BIT_ULL(63)
 extern "C" bool is_access_hugepage(void);
+extern "C" int drivers_nr_local_numa;
 
 using namespace std;
 
@@ -36,14 +38,18 @@ inline bool operator==(const pagemap_entry_t& a, const pagemap_entry_t& b)
 
 class AccessMMUTest : public ::testing::Test {
 protected:
+    int saved_nr_local_numa;
     void SetUp() override
     {
         cout << "[Phase SetUp Begin]" << endl;
+        saved_nr_local_numa = drivers_nr_local_numa;
+        drivers_nr_local_numa = 4;
         cout << "[Phase SetUp End]" << endl;
     }
     void TearDown() override
     {
         cout << "[Phase TearDown Begin]" << endl;
+        drivers_nr_local_numa = saved_nr_local_numa;
         GlobalMockObject::verify();
         cout << "[Phase TearDown End]" << endl;
     }
@@ -199,7 +205,7 @@ TEST_F(AccessMMUTest, CalcVaddrAcidx)
     info.segs[0].end = info.segs[0].start + TWO_MEGA_SIZE;
     info.segs[0].hugepages = 1;
 
-    info.segs[1].start = 0xffffffff;
+    info.segs[1].start = 0x100000000ULL;
     info.segs[1].end = info.segs[1].start + 2 * TWO_MEGA_SIZE;
     info.segs[1].hugepages = 2;
 

@@ -42,6 +42,8 @@ extern "C" {
 #endif
 
 int page_to_nid(const struct page *page);
+bool pfn_valid(unsigned long pfn);
+struct page *pfn_to_online_page(unsigned long pfn);
 
 #ifdef __cplusplus
 }
