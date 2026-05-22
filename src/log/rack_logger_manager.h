@@ -13,9 +13,9 @@
 #define TURBO_LOGGER_MANAGER_H
 
 #include "rack_common_def.h"
-#include "rack_logger_ringbuffer.h"
 #include "rack_logger_filesink.h"
 #include "rack_logger_filter.h"
+#include "rack_logger_ringbuffer.h"
 #include "rack_logger_writer.h"
 
 namespace turbo::log {
@@ -63,6 +63,6 @@ private:
     RackLoggerWriter *writer = nullptr;
     RackLoggerFilter rackLoggerFilter;
 };
-}
+} // namespace turbo::log
 
 #endif // TURBO_LOGGER_MANAGER_H

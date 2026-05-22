@@ -8,8 +8,8 @@
 #include "turbo_error.h"
 
 #define private public
-#include "turbo_module_conf.h"
 #include "turbo_conf_manager.h"
+#include "turbo_module_conf.h"
 
 #define MOCKER_CPP(api, TT) MOCKCPP_NS::mockAPI(#api, reinterpret_cast<TT>(api))
 

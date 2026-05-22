@@ -16,9 +16,9 @@
 #include "turbo_conf_manager.h"
 #include "turbo_logger.h"
 
-#include <string>
-#include <map>
 #include <iostream>
+#include <map>
+#include <string>
 
 namespace turbo::plugin {
 using namespace turbo::common;
@@ -34,7 +34,7 @@ public:
         static TurboPluginManager instance;
         return instance;
     }
-    TurboPluginManager operator = (const TurboPluginManager &) = delete;
+    TurboPluginManager operator=(const TurboPluginManager &) = delete;
     TurboPluginManager(const TurboPluginManager &) = delete;
 
     /**
@@ -73,7 +73,7 @@ private:
      */
     RetCode LoadPlugin(const std::string &pluginName, const std::string &fileName);
 
-     /* *
+    /* *
      * 初始化插件
      * @param pluginName  插件名称
      * @param moduleCode 模块编码
@@ -94,5 +94,5 @@ private:
     std::map<std::string, void *> loadedPluginModules;
 };
 
-}
+} // namespace turbo::plugin
 #endif //  TURBO_PLUGIN_MANAGER_H

@@ -9,8 +9,8 @@
 #include "callback_manager.h"
 #undef private
 
-#include "gtest/gtest.h"
 #include "bottleneck_detector.h"
+#include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 #include "rmrs_config.h"
 #include "rmrs_json_util.h"

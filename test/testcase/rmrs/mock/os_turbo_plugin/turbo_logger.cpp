@@ -16,9 +16,7 @@ bool TurboLog::operator==(TurboLoggerEntry &loggerEntry)
     return false;
 }
 
-void TurboLoggerEntry::DecodeData(std::ostream &os, char *start, const char *end)
-{
-}
+void TurboLoggerEntry::DecodeData(std::ostream &os, char *start, const char *end) {}
 
 char *TurboLoggerEntry::DecodeConstChar(std::ostream &os, char *buffer)
 {
@@ -60,26 +58,18 @@ char *TurboLoggerEntry::DecodeChar(std::ostream &os, char *buffer)
     return nullptr;
 }
 
-void TurboLoggerEntry::EncodeData(TurboLoggerString data)
-{
-}
+void TurboLoggerEntry::EncodeData(TurboLoggerString data) {}
 
-void TurboLoggerEntry::EncodeData(const char *data)
-{
-}
+void TurboLoggerEntry::EncodeData(const char *data) {}
 
-void TurboLoggerEntry::EncodeString(const char *data, size_t length)
-{
-}
+void TurboLoggerEntry::EncodeString(const char *data, size_t length) {}
 
 char *TurboLoggerEntry::GetBuffer()
 {
     return nullptr;
 }
 
-void TurboLoggerEntry::ResizeBuffer(size_t addSize)
-{
-}
+void TurboLoggerEntry::ResizeBuffer(size_t addSize) {}
 
 TurboLoggerEntry &TurboLoggerEntry::operator<<(const std::string &data)
 {
@@ -136,12 +126,10 @@ const char *TurboLoggerEntry::GetModuleName()
     return nullptr;
 }
 
-void TurboLoggerEntry::OutPutLog(std::ostream &os)
-{
-}
+void TurboLoggerEntry::OutPutLog(std::ostream &os) {}
 
 TurboLoggerEntry::TurboLoggerEntry(const char *gModuleName, TurboLogLevel level, const char *file, const char *func,
                                    uint32_t line)
 {
 }
-}  // namespace rack::log
+} // namespace turbo::log

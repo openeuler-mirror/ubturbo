@@ -20,7 +20,7 @@
  * 高字节0x1008表示模块ID：即0x1000 + 8，表示communication子系统的net模块，可在本头文件找到RACK_COMMUNICATION_MID_NET
  * 低字节0x1000表示错误类型：0x1000 + 0，表示模块内的私有错误码基础值 + 错误码，可在头文件rack_net_error.h中找到错误类型
  */
-#define RACK_ERROR_BEGIN_USER 0X1000                                 /* 模块内的私有错误码基础值 */
+#define RACK_ERROR_BEGIN_USER 0X1000 /* 模块内的私有错误码基础值 */
 const int SIXTEEN = 16;
 constexpr uint32_t RACK_ERROR_USERNO(uint32_t n)
 {
@@ -30,7 +30,6 @@ constexpr uint32_t RACK_MID_HI16(uint32_t MID)
 {
     return (MID) << SIXTEEN;
 }
-
 
 /* 各个子系统，MID分段起始ID定义，各个模块定义时选择相应的起始ID */
 #define RACK_MID_BEGIN0 0x0000 /* common        */
@@ -73,7 +72,6 @@ constexpr uint32_t RACK_MID_MAKE_CLI(uint32_t n)
 #define RACK_ERROR_MODULE_LOAD_FAILED RACK_COMMON_ERROR(15)  /* 模块加载失败 */
 #define RACK_ERROR_CLI_ARGS_FAILED RACK_COMMON_ERROR(16)     /* 解析参数失败 */
 
-
 /* **************************************** */
 /* 各个模块MID定义                            */
 /* 0:基础模块                                */
@@ -96,7 +94,7 @@ constexpr uint32_t RACK_MID_MAKE_CLI(uint32_t n)
 #define RACK_CONF_MID RACK_MID_MAKE_Manager(2)           /* 0X1002 */
 #define RACK_EVENT_MID RACK_MID_MAKE_Manager(3)          /* 0X1003 */
 #define RACK_HTTP_MID RACK_MID_MAKE_Manager(4)           /* 0X1004 */
-#define TURBO_LOG_MID RACK_MID_MAKE_Manager(5)            /* 0X1005 */
+#define TURBO_LOG_MID RACK_MID_MAKE_Manager(5)           /* 0X1005 */
 #define RACK_MESSAGE_MID RACK_MID_MAKE_Manager(6)        /* 0X1006 */
 #define RACK_PLUGIN_MID RACK_MID_MAKE_Manager(7)         /* 0X1007 */
 #define RACK_ROLE_MID RACK_MID_MAKE_Manager(8)           /* 0X1008 */
@@ -125,7 +123,7 @@ constexpr uint32_t RACK_MID_MAKE_CLI(uint32_t n)
 #define RACK_DATA_SYNC_MID RACK_MID_MAKE_Manager(29)        /* 0X101D */
 #define RACK_UBUS_MID RACK_MID_MAKE_Manager(30)             /* 0X101E */
 #define RACK_KMC_CRYPT_MID RACK_MID_MAKE_Manager(30)        /* 0X101E */
-#define RACK_PSK_MID RACK_MID_MAKE_Manager(30)        /* 0X101F */
+#define RACK_PSK_MID RACK_MID_MAKE_Manager(30)              /* 0X101F */
 
 /* Rack CLI */
 #define RACK_CLI_MID_BASE RACK_MID_MAKE_CLI(0)   /* 0X2000 基础模块 */

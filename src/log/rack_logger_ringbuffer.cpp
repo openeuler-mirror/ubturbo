@@ -14,8 +14,7 @@
 namespace turbo::log {
 SpinLock::SpinLock(std::atomic_flag &flag) : lock(flag)
 {
-    while (lock.test_and_set(std::memory_order_acquire)) {
-    }
+    while (lock.test_and_set(std::memory_order_acquire)) {}
 }
 
 SpinLock::~SpinLock()
@@ -23,8 +22,7 @@ SpinLock::~SpinLock()
     lock.clear(std::memory_order_release);
 }
 
-RingBuffer::RingBuffer(uint32_t size)
-    : size(size), wIndex(0), count(0)
+RingBuffer::RingBuffer(uint32_t size) : size(size), wIndex(0), count(0)
 {
     buffer.resize(size);
 }
@@ -39,7 +37,7 @@ bool RingBuffer::IsEmpty() const
     return count.load(std::memory_order_relaxed) == 0;
 }
 
-void RingBuffer::SwapAtomic(std::atomic<unsigned int>& src, std::atomic<unsigned int>& dest)
+void RingBuffer::SwapAtomic(std::atomic<unsigned int> &src, std::atomic<unsigned int> &dest)
 {
     auto oldSrc = src.load(std::memory_order_acquire);
     auto oldDest = dest.load(std::memory_order_acquire);
@@ -119,4 +117,4 @@ bool LogBuffer::Pop(TurboLoggerEntry &loggerEntry)
     }
     return readBuffer.Pop(loggerEntry);
 }
-}
+} // namespace turbo::log

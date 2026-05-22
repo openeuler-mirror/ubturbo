@@ -11,10 +11,10 @@
  */
 
 #include "turbo_rmrs_interface.h"
-#include "turbo_serialize.h"
-#include "turbo_ipc_client.h"
-#include "ulog.h"
 #include "turbo_error.h"
+#include "turbo_ipc_client.h"
+#include "turbo_serialize.h"
+#include "ulog.h"
 
 namespace turbo::rmrs {
 
@@ -28,7 +28,7 @@ uint32_t UBTurboRMRSAgentMigrateExecute(const MigrateStrategyResult &migrateStra
     TurboByteBuffer params;
     params.len = builder.GetSize();
     params.data = builder.GetBufferPointer();
-    
+
     TurboByteBuffer result;
     uint32_t ret = UBTurboFunctionCaller("MigrateExecuteRecvHandler", params, result);
     delete[] params.data;
@@ -200,19 +200,19 @@ uint32_t UBTurboRMRSAgentUCacheMigrateStrategy(const UCacheMigrationStrategyPara
     IPC_CLIENT_LOGGER_DEBUG("[UCache] Send UBTurboRMRSAgentUCacheMigrateStrategy ipc message started.");
     RmrsOutStream builder;
     builder << uCacheMigrationStrategyParam;
- 
+
     TurboByteBuffer reqTurbo;
     TurboByteBuffer respTurbo;
     reqTurbo.data = builder.GetBufferPointer();
     reqTurbo.len = builder.GetSize();
- 
+
     auto ret = UBTurboFunctionCaller("UCacheMigrateStrategyRecvHandler", reqTurbo, respTurbo);
     delete[] reqTurbo.data;
     if (ret != IPC_OK) {
         IPC_CLIENT_LOGGER_ERROR("[UCache] Send UCacheMigrateStrategyRecvHandler failed res: %u.", ret);
         return ret;
     }
- 
+
     RmrsInStream builderOut(respTurbo.data, respTurbo.len);
     builderOut >> resCode;
     delete[] respTurbo.data;
@@ -226,44 +226,44 @@ uint32_t UBTurboRMRSAgentUCacheMigrateStop(ResCode &resCode)
     ResCode blankParam{}; // 实际无需入参，仅用于生成TurboByteBuffer结构体
     RmrsOutStream builder;
     builder << blankParam;
- 
+
     TurboByteBuffer reqTurbo;
     TurboByteBuffer respTurbo;
     reqTurbo.data = builder.GetBufferPointer();
     reqTurbo.len = builder.GetSize();
- 
+
     auto ret = UBTurboFunctionCaller("UCacheMigrateStopRecvHandler", reqTurbo, respTurbo);
     delete[] reqTurbo.data;
     if (ret != IPC_OK) {
         IPC_CLIENT_LOGGER_ERROR("[UCache] Send UCacheMigrateStopRecvHandler failed res: %u.", ret);
         return ret;
     }
- 
+
     RmrsInStream builderOut(respTurbo.data, respTurbo.len);
     builderOut >> resCode;
     delete[] respTurbo.data;
     IPC_CLIENT_LOGGER_DEBUG("[UCache] UBTurboRMRSAgentUCacheMigrateStop ipc message sent successfully.");
     return TURBO_OK;
 }
- 
+
 uint32_t UBTurboRMRSAgentUpdateUCacheRatio(const MigrationInfoParam &migrationInfoParam, UCacheRatioRes &uCacheRatioRes)
 {
     IPC_CLIENT_LOGGER_DEBUG("[UCache] Send UBTurboRMRSAgentUpdateUCacheRatio ipc message started.");
     RmrsOutStream builder;
     builder << migrationInfoParam;
- 
+
     TurboByteBuffer reqTurbo;
     TurboByteBuffer respTurbo;
     reqTurbo.data = builder.GetBufferPointer();
     reqTurbo.len = builder.GetSize();
- 
+
     auto ret = UBTurboFunctionCaller("UpdateUCacheRatioRecvHandler", reqTurbo, respTurbo);
     delete[] reqTurbo.data;
     if (ret != IPC_OK) {
         IPC_CLIENT_LOGGER_ERROR("[UCache] Send UpdateUCacheRatioRecvHandler failed res: %u.", ret);
         return ret;
     }
- 
+
     RmrsInStream builderOut(respTurbo.data, respTurbo.len);
     builderOut >> uCacheRatioRes;
     delete[] respTurbo.data;

@@ -24,4 +24,4 @@ uint32_t SetIpcTimeLimit(uint32_t timeLimit)
     return IpcClientInner::Instance().SetTimeLimit(timeLimit);
 }
 
-}
+} // namespace turbo::ipc::client

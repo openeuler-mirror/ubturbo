@@ -3,10 +3,9 @@
  */
 #include <dirent.h>
 #include <gmock/gmock.h>
+#include <fstream>
 #include <string>
 #include <vector>
-#include <fstream>
-#include <dirent.h>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 #include "securec.h"
@@ -465,7 +464,7 @@ TEST(TestRmrsOsHelper, GetVmsPidOnNumaShouldReturnOk)
 
     resourceCollect.localUsedMem["node1"] = 1024;
     resourceCollect.remoteUsedMem["node1"] = 1024;
-    
+
     uint32_t result = OsHelper::GetVmsPidOnNuma(&resourceCollect);
 
     EXPECT_EQ(result, RMRS_OK);
@@ -473,9 +472,7 @@ TEST(TestRmrsOsHelper, GetVmsPidOnNumaShouldReturnOk)
 
 TEST(TestRmrsOsHelper, GetPidByVmNameShouldFailedWhenOpendirReturnNullptr)
 {
-    MOCKER_CPP(opendir, DIR* (*)(const char*))
-        .stubs()
-        .will(returnValue((DIR*)nullptr));
+    MOCKER_CPP(opendir, DIR * (*)(const char *)).stubs().will(returnValue((DIR *)nullptr));
     std::string name = "/test";
     pid_t result = OsHelper::GetPidByVmName(name);
 
@@ -500,8 +497,8 @@ TEST(TestRmrsOsHelper, GetPidByVmNameShouldFailedWhenGetFileInfoFailed)
 
 TEST(TestRmrsOsHelper, GetVMUsedMemoryShouldReturnOk)
 {
-    MOCKER_CPP(rmrs::OsHelper::GetInfoFromNumaMaps, uint32_t (*)(const std::string &uuid, const std::string &path,
-                                       ResourceExport *resourceCollect))
+    MOCKER_CPP(rmrs::OsHelper::GetInfoFromNumaMaps,
+               uint32_t(*)(const std::string &uuid, const std::string &path, ResourceExport *resourceCollect))
         .stubs()
         .will(returnValue(RMRS_OK));
     MOCKER_CPP(rmrs::OsHelper::GetVmPageSizeFromNumaMaps,
@@ -512,7 +509,7 @@ TEST(TestRmrsOsHelper, GetVMUsedMemoryShouldReturnOk)
     ResourceExport resourceCollect;
     pid_t pid = 1;
     resourceCollect.vPidList.push_back(pid);
-    
+
     uint32_t result = OsHelper::GetVMUsedMemory(&resourceCollect);
     EXPECT_EQ(result, RMRS_OK);
 }

@@ -11,16 +11,16 @@
  */
 #include "turbo_ipc_handler.h"
 
+#include <arpa/inet.h>
+#include <fcntl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <iostream>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <arpa/inet.h>
 
 #include "securec.h"
-#include "turbo_logger.h"
 #include "turbo_error.h"
+#include "turbo_logger.h"
 
 namespace turbo::ipc::server {
 
@@ -36,7 +36,7 @@ static const int MIN_MESSAGE_LENGTH = 10;
 static const int MAX_MESSAGE_LENGTH = 1024 * 1024 * 32;
 static const int MAX_FUNCTION_NAME_LENGTH = 128;
 
-IpcHandler& IpcHandler::Instance()
+IpcHandler &IpcHandler::Instance()
 {
     static IpcHandler instance;
     return instance;
@@ -122,9 +122,7 @@ uint32_t IpcHandler::StartListen()
         return TURBO_ERROR;
     }
     running = true;
-    pThread = new std::thread([this]() {
-        this->PThreadListen();
-    });
+    pThread = new std::thread([this]() { this->PThreadListen(); });
     UBTURBO_LOG_DEBUG(MODULE_NAME, MODULE_CODE) << "[Ipc][Server] Start listen succeed.";
     return TURBO_OK;
 }
@@ -176,9 +174,7 @@ void IpcHandler::PThreadListen()
             continue;
         }
         UBTURBO_LOG_DEBUG(MODULE_NAME, MODULE_CODE) << "[Ipc][Server] Get a connect request.";
-        std::thread handleThread([this, fd]() {
-            PThreadHandle(fd);
-        });
+        std::thread handleThread([this, fd]() { PThreadHandle(fd); });
         handleThread.detach();
     }
     UBTURBO_LOG_DEBUG(MODULE_NAME, MODULE_CODE) << "[Ipc][Server] Thread for listen finished.";
@@ -199,9 +195,9 @@ static void SetHeader(uint8_t *message, uint32_t number)
     uint32_t tmp = htonl(number);
     if (memcpy_s(message, sizeof(uint32_t), &tmp, sizeof(uint32_t)) != 0) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Ipc][Server] Memory copy error.";
-        return ;
+        return;
     }
-    return ;
+    return;
 }
 
 static void ClearBuffer(TurboByteBuffer &buffer)
@@ -211,8 +207,8 @@ static void ClearBuffer(TurboByteBuffer &buffer)
     buffer.len = 0;
 }
 
-static RetCode RecvMoreMessage(int fd, TurboByteBuffer &params, uint8_t *receivedBuffer,
-    int &messageLength, int &totalReceived)
+static RetCode RecvMoreMessage(int fd, TurboByteBuffer &params, uint8_t *receivedBuffer, int &messageLength,
+                               int &totalReceived)
 {
     if (messageLength != 0 &&
         memcpy_s(params.data, messageLength, receivedBuffer + HEADER_LENGTH, totalReceived) != 0) {
@@ -241,7 +237,9 @@ static RetCode RecvMoreMessage(int fd, TurboByteBuffer &params, uint8_t *receive
 static RetCode RecvMessage(int fd, TurboByteBuffer &params)
 {
     UBTURBO_LOG_DEBUG(MODULE_NAME, MODULE_CODE) << "[Ipc][Server] Recv Message start.";
-    struct timeval timeOut{1, 0};
+    struct timeval timeOut {
+        1, 0
+    };
     std::unique_ptr<uint8_t[]> receivedBuffer = std::make_unique<uint8_t[]>(BUFFER_LENGTH + 1);
     if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeOut, sizeof(timeOut)) < 0) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Ipc][Server] Set socket option error.";
@@ -354,18 +352,18 @@ void IpcHandler::PThreadHandle(int fd)
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Ipc][Server] No function name.";
         ClearBuffer(messageBuffer);
         close(fd);
-        return ;
+        return;
     }
     ret = HandleFunction(text, messageBuffer, fd);
     ClearBuffer(messageBuffer);
     if (ret != TURBO_OK) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Ipc][Server] Handle " << text << " function failed.";
         close(fd);
-        return ;
+        return;
     }
     close(fd);
     UBTURBO_LOG_DEBUG(MODULE_NAME, MODULE_CODE) << "[Ipc][Server] Thread for handle finished.";
-    return ;
+    return;
 }
 
-}
+} // namespace turbo::ipc::server

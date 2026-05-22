@@ -12,17 +12,17 @@
 #ifndef TURBO_MAIN_H
 #define TURBO_MAIN_H
 
+#include <chrono>
 #include <iostream>
 #include <vector>
-#include <chrono>
 
-#include "turbo_module.h"
 #include "turbo_common.h"
 #include "turbo_error.h"
+#include "turbo_module.h"
 #include "turbo_module_conf.h"
-#include "turbo_module_plugin.h"
-#include "turbo_module_logger.h"
 #include "turbo_module_ipc.h"
+#include "turbo_module_logger.h"
+#include "turbo_module_plugin.h"
 
 namespace turbo::main {
 
@@ -43,7 +43,6 @@ public:
     void Stop();
 
 private:
-
     TurboMain() = default;
     RetCode InitModule();
 
@@ -54,7 +53,6 @@ private:
     void UnInitModule();
 };
 
-}
-
+} // namespace turbo::main
 
 #endif //  TURBO_MAIN_H

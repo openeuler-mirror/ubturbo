@@ -22,7 +22,7 @@ using namespace turbo::module;
 class TurboModuleConf : public TurboModule {
 public:
     RetCode Init() override;
-    
+
     void UnInit() override;
 
     RetCode Start() override;
@@ -31,7 +31,6 @@ public:
 
     std::string Name() override;
 };
-
 
 } //  namespace turbo::config
 

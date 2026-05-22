@@ -20,8 +20,8 @@
 
 namespace rmrs::serialization {
 using namespace rmrs;
-using rmrs::serialize::RmrsOutStream;
 using rmrs::serialize::RmrsInStream;
+using rmrs::serialize::RmrsOutStream;
 
 // 测试类
 class TestRmrsSerializer : public ::testing::Test {
@@ -44,18 +44,18 @@ TEST_F(TestRmrsSerializer, PidNumaInfoCollectParam_Serialize_Succeed)
     RmrsInStream inBuilder(outBuilder.GetBufferPointer(), outBuilder.GetSize());
     PidNumaInfoCollectParam param2;
     inBuilder >> param2;
- 
+
     EXPECT_EQ(param1.pidList[0], param2.pidList[0]);
     EXPECT_EQ(param1.pidList[1], param2.pidList[1]);
 }
- 
+
 TEST_F(TestRmrsSerializer, PidNumaInfoCollectResult_Serialize_Succeed)
 {
     std::vector<mempooling::PidInfo> pidInfoList = {
         {1, {0}, 1024, 2048, {{0, 1024, true, 0}, {1, 2048, false, -1}}},
         {2, {1, 2}, 4096, 8192, {{1, 4096, true, 0}, {2, 8192, true, 1}}},
     };
- 
+
     PidNumaInfoCollectResult param1;
     param1.pidInfoList = pidInfoList;
     RmrsOutStream outBuilder;

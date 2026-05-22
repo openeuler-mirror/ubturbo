@@ -33,6 +33,6 @@ using Logfunc = void (*)(int level, const char *str, const char *moduleName);
 
 void UpstreamSubscribeLogger(Logfunc extlog);
 void LoggerMessage(LoggerLevel severity, const char *fmt, ...);
-}
+} // namespace turbo::smap::ulog
 
 #endif

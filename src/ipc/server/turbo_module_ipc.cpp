@@ -32,7 +32,7 @@ RetCode TurboModuleIPC::Start()
 void TurboModuleIPC::Stop()
 {
     IpcServerInner::Instance().EndListen();
-    return ;
+    return;
 }
 
 void TurboModuleIPC::UnInit() {}
@@ -42,4 +42,4 @@ std::string TurboModuleIPC::Name()
     return "ipc";
 }
 
-}  //  namespace turbo::ipc::server
+} //  namespace turbo::ipc::server

@@ -15,12 +15,12 @@
 
 #include <sys/types.h>
 #include <cstdint>
-#include <vector>
-#include <string>
-#include <unordered_map>
 #include <map>
 #include <set>
 #include <sstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace turbo::rmrs {
 
@@ -44,10 +44,10 @@ struct RemoteNumaSocketInfo {
 };
 
 struct MigrateStrategyParamRMRS {
-    std::vector<VMPresetParam> vmInfoList;                    // 虚拟机列表及最大迁出比例
-    std::uint64_t borrowSize;                                 // 需要匀出本地内存大小
-    std::map<pid_t, std::vector<uint16_t>> pidRemoteNumaMap;  // pid对应的远端numa信息Map
-    std::vector<uint16_t> timeOutNumas;                       // 归还超时的远端numa
+    std::vector<VMPresetParam> vmInfoList;                   // 虚拟机列表及最大迁出比例
+    std::uint64_t borrowSize;                                // 需要匀出本地内存大小
+    std::map<pid_t, std::vector<uint16_t>> pidRemoteNumaMap; // pid对应的远端numa信息Map
+    std::vector<uint16_t> timeOutNumas;                      // 归还超时的远端numa
 };
 
 struct VMMigrateOutParam {
@@ -85,10 +85,10 @@ struct BorrowIdInfo {
 };
 
 struct MetaNumaInfo {
-    uint16_t numaId{};       // numaId
-    uint64_t numaUsedMem{};  // 该numaId上使用的内存
-    bool isLocalNuma{true};  // 是否本地numa
-    int socketId{-1};        // numaId对应的socketId
+    uint16_t numaId{};      // numaId
+    uint64_t numaUsedMem{}; // 该numaId上使用的内存
+    bool isLocalNuma{true}; // 是否本地numa
+    int socketId{-1};       // numaId对应的socketId
 
     std::string ToString() const
     {
@@ -104,12 +104,12 @@ struct MetaNumaInfo {
 };
 
 struct PidInfo {
-    pid_t pid{};                                 // 进程id
-    std::vector<uint16_t> localNumaIds{};        // 本地numaId集合
-    uint64_t totalLocalUsedMem{};                // 本地numa上使用的总内存大小
-    uint64_t totalRemoteUsedMem{};               // 远端numa使用的总内存大小
-    std::vector<MetaNumaInfo> metaNumaInfos{};   // pid进程元信息集合
-    
+    pid_t pid{};                               // 进程id
+    std::vector<uint16_t> localNumaIds{};      // 本地numaId集合
+    uint64_t totalLocalUsedMem{};              // 本地numa上使用的总内存大小
+    uint64_t totalRemoteUsedMem{};             // 远端numa使用的总内存大小
+    std::vector<MetaNumaInfo> metaNumaInfos{}; // pid进程元信息集合
+
     std::string ToString() const
     {
         std::ostringstream oss;
@@ -117,7 +117,9 @@ struct PidInfo {
         oss << "pid:" << pid;
         oss << ",localNumaIds:[";
         for (size_t i = 0; i < localNumaIds.size(); ++i) {
-            if (i) oss << ", ";
+            if (i) {
+                oss << ", ";
+            }
             oss << localNumaIds[i];
         }
         oss << "]";
@@ -125,7 +127,9 @@ struct PidInfo {
         oss << ",totalRemoteUsedMem:" << totalRemoteUsedMem << " BYTE";
         oss << ",metaNumaInfos:[";
         for (size_t i = 0; i < metaNumaInfos.size(); ++i) {
-            if (i) oss << ", ";
+            if (i) {
+                oss << ", ";
+            }
             oss << metaNumaInfos[i].ToString();
         }
         oss << "]";
@@ -185,7 +189,7 @@ public:
 };
 
 struct UCacheMigrationStrategyParam {
-    int16_t localNumaId{};                 // 执行迁出的本地numa节点。若小于0，代表所有本地numa节点
+    int16_t localNumaId{}; // 执行迁出的本地numa节点。若小于0，代表所有本地numa节点
     std::vector<uint16_t> remoteNumaIds{}; // 执行迁入的远端内存呈现numa节点列表
     std::vector<pid_t> pids{};             // 需要迁移的进程列表
     float ucacheUsageRatio{};              // 给Pagecache分配使用的内存比例

@@ -29,7 +29,7 @@ RetCode TurboConfManager::Init(const std::string &confDir, const std::string &li
     std::cout << "[Conf] The absolute path to the configuration file is " << absPathInit << "." << std::endl;
     try {
         absPath = fs::canonical(absPathInit);
-    } catch (const fs::filesystem_error& e) {
+    } catch (const fs::filesystem_error &e) {
         std::cerr << "[Conf] Turbo conf path resolution failed: " << e.what() << std::endl;
         return TURBO_ERROR;
     }
@@ -49,7 +49,7 @@ RetCode TurboConfManager::Init(const std::string &confDir, const std::string &li
     std::string pluginConf;
     try {
         pluginConf = fs::canonical(fs::path(confDir) / fs::path(TURBO_PLUGIN_ADMISSION_FILE_NAME)).string();
-    } catch (const fs::filesystem_error& e) {
+    } catch (const fs::filesystem_error &e) {
         std::cerr << "[Conf] Turbo plugin addmission path resolution failed: " << e.what() << std::endl;
         return TURBO_ERROR;
     }
@@ -94,9 +94,10 @@ RetCode TurboConfManager::InitPluginConf(const std::string &pluginConfPath)
         fs::path soPath;
         try {
             soPath = fs::canonical(fs::path(libDir) / fs::path(pluginConf[KEY_PLUGIN_SO_PATH]));
-        } catch (const fs::filesystem_error& e) {
-            std::cerr << "Plugin " << pluginName << " so path resolution failed: " << e.what() << ", libdir = "
-            << libDir << ", pluginConf = " << pluginConf[KEY_PLUGIN_SO_PATH] << std::endl << ".";
+        } catch (const fs::filesystem_error &e) {
+            std::cerr << "Plugin " << pluginName << " so path resolution failed: " << e.what()
+                      << ", libdir = " << libDir << ", pluginConf = " << pluginConf[KEY_PLUGIN_SO_PATH] << std::endl
+                      << ".";
             return TURBO_ERROR;
         }
         // 加入配置文件，plugin 模块会读取并初始化插件
@@ -188,9 +189,9 @@ RetCode TurboConfManager::ParseLine(std::string line, size_t lineCount, std::str
     }
     static std::regex valLegalChars(R"(^[a-zA-Z0-9\.\_\-\:\,\/\;]+$)");
     if (!std::regex_match(valTmp, valLegalChars)) {
-            std::cerr << "[Conf] Invalid value " << valTmp << " in configuration file at line " << lineCount << "."
-                      << std::endl;
-            return TURBO_ERROR;
+        std::cerr << "[Conf] Invalid value " << valTmp << " in configuration file at line " << lineCount << "."
+                  << std::endl;
+        return TURBO_ERROR;
     }
     key = keyTmp;
     val = valTmp;
@@ -205,7 +206,7 @@ RetCode TurboConfManager::GetConf(const std::string &section, const std::string 
         std::cerr << "[Conf] Missing configuration key: " << key << "." << std::endl;
         return TURBO_ERROR;
     }
-    
+
     configVal = iter->second;
     return TURBO_OK;
 }
@@ -252,7 +253,6 @@ RetCode TurboConfManager::CheckPluginNameAndCode(const std::string &pluginName, 
     return TURBO_OK;
 }
 
-
 void LeftTrim(std::string &s, const std::locale &loc)
 {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), [&loc](char ch) { return !std::isspace(ch, loc); }));
@@ -272,7 +272,7 @@ std::pair<std::string, std::string> ParseConfigKeyAndValue(const std::string &li
     RightTrim(key);
     LeftTrim(value);
     RightTrim(value);
-    return { key, value };
+    return {key, value};
 }
 
 } // namespace turbo::config

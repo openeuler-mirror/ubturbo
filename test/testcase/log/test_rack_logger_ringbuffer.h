@@ -8,8 +8,8 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 #define private public
-#include "turbo_logger.h"
 #include "rack_logger_ringbuffer.h"
+#include "turbo_logger.h"
 
 #define MOCKER_CPP(api, TT) MOCKCPP_NS::mockAPI(#api, reinterpret_cast<TT>(api))
 
@@ -21,5 +21,5 @@ public:
     void SetUp() override;
     void TearDown() override;
 };
-}
+} // namespace turbo::log
 #endif // RACK_MANAGER_TEST_RACK_LOGGER_RINGBUFFER_H

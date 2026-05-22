@@ -26,9 +26,9 @@ protected:
         cout << "[Phase SetUp Begin]" << endl;
         SmapModule::Init();
         cout << "[Phase SetUp End]" << endl;
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         cerr << "SetUp failed: " << e.what() << endl;
-        throw;  // 重新抛出异常，确保测试失败
+        throw; // 重新抛出异常，确保测试失败
     }
     void TearDown() override
     {
@@ -40,9 +40,7 @@ protected:
 
 TEST_F(TestRmrsSmapModule, GetSetSmapRunModeFunc_nullptr)
 {
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
 
     SetSmapRunModeFunc result = SmapModule::GetSetSmapRunModeFunc();
     ASSERT_EQ(result, nullptr);
@@ -50,9 +48,7 @@ TEST_F(TestRmrsSmapModule, GetSetSmapRunModeFunc_nullptr)
 
 TEST_F(TestRmrsSmapModule, GetSmapEnableNodeFunc_nullptr)
 {
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
 
     SmapEnableNodeFunc result = SmapModule::GetSmapEnableNodeFunc();
     ASSERT_EQ(result, nullptr);
@@ -60,9 +56,7 @@ TEST_F(TestRmrsSmapModule, GetSmapEnableNodeFunc_nullptr)
 
 TEST_F(TestRmrsSmapModule, GetSmapEnableProcessMigrateFunc_nullptr)
 {
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
 
     SmapEnableProcessMigrateFunc result = SmapModule::GetSmapEnableProcessMigrateFunc();
     ASSERT_EQ(result, nullptr);
@@ -70,9 +64,7 @@ TEST_F(TestRmrsSmapModule, GetSmapEnableProcessMigrateFunc_nullptr)
 
 TEST_F(TestRmrsSmapModule, GetSmapInit_nullptr)
 {
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
 
     SmapInitFunc result = SmapModule::GetSmapInit();
     ASSERT_EQ(result, nullptr);
@@ -80,9 +72,7 @@ TEST_F(TestRmrsSmapModule, GetSmapInit_nullptr)
 
 TEST_F(TestRmrsSmapModule, GetSetSmapRemoteNumaInfo_nullptr)
 {
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
 
     SetSmapRemoteNumaInfoFunc result = SmapModule::GetSetSmapRemoteNumaInfo();
     ASSERT_EQ(result, nullptr);
@@ -90,22 +80,18 @@ TEST_F(TestRmrsSmapModule, GetSetSmapRemoteNumaInfo_nullptr)
 
 TEST_F(TestRmrsSmapModule, GetSmapMigrateOut_nullptr)
 {
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
 
-    SmapMigrateOutFunc  result = SmapModule::GetSmapMigrateOut();
+    SmapMigrateOutFunc result = SmapModule::GetSmapMigrateOut();
     ASSERT_EQ(result, nullptr);
 }
 
 TEST_F(TestRmrsSmapModule, GetSmapMigrateOutSync_nullptr)
 {
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
 
     SmapMigrateOutSyncFunc result = SmapModule::GetSmapMigrateOutSync();
     ASSERT_EQ(result, nullptr);
 }
 
-} // rmrs::smap
+} // namespace rmrs::smap

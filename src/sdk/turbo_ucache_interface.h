@@ -89,10 +89,10 @@ struct CgroupPSIInfo {
 };
 
 struct CgroupInfos {
-    struct CgroupIoInfo ioInfo{};
-    struct CgroupPageCacheInfo pageCacheInfo{};
-    struct CgroupCpuUsageInfo cpuUsageInfo{};
-    struct CgroupPSIInfo psiInfo{};
+    struct CgroupIoInfo ioInfo {};
+    struct CgroupPageCacheInfo pageCacheInfo {};
+    struct CgroupCpuUsageInfo cpuUsageInfo {};
+    struct CgroupPSIInfo psiInfo {};
     std::string ToString() const
     {
         std::ostringstream oss;
