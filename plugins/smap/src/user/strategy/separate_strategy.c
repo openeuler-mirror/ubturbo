@@ -379,7 +379,7 @@ static uint64_t CalcSwapNum4K(ProcessAttr *process, int localNid, int remoteNid,
     ActCount *localActCount = &process->scanAttr.actCount[localNid];
     ActCount *remoteActCount = &process->scanAttr.actCount[remoteNid];
     uint64_t localLen = process->scanAttr.actcLen[localNid] - numaOffset[localNid];
-    uint64_t remoteLen = process->scanAttr.actcLen[remoteNid] - numaOffset[remoteNid];
+    uint64_t maxByTotal = process->walkPage.nrPage / HUNDRED;
     if (localActCount->freqZero > numaOffset[localNid]) {
         lastZeroNum = localActCount->freqZero - numaOffset[localNid];
     } else {
@@ -390,12 +390,12 @@ static uint64_t CalcSwapNum4K(ProcessAttr *process, int localNid, int remoteNid,
     } else {
         lastFreqNum = 0;
     }
-    migrateNum = MIN(localLen, remoteLen);
     migrateNum = MIN(migrateNum, process->separateParam.maxMigrate);
     migrateNum = MIN(migrateNum, numaFreePage[localNid]);
     migrateNum = MIN(migrateNum, numaFreePage[remoteNid]);
     migrateNum = MIN(migrateNum, lastZeroNum);
     migrateNum = MIN(migrateNum, lastFreqNum);
+    migrateNum = MIN(migrateNum, maxByTotal);
     return migrateNum;
 }
 
