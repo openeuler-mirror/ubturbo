@@ -18,6 +18,7 @@
 #include <linux/completion.h>
 
 #include "ub_hist.h"
+#include "hist_ops.h"
 #include "smap_hist_mid.h"
 
 #define BACKEND_BUFFER_COUNT \
@@ -996,6 +997,14 @@ int smap_hist_middle_get_hot_pages(struct addr_count_pair *result_pair,
 		count = max_t(u32, 1,
 			      node->used_count * hist_mid->config.result_ratio /
 				      SCAN_RESULT_RATIO_MAX);
+		/* Limit copy to result_pair capacity (HIST_STS_VALUE_NUM)
+		 * to prevent OOB access when the scan window covers a large
+		 * memory region (e.g., >416G remote NUMA). */
+		if (count > HIST_STS_VALUE_NUM) {
+			pr_warn("hist hot pages count %u exceeds limit %u, truncated\n",
+				count, HIST_STS_VALUE_NUM);
+			count = HIST_STS_VALUE_NUM;
+		}
 		memcpy(result_pair, node->result_pair,
 		       sizeof(struct addr_count_pair) * count);
 	}
