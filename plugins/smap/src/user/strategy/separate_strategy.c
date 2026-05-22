@@ -342,6 +342,8 @@ static uint64_t CalcSwapNum4K(ProcessAttr *process, int localNid, int remoteNid,
     uint64_t localFree = localActCount->pageNum - localActCount->whiteNum;
     uint64_t remoteFree = remoteActCount->pageNum - remoteActCount->whiteNum;
     uint64_t freqBucketZero = localActCount->freqBuckets[0];
+    /* The number of pages with swap should not exceed 1% */
+    uint64_t maxByTotal = process->walkPage.nrPage / HUNDRED;
     if (freqBucketZero > numaOffset[localNid]) {
         lastZeroNum = freqBucketZero - numaOffset[localNid];
     } else {
@@ -358,6 +360,7 @@ static uint64_t CalcSwapNum4K(ProcessAttr *process, int localNid, int remoteNid,
     migrateNum = MIN(migrateNum, lastFreqNum);
     migrateNum = MIN(migrateNum, localFree);
     migrateNum = MIN(migrateNum, remoteFree);
+    migrateNum = MIN(migrateNum, maxByTotal);
     return migrateNum;
 }
 
