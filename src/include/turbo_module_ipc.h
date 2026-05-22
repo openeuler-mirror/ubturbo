@@ -32,5 +32,5 @@ public:
     std::string Name() override;
 };
 
-}
-#endif  // TURBO_MODULE_IPC_H
+} // namespace turbo::ipc::server
+#endif // TURBO_MODULE_IPC_H

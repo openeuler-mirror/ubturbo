@@ -12,14 +12,14 @@
 #ifndef TURBO_IPC_HANDLER_H
 #define TURBO_IPC_HANDLER_H
 
-#include <string>
+#include <sys/un.h>
 #include <functional>
 #include <shared_mutex>
-#include <unordered_map>
-#include <sys/un.h>
+#include <string>
 #include <thread>
-#include "turbo_def.h"
+#include <unordered_map>
 #include "turbo_common.h"
+#include "turbo_def.h"
 
 namespace turbo::ipc::server {
 using namespace turbo::common;
@@ -31,6 +31,7 @@ public:
     RetCode EndListen();
     RetCode UBTurboRegIpcService(const std::string &name, IpcHandlerFunc function);
     RetCode UBTurboUnRegIpcService(const std::string &name);
+
 private:
     IpcHandler() = default;
     std::shared_mutex gLock;
@@ -38,12 +39,12 @@ private:
     void PThreadHandle(int fd);
     RetCode HandleFunction(const std::string &functionName, const TurboByteBuffer &messageBuffer, int fd);
     std::unordered_map<std::string, IpcHandlerFunc> funcTable;
-    struct sockaddr_un addr{};
+    struct sockaddr_un addr {};
     int listenFd{};
     bool running{false};
     std::thread *pThread{nullptr};
 };
 
-}
+} // namespace turbo::ipc::server
 
 #endif

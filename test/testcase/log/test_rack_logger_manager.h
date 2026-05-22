@@ -10,7 +10,6 @@
 #define private public
 #include "rack_logger_manager.h"
 
-
 #define MOCKER_CPP(api, TT) MOCKCPP_NS::mockAPI(#api, reinterpret_cast<TT>(api))
 
 namespace turbo::log {
@@ -26,5 +25,5 @@ public:
 private:
     std::string currentPath;
 };
-}
+} // namespace turbo::log
 #endif // RACK_MANAGER_TEST_RACK_LOGGER_MANAGER_H

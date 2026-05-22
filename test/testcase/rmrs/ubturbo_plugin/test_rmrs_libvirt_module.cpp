@@ -2,15 +2,14 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.‘
  */
 
-#include <gmock/gmock.h>
 #include <dlfcn.h>
+#include <gmock/gmock.h>
 #include <cstring>
 #include <iostream>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
 #include "rmrs_libvirt_module.h"
-
 
 #define MOCKER_CPP(api, TT) MOCKCPP_NS::mockAPI(#api, reinterpret_cast<TT>(api))
 
@@ -20,7 +19,6 @@ namespace rmrs::libvirt {
 // 测试类
 class TestRmrsLibvirtModule : public ::testing::Test {
 protected:
-
     TestRmrsLibvirtModule() {}
 
     void SetUp() override
@@ -57,7 +55,7 @@ unsigned int MockVirDomainGetIDFunc(void *name)
     return 0;
 }
 
-int MockVirDomainGetUUIDStringFunc(void * a, char *b)
+int MockVirDomainGetUUIDStringFunc(void *a, char *b)
 {
     return 0;
 }
@@ -72,7 +70,7 @@ int MockVirConnectListAllDomainsFunc(void *x, void ***y, virConnectListAllDomain
     return 0;
 }
 
-int MockVirConnectCloseFunc(void* name)
+int MockVirConnectCloseFunc(void *name)
 {
     return 0; // 可以返回任意 void* 值
 }
@@ -87,7 +85,7 @@ int MockVirDomainGetVcpusFunc(void *a, void *b, int c, unsigned char *d, int e)
     return 0;
 }
 
-char* MockVirConnectGetHostnameFunc(void *name)
+char *MockVirConnectGetHostnameFunc(void *name)
 {
     return nullptr;
 }
@@ -119,9 +117,7 @@ int MockVirConnectDomainEventDeRegisterFunc(void *a, VirConnectDomainEventCallba
 
 TEST_F(TestRmrsLibvirtModule, VirConnectCloseFailWithNullptr)
 {
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     LibvirtModule obj;
     auto res = obj.VirConnectClose();
     ASSERT_EQ(res, nullptr);
@@ -129,10 +125,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectCloseFailWithNullptr)
 
 TEST_F(TestRmrsLibvirtModule, VirConnectCloseSucceed)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectCloseFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectCloseFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     auto res = obj.VirConnectClose();
     ASSERT_EQ(res, expectedReturn);
@@ -140,10 +134,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectCloseSucceed)
 
 TEST_F(TestRmrsLibvirtModule, VirConnectCloseSucceedWithSecondCall)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectCloseFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectCloseFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     obj.VirConnectClose();
     auto res = obj.VirConnectClose();
@@ -152,10 +144,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectCloseSucceedWithSecondCall)
 
 TEST_F(TestRmrsLibvirtModule, VirConnectListAllDomainsFuncFailWithNullptr)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectListAllDomainsFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectListAllDomainsFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     LibvirtModule obj;
     auto res = obj.VirConnectListAllDomains();
     ASSERT_EQ(res, nullptr);
@@ -163,10 +153,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectListAllDomainsFuncFailWithNullptr)
 
 TEST_F(TestRmrsLibvirtModule, VirConnectListAllDomainsFuncSucceed)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectListAllDomainsFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectListAllDomainsFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     auto res = obj.VirConnectListAllDomains();
     ASSERT_EQ(res, expectedReturn);
@@ -174,10 +162,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectListAllDomainsFuncSucceed)
 
 TEST_F(TestRmrsLibvirtModule, VirConnectListAllDomainsFuncSucceedWithSecondCall)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectListAllDomainsFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectListAllDomainsFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     obj.VirConnectListAllDomains();
     auto res = obj.VirConnectListAllDomains();
@@ -186,10 +172,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectListAllDomainsFuncSucceedWithSecondCall)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetNameFuncFailWithNullptr)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetNameFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetNameFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     LibvirtModule obj;
     auto res = obj.VirDomainGetName();
     ASSERT_EQ(res, nullptr);
@@ -197,10 +181,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetNameFuncFailWithNullptr)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetNameFuncSucceed)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetNameFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetNameFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     auto res = obj.VirDomainGetName();
     ASSERT_EQ(res, expectedReturn);
@@ -208,10 +190,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetNameFuncSucceed)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetNameFuncSucceedWithSecondCall)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetNameFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetNameFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     obj.VirDomainGetName();
     auto res = obj.VirDomainGetName();
@@ -220,10 +200,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetNameFuncSucceedWithSecondCall)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetIDFuncFailWithNullptr)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetIDFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetIDFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     LibvirtModule obj;
     auto res = obj.VirDomainGetID();
     ASSERT_EQ(res, nullptr);
@@ -231,10 +209,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetIDFuncFailWithNullptr)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetIDFuncSucceed)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetIDFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetIDFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     auto res = obj.VirDomainGetID();
     ASSERT_EQ(res, expectedReturn);
@@ -242,10 +218,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetIDFuncSucceed)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetIDFuncSucceedWithSecondCall)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetIDFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetIDFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     obj.VirDomainGetID();
     auto res = obj.VirDomainGetID();
@@ -254,10 +228,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetIDFuncSucceedWithSecondCall)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetUUIDStringFuncFailWithNullptr)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetUUIDStringFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetUUIDStringFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     LibvirtModule obj;
     auto res = obj.VirDomainGetUUIDString();
     ASSERT_EQ(res, nullptr);
@@ -265,10 +237,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetUUIDStringFuncFailWithNullptr)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetUUIDStringFuncSucceed)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetUUIDStringFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetUUIDStringFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     auto res = obj.VirDomainGetUUIDString();
     ASSERT_EQ(res, expectedReturn);
@@ -276,10 +246,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetUUIDStringFuncSucceed)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetUUIDStringFuncSucceedWithSecondCall)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetUUIDStringFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetUUIDStringFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     obj.VirDomainGetUUIDString();
     auto res = obj.VirDomainGetUUIDString();
@@ -288,10 +256,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetUUIDStringFuncSucceedWithSecondCall)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetInfoFuncFailWithNullptr)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetInfoFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetInfoFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     LibvirtModule obj;
     auto res = obj.VirDomainGetInfo();
     ASSERT_EQ(res, nullptr);
@@ -299,10 +265,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetInfoFuncFailWithNullptr)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetInfoFuncSucceed)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetInfoFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetInfoFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     auto res = obj.VirDomainGetInfo();
     ASSERT_EQ(res, expectedReturn);
@@ -310,10 +274,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetInfoFuncSucceed)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetInfoFuncSucceedWithSecondCall)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetInfoFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetInfoFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     obj.VirDomainGetInfo();
     auto res = obj.VirDomainGetInfo();
@@ -322,10 +284,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetInfoFuncSucceedWithSecondCall)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetVcpusFuncFailWithNullptr)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetVcpusFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetVcpusFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     LibvirtModule obj;
     auto res = obj.VirDomainGetVcpus();
     ASSERT_EQ(res, nullptr);
@@ -333,10 +293,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetVcpusFuncFailWithNullptr)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetVcpusFuncSucceed)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetVcpusFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetVcpusFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     auto res = obj.VirDomainGetVcpus();
     ASSERT_EQ(res, expectedReturn);
@@ -344,10 +302,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetVcpusFuncSucceed)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainGetVcpusFuncSucceedWithSecondCall)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainGetVcpusFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainGetVcpusFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     obj.VirDomainGetVcpus();
     auto res = obj.VirDomainGetVcpus();
@@ -356,10 +312,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetVcpusFuncSucceedWithSecondCall)
 
 TEST_F(TestRmrsLibvirtModule, VirConnectGetHostnameFuncFailWithNullptr)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectGetHostnameFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectGetHostnameFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     LibvirtModule obj;
     auto res = obj.VirConnectGetHostname();
     ASSERT_EQ(res, nullptr);
@@ -367,10 +321,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectGetHostnameFuncFailWithNullptr)
 
 TEST_F(TestRmrsLibvirtModule, VirConnectGetHostnameFuncSucceed)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectGetHostnameFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectGetHostnameFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     auto res = obj.VirConnectGetHostname();
     ASSERT_EQ(res, expectedReturn);
@@ -378,10 +330,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectGetHostnameFuncSucceed)
 
 TEST_F(TestRmrsLibvirtModule, VirConnectGetHostnameFuncSucceedWithSecondCall)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectGetHostnameFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectGetHostnameFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     obj.VirConnectGetHostname();
     auto res = obj.VirConnectGetHostname();
@@ -390,10 +340,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectGetHostnameFuncSucceedWithSecondCall)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainFreeFuncFailWithNullptr)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainFreeFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainFreeFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     LibvirtModule obj;
     auto res = obj.VirDomainFree();
     ASSERT_EQ(res, nullptr);
@@ -401,10 +349,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainFreeFuncFailWithNullptr)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainFreeFuncSucceed)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainFreeFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainFreeFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     auto res = obj.VirDomainFree();
     ASSERT_EQ(res, expectedReturn);
@@ -412,10 +358,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainFreeFuncSucceed)
 
 TEST_F(TestRmrsLibvirtModule, VirDomainFreeFuncSucceedWithSecondCall)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirDomainFreeFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirDomainFreeFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     obj.VirDomainFree();
     auto res = obj.VirDomainFree();
@@ -424,10 +368,8 @@ TEST_F(TestRmrsLibvirtModule, VirDomainFreeFuncSucceedWithSecondCall)
 
 TEST_F(TestRmrsLibvirtModule, VirEventRegisterDefaultImplFuncFailWithNullptr)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirEventRegisterDefaultImplFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirEventRegisterDefaultImplFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     LibvirtModule obj;
     auto res = obj.VirEventRegisterDefaultImpl();
     ASSERT_EQ(res, nullptr);
@@ -435,10 +377,8 @@ TEST_F(TestRmrsLibvirtModule, VirEventRegisterDefaultImplFuncFailWithNullptr)
 
 TEST_F(TestRmrsLibvirtModule, VirEventRegisterDefaultImplFuncSucceed)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirEventRegisterDefaultImplFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirEventRegisterDefaultImplFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     auto res = obj.VirEventRegisterDefaultImpl();
     ASSERT_EQ(res, expectedReturn);
@@ -446,10 +386,8 @@ TEST_F(TestRmrsLibvirtModule, VirEventRegisterDefaultImplFuncSucceed)
 
 TEST_F(TestRmrsLibvirtModule, VirEventRegisterDefaultImplFuncSucceedWithSecondCall)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirEventRegisterDefaultImplFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirEventRegisterDefaultImplFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     obj.VirEventRegisterDefaultImpl();
     auto res = obj.VirEventRegisterDefaultImpl();
@@ -458,10 +396,8 @@ TEST_F(TestRmrsLibvirtModule, VirEventRegisterDefaultImplFuncSucceedWithSecondCa
 
 TEST_F(TestRmrsLibvirtModule, VirEventRunDefaultImplFuncFailWithNullptr)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirEventRunDefaultImplFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirEventRunDefaultImplFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     LibvirtModule obj;
     auto res = obj.VirEventRunDefaultImpl();
     ASSERT_EQ(res, nullptr);
@@ -469,10 +405,8 @@ TEST_F(TestRmrsLibvirtModule, VirEventRunDefaultImplFuncFailWithNullptr)
 
 TEST_F(TestRmrsLibvirtModule, VirEventRunDefaultImplFuncSucceed)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirEventRunDefaultImplFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirEventRunDefaultImplFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     auto res = obj.VirEventRunDefaultImpl();
     ASSERT_EQ(res, expectedReturn);
@@ -480,10 +414,8 @@ TEST_F(TestRmrsLibvirtModule, VirEventRunDefaultImplFuncSucceed)
 
 TEST_F(TestRmrsLibvirtModule, VirEventRunDefaultImplFuncSucceedWithSecondCall)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirEventRunDefaultImplFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirEventRunDefaultImplFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     obj.VirEventRunDefaultImpl();
     auto res = obj.VirEventRunDefaultImpl();
@@ -492,10 +424,8 @@ TEST_F(TestRmrsLibvirtModule, VirEventRunDefaultImplFuncSucceedWithSecondCall)
 
 TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventRegisterFuncFailWithNullptr)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectDomainEventRegisterFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectDomainEventRegisterFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     LibvirtModule obj;
     auto res = obj.VirConnectDomainEventRegister();
     ASSERT_EQ(res, nullptr);
@@ -503,10 +433,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventRegisterFuncFailWithNullptr)
 
 TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventRegisterFuncSucceed)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectDomainEventRegisterFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectDomainEventRegisterFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     auto res = obj.VirConnectDomainEventRegister();
     ASSERT_EQ(res, expectedReturn);
@@ -514,10 +442,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventRegisterFuncSucceed)
 
 TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventRegisterFuncSucceedWithSecondCall)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectDomainEventRegisterFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectDomainEventRegisterFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     obj.VirConnectDomainEventRegister();
     auto res = obj.VirConnectDomainEventRegister();
@@ -526,10 +452,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventRegisterFuncSucceedWithSecond
 
 TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventDeRegisterFuncFailWithNullptr)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectDomainEventDeRegisterFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectDomainEventDeRegisterFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     LibvirtModule obj;
     auto res = obj.VirConnectDomainEventDeRegister();
     ASSERT_EQ(res, nullptr);
@@ -537,10 +461,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventDeRegisterFuncFailWithNullptr
 
 TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventDeRegisterFuncSucceed)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectDomainEventDeRegisterFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectDomainEventDeRegisterFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     auto res = obj.VirConnectDomainEventDeRegister();
     ASSERT_EQ(res, expectedReturn);
@@ -548,10 +470,8 @@ TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventDeRegisterFuncSucceed)
 
 TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventDeRegisterFuncSucceedWithSecondCall)
 {
-    void* expectedReturn = reinterpret_cast<void*>(&MockVirConnectDomainEventDeRegisterFunc);
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(expectedReturn));
+    void *expectedReturn = reinterpret_cast<void *>(&MockVirConnectDomainEventDeRegisterFunc);
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(expectedReturn));
     LibvirtModule obj;
     obj.VirConnectDomainEventDeRegister();
     auto res = obj.VirConnectDomainEventDeRegister();
@@ -570,7 +490,7 @@ TEST_F(TestRmrsLibvirtModule, InitShouldReturnOkWhenAllMethodsReturnOk)
 TEST_F(TestRmrsLibvirtModule, InitShouldReturnErrorWhenDlopenReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlopen, void *(*)(const char *, int)).stubs().will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlopen, void *(*)(const char *, int)).stubs().will(returnValue((void *)nullptr));
     uint32_t result = libvirtModule.Init();
     EXPECT_EQ(result, RMRS_ERROR);
 }
@@ -593,9 +513,7 @@ TEST_F(TestRmrsLibvirtModule, VirConnectOpenShouldReturnOkWhenAllMethodsReturnOk
 TEST_F(TestRmrsLibvirtModule, VirConnectOpenShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirConnectOpenFunc result = libvirtModule.VirConnectOpen();
     EXPECT_EQ(result, nullptr);
 }
@@ -618,9 +536,7 @@ TEST_F(TestRmrsLibvirtModule, VirConnectCloseShouldReturnOkWhenAllMethodsReturnO
 TEST_F(TestRmrsLibvirtModule, VirConnectCloseShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirConnectCloseFunc result = libvirtModule.VirConnectClose();
     EXPECT_EQ(result, nullptr);
 }
@@ -643,9 +559,7 @@ TEST_F(TestRmrsLibvirtModule, VirConnectListAllDomainsShouldReturnOkWhenAllMetho
 TEST_F(TestRmrsLibvirtModule, VirConnectListAllDomainsShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirConnectListAllDomainsFunc result = libvirtModule.VirConnectListAllDomains();
     EXPECT_EQ(result, nullptr);
 }
@@ -668,9 +582,7 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetNameShouldReturnOkWhenAllMethodsReturn
 TEST_F(TestRmrsLibvirtModule, VirDomainGetNameShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirDomainGetNameFunc result = libvirtModule.VirDomainGetName();
     EXPECT_EQ(result, nullptr);
 }
@@ -693,9 +605,7 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetIDShouldReturnOkWhenAllMethodsReturnOk
 TEST_F(TestRmrsLibvirtModule, VirDomainGetIDShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirDomainGetIDFunc result = libvirtModule.VirDomainGetID();
     EXPECT_EQ(result, nullptr);
 }
@@ -718,9 +628,7 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetUUIDStringShouldReturnOkWhenAllMethods
 TEST_F(TestRmrsLibvirtModule, VirDomainGetUUIDStringShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirDomainGetUUIDStringFunc result = libvirtModule.VirDomainGetUUIDString();
     EXPECT_EQ(result, nullptr);
 }
@@ -743,9 +651,7 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetInfoShouldReturnOkWhenAllMethodsReturn
 TEST_F(TestRmrsLibvirtModule, VirDomainGetInfoShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirDomainGetInfoFunc result = libvirtModule.VirDomainGetInfo();
     EXPECT_EQ(result, nullptr);
 }
@@ -768,9 +674,7 @@ TEST_F(TestRmrsLibvirtModule, VirDomainGetVcpusShouldReturnOkWhenAllMethodsRetur
 TEST_F(TestRmrsLibvirtModule, VirDomainGetVcpusShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirDomainGetVcpusFunc result = libvirtModule.VirDomainGetVcpus();
     EXPECT_EQ(result, nullptr);
 }
@@ -793,9 +697,7 @@ TEST_F(TestRmrsLibvirtModule, VirConnectGetHostnameShouldReturnOkWhenAllMethodsR
 TEST_F(TestRmrsLibvirtModule, VirConnectGetHostnameShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirConnectGetHostnameFunc result = libvirtModule.VirConnectGetHostname();
     EXPECT_EQ(result, nullptr);
 }
@@ -818,9 +720,7 @@ TEST_F(TestRmrsLibvirtModule, VirDomainFreeShouldReturnOkWhenAllMethodsReturnOk)
 TEST_F(TestRmrsLibvirtModule, VirDomainFreeShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirDomainFreeFunc result = libvirtModule.VirDomainFree();
     EXPECT_EQ(result, nullptr);
 }
@@ -843,9 +743,7 @@ TEST_F(TestRmrsLibvirtModule, VirConnectIsAliveShouldReturnOkWhenAllMethodsRetur
 TEST_F(TestRmrsLibvirtModule, VirConnectIsAliveShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirConnectIsAliveFunc result = libvirtModule.VirConnectIsAlive();
     EXPECT_EQ(result, nullptr);
 }
@@ -868,9 +766,7 @@ TEST_F(TestRmrsLibvirtModule, VirEventRegisterDefaultImplShouldReturnOkWhenAllMe
 TEST_F(TestRmrsLibvirtModule, VirEventRegisterDefaultImplShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirEventRegisterDefaultImplFunc result = libvirtModule.VirEventRegisterDefaultImpl();
     EXPECT_EQ(result, nullptr);
 }
@@ -893,9 +789,7 @@ TEST_F(TestRmrsLibvirtModule, VirEventRunDefaultImplShouldReturnOkWhenAllMethods
 TEST_F(TestRmrsLibvirtModule, VirEventRunDefaultImplShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirEventRunDefaultImplFunc result = libvirtModule.VirEventRunDefaultImpl();
     EXPECT_EQ(result, nullptr);
 }
@@ -918,9 +812,7 @@ TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventRegisterShouldReturnOkWhenAll
 TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventRegisterShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirConnectDomainEventRegisterFunc result = libvirtModule.VirConnectDomainEventRegister();
     EXPECT_EQ(result, nullptr);
 }
@@ -943,11 +835,9 @@ TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventDeRegisterShouldReturnOkWhenA
 TEST_F(TestRmrsLibvirtModule, VirConnectDomainEventDeRegisterShouldReturnErrorWhenDlsymReturnNullptr)
 {
     LibvirtModule libvirtModule;
-    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
-        .stubs()
-        .will(returnValue((void*)nullptr));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue((void *)nullptr));
     VirConnectDomainEventDeRegisterFunc result = libvirtModule.VirConnectDomainEventDeRegister();
     EXPECT_EQ(result, nullptr);
 }
 
-}
+} // namespace rmrs::libvirt

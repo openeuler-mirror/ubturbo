@@ -17,13 +17,9 @@ using namespace turbo::module;
 
 // 这里的顺序就是启动顺序，停止顺序与之相反。模块间有依赖关系，需要注意
 const std::vector<std::shared_ptr<TurboModule>> g_modules = {
-    std::make_shared<turbo::config::TurboModuleConf>(),
-    std::make_shared<turbo::log::TurboModuleLogger>(),
-    std::make_shared<turbo::smap::TurboModuleSmap>(),
-    std::make_shared<turbo::plugin::TurboModulePlugin>(),
-    std::make_shared<turbo::ipc::server::TurboModuleIPC>()
-};
-
+    std::make_shared<turbo::config::TurboModuleConf>(), std::make_shared<turbo::log::TurboModuleLogger>(),
+    std::make_shared<turbo::smap::TurboModuleSmap>(), std::make_shared<turbo::plugin::TurboModulePlugin>(),
+    std::make_shared<turbo::ipc::server::TurboModuleIPC>()};
 
 RetCode TurboMain::Run()
 {
@@ -53,20 +49,20 @@ void TurboMain::Stop()
 {
     std::cout << "[Main] TurboMain::Stop start" << std::endl;
     auto startTime = std::chrono::system_clock::now();
-    
+
     StopModule();
     UnInitModule();
 
     auto endTime = std::chrono::system_clock::now();
-    std::cout << "[Main] TurboMain::Stop end, cost time: " <<
-        std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count()
-        << "ms" << std::endl;
+    std::cout << "[Main] TurboMain::Stop end, cost time: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() << "ms"
+              << std::endl;
 }
 
 RetCode TurboMain::InitModule()
 {
     RetCode ret = TURBO_OK;
-    
+
     std::cout << "[Main] TurboMain::InitModule start" << std::endl;
 
     for (const auto &m : g_modules) {

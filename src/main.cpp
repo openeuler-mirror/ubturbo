@@ -9,16 +9,16 @@
  * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
  * See the Mulan PSL v2 for more details.
  */
-#include <iostream>
 #include <csignal>
+#include <iostream>
 #include <thread>
 
 #include "turbo_common.h"
-#include "turbo_ipc_server.h"
+#include "turbo_def.h"
 #include "turbo_error.h"
+#include "turbo_ipc_server.h"
 #include "turbo_logger.h"
 #include "turbo_main.h"
-#include "turbo_def.h"
 
 namespace turbo {
 
@@ -35,7 +35,7 @@ void SignalHandler(int signum)
     turbo::main::TurboMain::GetInstance().Stop();
     g_stopFlag = 1;
 }
-}  // namespace turbo
+} // namespace turbo
 using namespace turbo::config;
 using namespace turbo::log;
 using namespace turbo::ipc::server;

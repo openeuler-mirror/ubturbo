@@ -12,8 +12,8 @@
 #ifndef TURBO_IPC_SERVER_INNER_H
 #define TURBO_IPC_SERVER_INNER_H
 
-#include <string>
 #include <functional>
+#include <string>
 #include "turbo_common.h"
 #include "turbo_def.h"
 
@@ -58,6 +58,6 @@ public:
     RetCode UBTurboUnRegIpcService(const std::string &name);
 };
 
-}
+} // namespace turbo::ipc::server
 
 #endif

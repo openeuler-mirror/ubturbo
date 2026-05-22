@@ -148,8 +148,7 @@ TEST_F(TestRmrsSmapHelper, MigrateColdDataToRemoteNumaSync_Fail_M1)
         return -1;
     };
     MOCKER(&SmapModule::GetSmapMigrateOutSync).stubs().will(returnValue(smapMigrateOutSyncFunc));
-    RmrsResult ret =
-        RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdsIn, pidsIn, memSizeList, waitTime);
+    RmrsResult ret = RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdsIn, pidsIn, memSizeList, waitTime);
     EXPECT_EQ(ret, RMRS_MIGRATE_FAILED);
     GlobalMockObject::verify();
 }
@@ -178,8 +177,7 @@ TEST_F(TestRmrsSmapHelper, MigrateColdDataToRemoteNumaSync_Fail_M16)
         return -16;
     };
     MOCKER(&SmapModule::GetSmapMigrateOutSync).stubs().will(returnValue(smapMigrateOutSyncFunc));
-    RmrsResult ret =
-        RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdsIn, pidsIn, memSizeList, waitTime);
+    RmrsResult ret = RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdsIn, pidsIn, memSizeList, waitTime);
     EXPECT_EQ(ret, RMRS_MIGRATE_FAILED);
     GlobalMockObject::verify();
 }
@@ -205,8 +203,7 @@ TEST_F(TestRmrsSmapHelper, MigrateColdDataToRemoteNumaSync_Fail_Nullptr)
 
     SmapMigrateOutSyncFunc smapMigrateOutSyncFunc = nullptr;
     MOCKER(&SmapModule::GetSmapMigrateOutSync).stubs().will(returnValue(smapMigrateOutSyncFunc));
-    RmrsResult ret =
-        RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdsIn, pidsIn, memSizeList, waitTime);
+    RmrsResult ret = RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdsIn, pidsIn, memSizeList, waitTime);
     EXPECT_EQ(ret, RMRS_ERROR);
     GlobalMockObject::verify();
 }
@@ -232,8 +229,7 @@ TEST_F(TestRmrsSmapHelper, MigrateColdDataToRemoteNumaSync_PidsEmpty)
         return 0;
     };
     MOCKER(&SmapModule::GetSmapMigrateOutSync).stubs().will(returnValue(smapMigrateOutSyncFunc));
-    RmrsResult ret =
-        RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdsIn, pidsIn, memSizeList, waitTime);
+    RmrsResult ret = RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdsIn, pidsIn, memSizeList, waitTime);
     EXPECT_EQ(ret, RMRS_ERROR);
     GlobalMockObject::verify();
 }
@@ -261,8 +257,7 @@ TEST_F(TestRmrsSmapHelper, MigrateColdDataToRemoteNumaSync_Success)
         return 0;
     };
     MOCKER(&SmapModule::GetSmapMigrateOutSync).stubs().will(returnValue(smapMigrateOutSyncFunc));
-    RmrsResult ret =
-        RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdsIn, pidsIn, memSizeList, waitTime);
+    RmrsResult ret = RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdsIn, pidsIn, memSizeList, waitTime);
     EXPECT_EQ(ret, RMRS_OK);
     GlobalMockObject::verify();
 }

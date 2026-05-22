@@ -3,10 +3,10 @@
  */
 
 #include <gmock/gmock.h>
-#include <stdexcept>
 #include <limits>
-#include <vector>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "util/rmrs_string_util.h"
 
@@ -149,7 +149,7 @@ TEST_F(TestRmrsStringUtil, SafeStof_InvalidInput)
 TEST_F(TestRmrsStringUtil, SafeStof_OutOfRange)
 {
     float_t result;
-    EXPECT_EQ(RmrsStringUtil::SafeStof("1e1000", result), RMRS_ERROR_EXCEEDS_RANGE);  // Exceeds range for float
+    EXPECT_EQ(RmrsStringUtil::SafeStof("1e1000", result), RMRS_ERROR_EXCEEDS_RANGE); // Exceeds range for float
 }
 
-}  // namespace rmrs
+} // namespace rmrs

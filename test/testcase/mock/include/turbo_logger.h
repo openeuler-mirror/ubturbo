@@ -3,16 +3,16 @@
  */
 #ifndef TURBO_LOGGER_H
 #define TURBO_LOGGER_H
-#include <sys/types.h>  // for pid_t
-#include <cstdint>      // for uint32_t, uint64_t, int32_t, int64_t, uint8_t
-#include <cstring>      // for size_t, strrchr
+#include <sys/types.h> // for pid_t
+#include <cstdint>     // for uint32_t, uint64_t, int32_t, int64_t, uint8_t
+#include <cstring>     // for size_t, strrchr
 #include <iomanip>
-#include <iosfwd>       // for ostream
-#include <memory>       // for unique_ptr
-#include <string>       // for string
-#include <thread>       // for thread
-#include <type_traits>  // for enable_if, is_same
+#include <iosfwd> // for ostream
 #include <iostream>
+#include <memory>      // for unique_ptr
+#include <string>      // for string
+#include <thread>      // for thread
+#include <type_traits> // for enable_if, is_same
 
 namespace turbo::log {
 /**
@@ -42,14 +42,34 @@ namespace turbo::log {
 #define TURBO_LOG_INTERNAL(gModuleName, LEVEL) \
     turbo::log::TurboLog() == turbo::log::TurboLoggerEntry(gModuleName, LEVEL, FILENAME, __func__, __LINE__)
 
+#define UBTURBO_LOG_CRIT(gModuleName, gModuleId) \
+    if (true) {                                  \
+    } else                                       \
+        std::cout
+#define UBTURBO_LOG_ERROR(gModuleName, gModuleId) \
+    if (true) {                                   \
+    } else                                        \
+        std::cout
+#define UBTURBO_LOG_WARN(gModuleName, gModuleId) \
+    if (true) {                                  \
+    } else                                       \
+        std::cout
+#define UBTURBO_LOG_INFO(gModuleName, gModuleId) \
+    if (true) {                                  \
+    } else                                       \
+        std::cout
+#define UBTURBO_LOG_DEBUG(gModuleName, gModuleId) \
+    if (true) {                                   \
+    } else                                        \
+        std::cout
 
-#define UBTURBO_LOG_CRIT(gModuleName, gModuleId) if (true) {} else std::cout
-#define UBTURBO_LOG_ERROR(gModuleName, gModuleId) if (true) {} else std::cout
-#define UBTURBO_LOG_WARN(gModuleName, gModuleId) if (true) {} else std::cout
-#define UBTURBO_LOG_INFO(gModuleName, gModuleId) if (true) {} else std::cout
-#define UBTURBO_LOG_DEBUG(gModuleName, gModuleId) if (true) {} else std::cout
-
-enum class TurboLogLevel : uint32_t { DEBUG = 0, INFO = 1, WARN = 2, ERROR = 3, CRIT = 4 };
+enum class TurboLogLevel : uint32_t {
+    DEBUG = 0,
+    INFO = 1,
+    WARN = 2,
+    ERROR = 3,
+    CRIT = 4
+};
 
 /**
  * @brief 三方库注册日志函数接口
@@ -66,7 +86,16 @@ void TurboLogOutput(const char *moduleName, TurboLogLevel level, const char *msg
  */
 std::string FormatRetCode(uint32_t retCode);
 
-enum class TurboLoggerTypeId : uint8_t { CHAR = 0, UINT32, UINT64, INT32, INT64, DOUBLE, STRING, CHARPTR };
+enum class TurboLoggerTypeId : uint8_t {
+    CHAR = 0,
+    UINT32,
+    UINT64,
+    INT32,
+    INT64,
+    DOUBLE,
+    STRING,
+    CHARPTR
+};
 
 struct TurboLoggerString {
     explicit TurboLoggerString(const char *buffer) : data(buffer) {}
@@ -161,7 +190,7 @@ private:
     uint32_t line;
 
     size_t maxSize;
-    char logEntryBuffer[512] = {0};  // 缓冲区大小为512
+    char logEntryBuffer[512] = {0}; // 缓冲区大小为512
     std::unique_ptr<char[]> heapBuffer;
     size_t currentSize;
 };
@@ -171,5 +200,5 @@ bool TurboIsLog(TurboLogLevel level);
 struct TurboLog {
     bool operator==(TurboLoggerEntry &loggerEntry);
 };
-}  // namespace turbo::log
-#endif  // TURBO_LOGGER_H
+} // namespace turbo::log
+#endif // TURBO_LOGGER_H

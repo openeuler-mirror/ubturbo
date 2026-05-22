@@ -12,9 +12,9 @@
 #ifndef TURBO_LOG_FILTER_H
 #define TURBO_LOG_FILTER_H
 
-#include <unordered_map>
-#include <shared_mutex>
 #include <atomic>
+#include <shared_mutex>
+#include <unordered_map>
 
 #include "rack_common_def.h"
 #include "rack_error.h"
@@ -34,15 +34,15 @@ struct LogKey {
     std::unique_ptr<char[]> context;
     size_t length;
 
-    bool operator == (const LogKey &other) const
+    bool operator==(const LogKey &other) const
     {
         return fileName == other.fileName && fileLine == other.fileLine && length == other.length &&
-            (std::memcmp(context.get(), other.context.get(), length) == 0);
+               (std::memcmp(context.get(), other.context.get(), length) == 0);
     }
 };
 
 struct LogKeyHash {
-    std::size_t operator () (const LogKey &k) const
+    std::size_t operator()(const LogKey &k) const
     {
         return (std::hash<std::string>{}(k.fileName)) ^ (std::hash<uint32_t>{}(k.fileLine) << 1) ^
             (std::hash<size_t>{}(k.length) << 2); // 左移2位增加哈希值复杂度
@@ -55,9 +55,9 @@ public:
     ~RackLoggerFilter();
 
     RackLoggerFilter(const RackLoggerFilter &) = delete;
-    RackLoggerFilter &operator = (const RackLoggerFilter &) = delete;
+    RackLoggerFilter &operator=(const RackLoggerFilter &) = delete;
     RackLoggerFilter(RackLoggerFilter &&) = delete;
-    RackLoggerFilter &operator = (RackLoggerFilter &&) = delete;
+    RackLoggerFilter &operator=(RackLoggerFilter &&) = delete;
 
     /* *
      * @brief 设置日志过滤器历史记录的最大数量
@@ -149,7 +149,7 @@ private:
      * @return 如果 a 的时间戳早于 b 的时间戳，返回 true
      */
     static bool CompareTimestamp(const std::pair<const LogKey, LogFilterInfo> &a,
-        const std::pair<const LogKey, LogFilterInfo> &b);
+                                 const std::pair<const LogKey, LogFilterInfo> &b);
 };
 } // namespace turbo::log
 

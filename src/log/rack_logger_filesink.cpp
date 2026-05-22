@@ -49,12 +49,12 @@ RackLoggerFilesink::~RackLoggerFilesink()
 
 bool RackLoggerFilesink::Write(TurboLoggerEntry &loggerEntry)
 {
-    const char* moduleName = loggerEntry.GetModuleName();
+    const char *moduleName = loggerEntry.GetModuleName();
     if (moduleName == nullptr) {
         std::cerr << "LoggerEntry moduleName is nullptr." << std::endl;
         return false;
     }
-    
+
     std::string fileName = moduleName;
     if (!fileMap[fileName].isInitialized) {
         fileMap[fileName].filePath = basePath + "/" + fileName + ".log";
@@ -179,7 +179,6 @@ bool RackLoggerFilesink::CompressFile(const std::string &fileName, const std::st
     }
     return true;
 }
-
 
 uint32_t RackLoggerFilesink::RenameCompressedFile(std::vector<std::string> &compressedFiles)
 {

@@ -12,9 +12,8 @@
 #ifndef TURBO_MODULE_H
 #define TURBO_MODULE_H
 
-#include <string>
 #include <memory>
-
+#include <string>
 
 #include "turbo_common.h"
 

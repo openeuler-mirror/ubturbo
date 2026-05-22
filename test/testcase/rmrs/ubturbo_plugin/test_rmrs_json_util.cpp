@@ -72,4 +72,4 @@ TEST_F(TestRmrsJsonUtil, RackMemConvertJsonStr2MapSucceed)
     EXPECT_EQ(res, true);
 }
 
-}
+} // namespace rmrs

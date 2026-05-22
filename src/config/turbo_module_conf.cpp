@@ -10,8 +10,8 @@
  * See the Mulan PSL v2 for more details.
  */
 #include "turbo_module_conf.h"
-#include "turbo_file_util.h"
 #include "turbo_conf_manager.h"
+#include "turbo_file_util.h"
 
 #include <filesystem>
 
@@ -28,7 +28,7 @@ RetCode TurboModuleConf::Init()
     try {
         confPath = fs::canonical(fs::path(exeRootDir) / CONFIG_DEFAULT_DIR).string();
         libPath = fs::canonical(fs::path(exeRootDir) / LIB_DEFAULT_DIR).string();
-    } catch (const fs::filesystem_error& e) {
+    } catch (const fs::filesystem_error &e) {
         std::cerr << "[Conf] Path resolution failed: " << e.what() << std::endl;
         return TURBO_ERROR;
     }
@@ -54,4 +54,4 @@ std::string TurboModuleConf::Name()
     return "conf";
 }
 
-}  //  namespace turbo::config
+} //  namespace turbo::config

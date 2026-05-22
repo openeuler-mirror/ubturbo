@@ -22,9 +22,9 @@ const int ROTATION_FILE_COUNT = 10;
 
 struct LoggerOptions {
     TurboLogLevel minLogLevel = TurboLogLevel::INFO;
-    uint32_t maxFileSizeInMB = MAX_FILE_SIZE_IN_MB;    // 日志文件最大大小
-    uint32_t rotationFileCount = ROTATION_FILE_COUNT;  // 绕接个数
-    uint32_t bufferMaxItem = BUFFER_MAX_ITEM;          // 日志缓冲区最大日志条目
+    uint32_t maxFileSizeInMB = MAX_FILE_SIZE_IN_MB;   // 日志文件最大大小
+    uint32_t rotationFileCount = ROTATION_FILE_COUNT; // 绕接个数
+    uint32_t bufferMaxItem = BUFFER_MAX_ITEM;         // 日志缓冲区最大日志条目
     TurboLogLevel minSyslogLevel = TurboLogLevel::INFO;
     std::string logPath = "/var/log/ubturbo";
 };
@@ -47,5 +47,5 @@ public:
         return true;
     }
 };
-}
+} // namespace turbo::log
 #endif // TURBO_LOGGER_WRITER_H

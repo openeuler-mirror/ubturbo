@@ -12,19 +12,19 @@
 #include "turbo_ipc_client_inner.h"
 
 #include <arpa/inet.h>
-#include <cerrno>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
-#include <memory>
+#include <cerrno>
 #include <iostream>
+#include <memory>
 
 #include "securec.h"
 #include "ulog.h"
 
 namespace turbo::ipc::client {
 
-IpcClientInner& IpcClientInner::Instance()
+IpcClientInner &IpcClientInner::Instance()
 {
     static IpcClientInner instance;
     return instance;
@@ -76,8 +76,8 @@ uint32_t IpcClientInner::SendMessage(int fd, const std::string &function, const 
     auto sendBuffer = std::make_unique<uint8_t[]>(sendBufferLength + 1);
     SetHeader(sendBuffer.get() + HEADER_OFFSET_LENGTH, sendBufferLength);
     SetHeader(sendBuffer.get() + HEADER_OFFSET_STATUS, name.length());
-    if (memcpy_s(sendBuffer.get() + HEADER_LENGTH, sendBufferLength - HEADER_LENGTH,
-        name.c_str(), name.length()) != 0) {
+    if (memcpy_s(sendBuffer.get() + HEADER_LENGTH, sendBufferLength - HEADER_LENGTH, name.c_str(), name.length()) !=
+        0) {
         IPC_CLIENT_LOGGER_ERROR("[Ipc][Client] Memory copy failed.");
         return IPC_ERROR;
     }
@@ -104,7 +104,9 @@ static void ClearBuffer(TurboByteBuffer &buffer)
 uint32_t IpcClientInner::RecvMessage(int fd, TurboByteBuffer &result)
 {
     IPC_CLIENT_LOGGER_DEBUG("[Ipc][Client] RecvMessage start.");
-    struct timeval timeOut {ipcTimeLimit, 0};
+    struct timeval timeOut {
+        ipcTimeLimit, 0
+    };
     if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeOut, sizeof(timeOut)) < 0) {
         IPC_CLIENT_LOGGER_ERROR("[Ipc][Client] Set socket option failed.");
         return IPC_ERROR;
@@ -114,7 +116,7 @@ uint32_t IpcClientInner::RecvMessage(int fd, TurboByteBuffer &result)
     int receivedLength = recv(fd, receivedBuffer.get(), BUFFER_LENGTH, 0);
     if (receivedLength < MIN_MESSAGE_LENGTH) {
         IPC_CLIENT_LOGGER_ERROR("[Ipc][Client] ReceivedLength is %d, min length is %d, max length is %d.",
-            receivedLength, MIN_MESSAGE_LENGTH, MAX_MESSAGE_LENGTH);
+                                receivedLength, MIN_MESSAGE_LENGTH, MAX_MESSAGE_LENGTH);
         return IPC_ERROR;
     }
     receivedLength -= HEADER_LENGTH;
@@ -220,4 +222,4 @@ uint32_t IpcClientInner::UBTurboFunctionCaller(const std::string &function, cons
     return IPC_OK;
 }
 
-}
+} // namespace turbo::ipc::client

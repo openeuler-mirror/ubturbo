@@ -11,17 +11,17 @@
  */
 #include "turbo_conf.h"
 
-#include <string>
+#include <algorithm>
+#include <cctype>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
-#include <cctype>
-#include <algorithm>
-#include <limits>
 
 #include "turbo_common.h"
-#include "turbo_error.h"
 #include "turbo_conf_manager.h"
+#include "turbo_error.h"
 #include "turbo_type.h"
 
 namespace turbo::config {
@@ -49,7 +49,6 @@ RetCode TurboGet(const std::string &section, const std::string &configKey, T &co
     }
     return TURBO_OK;
 }
-
 
 uint32_t UBTurboGetUInt32(const std::string &section, const std::string &configKey, uint32_t &configValue)
 {

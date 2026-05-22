@@ -22,7 +22,6 @@ public:
 
     void TearDown() override;
 };
-}
-
+} // namespace turbo::log
 
 #endif // RACKMANAGER_TEST_RACK_LOG_FILESINK_H

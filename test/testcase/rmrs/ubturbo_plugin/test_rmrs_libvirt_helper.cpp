@@ -20,7 +20,6 @@ namespace rmrs {
 
 class TestRmrsLibvirtHelper : public ::testing::Test {
 protected:
-
     TestRmrsLibvirtHelper() {}
 
     void SetUp() override
@@ -39,12 +38,8 @@ protected:
 TEST_F(TestRmrsLibvirtHelper, InitShouldReturnOkWhenAllMethodsReturnOk)
 {
     LibvirtHelper libvirtHelper;
-    MOCKER_CPP(&LibvirtModule::Init, RmrsResult(*)())
-        .stubs()
-        .will(returnValue(RMRS_OK));
-    MOCKER_CPP(&rmrs::LibvirtHelper::Connect, uint32_t(*)())
-        .stubs()
-        .will(returnValue(RMRS_OK));
+    MOCKER_CPP(&LibvirtModule::Init, RmrsResult(*)()).stubs().will(returnValue(RMRS_OK));
+    MOCKER_CPP(&rmrs::LibvirtHelper::Connect, uint32_t(*)()).stubs().will(returnValue(RMRS_OK));
     uint32_t result = libvirtHelper.Init();
     EXPECT_EQ(result, RMRS_OK);
 }
@@ -52,9 +47,7 @@ TEST_F(TestRmrsLibvirtHelper, InitShouldReturnOkWhenAllMethodsReturnOk)
 TEST_F(TestRmrsLibvirtHelper, InitShouldReturnErrorWhenInitReturnError)
 {
     LibvirtHelper libvirtHelper;
-    MOCKER_CPP(&LibvirtModule::Init, RmrsResult(*)())
-        .stubs()
-        .will(returnValue(RMRS_ERROR));
+    MOCKER_CPP(&LibvirtModule::Init, RmrsResult(*)()).stubs().will(returnValue(RMRS_ERROR));
     uint32_t result = libvirtHelper.Init();
     EXPECT_EQ(result, RMRS_ERROR);
 }
@@ -62,17 +55,13 @@ TEST_F(TestRmrsLibvirtHelper, InitShouldReturnErrorWhenInitReturnError)
 TEST_F(TestRmrsLibvirtHelper, InitShouldReturnOkWhenConnectReturnError)
 {
     LibvirtHelper libvirtHelper;
-    MOCKER_CPP(&LibvirtModule::Init, RmrsResult(*)())
-        .stubs()
-        .will(returnValue(RMRS_OK));
-    MOCKER_CPP(&rmrs::LibvirtHelper::Connect, uint32_t(*)())
-        .stubs()
-        .will(returnValue(RMRS_ERROR));
+    MOCKER_CPP(&LibvirtModule::Init, RmrsResult(*)()).stubs().will(returnValue(RMRS_OK));
+    MOCKER_CPP(&rmrs::LibvirtHelper::Connect, uint32_t(*)()).stubs().will(returnValue(RMRS_ERROR));
     uint32_t result = libvirtHelper.Init();
     EXPECT_EQ(result, RMRS_OK);
 }
 
-int VirConnectCloseFuncReturnNullptrMockFunc(void* x)
+int VirConnectCloseFuncReturnNullptrMockFunc(void *x)
 {
     return 0;
 }
@@ -103,7 +92,7 @@ TEST_F(TestRmrsLibvirtHelper, IsConnectAliveShouldReturnFalseWhenVirConnectIsAli
     EXPECT_EQ(result, false);
 }
 
-int VirConnectIsAliveFuncReturnCorrectMockFunc(void* x)
+int VirConnectIsAliveFuncReturnCorrectMockFunc(void *x)
 {
     return 1;
 }
@@ -158,9 +147,7 @@ VirEventRegisterDefaultImplFunc VirEventRegisterDefaultImplFuncReturnErrorInvock
 TEST_F(TestRmrsLibvirtHelper, GetVmBasicInfoReturnErrorWhenGetDomainListError)
 {
     LibvirtHelper libvirtHelper;
-    MOCKER_CPP(&rmrs::LibvirtHelper::GetDomainList, uint32_t(*)(void **, int))
-        .stubs()
-        .will(returnValue(RMRS_ERROR));
+    MOCKER_CPP(&rmrs::LibvirtHelper::GetDomainList, uint32_t(*)(void **, int)).stubs().will(returnValue(RMRS_ERROR));
     uint32_t result = libvirtHelper.GetVmBasicInfo(nullptr);
     EXPECT_EQ(result, RMRS_ERROR);
 }
@@ -173,9 +160,7 @@ VirDomainGetNameFunc VirDomainGetNameReturnNullptrInvokeFunc()
 TEST_F(TestRmrsLibvirtHelper, GetVmBasicInfoReturnErrorWhenVirDomainGetNameNullptr)
 {
     LibvirtHelper libvirtHelper;
-    MOCKER_CPP(&rmrs::LibvirtHelper::GetDomainList, uint32_t(*)(void **, int))
-        .stubs()
-        .will(returnValue(RMRS_OK));
+    MOCKER_CPP(&rmrs::LibvirtHelper::GetDomainList, uint32_t(*)(void **, int)).stubs().will(returnValue(RMRS_OK));
     MOCKER_CPP(&LibvirtModule::VirDomainGetName, VirDomainGetNameFunc(*)())
         .stubs()
         .will(invoke(VirDomainGetNameReturnNullptrInvokeFunc));
@@ -183,7 +168,7 @@ TEST_F(TestRmrsLibvirtHelper, GetVmBasicInfoReturnErrorWhenVirDomainGetNameNullp
     EXPECT_EQ(result, RMRS_ERROR);
 }
 
-const char* VirDomainGetNameFuncReturnCorrectMockFunc(void * domain)
+const char *VirDomainGetNameFuncReturnCorrectMockFunc(void *domain)
 {
     return "test";
 }
@@ -385,9 +370,7 @@ TEST_F(TestRmrsLibvirtHelper, GetVmUuidReturnErrorWhenVirDomainGetUUIDStringErro
 {
     LibvirtHelper libvirtHelper;
     vector<std::string> *vmIdList;
-    MOCKER_CPP(&rmrs::ResourceExport::GetUuidList, vector<std::string> *(*)())
-        .stubs()
-        .will(returnValue(vmIdList));
+    MOCKER_CPP(&rmrs::ResourceExport::GetUuidList, vector<std::string> * (*)()).stubs().will(returnValue(vmIdList));
 
     MOCKER_CPP(LibvirtModule::VirDomainGetUUIDString, VirDomainGetUUIDStringFunc(*)())
         .stubs()
@@ -425,7 +408,7 @@ TEST_F(TestRmrsLibvirtHelper, GetVmStatusReturnErrorWhenVirDomainGetInfoNullptr)
     EXPECT_EQ(result, RMRS_ERROR);
 }
 
-int VirDomainGetInfoFuncReturnErrorMockFunc(void* domain, void* info)
+int VirDomainGetInfoFuncReturnErrorMockFunc(void *domain, void *info)
 {
     return -1;
 }
@@ -447,7 +430,7 @@ TEST_F(TestRmrsLibvirtHelper, GetVmStatusReturnErrorWhenVirDomainGetInfoError)
     EXPECT_EQ(result, RMRS_ERROR);
 }
 
-int VirDomainGetInfoFuncReturnCorrectMockFunc(void* domain, void* info)
+int VirDomainGetInfoFuncReturnCorrectMockFunc(void *domain, void *info)
 {
     return 1;
 }
@@ -472,7 +455,7 @@ TEST_F(TestRmrsLibvirtHelper, GetVmStatusReturnCorrectWhenVirDomainGetInfoCorrec
 TEST_F(TestRmrsLibvirtHelper, GetVmVCpuInfoReturnErrorWhenGetVirDomainVCpusError)
 {
     LibvirtHelper libvirtHelper;
-    MOCKER_CPP(&rmrs::LibvirtHelper::GetVirDomainVCpus, uint32_t(*)(void*, virDomainInfo, virVcpuInfo**, int&))
+    MOCKER_CPP(&rmrs::LibvirtHelper::GetVirDomainVCpus, uint32_t(*)(void *, virDomainInfo, virVcpuInfo **, int &))
         .stubs()
         .will(returnValue(RMRS_ERROR));
     ResourceExport vmInfoHandler;
@@ -483,9 +466,8 @@ TEST_F(TestRmrsLibvirtHelper, GetVmVCpuInfoReturnErrorWhenGetVirDomainVCpusError
     EXPECT_EQ(result, RMRS_ERROR);
 }
 
-
-uint32_t GetVirDomainVCpusReturnNegativeNumInvokeFunc(void *domain, virDomainInfo info,
-    virVcpuInfo **virCpu, int &cpuNums)
+uint32_t GetVirDomainVCpusReturnNegativeNumInvokeFunc(void *domain, virDomainInfo info, virVcpuInfo **virCpu,
+                                                      int &cpuNums)
 {
     cpuNums = -1;
     return RMRS_OK;
@@ -494,12 +476,12 @@ uint32_t GetVirDomainVCpusReturnNegativeNumInvokeFunc(void *domain, virDomainInf
 TEST_F(TestRmrsLibvirtHelper, GetVmVCpuInfoReturnCorrectWhenGetVirDomainVCpusReturnNegativeNum)
 {
     LibvirtHelper libvirtHelper;
-    MOCKER_CPP(&rmrs::LibvirtHelper::GetVirDomainVCpus, uint32_t(*)(void *domain, virDomainInfo info,
-        virVcpuInfo **virCpu, int &cpuNums))
+    MOCKER_CPP(&rmrs::LibvirtHelper::GetVirDomainVCpus,
+               uint32_t(*)(void *domain, virDomainInfo info, virVcpuInfo **virCpu, int &cpuNums))
         .stubs()
         .will(invoke(GetVirDomainVCpusReturnNegativeNumInvokeFunc));
     ResourceExport vmInfoHandler;
-    void *domain = reinterpret_cast<void*>(0x1);  // 非 nullptr，但不能解引用
+    void *domain = reinterpret_cast<void *>(0x1); // 非 nullptr，但不能解引用
     virDomainInfo info;
     info.nrVirtCpu = 1;
     VmDomainInfo vmInfo;
@@ -507,8 +489,8 @@ TEST_F(TestRmrsLibvirtHelper, GetVmVCpuInfoReturnCorrectWhenGetVirDomainVCpusRet
     EXPECT_EQ(result, RMRS_OK);
 }
 
-uint32_t GetVirDomainVCpusReturnPositiveNumInvokeFunc(void *domain, virDomainInfo info,
-    virVcpuInfo **virCpu, int &cpuNums)
+uint32_t GetVirDomainVCpusReturnPositiveNumInvokeFunc(void *domain, virDomainInfo info, virVcpuInfo **virCpu,
+                                                      int &cpuNums)
 {
     (*virCpu)[0].cpu = 0;
     cpuNums = 1;
@@ -518,12 +500,12 @@ uint32_t GetVirDomainVCpusReturnPositiveNumInvokeFunc(void *domain, virDomainInf
 TEST_F(TestRmrsLibvirtHelper, GetVmVCpuInfoReturnCorrectWhenGetVirDomainVCpusReturnPositiveNum)
 {
     LibvirtHelper libvirtHelper;
-    MOCKER_CPP(&rmrs::LibvirtHelper::GetVirDomainVCpus, uint32_t(*)(void *domain, virDomainInfo info,
-        virVcpuInfo **virCpu, int &cpuNums))
+    MOCKER_CPP(&rmrs::LibvirtHelper::GetVirDomainVCpus,
+               uint32_t(*)(void *domain, virDomainInfo info, virVcpuInfo **virCpu, int &cpuNums))
         .stubs()
         .will(invoke(GetVirDomainVCpusReturnPositiveNumInvokeFunc));
     ResourceExport vmInfoHandler;
-    void *domain = reinterpret_cast<void*>(0x1);  // 非 nullptr，但不能解引用
+    void *domain = reinterpret_cast<void *>(0x1); // 非 nullptr，但不能解引用
     virDomainInfo info;
     info.nrVirtCpu = 1;
     VmDomainInfo vmInfo;
@@ -549,7 +531,7 @@ TEST_F(TestRmrsLibvirtHelper, GetVirDomainVCpusReturnErrorWhenVirDomainGetVcpusN
 }
 
 int VirDomainGetVcpusFuncMockFuncReturnError(void *domain, void *virCpu, int nrVirtCpu, unsigned char *cpuMaps,
-    int cpuMapLen)
+                                             int cpuMapLen)
 {
     return -1;
 }
@@ -572,8 +554,8 @@ TEST_F(TestRmrsLibvirtHelper, GetVirDomainVCpusReturnErrorWhenVirDomainGetVcpusE
     EXPECT_EQ(result, RMRS_ERROR);
 }
 
-int VirDomainGetVcpusFuncMockFuncReturnCorrect(void * domain, void * virCpu, int nrVirtCpu, unsigned char * cpuMaps,
-    int cpuMapLen)
+int VirDomainGetVcpusFuncMockFuncReturnCorrect(void *domain, void *virCpu, int nrVirtCpu, unsigned char *cpuMaps,
+                                               int cpuMapLen)
 {
     return 1;
 }
@@ -643,7 +625,6 @@ VirDomainFreeFunc VirDomainFreeReturnNullptrInvokeFunc()
     return nullptr;
 }
 
-
 int VirDomainFreeCorrectMockFunc(void *domain)
 {
     return RMRS_OK;
@@ -681,8 +662,8 @@ TEST_F(TestRmrsLibvirtHelper, GetDomainListReturnErrorWhenVirConnectListAllDomai
     EXPECT_EQ(result, RMRS_ERROR);
 }
 
-int VirConnectListAllDomainsFuncReturnErrorMockFunc(void * virConnect, void *** domainPtr,
-    virConnectListAllDomainsFlags flag)
+int VirConnectListAllDomainsFuncReturnErrorMockFunc(void *virConnect, void ***domainPtr,
+                                                    virConnectListAllDomainsFlags flag)
 {
     return -1;
 }
@@ -704,8 +685,8 @@ TEST_F(TestRmrsLibvirtHelper, GetDomainListReturnErrorWhenVirConnectListAllDomai
     EXPECT_EQ(result, RMRS_ERROR);
 }
 
-int VirConnectListAllDomainsFuncReturnCorrectMockFunc(void * virConnect, void *** domainPtr,
-    virConnectListAllDomainsFlags flag)
+int VirConnectListAllDomainsFuncReturnCorrectMockFunc(void *virConnect, void ***domainPtr,
+                                                      virConnectListAllDomainsFlags flag)
 {
     return -1;
 }
@@ -715,8 +696,8 @@ VirConnectListAllDomainsFunc VirConnectListAllDomainsReturnCorrectInvokeFunc()
     return reinterpret_cast<VirConnectListAllDomainsFunc>(VirConnectListAllDomainsFuncReturnCorrectMockFunc);
 }
 
-int VirConnectListAllDomainsFuncReturnCorrectMockFunc2(void * virConnect, void *** domainPtr,
-    virConnectListAllDomainsFlags flag)
+int VirConnectListAllDomainsFuncReturnCorrectMockFunc2(void *virConnect, void ***domainPtr,
+                                                       virConnectListAllDomainsFlags flag)
 {
     return 1;
 }

@@ -1,13 +1,13 @@
-#include "gtest/gtest.h"
-#include "mockcpp/mokc.h"
 #include <dlfcn.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include "gtest/gtest.h"
+#include "mockcpp/mokc.h"
 #include "securec.h"
 #include "turbo_def.h"
 #define private public
-#include "turbo_ipc_client_inner.h"
 #include "turbo_ipc_client.h"
+#include "turbo_ipc_client_inner.h"
 #undef private
 #include "ulog.h"
 
@@ -212,8 +212,8 @@ TEST_F(TurboIpcTest, SendMessageReturnErrWhenMemcpyErr)
         .stubs()
         .will(returnValue(1));
     TurboByteBuffer params;
-    params.data = (uint8_t*)"testParams";
-    params.len = strlen((const char*)params.data);
+    params.data = (uint8_t *)"testParams";
+    params.len = strlen((const char *)params.data);
     uint32_t ret = ipcClient->SendMessage(0, "test", params);
     EXPECT_EQ(ret, IPC_ERROR);
 }
@@ -223,9 +223,7 @@ TEST_F(TurboIpcTest, SendMessageReturnErrWhenSendErr)
     MOCKER_CPP(memcpy_s, errno_t(*)(void *dest, size_t destMax, const void *src, size_t count))
         .stubs()
         .will(returnValue(0));
-    MOCKER_CPP(send, errno_t(*)(int sockfd, const void *buf, size_t len, int flags))
-        .stubs()
-        .will(returnValue(0));
+    MOCKER_CPP(send, errno_t(*)(int sockfd, const void *buf, size_t len, int flags)).stubs().will(returnValue(0));
     uint32_t ret = ipcClient->SendMessage(0, "test", TurboByteBuffer());
     EXPECT_EQ(ret, IPC_ERROR);
 }
@@ -234,8 +232,8 @@ TEST_F(TurboIpcTest, NormalSendMessage)
 {
     const std::string function = "testFunction";
     TurboByteBuffer params;
-    params.data = (uint8_t*)"testParams";
-    params.len = strlen((const char*)params.data);
+    params.data = (uint8_t *)"testParams";
+    params.len = strlen((const char *)params.data);
 
     // 调用SendMessage
     uint32_t result = ipcClient->SendMessage(client_fd, function, params);
@@ -249,8 +247,8 @@ TEST_F(TurboIpcTest, NormalRecvMessage)
     // 准备发送的数据
     std::string function = "function";
     TurboByteBuffer send_params;
-    send_params.data = (uint8_t*)"testParams";
-    send_params.len = strlen((const char*)send_params.data);
+    send_params.data = (uint8_t *)"testParams";
+    send_params.len = strlen((const char *)send_params.data);
 
     // 发送消息
     uint32_t send_result = ipcClient->SendMessage(client_fd, function, send_params);
@@ -276,8 +274,8 @@ TEST_F(TurboIpcTest, SendMessageErrWhenMemcpyErr)
     // 准备发送的数据
     std::string function = "testFunction";
     TurboByteBuffer send_params;
-    send_params.data = (uint8_t*)"testParams";
-    send_params.len = strlen((const char*)send_params.data);
+    send_params.data = (uint8_t *)"testParams";
+    send_params.len = strlen((const char *)send_params.data);
     MOCKER_CPP(memcpy_s, errno_t(*)(void *dest, size_t destMax, const void *src, size_t count))
         .stubs()
         .will(returnValue(1));
@@ -289,8 +287,8 @@ TEST_F(TurboIpcTest, SendMessageErrWhenMemcpyErr)
 
 TEST_F(TurboIpcTest, UBTurboFunctionCallerFailed1)
 {
-    MOCKER_CPP(&IpcClientInner::CheckInputIsValid, bool(*)(IpcClientInner *, const std::string &,
-        const TurboByteBuffer &))
+    MOCKER_CPP(&IpcClientInner::CheckInputIsValid,
+               bool (*)(IpcClientInner *, const std::string &, const TurboByteBuffer &))
         .stubs()
         .will(returnValue(false));
     TurboByteBuffer params;

@@ -2,23 +2,23 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.‘
  */
 
-#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
 #include <sys/select.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #include <iostream>
-#include <fcntl.h>
-#include <arpa/inet.h>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 #define private public
-#include "turbo_error.h"
-#include "turbo_ipc_handler.h"
-#include "turbo_ipc_server_inner.h"
-#include "turbo_def.h"
-#include "turbo_ipc_client_inner.h"
-#include "turbo_ipc_client.h"
-#include "turbo_ipc_server.h"
 #include "securec.h"
+#include "turbo_def.h"
+#include "turbo_error.h"
+#include "turbo_ipc_client.h"
+#include "turbo_ipc_client_inner.h"
+#include "turbo_ipc_handler.h"
+#include "turbo_ipc_server.h"
+#include "turbo_ipc_server_inner.h"
 #include "turbo_module_ipc.h"
 
 #define MOCKER_CPP(api, TT) MOCKCPP_NS::mockAPI(#api, reinterpret_cast<TT>(api))
@@ -414,7 +414,8 @@ TEST_F(TestTurboIpcHandler, TESTIpcServerInnerEndListen)
 TEST_F(TestTurboIpcHandler, PThreadFailedWhenHandleFunctionFailed)
 {
     MOCKER_CPP(&IpcHandler::HandleFunction, uint32_t(*)(const std::string &, const TurboByteBuffer &, int))
-        .stubs().will(returnValue(TURBO_ERROR));
+        .stubs()
+        .will(returnValue(TURBO_ERROR));
     UBTurboRegIpcService("function", TestFunc);
     ipcHandler->StartListen();
     params.data = new uint8_t[5];
@@ -428,4 +429,4 @@ TEST_F(TestTurboIpcHandler, PThreadFailedWhenHandleFunctionFailed)
     ipcHandler->EndListen();
 }
 
-}
+} // namespace turbo::ipc_server

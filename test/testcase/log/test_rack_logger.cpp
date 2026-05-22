@@ -6,8 +6,8 @@
 #include "mockcpp/mockcpp.hpp"
 #include "securec.h"
 #define private public
-#include "turbo_logger.h"
 #include "rack_logger_manager.h"
+#include "turbo_logger.h"
 #define MOCKER_CPP(api, TT) MOCKCPP_NS::mockAPI(#api, reinterpret_cast<TT>(api))
 namespace turbo::log {
 class TestRackLogger : public testing::Test {
@@ -175,7 +175,7 @@ TEST_F(TestRackLogger, TestEncodeString_success)
 TEST_F(TestRackLogger, TestEncodeString_failed)
 {
     TurboLoggerEntry turboLoggerEntry(nullptr, TurboLogLevel::INFO, nullptr, nullptr, 0);
-    char data[512];    // 设置data容量为512
+    char data[512];       // 设置data容量为512
     size_t length = 1024; // 设置length为1
     MOCKER(memcpy_s).stubs().will(returnValue(1));
 }
