@@ -390,6 +390,7 @@ static uint64_t CalcSwapNum4K(ProcessAttr *process, int localNid, int remoteNid,
     } else {
         lastFreqNum = 0;
     }
+    migrateNum = localLen;
     migrateNum = MIN(migrateNum, process->separateParam.maxMigrate);
     migrateNum = MIN(migrateNum, numaFreePage[localNid]);
     migrateNum = MIN(migrateNum, numaFreePage[remoteNid]);
