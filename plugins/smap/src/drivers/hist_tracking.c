@@ -30,7 +30,8 @@
 #include "hist_ops.h"
 #include "hist_tracking.h"
 
-#define to_access_tracking_dev(n) container_of(n, struct access_tracking_dev, ldev)
+#define to_access_tracking_dev(n) \
+	container_of(n, struct access_tracking_dev, ldev)
 #define to_delay_work(n) container_of(n, struct delayed_work, work)
 #define delay_work_to_dev(n) \
 	container_of(n, struct access_tracking_dev, scan_work)
@@ -218,7 +219,8 @@ static void scan_hist(struct access_tracking_dev *hdev)
 				pgcount + addr_pg, dev_page_count);
 			break;
 		}
-		fetch_hist_actc_buf(hdev->access_bit_actc_data + pgcount, &addr_seg);
+		fetch_hist_actc_buf(hdev->access_bit_actc_data + pgcount,
+				    &addr_seg);
 		pgcount += addr_pg;
 	}
 	read_unlock(&rem_ram_list_lock);
@@ -326,8 +328,12 @@ put_dev:
 int hist_module_init(void)
 {
 	int ret;
-
-	ret = hist_init(SIZE_2M, smap_scene != NORMAL_SCENE);
+	ret = init_acpi_mem();
+	if (ret) {
+		pr_err("parse ACPI table failed: %d\n", ret);
+		return ret;
+	}
+	ret = hist_init(SIZE_2M);
 	if (ret) {
 		pr_err("init SMAP histogram device failed, ret: %d\n", ret);
 		return ret;
@@ -344,5 +350,6 @@ int hist_module_init(void)
 
 err_tracking_add:
 	hist_deinit();
+	reset_acpi_mem();
 	return ret;
 }

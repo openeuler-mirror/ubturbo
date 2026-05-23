@@ -7,7 +7,7 @@ obj-m += smap_histogram_tracking.o
 
 smap_tracking_core-objs := core.o
 smap_tracking_core-objs += bus.o
-smap_access_tracking-objs := access_iomem.o access_acpi_helper.o access_acpi_mem.o smap_hist_mid.o hist_ops.o hist_tracking.o accessed_bit.o access_ioctl.o access_pid.o access_mmu.o access_tracking.o kvm_pgtable.o access_tracking_wrapper.o memory_notifier.o
+smap_access_tracking-objs := access_iomem.o access_acpi_helper.o access_acpi_mem.o hist_ops.o hist_tracking.o accessed_bit.o access_ioctl.o access_pid.o access_mmu.o access_tracking.o kvm_pgtable.o access_tracking_wrapper.o memory_notifier.o
 smap_histogram_tracking-objs := ub_hist.o
 
 ccflags-y += -DACPI_NOT_READY
