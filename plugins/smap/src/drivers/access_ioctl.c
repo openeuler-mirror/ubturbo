@@ -318,21 +318,27 @@ static void write_bitmap_buffer(char **buffer)
 	up_read(&ap_data.lock);
 }
 
-static ssize_t read_bitmap(char __user *buf, size_t cnt, loff_t *loff)
+static ssize_t read_bitmap(char __user *buf, size_t cnt, loff_t *loff,
+			   bool *completed)
 {
 	char *tmp_buf;
 	ssize_t len;
 
+	*completed = false;
 	pr_debug("reading bitmap, smap_buf_len %zu, loff %lld, cnt %zu\n",
 		 smap_buf_len, *loff, cnt);
-	if (cnt == 0)
+	if (cnt == 0) {
+		*completed = true;
 		return 0;
+	}
 	if (*loff > 0)
 		goto copy_data;
 
 	smap_buf_len = calc_bitmap_len();
-	if (smap_buf_len == 0)
+	if (smap_buf_len == 0) {
+		*completed = true;
 		return 0;
+	}
 
 	vfree(smap_bitmap_buf);
 	smap_bitmap_buf = vmalloc(smap_buf_len);
@@ -347,7 +353,7 @@ static ssize_t read_bitmap(char __user *buf, size_t cnt, loff_t *loff)
 
 copy_data:
 	if (unlikely(*loff >= smap_buf_len)) {
-		len = 0;
+		len = -ERANGE;
 		goto free_buf;
 	}
 	if (*loff + cnt > smap_buf_len)
@@ -358,8 +364,10 @@ copy_data:
 		len = -EFAULT;
 		goto free_buf;
 	}
-	if (*loff + len == smap_buf_len)
+	if (*loff + len == smap_buf_len) {
+		*completed = true;
 		goto free_buf;
+	}
 	*loff += len;
 	return len;
 
@@ -502,16 +510,17 @@ static ssize_t smap_access_read(struct file *file, char __user *buf, size_t cnt,
 				loff_t *loff)
 {
 	ssize_t ret;
+	bool completed = false;
 
 	if (!check_and_clear_ap_state(&ap_data, AP_STATE_READ)) {
 		pr_err("read bitmap of access pid is not allowed\n");
 		return -EPERM;
 	}
 
-	ret = read_bitmap(buf, cnt, loff);
+	ret = read_bitmap(buf, cnt, loff, &completed);
 	if (ret < 0)
 		set_ap_whole_state(&ap_data, AP_STATE_WALK);
-	else if (ret == cnt || ret == 0)
+	else if (completed)
 		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_FREQ);
 	else
 		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ);
