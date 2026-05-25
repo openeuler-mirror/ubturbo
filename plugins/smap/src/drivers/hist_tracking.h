@@ -17,7 +17,7 @@
 
 extern struct list_head remote_ram_list;
 extern rwlock_t rem_ram_list_lock;
-
+extern struct list_head access_dev;
 extern u64 get_node_page_cnt_iomem(int nid, int page_size);
 
 extern u32 g_pagesize_huge;

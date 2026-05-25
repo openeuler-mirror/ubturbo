@@ -199,48 +199,6 @@ static int actc_buffer_init(struct access_tracking_dev *hdev)
 	return 0;
 }
 
-static void scan_hist(struct access_tracking_dev *hdev)
-{
-	u32 pgcount = 0, addr_pg = 0;
-	u64 dev_page_count = hdev->page_count;
-	struct ram_segment *rseg, *tmp;
-	struct addr_seg addr_seg;
-	if (PAGE_SIZE == PAGE_SIZE_64K)
-		dev_page_count *= PAGE_SIZE_64K_DIV_4K;
-	read_lock(&rem_ram_list_lock);
-	list_for_each_entry_safe(rseg, tmp, &remote_ram_list, node) {
-		if (rseg->numa_node != hdev->node) {
-			continue;
-		}
-		addr_seg.start = rseg->start;
-		addr_seg.size = rseg->end - rseg->start + 1;
-		addr_pg = addr_seg.size >>
-			  (hdev->page_size_mode == PAGE_MODE_2M ?
-				   HIST_ADDR_SHIFT_2M :
-				   HIST_ADDR_SHIFT_4K);
-		if (pgcount + addr_pg > dev_page_count) {
-			pr_warn("page index: %u exceeds upper bound of page count: %llu\n",
-				pgcount + addr_pg, dev_page_count);
-			break;
-		}
-		fetch_hist_actc_buf(hdev->access_bit_actc_data + pgcount,
-				    &addr_seg);
-		pgcount += addr_pg;
-	}
-	read_unlock(&rem_ram_list_lock);
-}
-
-static void update_hist_actc_batch(void)
-{
-	struct access_tracking_dev *hdev, *n;
-	list_for_each_entry_safe(hdev, n, &access_dev, list) {
-		if (!hdev->is_hist)
-			continue;
-		down_write(&hdev->buffer_lock);
-		scan_hist(hdev);
-		up_write(&hdev->buffer_lock);
-	}
-}
 
 static void hist_tracking_deinit(void)
 {
@@ -348,7 +306,6 @@ int hist_module_init(void)
 		pr_err("init histogram tracking device failed, ret: %d\n", ret);
 		goto err_tracking_add;
 	}
-	hist_set_flush_actc_cb(update_hist_actc_batch);
 	pr_info("smap hist tracking init success.\n");
 	return 0;
 
