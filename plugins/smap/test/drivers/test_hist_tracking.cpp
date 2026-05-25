@@ -223,45 +223,14 @@ TEST_F(HistTrackingTest, actc_buffer_init_alloc_fail)
     EXPECT_EQ(0, dev.page_count);
 }
 
-static void fetch_hist_actc_buf_call(u16 *dst_buf, struct addr_seg *seg)
-{
-    dst_buf[0] = 1;
-    return;
-}
-
-extern "C" void scan_hist(struct access_tracking_dev *hdev);
-TEST_F(HistTrackingTest, scan_hist)
-{
-    struct access_tracking_dev hdev = {
-        .node = 0,
-    };
-    INIT_LIST_HEAD(&drivers_remote_ram_list);
-    struct ram_segment newdata1 = {
-        .numa_node = 0,
-        .start = 0,
-        .end = 10,
-    };
-    list_add(&newdata1.node, &drivers_remote_ram_list);
-    scan_hist(&hdev);
-}
-
-extern "C" void update_hist_actc_batch(void);
-TEST_F(HistTrackingTest, update_hist_actc_batch)
-{
-    struct access_tracking_dev hdev;
-    INIT_LIST_HEAD(&access_dev);
-    list_add(&hdev.list, &access_dev);
-    MOCKER(scan_hist).stubs();
-    update_hist_actc_batch();
-    list_del(&hdev.list);
-}
-
 extern "C" void hist_tracking_deinit(void);
 TEST_F(HistTrackingTest, hist_tracking_deinit)
 {
+    INIT_LIST_HEAD(&access_dev);
     struct access_tracking_dev *hdev = (struct access_tracking_dev *)kmalloc(
         sizeof(struct access_tracking_dev), GFP_KERNEL);
     hdev->page_count = 1;
+    hdev->is_hist = 1;
     hdev->tracking_dev = (struct tracking_dev *)malloc(sizeof(struct tracking_dev));
     list_add_tail(&hdev->list, &access_dev);
     MOCKER(tracking_dev_remove).stubs().will(ignoreReturnValue());
