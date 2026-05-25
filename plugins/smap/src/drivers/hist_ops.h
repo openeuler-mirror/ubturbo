@@ -37,8 +37,8 @@
 
 /* 4K scan mode enumeration */
 enum hist_4k_scan_mode {
-	HIST_4K_SCAN_MULTI_GRAN = 0,   /* Multi-granularity sliding (existing method) */
-	HIST_4K_SCAN_SEQ_LOOP = 1,     /* Sequential loop sliding (new method) */
+	HIST_4K_SCAN_MULTI_GRAN = 0,   /* Multi-granularity sliding */
+	HIST_4K_SCAN_SEQ_LOOP = 1,     /* Sequential loop sliding */
 };
 
 struct addr_seg {
