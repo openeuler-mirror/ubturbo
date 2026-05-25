@@ -59,12 +59,17 @@ static inline int pgd_bad(pgd_t pgd)		{ return 0; }
 #if LINUX_VERSION_CODE == KERNEL_VERSION(6, 6, 0)
 static inline int __ptep_test_and_clear_young(void *vma, int address,
 					      pte_t *ptep)
-#else
-static inline int __ptep_test_and_clear_young(pte_t *ptep)
-#endif
 {
 	return 0;
 }
+#define ptep_test_and_clear_young(vma, address, ptep) __ptep_test_and_clear_young(vma, address, ptep)
+#else
+static inline int __ptep_test_and_clear_young(pte_t *ptep)
+{
+	return 0;
+}
+#define ptep_test_and_clear_young(vma, address, ptep) __ptep_test_and_clear_young(ptep)
+#endif
 
 static inline int set_linear_mapping_invalid(unsigned long start_pfn, unsigned long end_pfn, bool invalid)
 {

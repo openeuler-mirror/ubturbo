@@ -83,6 +83,8 @@
 #define MAX_LINE_LENGTH 1024
 #define NUMA_MAPS_MAX_PATTERN_LEN 20
 
+#define FREQ_BUCKETS_SIZE 256
+
 extern EnvAtomic g_forbiddenNodes[MAX_NODES];
 
 #define NODE_FORBIDDEN_USER (1 << 0)
@@ -145,6 +147,7 @@ typedef struct {
     uint64_t freqSum;
     uint64_t remoteHotNum;
     uint64_t whiteNum;
+    uint32_t freqBuckets[FREQ_BUCKETS_SIZE]; /* 频次桶：freqBuckets[freq] = 频次为freq的非白名单页面数 */
 } ActCount;
 
 typedef struct {
@@ -239,6 +242,7 @@ typedef struct {
     uint64_t actcLen[MAX_NODES];
     ActcData *actcData[MAX_NODES]; // actc数据
     ActCount actCount[MAX_NODES]; // 统计数据
+    uint32_t selectedBuckets[MAX_NODES][FREQ_BUCKETS_SIZE]; // 已选频次为freq的页面数
 } ScanAttribute;
 
 typedef struct {

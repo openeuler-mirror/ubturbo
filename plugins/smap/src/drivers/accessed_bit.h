@@ -15,6 +15,11 @@
 
 #define SCAN_PERIOD_UNIT_MS 50
 
+#define MMAPLOCK_BATCH_SIZE (64UL * 1024 * 1024)
+#define SCAN_GROUP_SIZE (64UL * 1024)  /* 64KiB分组扫描优化 */
+
+#define SCAN_RESULT_CAPACITY (MMAPLOCK_BATCH_SIZE / PAGE_SIZE)
+
 extern struct list_head remote_ram_list;
 extern int nr_local_numa;
 extern struct access_pid_struct ap_data;
@@ -48,6 +53,12 @@ struct hva_info {
 	int nid;
 };
 
+struct scan_result_entry {
+	phys_addr_t paddr;
+	u8 nid;
+	u8 hot;
+};
+
 struct pte_walk {
 	pid_t pid;
 	scan_type type;
@@ -63,6 +74,9 @@ struct pte_walk {
 	u64 *statistic_vaddr;
 	struct access_pid *ap;
 	bool group_hot;
+	u64 group_hot_skip_cnt;
+	struct scan_result_entry *scan_results;
+	u64 scan_result_cnt;		/* 当前缓冲区计数 */
 };
 
 struct freq_info {

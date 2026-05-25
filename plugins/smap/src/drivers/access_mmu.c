@@ -72,21 +72,11 @@ static int calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
 
 static int set_non_anon_bm(struct access_pid *ap, u64 acidx, u64 paddr, int nid)
 {
-	unsigned long pfn;
-	struct page *p_page = NULL;
-
-	pfn = PHYS_PFN(paddr);
-	if (!pfn_valid(pfn)) {
+	struct page *page = smap_paddr_to_page(paddr);
+	if (!page)
 		return -EINVAL;
-	}
-	p_page = pfn_to_online_page(pfn);
-	if (!p_page) {
-		return -EINVAL;
-	}
-	if (!PageHuge(p_page)) {
-		if (!PageAnon(p_page) || page_mapcount(p_page) > 1) {
-			set_bit(acidx, ap->white_list_bm[nid]);
-		}
+	if (is_file_or_shared_page(page)) {
+		set_bit(acidx, ap->white_list_bm[nid]);
 	}
 	return 0;
 }
@@ -112,14 +102,17 @@ int add_to_bm_page(u64 paddr, struct access_pid *ap)
 	if (ret) {
 		return ret;
 	}
-	set_bit(acidx, ap->paddr_bm[nid]);
-	ap->page_num[nid]++;
+	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly */
+	if (!test_bit(acidx, ap->paddr_bm[nid])) {
+		set_bit(acidx, ap->paddr_bm[nid]);
+		ap->page_num[nid]++;
+	}
 	return 0;
 }
 
 int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap)
 {
-	int nid_pos;
+	int ret, nid_pos;
 	unsigned long numa_nodes;
 
 	nid_pos = convert_nid_to_pos(nid);
@@ -130,9 +123,14 @@ int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap)
 	if (BIT_WORD(acidx) >= ap->bm_len[nid])
 		return -ERANGE;
 
-	set_non_anon_bm(ap, acidx, paddr, nid);
-	set_bit(acidx, ap->paddr_bm[nid]);
-	ap->page_num[nid]++;
+	ret = set_non_anon_bm(ap, acidx, paddr, nid);
+	if (ret)
+		return ret;
+	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly */
+	if (!test_bit(acidx, ap->paddr_bm[nid])) {
+		set_bit(acidx, ap->paddr_bm[nid]);
+		ap->page_num[nid]++;
+	}
 	return 0;
 }
 
@@ -206,9 +204,12 @@ int add_to_bm_hugepage(u64 vaddr, u64 paddr, struct access_pid *ap)
 	if (BIT_WORD(acidx) >= ap->bm_len[nid]) {
 		return -ERANGE;
 	}
-	set_bit(acidx, ap->paddr_bm[nid]);
+	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly */
+	if (!test_bit(acidx, ap->paddr_bm[nid])) {
+		set_bit(acidx, ap->paddr_bm[nid]);
+		ap->page_num[nid]++;
+	}
 	set_pa_prior(ap, vaddr, acidx, nid);
-	ap->page_num[nid]++;
 	return 0;
 }
 

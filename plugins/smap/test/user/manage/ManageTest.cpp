@@ -11,6 +11,7 @@
 #include "manage/access_ioctl.h"
 #include "manage/smap_config.h"
 #include "manage/manage.h"
+#include "strategy/period_config.h"
 #include "securec.h"
 
 using namespace std;
@@ -504,7 +505,7 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
     EXPECT_NE(nullptr, g_processManager.processes);
-    EXPECT_EQ(param.scanTime, g_processManager.processes->scanTime);
+    EXPECT_EQ(DEFAULT_SCAN_PERIOD, g_processManager.processes->scanTime);  // 首次扫描使用DEFAULT_SCAN_PERIOD
     EXPECT_EQ(param.duration, g_processManager.processes->duration);
     EXPECT_EQ(50, g_processManager.processes->initLocalMemRatio);
     EXPECT_EQ(0x10, g_processManager.processes->numaAttr.numaNodes);
@@ -519,7 +520,7 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
     EXPECT_NE(nullptr, g_processManager.processes);
-    EXPECT_EQ(param.scanTime, g_processManager.processes->scanTime);
+    EXPECT_EQ(DEFAULT_SCAN_PERIOD, g_processManager.processes->scanTime);  // 首次扫描使用DEFAULT_SCAN_PERIOD
     EXPECT_EQ(param.duration, g_processManager.processes->duration);
     EXPECT_EQ(50, g_processManager.processes->initLocalMemRatio);
     EXPECT_EQ(0x10, g_processManager.processes->numaAttr.numaNodes);

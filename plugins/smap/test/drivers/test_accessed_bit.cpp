@@ -643,23 +643,29 @@ const struct mm_walk_ops pte_range_ops = {
 
 extern "C" int small_vma_walk(struct mm_struct *mm, unsigned long start_vaddr, unsigned long end_vaddr,
                               struct pte_walk *pte_walk, const struct mm_walk_ops *ops);
+extern "C" void process_scan_results(struct pte_walk *pte_walk);
 TEST_F(AccessedBitTest, small_vma_walk)
 {
+    struct pte_walk pw = {};
     MOCKER(mmap_read_lock_killable).stubs().will(returnValue(1));
 
-    int ret = small_vma_walk(nullptr, 1, 10, nullptr, &pte_range_ops);
+    int ret = small_vma_walk(nullptr, 1, 10, &pw, &pte_range_ops);
     EXPECT_EQ(1, ret);
 
     GlobalMockObject::verify();
     MOCKER(mmap_read_lock_killable).stubs().will(returnValue(0));
     MOCKER(walk_page_range).stubs().will(returnValue(1));
-    ret = small_vma_walk(nullptr, 1, 10, nullptr, &pte_range_ops);
+    MOCKER(mmap_read_unlock).stubs();
+    MOCKER(process_scan_results).stubs();
+    ret = small_vma_walk(nullptr, 1, 10, &pw, &pte_range_ops);
     EXPECT_EQ(1, ret);
 
     GlobalMockObject::verify();
     MOCKER(mmap_read_lock_killable).stubs().will(returnValue(0));
     MOCKER(walk_page_range).stubs().will(returnValue(0));
-    ret = small_vma_walk(nullptr, 1, 10, nullptr, &pte_range_ops);
+    MOCKER(mmap_read_unlock).stubs();
+    MOCKER(process_scan_results).stubs();
+    ret = small_vma_walk(nullptr, 1, 10, &pw, &pte_range_ops);
     EXPECT_EQ(0, ret);
 }
 

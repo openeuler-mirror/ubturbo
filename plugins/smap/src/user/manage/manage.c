@@ -603,7 +603,7 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
     attr->type = type;
     attr->isFirstScan = true; // 标记新PID首次扫描
     SetProcessConfig(attr, param);
-    attr->scanTime = MIN_SCAN_PERIOD; // 首次扫描使用高频周期
+    attr->scanTime = DEFAULT_SCAN_PERIOD;
     LinkedListAdd(&g_processManager.processes, &attr);
     SMAP_LOGGER_INFO("Set pid %d scan cycle to %ums.", attr->pid, attr->scanTime);
     g_processManager.nr[type]++;
@@ -1123,11 +1123,15 @@ static void SetPidNrPages(ProcessAttr *attr, size_t *nrPages, int len)
 static void CalcActcStats(ProcessAttr *attr)
 {
     uint16_t remoteHotThreshold = GetRemoteHotThreshold();
+    int nrLocalNuma = GetNrLocalNuma();
 
     for (int nid = 0; nid < MAX_NODES; nid++) {
         uint64_t actcLen = attr->scanAttr.actcLen[nid];
         ActcData *actc = attr->scanAttr.actcData[nid];
         ActCount *count = &attr->scanAttr.actCount[nid];
+
+        memset(count->freqBuckets, 0, sizeof(count->freqBuckets));
+        memset(attr->scanAttr.selectedBuckets[nid], 0, sizeof(attr->scanAttr.selectedBuckets[nid]));
 
         if (actcLen == 0 || !actc) {
             memset(count, 0, sizeof(*count));
@@ -1145,6 +1149,10 @@ static void CalcActcStats(ProcessAttr *attr)
 
         for (uint64_t i = 0; i < actcLen; i++) {
             actc_t freq = actc[i].freq;
+            uint16_t bucketIdx = MIN(freq, FREQ_BUCKETS_SIZE - 1);
+            if (!actc[i].isWhiteListPage) {
+                count->freqBuckets[bucketIdx]++;
+            }
             if (freq != 0) {
                 count->freqNum++;
                 count->freqSum += freq;
@@ -1165,6 +1173,15 @@ static void CalcActcStats(ProcessAttr *attr)
                          "freqSum %llu, remoteHotNum %llu, whiteNum %llu",
                          nid, actcLen, count->freqMax, count->freqMin,
                          count->freqNum, count->freqSum, count->remoteHotNum, count->whiteNum);
+
+        /* 打印各频次桶的页面数（仅本地NUMA，跳过页面数为零的） */
+        if (nid < nrLocalNuma) {
+            for (int f = 0; f < FREQ_BUCKETS_SIZE; f++) {
+                if (count->freqBuckets[f] > 0) {
+                    SMAP_LOGGER_DEBUG("Node%d freq=%d pages=%u", nid, f, count->freqBuckets[f]);
+                }
+            }
+        }
     }
 }
 

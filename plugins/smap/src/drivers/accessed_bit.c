@@ -42,8 +42,6 @@
 #define MAX_NR_KVM 100
 #undef pr_fmt
 #define pr_fmt(fmt) "access-bit: " fmt
-#define MMAPLOCK_BATCH_SIZE (64UL * 1024 * 1024)
-#define SCAN_GROUP_SIZE (64UL * 1024)  /* 64KiB分组扫描优化 */
 
 LIST_HEAD(ham_pid_list);
 LIST_HEAD(statistic_pid_list);
@@ -366,32 +364,6 @@ static inline int get_numa_id_by_paddr(phys_addr_t paddr)
 		return NUMA_NO_NODE;
 
 	return page_to_nid(page);
-}
-
-static int calc_paddr_nid_idx(u64 paddr, int page_size, int *nid, u64 *pa_idx,
-			      bool *is_hist)
-{
-	int ret;
-	struct access_tracking_dev *adev;
-
-	*nid = get_numa_id_by_paddr(paddr);
-	if (unlikely(*nid == NUMA_NO_NODE))
-		return -ERANGE;
-
-	if (*nid < nr_local_numa)
-		ret = calc_paddr_acidx_acpi_known_nid(paddr, *nid, pa_idx, page_size);
-	else
-		ret = calc_paddr_acidx_iomem_known_nid(paddr, *nid, pa_idx, page_size);
-
-	if (unlikely(ret))
-		return ret;
-
-	adev = get_access_tracking_dev(*nid);
-	if (unlikely(!adev || *pa_idx >= adev->page_count))
-		return -ERANGE;
-
-	*is_hist = adev->is_hist;
-	return 0;
 }
 
 static void actc_data_update(int nid, u64 pa_index)
@@ -1301,46 +1273,85 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 {
 	struct pte_walk *pte_walk = walk->private;
 	pte_t ptent = ptep_get(pte);
-	int nid = NUMA_NO_NODE;
-	u64 pa_idx = 0;
-	bool is_hist = false;
 	phys_addr_t paddr = (phys_addr_t)__pte_to_phys(ptent);
+	unsigned long pfn = PHYS_PFN(paddr);
+	struct page *page = NULL;
+	bool is_young = pte_young(ptent);
+	bool is_local = false;
+	u8 nid;
 
 	if (paddr == 0 || is_swap_pte(ptent) || !pte_present(ptent))
 		return 0;
 
-	if (calc_paddr_nid_idx(paddr, PAGE_SIZE, &nid, &pa_idx, &is_hist))
+	if (pte_walk->scan_result_cnt >= SCAN_RESULT_CAPACITY)
 		return 0;
+
+	/* 锁内：获取 page 用于 inc_smap_acc_cnt */
+	if (!pfn_valid(pfn))
+		return 0;
+	page = pfn_to_online_page(pfn);
+	if (!page)
+		return 0;
+	nid = page_to_nid(page);
+	is_local = nid < nr_local_numa;
+	if (!is_local && enable_hist && pte_walk->type == NORMAL_SCAN) {
+		is_young = false;
+		goto save_res;
+	}
 
 	/* 64KiB分组优化：NORMAL_SCAN类型，首页young则跳过后续页 */
 	if (pte_walk->type == NORMAL_SCAN) {
 		bool is_first = (addr & (SCAN_GROUP_SIZE - 1)) == 0;
 		if (is_first)
-			pte_walk->group_hot = pte_young(ptent);
+			pte_walk->group_hot = is_young;
 		else if (pte_walk->group_hot) {
-			actc_data_update(nid, pa_idx);
-			goto skip_scan;
+			pte_walk->group_hot_skip_cnt++;
+			goto save_res;
 		}
 	}
 
-	if (pte_young(ptent)) {
+	if (is_young) {
 		if (pte_walk->type == STATISTIC_SCAN)
 			pte_walk->statistic_vaddr[pte_walk->statistic_cnt++] = addr;
-		actc_data_update(nid, pa_idx);
-		if (pte_walk->type == STATISTIC_SCAN || !is_hist) {
+		if (!is_file_or_shared_page(page))
 			__ptep_test_and_clear_young(NULL, 0, pte);
-			pte_walk->flag = true;
-		}
+		pte_walk->flag = true;
 	}
-skip_scan:
-	if (access_pid_cur_last_scanning(pte_walk->ap))
-		add_to_bm_page_fast(paddr, nid, pa_idx, pte_walk->ap);
+
+save_res:
+	pte_walk->scan_results[pte_walk->scan_result_cnt].paddr = paddr;
+	pte_walk->scan_results[pte_walk->scan_result_cnt].nid = nid;
+	pte_walk->scan_results[pte_walk->scan_result_cnt].hot = is_young;
+	pte_walk->scan_result_cnt++;
+
 	return 0;
 }
 
 static const struct mm_walk_ops pte_range_ops = {
 	.pte_entry = check_pte_young,
 };
+
+static void process_scan_results(struct pte_walk *pte_walk)
+{
+	u64 i, pa_idx;
+	int ret;
+	bool is_last_scan = access_pid_cur_last_scanning(pte_walk->ap);
+
+	for (i = 0; i < pte_walk->scan_result_cnt; i++) {
+		struct scan_result_entry *entry = &pte_walk->scan_results[i];
+		if (entry->nid < nr_local_numa)
+			ret = calc_paddr_acidx_acpi_known_nid(entry->paddr, entry->nid, &pa_idx, PAGE_SIZE);
+		else
+			ret = calc_paddr_acidx_iomem_known_nid(entry->paddr, entry->nid, &pa_idx, PAGE_SIZE);
+		if (ret)
+			continue;
+		if (entry->hot)
+			actc_data_update(entry->nid, pa_idx);
+		if (is_last_scan)
+			add_to_bm_page_fast(entry->paddr, entry->nid, pa_idx, pte_walk->ap);
+		cond_resched();
+	}
+}
 
 static int small_vma_walk(struct mm_struct *mm, unsigned long start_vaddr,
 			  unsigned long end_vaddr, struct pte_walk *pte_walk,
@@ -1353,15 +1364,13 @@ static int small_vma_walk(struct mm_struct *mm, unsigned long start_vaddr,
 		pr_err("unable to get mmap read lock, ret: %d\n", ret);
 		return ret;
 	}
+	pte_walk->scan_result_cnt = 0;
 
 	ret = walk_page_range(mm, start_vaddr, end_vaddr, ops, pte_walk);
-	if (ret) {
-		pr_err("failed to walk page range, ret: %d\n", ret);
-		mmap_read_unlock(mm);
-		return ret;
-	}
 	mmap_read_unlock(mm);
-	return 0;
+	cond_resched();
+	process_scan_results(pte_walk);
+	return ret;
 }
 
 static int huge_vma_walk(struct mm_struct *mm, struct smap_vma_struct *vma,
@@ -1496,7 +1505,10 @@ static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 	struct smap_vma_struct *vma_array = NULL;
 	struct pte_walk pte_walk = {
 		.flag = false,
-		.ap = ap
+		.ap = ap,
+		.group_hot_skip_cnt = 0,
+		.scan_results = NULL,
+		.scan_result_cnt = 0
 	};
 	pte_walk.pid = ap->pid;
 	pte_walk.type = ap->type;
@@ -1506,9 +1518,18 @@ static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 		pr_err("bad mm of pid: %d\n", ap->pid);
 		return -EINVAL;
 	}
+
+	pte_walk.scan_results = vzalloc(SCAN_RESULT_CAPACITY * sizeof(struct scan_result_entry));
+	if (!pte_walk.scan_results) {
+		pr_err("failed to allocate scan results buffer\n");
+		mmput(mm);
+		return -ENOMEM;
+	}
+
 	ret = take_vma_snapshot(mm, &vma_array, &vma_count);
 	if (ret) {
 		pr_err("failed to take VMA snapshot, ret: %d\n", ret);
+		vfree(pte_walk.scan_results);
 		mmput(mm);
 		return -EINVAL;
 	}
@@ -1516,14 +1537,20 @@ static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 	ret = setup_statistic_scan(&pte_walk, ap->pid, vma_array, vma_count);
 	if (ret) {
 		pr_err("failed to setup statistic scan, ret: %d\n", ret);
+		vfree(pte_walk.scan_results);
 		mmput(mm);
 		return -EINVAL;
 	}
 
 	ret = walk_all_vmas(mm, vma_array, vma_count, &pte_walk, ap->pid);
+	vfree(pte_walk.scan_results);
 
 	update_and_cleanup_statistic(ap->pid, &pte_walk, mm, vma_array);
 	mmput(mm);
+
+	if (pte_walk.type == NORMAL_SCAN)
+		pr_debug("pid %d: group_hot skipped %llu pages\n",
+			 ap->pid, pte_walk.group_hot_skip_cnt);
 
 	return ret;
 }

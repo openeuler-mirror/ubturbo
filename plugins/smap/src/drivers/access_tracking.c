@@ -401,7 +401,8 @@ static void adev_buffer_down_read(void)
 {
 	struct access_tracking_dev *adev;
 	list_for_each_entry(adev, &access_dev, list) {
-		down_read(&adev->buffer_lock);
+		if (!adev->is_hist)
+			down_read(&adev->buffer_lock);
 	}
 }
 
@@ -409,7 +410,8 @@ static void adev_buffer_up_read(void)
 {
 	struct access_tracking_dev *adev;
 	list_for_each_entry(adev, &access_dev, list) {
-		up_read(&adev->buffer_lock);
+		if (!adev->is_hist)
+			up_read(&adev->buffer_lock);
 	}
 }
 
