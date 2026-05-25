@@ -2443,7 +2443,7 @@ static uint64_t GetAttrNidInitMemSize(pid_t pid, int nid)
 
 static bool IsRemoteNidMemSizeValid(pid_t pid, int nid, uint64_t memSize)
 {
-    if (memSize % KB_PER_2MB != 0 || memSize == 0) {
+    if (memSize % KB_PER_4KB != 0 || memSize == 0) {
         return false;
     }
     uint64_t curMemSize = GetAttrNidInitMemSize(pid, nid);
@@ -2532,10 +2532,17 @@ static int SmapMigratePidRemoteNumaCheck(struct MigrateEscapeMsg *msg)
             SMAP_LOGGER_ERROR("[%d] pid: %d ratio %d invalid.", i, msg->payload[i].pid, msg->payload[i].ratio);
             return -EINVAL;
         }
-        if (msg->payload[i].migrateMode == MIG_MEMSIZE_MODE &&
-                !IsRemoteNidMemSizeValid(msg->payload[i].pid, msg->payload[i].srcNid, msg->payload[i].memSize)) {
-            SMAP_LOGGER_ERROR("[%d] pid: %d memSize %d invalid.", i, msg->payload[i].pid, msg->payload[i].memSize);
-            return -EINVAL;
+        if (msg->payload[i].migrateMode == MIG_MEMSIZE_MODE) {
+            if (msg->payload[i].memSize == 0) {
+                msg->payload[i].memSize = GetAttrNidInitMemSize(msg->payload[i].pid, msg->payload[i].srcNid);
+                SMAP_LOGGER_INFO("[%d] pid: %d memSize is 0, set to curMemSize %llu.",
+                    i, msg->payload[i].pid, msg->payload[i].memSize);
+            }
+            if (!IsRemoteNidMemSizeValid(msg->payload[i].pid, msg->payload[i].srcNid, msg->payload[i].memSize)) {
+                SMAP_LOGGER_ERROR("[%d] pid: %d memSize %llu invalid.",
+                    i, msg->payload[i].pid, (unsigned long long)msg->payload[i].memSize);
+                return -EINVAL;
+            }
         }
     }
 
