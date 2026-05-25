@@ -19,9 +19,9 @@
 #include "smap_user_log.h"
 #include "strategy.h"
 #include "grouped_strategy.h"
+#include "period_config.h"
 
 #define GROUP_SWAP_READY_ROUNDS 2
-#define GROUP_SWAP_RATIO 5
 #define GROUP_SWAP_PERCENT_BASE 100
 #define GROUP_SWAP_DEFAULT_FREQ_WT 1
 #define GROUP_SWAP_DEFAULT_SLOW_THRED 2
@@ -246,7 +246,11 @@ static bool IsSharedTarget(const GroupMigrationPolicy *policy, int groupIdx)
 
 static uint64_t CalcGroupSwapBaseCap(uint64_t remoteUsed)
 {
-    return (remoteUsed * GROUP_SWAP_RATIO + GROUP_SWAP_PERCENT_BASE - 1) / GROUP_SWAP_PERCENT_BASE;
+    uint32_t ratio = GetGroupSwapRatioConfig();
+    if (ratio == 0) {
+        return 0;
+    }
+    return (remoteUsed * ratio + GROUP_SWAP_PERCENT_BASE - 1) / GROUP_SWAP_PERCENT_BASE;
 }
 
 static void EnsureGroupedSwapParam(ProcessAttr *process, uint64_t localUsed, uint64_t remoteUsed)
@@ -269,6 +273,12 @@ static bool IsSwapBeneficial(const ProcessAttr *process, const GroupPageData *lo
     uint64_t localFreq = freqWt * local->freq;
     uint64_t remoteFreq = remote->freq;
 
+    if (remote->freq < GetGroupSwapMinRemoteFreqConfig()) {
+        return false;
+    }
+    if (remoteFreq <= localFreq + GetGroupSwapMinFreqGainConfig()) {
+        return false;
+    }
     return ((localFreq == 0 && remoteFreq > 0) || (localFreq + slowThred < remoteFreq));
 }
 

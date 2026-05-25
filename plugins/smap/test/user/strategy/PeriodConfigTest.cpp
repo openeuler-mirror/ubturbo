@@ -45,6 +45,9 @@ typedef struct {
     uint32_t slowThreshold;
     uint64_t freqWt;
     uint32_t remoteHotThreshold;
+    uint32_t groupSwapRatio;
+    uint32_t groupSwapMinRemoteFreq;
+    uint32_t groupSwapMinFreqGain;
     bool fileConfSwitch;
     bool scanPeriodChanged;
     bool migratePeriodChanged;
@@ -83,6 +86,30 @@ TEST_F(PeriodConfigTest, GetFileConfSwitchConfigTest)
     g_periodConfig.fileConfSwitch = true;
     bool ret = GetFileConfSwitchConfig();
     EXPECT_EQ(true, ret);
+}
+
+extern "C" uint32_t GetGroupSwapRatioConfig(void);
+TEST_F(PeriodConfigTest, GetGroupSwapRatioConfigTest)
+{
+    g_periodConfig.groupSwapRatio = 1;
+    uint32_t ret = GetGroupSwapRatioConfig();
+    EXPECT_EQ(1, ret);
+}
+
+extern "C" uint32_t GetGroupSwapMinRemoteFreqConfig(void);
+TEST_F(PeriodConfigTest, GetGroupSwapMinRemoteFreqConfigTest)
+{
+    g_periodConfig.groupSwapMinRemoteFreq = 5;
+    uint32_t ret = GetGroupSwapMinRemoteFreqConfig();
+    EXPECT_EQ(5, ret);
+}
+
+extern "C" uint32_t GetGroupSwapMinFreqGainConfig(void);
+TEST_F(PeriodConfigTest, GetGroupSwapMinFreqGainConfigTest)
+{
+    g_periodConfig.groupSwapMinFreqGain = 3;
+    uint32_t ret = GetGroupSwapMinFreqGainConfig();
+    EXPECT_EQ(3, ret);
 }
 
 extern "C" bool GetScanPeriodChanged(void);
@@ -254,6 +281,72 @@ TEST_F(PeriodConfigTest, ConfigFreqWtTest)
 }
 
 extern "C" int32_t ConfigFileConfSwitch(char *substr, char *value);
+extern "C" int32_t ConfigGroupSwapRatio(char *substr, char *value);
+TEST_F(PeriodConfigTest, ConfigGroupSwapRatioTest)
+{
+    char *substr = "smap.group.swap.ratio";
+    char *value = "101";
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
+    int32_t ret = ConfigGroupSwapRatio(substr, value);
+    EXPECT_EQ(-1, ret);
+
+    g_tmpPeriodConfig.groupSwapRatio = 101;
+    GlobalMockObject::verify();
+    ret = ConfigGroupSwapRatio(substr, value);
+    EXPECT_EQ(RETURN_ERROR, ret);
+    EXPECT_EQ(101, g_tmpPeriodConfig.groupSwapRatio);
+
+    GlobalMockObject::verify();
+    char *value1 = "1";
+    ret = ConfigGroupSwapRatio(substr, value1);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, g_tmpPeriodConfig.groupSwapRatio);
+}
+
+extern "C" int32_t ConfigGroupSwapMinRemoteFreq(char *substr, char *value);
+TEST_F(PeriodConfigTest, ConfigGroupSwapMinRemoteFreqTest)
+{
+    char *substr = "smap.group.swap.min.remote.freq";
+    char *value = "65536";
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
+    int32_t ret = ConfigGroupSwapMinRemoteFreq(substr, value);
+    EXPECT_EQ(-1, ret);
+
+    g_tmpPeriodConfig.groupSwapMinRemoteFreq = 65536;
+    GlobalMockObject::verify();
+    ret = ConfigGroupSwapMinRemoteFreq(substr, value);
+    EXPECT_EQ(RETURN_ERROR, ret);
+    EXPECT_EQ(65536, g_tmpPeriodConfig.groupSwapMinRemoteFreq);
+
+    GlobalMockObject::verify();
+    char *value1 = "5";
+    ret = ConfigGroupSwapMinRemoteFreq(substr, value1);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(5, g_tmpPeriodConfig.groupSwapMinRemoteFreq);
+}
+
+extern "C" int32_t ConfigGroupSwapMinFreqGain(char *substr, char *value);
+TEST_F(PeriodConfigTest, ConfigGroupSwapMinFreqGainTest)
+{
+    char *substr = "smap.group.swap.min.freq.gain";
+    char *value = "65536";
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
+    int32_t ret = ConfigGroupSwapMinFreqGain(substr, value);
+    EXPECT_EQ(-1, ret);
+
+    g_tmpPeriodConfig.groupSwapMinFreqGain = 65536;
+    GlobalMockObject::verify();
+    ret = ConfigGroupSwapMinFreqGain(substr, value);
+    EXPECT_EQ(RETURN_ERROR, ret);
+    EXPECT_EQ(65536, g_tmpPeriodConfig.groupSwapMinFreqGain);
+
+    GlobalMockObject::verify();
+    char *value1 = "3";
+    ret = ConfigGroupSwapMinFreqGain(substr, value1);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(3, g_tmpPeriodConfig.groupSwapMinFreqGain);
+}
+
 TEST_F(PeriodConfigTest, ConfigFileConfSwitchTest)
 {
     char* substr = "test";
@@ -327,7 +420,7 @@ TEST_F(PeriodConfigTest, PeriodConfigReviewTest)
     int32_t ret = PeriodConfigReview();
     EXPECT_EQ(-1, ret);
 
-    uint32_t num = 7;
+    uint32_t num = 10;
     for (int i = 0; i < num; i++) {
         g_periodConfigRead[i].needCfg = 2UL;
         g_periodConfigRead[i].realCfg = 2UL;
@@ -365,6 +458,9 @@ TEST_F(PeriodConfigTest, InitPeriodConfigTest)
     InitPeriodConfig();
     EXPECT_EQ(200, g_periodConfig.scanPeriod);
     EXPECT_EQ(2000, g_periodConfig.migratePeriod);
+    EXPECT_EQ(1, g_periodConfig.groupSwapRatio);
+    EXPECT_EQ(0, g_periodConfig.groupSwapMinRemoteFreq);
+    EXPECT_EQ(0, g_periodConfig.groupSwapMinFreqGain);
     EXPECT_EQ(false, g_periodConfig.fileConfSwitch);
     EXPECT_EQ(false, g_periodConfig.scanPeriodChanged);
     EXPECT_EQ(false, g_periodConfig.migratePeriodChanged);

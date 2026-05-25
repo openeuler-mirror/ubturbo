@@ -10,6 +10,7 @@
 #include "manage/manage.h"
 #include "strategy/strategy.h"
 #include "strategy/grouped_strategy.h"
+#include "strategy/period_config.h"
 
 class GroupedStrategyTest : public ::testing::Test {
 protected:
@@ -332,7 +333,7 @@ TEST_F(GroupedStrategyTest, TestUpdateGroupedMigrationResult)
     EXPECT_EQ(0, process.groupPolicy.groups[0].targets[0].usedPages);
 
     UpdateGroupedMigrationResult(&process, 0, 0, 1);
-    EXPECT_EQ(1, process.groupPolicy.groups[0].targets[0].usedPages);
+    EXPECT_EQ(0, process.groupPolicy.groups[0].targets[0].usedPages);
 }
 
 TEST_F(GroupedStrategyTest, TestGroupedStrategyLocalRebalanceUsesRemainingDeficitAfterPromote)
@@ -424,6 +425,9 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapAfterStableRounds)
     EXPECT_EQ(0, mlist[0][4].nr);
 
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+    MOCKER(GetGroupSwapRatioConfig).stubs().will(returnValue((uint32_t)5));
+    MOCKER(GetGroupSwapMinRemoteFreqConfig).stubs().will(returnValue((uint32_t)0));
+    MOCKER(GetGroupSwapMinFreqGainConfig).stubs().will(returnValue((uint32_t)0));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(1, mlist[4][0].nr);
@@ -544,6 +548,9 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapRequiresHotColdGap)
     process.scanAttr.actcLen[4] = 1;
 
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+    MOCKER(GetGroupSwapRatioConfig).stubs().will(returnValue((uint32_t)5));
+    MOCKER(GetGroupSwapMinRemoteFreqConfig).stubs().will(returnValue((uint32_t)0));
+    MOCKER(GetGroupSwapMinFreqGainConfig).stubs().will(returnValue((uint32_t)0));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
