@@ -19,6 +19,7 @@
 #include "acpi_mem.h"
 #include "iomem.h"
 #include "ham_migration.h"
+#include "smap_migrate_pages.h"
 #include "mig_init.h"
 
 #undef pr_fmt
@@ -475,6 +476,20 @@ static int __ioctl_check_pagesize(void __user *argp)
 	return pageType == smap_pgsize ? 0 : -EINVAL;
 }
 
+static int __ioctl_set_ub_dma_avail(void __user *argp)
+{
+	unsigned int available;
+
+	if (copy_from_user(&available, argp, sizeof(unsigned int)))
+		return -EFAULT;
+
+	if (available != 0 && available != 1)
+		return -EINVAL;
+
+	set_remote_migrate_mode(available);
+	return 0;
+}
+
 static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 			  unsigned long arg)
 {
@@ -499,6 +514,9 @@ static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 		rc = __ioctl_migrate_pid_remote_numa(argp);
 		break;
 	}
+	case SMAP_SET_UB_DMA_AVAIL:
+		rc = __ioctl_set_ub_dma_avail(argp);
+		break;
 	default:
 		rc = -ENOTTY;
 	}

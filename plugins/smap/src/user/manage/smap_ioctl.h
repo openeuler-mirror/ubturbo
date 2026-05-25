@@ -36,6 +36,7 @@
 #define SMAP_CHECK_PAGESIZE _IOW(SMAP_MIG_MAGIC, 1, uint32_t)
 #define SMAP_MIG_MIGRATE_NUMA _IOW(SMAP_MIG_MAGIC, 2, struct MigrateNumaIoctlMsg)
 #define SMAP_MIG_PID_REMOTE_NUMA _IOW(SMAP_MIG_MAGIC, 3, struct MigPidRemoteNumaIoctlMsg)
+#define SMAP_SET_UB_DMA_AVAIL _IOW(SMAP_MIG_MAGIC, 4, unsigned int)
 
 #define SMAP_MAGIC 0xBA
 #define SMAP_MIGRATE_BACK _IOW(SMAP_MAGIC, 0, struct MigrateBackMsg)
