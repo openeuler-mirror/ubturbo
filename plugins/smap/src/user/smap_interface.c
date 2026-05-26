@@ -179,28 +179,14 @@ static bool IsNidInNumastat(int nid)
     return nodeExists == 1;
 }
 
-static bool IsRemoteNidValid(int nid)
+/* Validate that a remote nid is in range and currently visible in numastat. */
+static bool IsOnlineRemoteNidValid(int nid)
 {
-    struct ProcessManager *pm = GetProcessManager();
-    if (!pm) {
-        SMAP_LOGGER_ERROR("process manager is null.");
-        return false;
-    }
-    if (nid < pm->nrLocalNuma || nid >= (REMOTE_NUMA_BITS + pm->nrLocalNuma)) {
+    if (!IsRemoteNidValid(nid)) {
         return false;
     }
 
     return IsNidInNumastat(nid);
-}
-
-static bool IsRemoveRemoteNidValid(int nid)
-{
-    struct ProcessManager *pm = GetProcessManager();
-    if (!pm) {
-        SMAP_LOGGER_ERROR("process manager is null.");
-        return false;
-    }
-    return nid >= pm->nrLocalNuma && nid < (REMOTE_NUMA_BITS + pm->nrLocalNuma);
 }
 
 static bool IsPidArrValid(pid_t *pidArr, int len, bool ignoreUnmanaged)
@@ -383,7 +369,7 @@ static bool CheckMigOutPayloadItems(struct MigrateOutPayload *payload, int *tota
 {
     *totalRatio = 0;
     for (int i = 0; i < payload->count; i++) {
-        if (!IsRemoteNidValid(payload->inner[i].destNid)) {
+        if (!IsOnlineRemoteNidValid(payload->inner[i].destNid)) {
             SMAP_LOGGER_ERROR("mig para pid:%d destnode%d invalid.", payload->pid, payload->inner[i].destNid);
             return false;
         }
@@ -529,7 +515,7 @@ static int CheckGroupedTarget(const struct MigrationGroup *group, int payloadIdx
     }
     for (int i = 0; i < group->targetCount; i++) {
         int nid = group->targets[i].nid;
-        if (!IsRemoteNidValid(nid)) {
+        if (!IsOnlineRemoteNidValid(nid)) {
             SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target nid %d invalid.", payloadIdx, groupIdx, i, nid);
             return -EINVAL;
         }
@@ -1236,6 +1222,7 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
     return ret;
 }
 
+/* Validate remove payload shape before touching kernel or manager state. */
 static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType)
 {
     if (!IsCountValid(msg->count, MAX_NR_REMOVE)) {
@@ -1253,7 +1240,7 @@ static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType)
             return -EINVAL;
         }
         for (int j = 0; j < payload->count; j++) {
-            if (!IsRemoveRemoteNidValid(payload->nid[j])) {
+            if (!IsRemoteNidValid(payload->nid[j])) {
                 SMAP_LOGGER_ERROR("[%d] pid:%d remote node %d invalid.", i, payload->pid, payload->nid[j]);
                 return -EINVAL;
             }
@@ -1274,11 +1261,13 @@ static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType)
     return 0;
 }
 
+/* A remove payload with no nid keeps the legacy whole-process remove behavior. */
 static bool IsRemoveWholeProcess(const struct RemovePayload *payload)
 {
     return payload->count == 0;
 }
 
+/* Remove all access-tracking state for pid from the kernel module. */
 static int AccessRemovePid(pid_t pid)
 {
     struct AccessRemovePidPayload payload = { .pid = pid };
@@ -1289,6 +1278,7 @@ static int AccessRemovePid(pid_t pid)
     return ret;
 }
 
+/* Build the remaining remote-node mask after clearing requested remote nodes. */
 static uint32_t ClearRemovePayloadRemoteNodes(ProcessAttr *attr, const struct RemovePayload *payload)
 {
     uint32_t numaNodes = attr->numaAttr.numaNodes;
@@ -1299,6 +1289,7 @@ static uint32_t ClearRemovePayloadRemoteNodes(ProcessAttr *attr, const struct Re
     return numaNodes;
 }
 
+/* Refresh kernel access-tracking state with the remaining remote nodes. */
 static int AccessUpdateProcessRemoteNodes(ProcessAttr *attr, uint32_t numaNodes)
 {
     struct AccessAddPidPayload payload = { .pid = attr->pid };
@@ -1313,6 +1304,7 @@ static int AccessUpdateProcessRemoteNodes(ProcessAttr *attr, uint32_t numaNodes)
     return ret;
 }
 
+/* Apply remove requests to kernel access tracking before changing manager state. */
 static int IoctlRemoveProcess(struct RemoveMsg *msg)
 {
     for (int i = 0; i < msg->count; i++) {
@@ -1343,6 +1335,7 @@ static int IoctlRemoveProcess(struct RemoveMsg *msg)
     return 0;
 }
 
+/* Partial remove cannot safely update grouped policy state, so reject it. */
 static int CheckSmapRemoveGroupedPidLocked(struct RemoveMsg *msg)
 {
     for (int i = 0; i < msg->count; i++) {
@@ -1359,6 +1352,7 @@ static int CheckSmapRemoveGroupedPidLocked(struct RemoveMsg *msg)
     return 0;
 }
 
+/* Remove one pid from the user-space manager process list. */
 static void ClearManagedWholeProcess(pid_t pid, bool *removed)
 {
     struct ProcessManager *manager = GetProcessManager();
@@ -1368,6 +1362,7 @@ static void ClearManagedWholeProcess(pid_t pid, bool *removed)
     }
     if (!attr) {
         SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", pid);
+	*removed = false;
         return;
     }
 
@@ -1380,6 +1375,7 @@ static void ClearManagedWholeProcess(pid_t pid, bool *removed)
     SMAP_LOGGER_INFO("Remove pid: %d, from managed process.", pid);
 }
 
+/* Clear strategy/accounting fields that belong to the removed remote node. */
 static void ClearRemovedRemoteStrategy(ProcessAttr *attr, int remoteNid)
 {
     int nrLocalNuma = GetNrLocalNuma();
@@ -1402,6 +1398,7 @@ static void ClearRemovedRemoteStrategy(ProcessAttr *attr, int remoteNid)
     }
 }
 
+/* Drop one remote node from a managed process and compact migrateParam. */
 static void RemoveManagedProcessRemoteNode(ProcessAttr *attr, int remoteNid)
 {
     int nrLocalNuma = GetNrLocalNuma();
@@ -1426,6 +1423,7 @@ static void RemoveManagedProcessRemoteNode(ProcessAttr *attr, int remoteNid)
     attr->remoteNumaCnt = GetL2Count(attr->numaAttr.numaNodes);
 }
 
+/* Apply a partial remote-node remove to the user-space manager state. */
 static void ClearManagedPartialRemoteNodes(struct RemovePayload *payload, bool *removed, bool *changed)
 {
     struct ProcessManager *manager = GetProcessManager();
@@ -1435,6 +1433,7 @@ static void ClearManagedPartialRemoteNodes(struct RemovePayload *payload, bool *
     }
     if (!attr) {
         SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", payload->pid);
+	*changed = false;
         return;
     }
     for (int i = 0; i < payload->count; i++) {
@@ -1446,6 +1445,7 @@ static void ClearManagedPartialRemoteNodes(struct RemovePayload *payload, bool *
     }
 }
 
+/* Keep manager state and persisted process config consistent after remove. */
 static void ClearManagedProcess(int nr, struct RemovePayload *payload)
 {
     bool removed = false;
@@ -1887,7 +1887,7 @@ int ubturbo_smap_remote_numa_info_set(struct SetRemoteNumaInfoMsg *msg)
         SMAP_LOGGER_ERROR("Set smap remote numa info src node%d invalid.", msg->srcNid);
         return -EINVAL;
     }
-    if (!IsRemoteNidValid(msg->destNid)) {
+    if (!IsOnlineRemoteNidValid(msg->destNid)) {
         SMAP_LOGGER_ERROR("Set smap remote numa info dest node%d invalid.", msg->destNid);
         return -EINVAL;
     }
@@ -2148,7 +2148,7 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
                 free(payload);
                 return -EINVAL;
             }
-            if (!IsRemoteNidValid(GetAttrL2(attr))) {
+            if (!IsOnlineRemoteNidValid(GetAttrL2(attr))) {
                 SMAP_LOGGER_ERROR("pid %d l2 node is invalid, scan type is %d.", attr->pid, scanType);
                 free(payload);
                 return -EINVAL;
@@ -2333,11 +2333,11 @@ static int CheckMigrateNumaMsg(struct MigrateNumaMsg *msg)
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate srcNid = destNid.");
         return -EINVAL;
     }
-    if (!IsRemoteNidValid(msg->srcNid)) {
+    if (!IsOnlineRemoteNidValid(msg->srcNid)) {
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate invalid srcNid %d.", msg->srcNid);
         return -EINVAL;
     }
-    if (!IsRemoteNidValid(msg->destNid)) {
+    if (!IsOnlineRemoteNidValid(msg->destNid)) {
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate invalid destNid %d.", msg->destNid);
         return -EINVAL;
     }
@@ -2392,7 +2392,7 @@ static int CheckSameMigrateNumaMsg(struct MigrateNumaMsg *msg)
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate srcNid = destNid.");
         return -EINVAL;
     }
-    if (!IsRemoteNidValid(msg->srcNid)) {
+    if (!IsOnlineRemoteNidValid(msg->srcNid)) {
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate invalid srcNid %d.", msg->srcNid);
         return -EINVAL;
     }
@@ -2689,11 +2689,11 @@ static int SmapMigratePidRemoteNumaCheck(struct MigrateEscapeMsg *msg)
             SMAP_LOGGER_ERROR("srcNid must not equal destNid.");
             return -EINVAL;
         }
-        if (!IsRemoteNidValid(msg->payload[i].srcNid)) {
+        if (!IsOnlineRemoteNidValid(msg->payload[i].srcNid)) {
             SMAP_LOGGER_ERROR("[%d] srcNid %d invalid, migrate pid remote numa failed.", i, msg->payload[i].srcNid);
             return -EINVAL;
         }
-        if (!IsRemoteNidValid(msg->payload[i].destNid)) {
+        if (!IsOnlineRemoteNidValid(msg->payload[i].destNid)) {
             SMAP_LOGGER_ERROR("[%d] destNid %d invalid, migrate pid remote numa failed.", i, msg->payload[i].destNid);
             return -EINVAL;
         }
@@ -2830,7 +2830,7 @@ static int AssignOldProcessPayload(struct OldProcessPayload *result, ProcessAttr
 
 static int CheckSmapQueryProcessConfig(int nid, struct OldProcessPayload *result, int inLen, int *outLen)
 {
-    if (!IsRemoteNidValid(nid)) {
+    if (!IsOnlineRemoteNidValid(nid)) {
         SMAP_LOGGER_ERROR("ubturbo_smap_process_config_query invalid nid %d.", nid);
         return -EINVAL;
     }
@@ -2911,7 +2911,7 @@ int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t
         return -EINVAL;
     }
     for (i = 0; i < length; i++) {
-        if (!IsRemoteNidValid(numa[i])) {
+        if (!IsOnlineRemoteNidValid(numa[i])) {
             SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_freq_query nid %u invalid.", numa[i]);
             return -EINVAL;
         }

@@ -405,6 +405,9 @@ void DebugProcessAttr(struct ProcessManager *manager);
 
 int GetNrLocalNuma(void);
 
+/* Range-check a remote NUMA id against the manager's local/remote layout. */
+bool IsRemoteNidValid(int nid);
+
 int ProcessManagerInit(uint32_t pageType);
 
 int DestroyProcessManager(void);
