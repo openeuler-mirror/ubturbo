@@ -1335,7 +1335,12 @@ static void process_scan_results(struct pte_walk *pte_walk)
 {
 	u64 i, pa_idx;
 	int ret;
-	bool is_last_scan = access_pid_cur_last_scanning(pte_walk->ap);
+	bool is_last_scan;
+
+	if (!pte_walk || !pte_walk->ap)
+		return;
+
+	is_last_scan = access_pid_cur_last_scanning(pte_walk->ap);
 
 	for (i = 0; i < pte_walk->scan_result_cnt; i++) {
 		struct scan_result_entry *entry = &pte_walk->scan_results[i];
