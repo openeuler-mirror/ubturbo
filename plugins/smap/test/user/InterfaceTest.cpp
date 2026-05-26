@@ -270,6 +270,34 @@ TEST_F(InterfaceTest, TestInitAllThreads)
     EXPECT_EQ(-EPERM, ret);
 }
 
+extern "C" bool GetFileConfSwitchConfig(void);
+extern "C" uint32_t GetMigratePeriodConfig(void);
+TEST_F(InterfaceTest, TestInitAllThreadsHugeMode)
+{
+    int ret;
+    struct ProcessManager pm;
+
+    EnvMutexInit(&pm.threadLock);
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
+    MOCKER(InitThread).stubs().will(returnValue(0));
+    ret = InitAllThreads(&pm);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestInitAllThreadsProcessMode)
+{
+    int ret;
+    struct ProcessManager pm;
+
+    EnvMutexInit(&pm.threadLock);
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
+    MOCKER(InitThread).stubs().will(returnValue(0));
+    ret = InitAllThreads(&pm);
+    EXPECT_EQ(0, ret);
+}
+
 extern "C" bool IsNidInNumastat(int nid);
 extern "C" bool IsRemoteNidValid(int nid);
 extern "C" bool IsOnlineRemoteNidValid(int nid);

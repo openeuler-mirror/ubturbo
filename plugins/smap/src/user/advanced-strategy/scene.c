@@ -226,13 +226,13 @@ int GetProcessSceneAttr(Scene scene, SceneInfo *info, PidType type)
 
     if (scene == UNSTABLE_SCENE) {
         info->cycles.scanCycle = type == PROCESS_TYPE ? PROCESS_UNSTABLE_SCAN_CYCLE : VM_UNSTABLE_SCAN_CYCLE;
-        info->cycles.migCycle = UNSTABLE_MIGRATE_CYCLE;
+        info->cycles.migCycle = type == PROCESS_TYPE ? PROCESS_UNSTABLE_MIGRATE_CYCLE : UNSTABLE_MIGRATE_CYCLE;
     } else if (scene == HEAVY_STABLE_SCENE) {
         info->cycles.scanCycle = type == PROCESS_TYPE ? PROCESS_HEAVY_STABLE_SCAN_CYCLE : VM_HEAVY_STABLE_SCAN_CYCLE;
-        info->cycles.migCycle = HEAVY_STABLE_MIGRATE_CYCLE;
+        info->cycles.migCycle = type == PROCESS_TYPE ? PROCESS_HEAVY_STABLE_MIGRATE_CYCLE : HEAVY_STABLE_MIGRATE_CYCLE;
     } else {
         info->cycles.scanCycle = type == PROCESS_TYPE ? PROCESS_LIGHT_STABLE_SCAN_CYCLE : VM_LIGHT_STABLE_SCAN_CYCLE;
-        info->cycles.migCycle = LIGHT_STABLE_MIGRATE_CYCLE;
+        info->cycles.migCycle = type == PROCESS_TYPE ? PROCESS_LIGHT_STABLE_MIGRATE_CYCLE : LIGHT_STABLE_MIGRATE_CYCLE;
     }
 
     return 0;

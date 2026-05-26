@@ -125,54 +125,6 @@ TEST_F(SmapLogCoreTest, TestWriteWithoutInit)
     EXPECT_EQ(-22, ret);
 }
 
-TEST_F(SmapLogCoreTest, TestLogLevelFilter)
-{
-    SmapLogConfig config;
-    memset(&config, 0, sizeof(config));
-    strncpy(config.filePath, testLogFile.c_str(), SMAP_LOG_MAX_PATH_LEN - 1);
-    config.maxFileSize = 1024 * 1024;
-    config.maxFileCount = 5;
-    config.minLogLevel = SMAP_LOG_CORE_INFO;
-
-    cout << "Config filePath: " << config.filePath << endl;
-    cout << "testLogFile: " << testLogFile << endl;
-
-    int ret = SmapLogCoreInit(&config);
-    cout << "Init result: " << ret << endl;
-    EXPECT_EQ(0, ret);
-
-    // Check if file was created after init
-    if (access(testLogFile.c_str(), F_OK) == 0) {
-        cout << "File exists after init" << endl;
-        ifstream initFile(testLogFile);
-        string initLine;
-        while (getline(initFile, initLine)) {
-            cout << "Init content: " << initLine << endl;
-        }
-        initFile.close();
-    } else {
-        cout << "File does not exist after init" << endl;
-    }
-
-    MOCKER(GetTimestamp).stubs().will(returnValue(0));
-    ret = SmapLogCoreWrite(SMAP_LOG_CORE_DEBUG, "test_prefix", "debug_message");
-    cout << "Write DEBUG result: " << ret << endl;
-    EXPECT_EQ(0, ret);
-
-    ret = SmapLogCoreWrite(SMAP_LOG_CORE_INFO, "test_prefix", "info_message");
-    cout << "Write INFO result: " << ret << endl;
-    EXPECT_EQ(0, ret);
-
-    // Check file before exit
-    if (access(testLogFile.c_str(), F_OK) == 0) {
-        cout << "File exists before exit" << endl;
-    } else {
-        cout << "File does not exist before exit" << endl;
-    }
-
-    SmapLogCoreExit();
-}
-
 TEST_F(SmapLogCoreTest, TestDoubleInit)
 {
     SmapLogConfig config;

@@ -558,6 +558,8 @@ TEST_F(SmapConfigTest, TestAssignProcessAttr)
     ASSERT_EQ(attr.scanType, 0);
     ASSERT_EQ(attr.scanTime, 0);
     ASSERT_EQ(attr.numaAttr.numaNodes, 0);
+    ASSERT_EQ(attr.isFirstScan, false);
+    ASSERT_EQ(attr.enableSwap, false);
     AssignProcessAttr(&attr, &payload);
     EXPECT_EQ(attr.pid, payload.pid);
     EXPECT_EQ(attr.initLocalMemRatio, payload.migrateParam[0].ratio);
@@ -566,6 +568,8 @@ TEST_F(SmapConfigTest, TestAssignProcessAttr)
     EXPECT_EQ(attr.scanType, payload.scanType);
     EXPECT_EQ(attr.scanTime, payload.scanTime);
     ASSERT_EQ(attr.numaAttr.numaNodes, payload.numaNodes);
+    EXPECT_EQ(attr.isFirstScan, true);
+    EXPECT_EQ(attr.enableSwap, true);
 }
 
 extern "C" size_t CalcNumaConfigLen(void);
