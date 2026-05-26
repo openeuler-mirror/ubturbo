@@ -39,6 +39,12 @@ uint64_t GetFreqWtConfig(void);
 
 uint32_t GetRemoteHotThreshold(void);
 
+uint32_t GetGroupSwapRatioConfig(void);
+
+uint32_t GetGroupSwapMinRemoteFreqConfig(void);
+
+uint32_t GetGroupSwapMinFreqGainConfig(void);
+
 bool GetFileConfSwitchConfig(void);
 
 int32_t GeneratePeriodConfigFile(const char *configFile);

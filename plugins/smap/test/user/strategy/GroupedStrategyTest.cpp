@@ -10,6 +10,7 @@
 #include "manage/manage.h"
 #include "strategy/strategy.h"
 #include "strategy/grouped_strategy.h"
+#include "strategy/period_config.h"
 
 class GroupedStrategyTest : public ::testing::Test {
 protected:
@@ -175,8 +176,13 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategyLocalDeficitWithoutRemoteSkipsDem
     process.scanAttr.actcData[1] = local1;
     process.scanAttr.actcLen[1] = 3;
 
+    MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(0, mlist[1][4].nr);
+    EXPECT_EQ(2, mlist[1][0].nr);
+    EXPECT_EQ(0x2000, mlist[1][0].addr[0]);
+    EXPECT_EQ(0x3000, mlist[1][0].addr[1]);
 
     FreeMigList(mlist);
 }
@@ -325,6 +331,58 @@ TEST_F(GroupedStrategyTest, TestUpdateGroupedMigrationResult)
 
     UpdateGroupedMigrationResult(&process, 4, 0, 2);
     EXPECT_EQ(0, process.groupPolicy.groups[0].targets[0].usedPages);
+
+    UpdateGroupedMigrationResult(&process, 0, 0, 1);
+    EXPECT_EQ(0, process.groupPolicy.groups[0].targets[0].usedPages);
+}
+
+TEST_F(GroupedStrategyTest, TestGroupedStrategyLocalRebalanceUsesRemainingDeficitAfterPromote)
+{
+    ProcessAttr process = {};
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    ActcData local0[4] = {};
+    ActcData local1[1] = {};
+    ActcData remotePages[1] = {};
+
+    process.pid = 112;
+    process.groupPolicy.enabled = true;
+    process.groupPolicy.groupCount = 1;
+    process.groupPolicy.groups[0].localCount = 2;
+    process.groupPolicy.groups[0].locals[0].nid = 0;
+    process.groupPolicy.groups[0].locals[0].localReservePages = 1;
+    process.groupPolicy.groups[0].locals[1].nid = 1;
+    process.groupPolicy.groups[0].locals[1].localReservePages = 3;
+    process.groupPolicy.groups[0].targetCount = 1;
+    process.groupPolicy.groups[0].targets[0].nid = 4;
+    process.groupPolicy.groups[0].targets[0].quotaPages = 10;
+    process.groupPolicy.groups[0].targets[0].usedPages = 1;
+
+    local0[0].addr = 0x1000;
+    local0[0].freq = 1;
+    local0[1].addr = 0x2000;
+    local0[1].freq = 2;
+    local0[2].addr = 0x3000;
+    local0[2].freq = 3;
+    local0[3].addr = 0x4000;
+    local0[3].freq = 4;
+    process.scanAttr.actcData[0] = local0;
+    process.scanAttr.actcLen[0] = 4;
+    process.scanAttr.actcData[1] = local1;
+    process.scanAttr.actcLen[1] = 1;
+    remotePages[0].addr = 0x5000;
+    remotePages[0].freq = 10;
+    process.scanAttr.actcData[4] = remotePages;
+    process.scanAttr.actcLen[4] = 1;
+
+    MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(1, mlist[4][1].nr);
+    EXPECT_EQ(1, mlist[0][1].nr);
+    EXPECT_EQ(0x1000, mlist[0][1].addr[0]);
+    EXPECT_EQ(0, mlist[0][4].nr);
+
+    FreeMigList(mlist);
 }
 
 TEST_F(GroupedStrategyTest, TestGroupedStrategySwapAfterStableRounds)
@@ -367,6 +425,9 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapAfterStableRounds)
     EXPECT_EQ(0, mlist[0][4].nr);
 
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+    MOCKER(GetGroupSwapRatioConfig).stubs().will(returnValue((uint32_t)5));
+    MOCKER(GetGroupSwapMinRemoteFreqConfig).stubs().will(returnValue((uint32_t)0));
+    MOCKER(GetGroupSwapMinFreqGainConfig).stubs().will(returnValue((uint32_t)0));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(1, mlist[4][0].nr);
@@ -487,6 +548,9 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapRequiresHotColdGap)
     process.scanAttr.actcLen[4] = 1;
 
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+    MOCKER(GetGroupSwapRatioConfig).stubs().will(returnValue((uint32_t)5));
+    MOCKER(GetGroupSwapMinRemoteFreqConfig).stubs().will(returnValue((uint32_t)0));
+    MOCKER(GetGroupSwapMinFreqGainConfig).stubs().will(returnValue((uint32_t)0));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));

@@ -19,9 +19,9 @@
 #include "smap_user_log.h"
 #include "strategy.h"
 #include "grouped_strategy.h"
+#include "period_config.h"
 
 #define GROUP_SWAP_READY_ROUNDS 2
-#define GROUP_SWAP_RATIO 5
 #define GROUP_SWAP_PERCENT_BASE 100
 #define GROUP_SWAP_DEFAULT_FREQ_WT 1
 #define GROUP_SWAP_DEFAULT_SLOW_THRED 2
@@ -45,6 +45,11 @@ typedef struct {
     GroupPageData local;
     GroupPageData remote;
 } SwapPair;
+
+typedef struct {
+    GroupPageData page;
+    int toNid;
+} RebalancePair;
 
 static int GroupPageAscFunc(const void *data1, const void *data2)
 {
@@ -241,7 +246,11 @@ static bool IsSharedTarget(const GroupMigrationPolicy *policy, int groupIdx)
 
 static uint64_t CalcGroupSwapBaseCap(uint64_t remoteUsed)
 {
-    return (remoteUsed * GROUP_SWAP_RATIO + GROUP_SWAP_PERCENT_BASE - 1) / GROUP_SWAP_PERCENT_BASE;
+    uint32_t ratio = GetGroupSwapRatioConfig();
+    if (ratio == 0) {
+        return 0;
+    }
+    return (remoteUsed * ratio + GROUP_SWAP_PERCENT_BASE - 1) / GROUP_SWAP_PERCENT_BASE;
 }
 
 static void EnsureGroupedSwapParam(ProcessAttr *process, uint64_t localUsed, uint64_t remoteUsed)
@@ -264,6 +273,12 @@ static bool IsSwapBeneficial(const ProcessAttr *process, const GroupPageData *lo
     uint64_t localFreq = freqWt * local->freq;
     uint64_t remoteFreq = remote->freq;
 
+    if (remote->freq < GetGroupSwapMinRemoteFreqConfig()) {
+        return false;
+    }
+    if (remoteFreq <= localFreq + GetGroupSwapMinFreqGainConfig()) {
+        return false;
+    }
     return ((localFreq == 0 && remoteFreq > 0) || (localFreq + slowThred < remoteFreq));
 }
 
@@ -498,6 +513,167 @@ static int BuildPromoteMigList(ProcessAttr *process, MigrationGroupAttr *group, 
     }
     free(pages);
     return 0;
+}
+
+static void GetPlannedPromoteToLocal(const MigrationGroupAttr *group, struct MigList mlist[MAX_NODES][MAX_NODES],
+                                     uint64_t plannedIn[MAX_NODES])
+{
+    for (int i = 0; i < group->targetCount; i++) {
+        int from = group->targets[i].nid;
+        for (int j = 0; j < group->localCount; j++) {
+            int to = group->locals[j].nid;
+            plannedIn[to] += mlist[from][to].nr;
+        }
+    }
+}
+
+static int SelectRebalanceTargetLocal(ProcessAttr *process, const MigrationGroupAttr *group,
+                                      const uint64_t plannedIn[MAX_NODES], const uint64_t selectedPerLocal[])
+{
+    int selectedIdx = -1;
+    uint64_t selectedDeficit = 0;
+    uint64_t selectedFree = 0;
+
+    for (int i = 0; i < group->localCount; i++) {
+        int nid = group->locals[i].nid;
+        uint64_t deficit = CalcLocalDeficit(process, group, i);
+        uint64_t selected = plannedIn[nid] + selectedPerLocal[i];
+        if (deficit <= selected) {
+            continue;
+        }
+        uint64_t freePages = GetNrFreeHugePagesByNode(nid);
+        if (freePages <= selected) {
+            continue;
+        }
+        uint64_t remainingDeficit = deficit - selected;
+        uint64_t remainingFree = freePages - selected;
+        if (selectedIdx < 0 || remainingDeficit > selectedDeficit ||
+            (remainingDeficit == selectedDeficit && remainingFree > selectedFree)) {
+            selectedIdx = i;
+            selectedDeficit = remainingDeficit;
+            selectedFree = remainingFree;
+        }
+    }
+    return selectedIdx;
+}
+
+static void FreeRebalanceBuckets(GroupPageData *pages[MAX_NODES][MAX_NODES])
+{
+    for (int i = 0; i < MAX_NODES; i++) {
+        for (int j = 0; j < MAX_NODES; j++) {
+            free(pages[i][j]);
+        }
+    }
+}
+
+static int BuildRebalanceMigListsFromPairs(const RebalancePair *pairs, uint64_t nrPairs,
+                                           struct MigList mlist[MAX_NODES][MAX_NODES])
+{
+    uint64_t cnt[MAX_NODES][MAX_NODES] = { 0 };
+    uint64_t pos[MAX_NODES][MAX_NODES] = { 0 };
+    GroupPageData *pages[MAX_NODES][MAX_NODES] = { NULL };
+
+    for (uint64_t i = 0; i < nrPairs; i++) {
+        cnt[pairs[i].page.nid][pairs[i].toNid]++;
+    }
+    for (int i = 0; i < MAX_NODES; i++) {
+        for (int j = 0; j < MAX_NODES; j++) {
+            if (cnt[i][j] == 0) {
+                continue;
+            }
+            pages[i][j] = calloc(cnt[i][j], sizeof(GroupPageData));
+            if (!pages[i][j]) {
+                FreeRebalanceBuckets(pages);
+                return -ENOMEM;
+            }
+        }
+    }
+    for (uint64_t i = 0; i < nrPairs; i++) {
+        int from = pairs[i].page.nid;
+        int to = pairs[i].toNid;
+        pages[from][to][pos[from][to]++] = pairs[i].page;
+    }
+    for (int i = 0; i < MAX_NODES; i++) {
+        for (int j = 0; j < MAX_NODES; j++) {
+            int ret = AppendMigPages(&mlist[i][j], pages[i][j], cnt[i][j]);
+            if (ret) {
+                FreeRebalanceBuckets(pages);
+                return ret;
+            }
+        }
+    }
+    FreeRebalanceBuckets(pages);
+    return 0;
+}
+
+static int BuildLocalRebalanceMigList(ProcessAttr *process, MigrationGroupAttr *group,
+                                      struct MigList mlist[MAX_NODES][MAX_NODES])
+{
+    uint64_t deficit = CalcGroupDeficit(process, group);
+    uint64_t excess = CalcGroupExcess(process, group);
+    if (deficit == 0 || excess == 0) {
+        return 0;
+    }
+
+    uint64_t plannedIn[MAX_NODES] = { 0 };
+    GetPlannedPromoteToLocal(group, mlist, plannedIn);
+    uint64_t plannedPromote = 0;
+    for (int i = 0; i < group->localCount; i++) {
+        plannedPromote += plannedIn[group->locals[i].nid];
+    }
+    if (plannedPromote >= deficit) {
+        return 0;
+    }
+
+    GroupPageData *pages = NULL;
+    uint64_t nrPages = 0;
+    int ret = CollectLocalPages(process, group, &pages, &nrPages);
+    if (ret) {
+        return ret;
+    }
+    uint64_t rebalanceNeed = MIN(deficit - plannedPromote, excess);
+    if (rebalanceNeed == 0 || nrPages == 0) {
+        free(pages);
+        return 0;
+    }
+    RebalancePair *pairs = calloc(rebalanceNeed, sizeof(RebalancePair));
+    if (!pairs) {
+        free(pages);
+        return -ENOMEM;
+    }
+
+    uint64_t localSelectedFrom[MAX_NODES] = { 0 };
+    uint64_t selectedPerTarget[MAX_GROUP_LOCAL_NUMA] = { 0 };
+    uint64_t localExcess[MAX_NODES] = { 0 };
+    for (int i = 0; i < group->localCount; i++) {
+        int nid = group->locals[i].nid;
+        localExcess[nid] = CalcLocalExcess(process, group, i);
+    }
+
+    uint64_t built = 0;
+    for (uint64_t i = 0; i < nrPages && built < rebalanceNeed; i++) {
+        int from = pages[i].nid;
+        if (localSelectedFrom[from] >= localExcess[from]) {
+            continue;
+        }
+        int targetIdx = SelectRebalanceTargetLocal(process, group, plannedIn, selectedPerTarget);
+        if (targetIdx < 0) {
+            break;
+        }
+        int to = group->locals[targetIdx].nid;
+        pairs[built].page = pages[i];
+        pairs[built].toNid = to;
+        localSelectedFrom[from]++;
+        selectedPerTarget[targetIdx]++;
+        built++;
+    }
+    if (built > 0) {
+        SMAP_LOGGER_INFO("grouped pid %d local rebalance %llu pages.", process->pid, built);
+        ret = BuildRebalanceMigListsFromPairs(pairs, built, mlist);
+    }
+    free(pairs);
+    free(pages);
+    return ret;
 }
 
 static void FreeSwapBuckets(GroupPageData *promotePages[MAX_NODES][MAX_NODES],
@@ -744,6 +920,25 @@ static int RunDemoteStage(ProcessAttr *process, struct MigList mlist[MAX_NODES][
     return 0;
 }
 
+static int RunLocalRebalanceStage(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
+{
+    for (int i = 0; i < process->groupPolicy.groupCount; i++) {
+        MigrationGroupAttr *group = &process->groupPolicy.groups[i];
+        uint64_t deficit = CalcGroupDeficit(process, group);
+        uint64_t excess = CalcGroupExcess(process, group);
+        if (deficit == 0 || excess == 0) {
+            continue;
+        }
+        SMAP_LOGGER_INFO("grouped pid %d group %d local rebalance candidate deficit %llu excess %llu.",
+                         process->pid, i, deficit, excess);
+        int ret = BuildLocalRebalanceMigList(process, group, mlist);
+        if (ret) {
+            return ret;
+        }
+    }
+    return 0;
+}
+
 static int RunSwapStage(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
 {
     if (!process->enableSwap) {
@@ -789,6 +984,11 @@ int GroupedMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODE
         SMAP_LOGGER_ERROR("grouped pid %d promote stage failed: %d.", process->pid, ret);
         return ret;
     }
+    ret = RunLocalRebalanceStage(process, mlist);
+    if (ret) {
+        SMAP_LOGGER_ERROR("grouped pid %d local rebalance stage failed: %d.", process->pid, ret);
+        return ret;
+    }
     ret = RunDemoteStage(process, mlist);
     if (ret) {
         SMAP_LOGGER_ERROR("grouped pid %d demote stage failed: %d.", process->pid, ret);
@@ -809,6 +1009,11 @@ void UpdateGroupedMigrationResult(ProcessAttr *process, int fromNid, int toNid, 
     for (int i = 0; i < process->groupPolicy.groupCount; i++) {
         MigrationGroupAttr *group = &process->groupPolicy.groups[i];
         if (GroupHasLocal(group, fromNid)) {
+            if (GroupHasLocal(group, toNid)) {
+                SMAP_LOGGER_INFO("grouped pid %d group %d local rebalance from %d to %d success pages %llu.",
+                                 process->pid, i, fromNid, toNid, successPages);
+                return;
+            }
             int targetIdx = GroupTargetIndex(group, toNid);
             if (targetIdx >= 0) {
                 group->targets[targetIdx].usedPages += successPages;
