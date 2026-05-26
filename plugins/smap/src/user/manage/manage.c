@@ -100,6 +100,22 @@ int GetNrLocalNuma(void)
     return g_processManager.nrLocalNuma;
 }
 
+/*
+ * Validate that nid belongs to the configured remote NUMA id range. This is a
+ * range check only; callers that require online-node validation should do that
+ * separately.
+ */
+bool IsRemoteNidValid(int nid)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    if (!manager) {
+        SMAP_LOGGER_ERROR("process manager is null.");
+        return false;
+    }
+
+    return nid >= manager->nrLocalNuma && nid < (REMOTE_NUMA_BITS + manager->nrLocalNuma);
+}
+
 int ProcessManagerInit(uint32_t pageType)
 {
     int i;
