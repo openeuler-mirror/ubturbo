@@ -2433,12 +2433,17 @@ static bool IsRemoteNidRatioValid(pid_t pid, int nid, int ratio)
 static uint64_t GetAttrNidInitMemSize(pid_t pid, int nid)
 {
     int nrLocalNuma = GetNrLocalNuma();
+    uint64_t memsize = 0;
     ProcessAttr *attr = GetProcessAttr(pid);
     if (!attr) {
         return -EINVAL;
     }
-    int l1node = GetAttrL1(attr);
-    return attr->strategyAttr.memSize[l1node][nid - nrLocalNuma];
+    for (int i = 0; i < nrLocalNuma; i++) {
+        if (InAttrL1(attr, i)) {
+            memsize += attr->strategyAttr.memSize[i][nid - nrLocalNuma];
+        }
+    }
+    return memsize;
 }
 
 static bool IsRemoteNidMemSizeValid(pid_t pid, int nid, uint64_t memSize)
