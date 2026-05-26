@@ -244,7 +244,7 @@ static int InitAllThreads(struct ProcessManager *manager)
 {
     int ret;
     EnvMutexLock(&manager->threadLock);
-    uint32_t migPeriod = SCAN_MIGRATE_PERIOD;
+    uint32_t migPeriod = IsHugeMode() ? LIGHT_STABLE_MIGRATE_CYCLE : PROCESS_LIGHT_STABLE_MIGRATE_CYCLE;
     if (GetFileConfSwitchConfig()) {
         migPeriod = GetMigratePeriodConfig();
     }

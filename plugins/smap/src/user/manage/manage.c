@@ -447,6 +447,7 @@ static void SetBasicProcessConfig(ProcessAttr *attr, ProcessParam *param)
     attr->scanType = param->scanType;
     attr->migrateMode = param->numaParam[0].migrateMode;
     attr->remoteNumaCnt = param->count;
+    attr->isFirstScan = true;
     attr->enableSwap = true;
 
     int localRatio = HUNDRED;
@@ -601,7 +602,6 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
     }
 
     attr->type = type;
-    attr->isFirstScan = true; // 标记新PID首次扫描
     SetProcessConfig(attr, param);
     attr->scanTime = DEFAULT_SCAN_PERIOD;
     LinkedListAdd(&g_processManager.processes, &attr);
