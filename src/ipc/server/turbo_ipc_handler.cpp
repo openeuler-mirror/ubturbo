@@ -44,7 +44,11 @@ IpcHandler &IpcHandler::Instance()
 
 uint32_t IpcHandler::UBTurboRegIpcService(const std::string &name, IpcHandlerFunc function)
 {
-    std::lock_guard<std::shared_mutex> lock(gLock);
+    if (!gLock.try_lock()) {
+        UBTURBO_LOG_DEBUG(MODULE_NAME, MODULE_CODE) << "[Ipc][Server] Get lock failed.";
+        return TURBO_ERROR;
+    }
+    std::lock_guard<std::shared_mutex> lock(gLock, std::adopt_lock);
     if (name.empty()) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Ipc][Server] Name is empty.";
         return TURBO_ERROR;
@@ -67,7 +71,11 @@ uint32_t IpcHandler::UBTurboRegIpcService(const std::string &name, IpcHandlerFun
 
 uint32_t IpcHandler::UBTurboUnRegIpcService(const std::string &name)
 {
-    std::lock_guard<std::shared_mutex> lock(gLock);
+    if (!gLock.try_lock()) {
+        UBTURBO_LOG_DEBUG(MODULE_NAME, MODULE_CODE) << "[Ipc][Server] Get lock failed.";
+        return TURBO_ERROR;
+    }
+    std::lock_guard<std::shared_mutex> lock(gLock, std::adopt_lock);
     auto it = funcTable.find(name);
     if (it == funcTable.end()) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Ipc][Server] Function not found.";
