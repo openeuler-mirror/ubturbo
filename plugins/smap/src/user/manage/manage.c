@@ -2081,6 +2081,8 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
         for (int i = 0; i < g_processManager.nrLocalNuma; i++) {
             attr->strategyAttr.initRemoteMemRatio[i][destNodeIndex] += ratio;
             attr->strategyAttr.initRemoteMemRatio[i][srcNodeIndex] -= ratio;
+            attr->strategyAttr.memSize[i][destNodeIndex] = attr->strategyAttr.memSize[i][srcNodeIndex];
+            attr->strategyAttr.memSize[i][srcNodeIndex] = 0;
         }
     } else if (GetRunMode() == MEM_POOL_MODE) {
         uint64_t srcMemSize = 0;
