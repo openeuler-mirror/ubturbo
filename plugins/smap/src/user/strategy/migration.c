@@ -624,8 +624,7 @@ static void RestoreNewPidScanTime(ThreadCtx *ctx)
         if (!current->isFirstScan) {
             continue;
         }
-        scanPeriod = GetFileConfSwitchConfig() ?
-            GetScanPeriodConfig() : current->sceneInfo.cycles.scanCycle;
+        scanPeriod = GetFileConfSwitchConfig() ? GetScanPeriodConfig() : current->sceneInfo.cycles.scanCycle;
         payload.pid = current->pid;
         payload.numaNodes = current->numaAttr.numaNodes;
         payload.type = current->scanType;

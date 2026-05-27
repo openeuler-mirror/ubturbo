@@ -22,9 +22,9 @@ extern "C" {
 #define HAM_TASK_OCCUPIED 0x80000000
 
 enum ham_page_map_flag {
-	HPM_present,	/* src_folio in ham_page_map is present */
-	HPM_migrate,	/* src_folio in ham_page_map is migrated */
-	HPM_rollback,	/* dst_folio in ham_page_map is rollbacked */
+	HPM_present, /* src_folio in ham_page_map is present */
+	HPM_migrate, /* src_folio in ham_page_map is migrated */
+	HPM_rollback, /* dst_folio in ham_page_map is rollbacked */
 };
 
 struct ham_page_map {
@@ -36,13 +36,19 @@ struct ham_page_map {
 	unsigned short freq;
 };
 
-#define HAMPAGEMAPOPS(name)	\
-static __always_inline bool hpm_test_##name(struct ham_page_map *hpm)	\
-{ return test_bit(HPM_##name, &hpm->flags); }	\
-static __always_inline void hpm_set_##name(struct ham_page_map *hpm)	\
-{ set_bit(HPM_##name, &hpm->flags); }	\
-static __always_inline void hpm_clear_##name(struct ham_page_map *hpm)	\
-{ clear_bit(HPM_##name, &hpm->flags); }
+#define HAMPAGEMAPOPS(name)                                                    \
+	static __always_inline bool hpm_test_##name(struct ham_page_map *hpm)  \
+	{                                                                      \
+		return test_bit(HPM_##name, &hpm->flags);                      \
+	}                                                                      \
+	static __always_inline void hpm_set_##name(struct ham_page_map *hpm)   \
+	{                                                                      \
+		set_bit(HPM_##name, &hpm->flags);                              \
+	}                                                                      \
+	static __always_inline void hpm_clear_##name(struct ham_page_map *hpm) \
+	{                                                                      \
+		clear_bit(HPM_##name, &hpm->flags);                            \
+	}
 
 HAMPAGEMAPOPS(present)
 HAMPAGEMAPOPS(migrate)

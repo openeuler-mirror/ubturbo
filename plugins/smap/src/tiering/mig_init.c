@@ -303,20 +303,22 @@ static int check_mig_msg(struct mig_payload *payloads, int len)
 	for (int i = 0; i < len; i++) {
 		if (!is_numa_remote(payloads[i].src_nid)) {
 			pr_err("invalid source node id: %d passed to check params\n",
-				   payloads[i].src_nid);
+			       payloads[i].src_nid);
 			return -EINVAL;
 		}
 		if (!is_numa_remote(payloads[i].dest_nid)) {
 			pr_err("invalid destination node id: %d passed to check params\n",
-				   payloads[i].dest_nid);
+			       payloads[i].dest_nid);
 			return -EINVAL;
 		}
 		if (payloads[i].dest_nid == payloads[i].src_nid) {
 			pr_err("source and destination node id should not be the same\n");
 			return -EINVAL;
 		}
-		if (payloads[i].keep_ratio < 0 || payloads[i].keep_ratio > HUNDRED) {
-			pr_err("migrate ratio: %d invalid\n", payloads[i].keep_ratio);
+		if (payloads[i].keep_ratio < 0 ||
+		    payloads[i].keep_ratio > HUNDRED) {
+			pr_err("migrate ratio: %d invalid\n",
+			       payloads[i].keep_ratio);
 			return -EINVAL;
 		}
 	}
@@ -328,11 +330,13 @@ static void init_pm_info(struct pagemapread *pm, struct mig_payload *payload)
 	int page_size = smap_pgsize == HUGE_PAGE ? g_pagesize_huge : PAGE_SIZE;
 	pm->mig_type = REMOTE_MIGRATE;
 	pm->mig_info.pid = payload->pid;
-	pm->mig_info.folios_len = get_node_page_cnt_iomem(payload->src_nid, page_size);
+	pm->mig_info.folios_len =
+		get_node_page_cnt_iomem(payload->src_nid, page_size);
 	pm->mig_info.remote_nid = payload->src_nid;
 }
 
-static void walkpage_and_migrate(struct mig_payload *payloads, int len, int *mig_res)
+static void walkpage_and_migrate(struct mig_payload *payloads, int len,
+				 int *mig_res)
 {
 	int i;
 	unsigned int failed_cnt;
@@ -357,24 +361,36 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len, int *mig
 
 			walk_pid_pagemap(&pm);
 
-			pr_info("pid :%d total page count:%llu", payloads[i].pid, pm.mig_info.page_cnt);
+			pr_info("pid :%d total page count:%llu",
+				payloads[i].pid, pm.mig_info.page_cnt);
 			if (payloads[i].is_ratio_mode) {
-				u64 keep_cnt = (pm.mig_info.page_cnt * payloads[i].keep_ratio + HALF_HUNDRED) / HUNDRED;
+				u64 keep_cnt = (pm.mig_info.page_cnt *
+							payloads[i].keep_ratio +
+						HALF_HUNDRED) /
+					       HUNDRED;
 				mig_cnt = pm.mig_info.mig_cnt - keep_cnt;
 			} else {
-				mig_cnt = smap_pgsize == HUGE_PAGE ? (payloads[i].mem_size >> KB_TO_2M) : (payloads[i].mem_size >> KB_TO_4K);
+				mig_cnt = smap_pgsize == HUGE_PAGE ?
+						  (payloads[i].mem_size >>
+						   KB_TO_2M) :
+						  (payloads[i].mem_size >>
+						   KB_TO_4K);
 			}
 			if (smap_pgsize != HUGE_PAGE) {
-				for (int j = mig_cnt; j < pm.mig_info.mig_cnt; j++) {
+				for (int j = mig_cnt; j < pm.mig_info.mig_cnt;
+				     j++) {
 					folio_put(pm.mig_info.folios[j]);
 				}
 			}
 
 			mig_cnt = MIN(mig_cnt, pm.mig_info.mig_cnt);
 			pr_info("pid:%d migrate page count: %llu, from: %d to: %d\n",
-					payloads[i].pid, mig_cnt, payloads[i].src_nid, payloads[i].dest_nid);
+				payloads[i].pid, mig_cnt, payloads[i].src_nid,
+				payloads[i].dest_nid);
 
-			failed_cnt = smap_migrate(pm.mig_info.folios, mig_cnt, payloads[i].dest_nid, MIGRATE_TYPE_REMOTE);
+			failed_cnt = smap_migrate(pm.mig_info.folios, mig_cnt,
+						  payloads[i].dest_nid,
+						  MIGRATE_TYPE_REMOTE);
 			payloads[i].success_cnt += (mig_cnt - failed_cnt);
 			vfree(pm.mig_info.folios);
 			if (failed_cnt == 0) {
@@ -432,7 +448,8 @@ static int __ioctl_migrate_pid_remote_numa(void __user *argp)
 		return -EINVAL;
 	}
 
-	payloads = kzalloc(sizeof(struct mig_payload) * msg.pid_cnt, GFP_KERNEL);
+	payloads =
+		kzalloc(sizeof(struct mig_payload) * msg.pid_cnt, GFP_KERNEL);
 	if (!payloads) {
 		pr_err("unable to allocate memory for pid array\n");
 		return -ENOMEM;

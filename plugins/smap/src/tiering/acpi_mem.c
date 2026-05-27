@@ -32,7 +32,8 @@ static void update_nr_local_numa(int node)
 {
 	if (node >= nr_local_numa) {
 		nr_local_numa = node + 1;
-		pr_info("local NUMA nodes amount: %u (from node %d)\n", nr_local_numa, node);
+		pr_info("local NUMA nodes amount: %u (from node %d)\n",
+			nr_local_numa, node);
 	}
 }
 
@@ -88,7 +89,7 @@ static int acpi_table_build_mem(struct acpi_subtable_header *header)
 }
 
 static int acpi_parse_memory_affinity(union acpi_subtable_headers *header,
-					  const unsigned long end)
+				      const unsigned long end)
 {
 	struct acpi_srat_mem_affinity *memory_affinity;
 
@@ -97,7 +98,7 @@ static int acpi_parse_memory_affinity(union acpi_subtable_headers *header,
 }
 
 static int acpi_parse_gicc_affinity(union acpi_subtable_headers *header,
-					const unsigned long end)
+				    const unsigned long end)
 {
 	struct acpi_srat_gicc_affinity *gicc =
 		(struct acpi_srat_gicc_affinity *)header;
@@ -109,12 +110,12 @@ static int acpi_parse_gicc_affinity(union acpi_subtable_headers *header,
 	node = pxm_to_node(gicc->proximity_domain);
 	if (node == NUMA_NO_NODE) {
 		pr_warn("GICC affinity: unable to map proximity domain %u to node\n",
-				gicc->proximity_domain);
+			gicc->proximity_domain);
 		return 0;
 	}
 
-	pr_debug("GICC affinity: CPU %u in node %d\n",
-			 gicc->acpi_processor_uid, node);
+	pr_debug("GICC affinity: CPU %u in node %d\n", gicc->acpi_processor_uid,
+		 node);
 
 	update_nr_local_numa(node);
 
@@ -148,7 +149,7 @@ int find_closest_node(int nid, int *cnid)
 	int min_distance_no_cpu = INT_MAX;
 
 	if (nid < 0 || nid >= ARRAY_SIZE(acpi_mem_cached) ||
-		!acpi_mem_cached[nid].online) {
+	    !acpi_mem_cached[nid].online) {
 		return -EINVAL;
 	}
 
@@ -161,7 +162,7 @@ int find_closest_node(int nid, int *cnid)
 			closest_nid = i;
 		}
 		if (!node_state(i, N_CPU) &&
-			acpi_mem_cached[nid].distance[i] < min_distance_no_cpu) {
+		    acpi_mem_cached[nid].distance[i] < min_distance_no_cpu) {
 			min_distance_no_cpu = acpi_mem_cached[nid].distance[i];
 			closest_nid_no_cpu = i;
 		}
@@ -262,7 +263,8 @@ int init_acpi_mem(void)
 	}
 
 	count = acpi_parse_entries_array(ACPI_SIG_SRAT, table_size,
-					 table_header, proc, ARRAY_SIZE(proc), 0);
+					 table_header, proc, ARRAY_SIZE(proc),
+					 0);
 	if (count < 0) {
 		pr_err("failed to parse ACPI entries, ret: %d\n", count);
 		acpi_put_table(table_header);
@@ -327,7 +329,8 @@ int calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
 	u64 offset = 0;
 	u64 acidx;
 	int last_nid = -1;
-	int shift = is_smap_pg_huge() ? __builtin_ctz(g_pagesize_huge) : PAGE_SHIFT;
+	int shift = is_smap_pg_huge() ? __builtin_ctz(g_pagesize_huge) :
+					PAGE_SHIFT;
 
 	list_for_each_entry(mem, &acpi_mem.mem, segment) {
 		if (last_nid != mem->node) {

@@ -26,9 +26,7 @@ static int g_initialized = 0;
 
 static const char *LogLevelToString(int level)
 {
-    static const char *levelNames[] = {
-        "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"
-    };
+    static const char *levelNames[] = { "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL" };
     if (level >= 0 && level < SMAP_LOG_CORE_BUTT) {
         return levelNames[level];
     }
@@ -44,9 +42,8 @@ static int GetTimestamp(char *buffer, size_t bufSize)
     clock_gettime(CLOCK_REALTIME, &ts);
     localtime_r(&ts.tv_sec, &tmInfo);
 
-    ret = snprintf_s(buffer, bufSize, bufSize - 1, "%04d-%02d-%02d %02d:%02d:%02d.%06ld",
-                     tmInfo.tm_year + 1900, tmInfo.tm_mon + 1, tmInfo.tm_mday,
-                     tmInfo.tm_hour, tmInfo.tm_min, tmInfo.tm_sec,
+    ret = snprintf_s(buffer, bufSize, bufSize - 1, "%04d-%02d-%02d %02d:%02d:%02d.%06ld", tmInfo.tm_year + 1900,
+                     tmInfo.tm_mon + 1, tmInfo.tm_mday, tmInfo.tm_hour, tmInfo.tm_min, tmInfo.tm_sec,
                      ts.tv_nsec / NS_PER_USEC);
     if (ret == -1) {
         return -EINVAL;
@@ -154,16 +151,14 @@ int SmapLogCoreInit(const SmapLogConfig *config)
 
     pthread_mutex_init(&g_smapLogFile.lock, NULL);
 
-    ret = snprintf_s(g_smapLogFile.basePath, sizeof(g_smapLogFile.basePath),
-                     sizeof(g_smapLogFile.basePath) - 1, "%s", config->filePath);
+    ret = snprintf_s(g_smapLogFile.basePath, sizeof(g_smapLogFile.basePath), sizeof(g_smapLogFile.basePath) - 1, "%s",
+                     config->filePath);
     if (ret == -1) {
         return -EINVAL;
     }
 
-    g_smapLogFile.maxFileSize = config->maxFileSize > 0 ?
-                                config->maxFileSize : SMAP_LOG_MAX_FILE_SIZE_DEFAULT;
-    g_smapLogFile.maxFileCount = config->maxFileCount > 0 ?
-                                 config->maxFileCount : SMAP_LOG_MAX_FILE_COUNT_DEFAULT;
+    g_smapLogFile.maxFileSize = config->maxFileSize > 0 ? config->maxFileSize : SMAP_LOG_MAX_FILE_SIZE_DEFAULT;
+    g_smapLogFile.maxFileCount = config->maxFileCount > 0 ? config->maxFileCount : SMAP_LOG_MAX_FILE_COUNT_DEFAULT;
     g_minLogLevel = config->minLogLevel;
 
     g_smapLogFile.currentFileIndex = 0;
@@ -231,9 +226,8 @@ int SmapLogCoreWrite(int level, const char *prefix, const char *message)
         return -EINVAL;
     }
 
-    ret = snprintf_s(logLine, sizeof(logLine), sizeof(logLine) - 1, "%s %d %s [%s] %s\n",
-             timestamp, getpid(),
-             LogLevelToString(level), prefix, message);
+    ret = snprintf_s(logLine, sizeof(logLine), sizeof(logLine) - 1, "%s %d %s [%s] %s\n", timestamp, getpid(),
+                     LogLevelToString(level), prefix, message);
     if (ret == -1) {
         pthread_mutex_unlock(&g_smapLogFile.lock);
         return -EINVAL;

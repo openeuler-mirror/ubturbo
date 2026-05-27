@@ -289,13 +289,16 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 
 		/* 填充prior - 从mapping获取 */
 		if (ap->info.vm_size && ap->info.mapping) {
-			actc[len_cnt].prior = ap->info.mapping[mapping_offset + len_cnt] & 0xff;
+			actc[len_cnt].prior =
+				ap->info.mapping[mapping_offset + len_cnt] &
+				0xff;
 		} else {
 			actc[len_cnt].prior = 0;
 		}
 
 		/* 填充is_white_list */
-		if (ap->white_list_bm[nid] && test_bit(acidx, ap->white_list_bm[nid])) {
+		if (ap->white_list_bm[nid] &&
+		    test_bit(acidx, ap->white_list_bm[nid])) {
 			actc[len_cnt].is_white_list = 1;
 		} else {
 			actc[len_cnt].is_white_list = 0;
@@ -325,7 +328,7 @@ static void fill_pid_actc_data(struct access_pid *ap, struct actc_data *actc,
 
 	for (nid = 0; nid < SMAP_MAX_NUMNODES; nid++) {
 		fill_actc_data_by_bitmap(ap, nid, actc + actc_offset,
-				 &actc_len[nid], mapping_offset);
+					 &actc_len[nid], mapping_offset);
 		mapping_offset += actc_len[nid];
 		actc_offset += ap->page_num[nid];
 	}
@@ -410,7 +413,7 @@ static int create_procfs_freq(struct access_pid *ap)
 	struct proc_dir_entry *freq_pde;
 
 	freq_pde = proc_create_data("mem_freq", S_IRUSR | S_IRGRP,
-				 ap->proc_root, &ap_mem_freq_fops, ap);
+				    ap->proc_root, &ap_mem_freq_fops, ap);
 	if (!freq_pde) {
 		pr_err("failed to create proc freq dir for %d\n", ap->pid);
 		return -ENOMEM;
@@ -888,7 +891,7 @@ static int init_access_statistic_pid_4k(struct access_add_pid_payload *payload)
 	total_size_gb = total_pages * PAGE_SIZE / SZ_1G;
 	suggested_scan_time = total_size_gb * DEFAULT_PERIOD_MS;
 	pr_info("STATISTIC_SCAN for 4K scenario: suggested minimum scan_time = %llu ms (total_size = %llu GB)\n",
-			suggested_scan_time, total_size_gb);
+		suggested_scan_time, total_size_gb);
 	return 0;
 }
 
@@ -904,7 +907,7 @@ static int init_access_statistic_pid(struct access_add_pid_payload *payload,
 }
 
 int access_add_statistic_pid(int len, struct access_add_pid_payload *payload,
-			    			 int page_size)
+			     int page_size)
 {
 	int ret = 0;
 	int i;

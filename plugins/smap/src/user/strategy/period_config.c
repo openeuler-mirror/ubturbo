@@ -265,7 +265,7 @@ static int32_t ConfigFreqWt(char *substr, char *value)
     return RETURN_OK;
 }
 
-static int32_t ConfigRemoteHotThreshold(char *substr, char * value)
+static int32_t ConfigRemoteHotThreshold(char *substr, char *value)
 {
     SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
     uint32_t remoteHotThreshold;
@@ -276,7 +276,7 @@ static int32_t ConfigRemoteHotThreshold(char *substr, char * value)
     }
     if (remoteHotThreshold > MAX_REMOTE_HOT_THRESHOLD || remoteHotThreshold < MIN_REMOTE_FREQ_PERCENTILE) {
         SMAP_LOGGER_ERROR("Config remote hot threshold(%d) invalid, range(%d-%d), key:%s.", remoteHotThreshold,
-                           MIN_REMOTE_FREQ_PERCENTILE, MAX_REMOTE_HOT_THRESHOLD, substr);
+                          MIN_REMOTE_FREQ_PERCENTILE, MAX_REMOTE_HOT_THRESHOLD, substr);
         return RETURN_ERROR;
     }
     g_tmpPeriodConfig.remoteHotThreshold = remoteHotThreshold;
@@ -714,10 +714,10 @@ static bool UpdatePeriodConfigChanged(void)
     groupSwapMinRemoteFreq = g_tmpPeriodConfig.groupSwapMinRemoteFreq;
     groupSwapMinFreqGain = g_tmpPeriodConfig.groupSwapMinFreqGain;
 
-    if (oldScanPeriod == scanPeriod && oldMigratePeriod == migratePeriod && oldRemoteHotThreshold == remoteHotThreshold
-        && oldRemoteFreqPercentile == remoteFreqPercentile && oldSlowThreshold == slowThreshold && oldFreqWt == freqWt
-        && oldGroupSwapRatio == groupSwapRatio && oldGroupSwapMinRemoteFreq == groupSwapMinRemoteFreq
-        && oldGroupSwapMinFreqGain == groupSwapMinFreqGain) {
+    if (oldScanPeriod == scanPeriod && oldMigratePeriod == migratePeriod &&
+        oldRemoteHotThreshold == remoteHotThreshold && oldRemoteFreqPercentile == remoteFreqPercentile &&
+        oldSlowThreshold == slowThreshold && oldFreqWt == freqWt && oldGroupSwapRatio == groupSwapRatio &&
+        oldGroupSwapMinRemoteFreq == groupSwapMinRemoteFreq && oldGroupSwapMinFreqGain == groupSwapMinFreqGain) {
         return false;
     }
 

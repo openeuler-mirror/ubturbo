@@ -29,7 +29,8 @@ int init_acpi_mem(void);
 void reset_acpi_mem(void);
 u64 get_node_actc_len(int node_id, int page_size);
 int calc_paddr_acidx_acpi(u64 paddr, int *nid, u64 *index, int page_size);
-int calc_paddr_acidx_acpi_known_nid(u64 paddr, int nid, u64 *index, int page_size);
+int calc_paddr_acidx_acpi_known_nid(u64 paddr, int nid, u64 *index,
+				    int page_size);
 int calc_acidx_paddr_acpi(int nid, u64 acidx, u64 *paddr, int page_size);
 
 static inline int convert_nid_to_pos(int nid)

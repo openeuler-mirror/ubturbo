@@ -212,8 +212,8 @@ static inline u64 seg_end(struct addr_seg *seg)
 	return seg->start + seg->size - 1;
 }
 
-static inline bool addr_seg_is_continuous_scan_wins(struct addr_seg *seg1,
-				 struct addr_seg *seg2,
+static inline bool
+addr_seg_is_continuous_scan_wins(struct addr_seg *seg1, struct addr_seg *seg2,
 				 enum ub_hist_sts_size sts_size)
 {
 	u64 scan_win_size = get_hist_scan_win_size(sts_size);

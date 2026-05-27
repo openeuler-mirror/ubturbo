@@ -119,7 +119,7 @@ static int check_scan_works_status(struct access_tracking_dev *adev)
 			all_complete = false;
 			break;
 		}
-    }
+	}
 	up_read(&ap_data.lock);
 
 	return all_complete ? 0 : -EBUSY;
@@ -128,8 +128,8 @@ static int check_scan_works_status(struct access_tracking_dev *adev)
 static int create_scan_workqueue(void)
 {
 	struct access_tracking_dev *adev = get_first_access_dev();
-	adev->scanq = alloc_workqueue("accessbit_workq", WQ_UNBOUND,
-				      WQ_MAX_THREADS);
+	adev->scanq =
+		alloc_workqueue("accessbit_workq", WQ_UNBOUND, WQ_MAX_THREADS);
 	if (!adev->scanq) {
 		pr_err("unable to init access bit workqueue\n");
 		return -ENOMEM;
@@ -333,7 +333,8 @@ static int access_tracking_add(void)
 	int ret;
 	int devno;
 	struct access_tracking_dev *adev, *n;
-	int access_devices_cnt = enable_hist ? nr_local_numa : SMAP_MAX_NUMNODES;
+	int access_devices_cnt = enable_hist ? nr_local_numa :
+					       SMAP_MAX_NUMNODES;
 
 	for (devno = 0; devno < access_devices_cnt; devno++) {
 		adev = kzalloc(sizeof(struct access_tracking_dev), GFP_KERNEL);
@@ -416,24 +417,30 @@ static void adev_buffer_up_read(void)
 }
 
 static void handle_statistic_scan(struct access_pid *ap, ktime_t start_time,
-    s64 scan_time, unsigned long *scan_delay_ms)
+				  s64 scan_time, unsigned long *scan_delay_ms)
 {
 	unsigned long delay_buffer_ms;
 	if (ap->cur_times == 1) {
 		delay_buffer_ms = DELAY_BUFFER_MS;
 	} else {
-		delay_buffer_ms = ktime_to_ms(ktime_sub(start_time, ap->last_scan_end)) - ap->last_scan_delay_ms;
+		delay_buffer_ms =
+			ktime_to_ms(ktime_sub(start_time, ap->last_scan_end)) -
+			ap->last_scan_delay_ms;
 	}
 
 	if (*scan_delay_ms < ((scan_time / MS_TO_US) + delay_buffer_ms)) {
-		pr_err("pid[%d] scan cost %lums exceeded expected scan time:%lums\n", ap->pid,
-			   (unsigned long)((scan_time / MS_TO_US) + delay_buffer_ms), *scan_delay_ms);
+		pr_err("pid[%d] scan cost %lums exceeded expected scan time:%lums\n",
+		       ap->pid,
+		       (unsigned long)((scan_time / MS_TO_US) +
+				       delay_buffer_ms),
+		       *scan_delay_ms);
 		*scan_delay_ms = 0;
 	} else {
 		*scan_delay_ms -= (scan_time / MS_TO_US + delay_buffer_ms);
 	}
-	pr_debug("pid[%d] statistic scan delay_buffer_ms :%ldms, scan_delay_ms: %ldms \n",
-          ap->pid, delay_buffer_ms, *scan_delay_ms);
+	pr_debug(
+		"pid[%d] statistic scan delay_buffer_ms :%ldms, scan_delay_ms: %ldms \n",
+		ap->pid, delay_buffer_ms, *scan_delay_ms);
 }
 
 static void work_func(struct work_struct *work)
@@ -471,15 +478,17 @@ static void work_func(struct work_struct *work)
 	}
 	ap->cur_times++;
 	pr_debug("pid[%d] cpu[%d], scan took %lldus for %dth time\n", ap->pid,
-			 raw_smp_processor_id(), scan_time, ap->cur_times);
+		 raw_smp_processor_id(), scan_time, ap->cur_times);
 
 	scan_delay_ms = ap->scan_time;
 	if (ap->type == STATISTIC_SCAN) {
-		handle_statistic_scan(ap, start_time, scan_time, &scan_delay_ms);
+		handle_statistic_scan(ap, start_time, scan_time,
+				      &scan_delay_ms);
 	}
 	ap->last_scan_delay_ms = scan_delay_ms;
 	if (ap->cur_times < ap->ntimes) {
-		queue_delayed_work(adev->scanq, &ap->scan_work, msecs_to_jiffies(scan_delay_ms));
+		queue_delayed_work(adev->scanq, &ap->scan_work,
+				   msecs_to_jiffies(scan_delay_ms));
 		ap->last_scan_end = ktime_get();
 	} else {
 		complete(&ap->work_done);
