@@ -565,7 +565,6 @@ TEST_F(HistOpsTest, scan_thread_run)
 {
     int ret;
     MOCKER(kthread_should_stop).stubs().will(returnValue(false)).then(returnValue(true));
-    MOCKER(drivers_ram_changed).stubs().will(returnValue(false));
 
     g_smap_hist_dev.status.status_all = 1;
     g_smap_hist_dev.thread_enable = 1;
@@ -580,7 +579,6 @@ TEST_F(HistOpsTest, scan_thread_run_two)
 {
     int ret;
     MOCKER(kthread_should_stop).stubs().will(returnValue(false)).then(returnValue(true));
-    MOCKER(drivers_ram_changed).stubs().will(returnValue(false));
 
     g_smap_hist_dev.status.status_all = 1;
     MOCKER(hist_pginfo_reinit).stubs().will(returnValue(1));
@@ -592,7 +590,6 @@ TEST_F(HistOpsTest, scan_thread_run_three)
 {
     int ret;
     MOCKER(kthread_should_stop).stubs().will(returnValue(false)).then(returnValue(true));
-    MOCKER(drivers_ram_changed).stubs().will(returnValue(false));
 
     g_smap_hist_dev.status.status_all = 1;
     g_smap_hist_dev.thread_enable = 1;

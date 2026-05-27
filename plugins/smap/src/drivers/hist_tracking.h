@@ -16,7 +16,6 @@
 extern struct list_head remote_ram_list;
 extern rwlock_t rem_ram_list_lock;
 
-extern bool ram_changed(void);
 extern u64 get_node_page_cnt_iomem(int nid, int page_size);
 
 extern u32 g_pagesize_huge;
@@ -40,6 +39,7 @@ struct access_tracking_dev {
 	struct delayed_work scan_work;
 	struct rw_semaphore buffer_lock;
 	struct completion work_done;
+	bool need_reinit_actc;
 } __attribute__((aligned(8)));
 
 void access_tracking_dev_release(struct device *dev);

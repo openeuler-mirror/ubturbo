@@ -28,7 +28,6 @@ struct ram_segment {
 	u64 end;
 };
 
-bool ram_changed(void);
 void release_remote_ram(void);
 int refresh_remote_ram(void);
 int get_numa_by_pfn(unsigned long pfn);

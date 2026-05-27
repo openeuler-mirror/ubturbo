@@ -252,24 +252,6 @@ int InitTrackingDev(struct ProcessManager *manager)
     return ret;
 }
 
-int GetRamIsChange(struct ProcessManager *manager, int *change)
-{
-    int fd;
-    int ret;
-
-    fd = FindFdByNode(manager->fds.nodes, MAX_NODES);
-    if (fd < 0) {
-        SMAP_LOGGER_ERROR("Can't find fd by node %d.", fd);
-        return fd;
-    }
-    ret = ioctl(fd, SMAP_IOCTL_RAM_CHANGE, change);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Error when change ram segment : %d.", ret);
-        return ret;
-    }
-    return 0;
-}
-
 void DeinitTrackingDev(struct ProcessManager *manager)
 {
     int i;

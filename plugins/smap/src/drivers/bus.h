@@ -16,10 +16,9 @@ struct tracking_operations {
 	int (*tracking_disable)(struct device *ldev);
 	int (*tracking_mode_set)(struct device *ldev, u8 trk_mode);
 	int (*tracking_set_page_size)(struct device *ldev, u8 page_size);
-	int (*tracking_reinit_actc_buffer)(struct device *ldev);
 	int (*tracking_set_sample_rate)(struct device *ldev, u32 sample_rate);
 	int (*tracking_read)(struct device *ldev, void *buffer, u32 length);
-	int (*tracking_ram_change)(struct device *ldev, void __user *argp);
+	void (*tracking_set_reinit_pending)(struct device *ldev);
 };
 
 struct tracking_dev {
@@ -68,6 +67,6 @@ struct tracking_dev *tracking_dev_add(struct device *ldev,
 				      const struct tracking_operations *ops,
 				      u8 target_node);
 void tracking_dev_remove(struct tracking_dev *trk_dev);
-int tracking_core_reinit_actc_buffer(int nid);
+void set_reinit_pending_flag(int nid);
 
 #endif /* __TRACKING_BUS_H__ */
