@@ -49,6 +49,7 @@ int smap_process_symbols(void)
 	if (!fp_kallsyms_lookup_name)
 		return -EFAULT;
 
+	// clang-format off
 	fp_migrate_pages =
 		(int (*)(struct list_head *from, new_folio_t get_new_folio,
 			 free_folio_t put_new_folio, unsigned long private,
@@ -56,11 +57,12 @@ int smap_process_symbols(void)
 			 unsigned int *ret_succeeded))
 			fp_kallsyms_lookup_name("migrate_pages");
 	fp_putback_movable_pages =
-		(void (*)(struct list_head *l))fp_kallsyms_lookup_name(
-			"putback_movable_pages");
+		(void (*)(struct list_head *l))
+			fp_kallsyms_lookup_name("putback_movable_pages");
 	fp_isolate_folio_to_list =
 		(bool (*)(struct folio *folio, struct list_head *list))
 			fp_kallsyms_lookup_name("isolate_folio_to_list");
+	// clang-format on
 	if (!(fp_migrate_pages && fp_putback_movable_pages &&
 	      fp_isolate_folio_to_list))
 		return -EFAULT;

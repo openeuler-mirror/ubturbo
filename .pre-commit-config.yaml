@@ -18,17 +18,19 @@ repos:
         entry: clang-format
         language: system
         files: \.(h|c|cpp)$
-        exclude : (^plugins/smap/test/ | ^plugins/ubdma/test)
+        exclude: ^(plugins/smap/test/|plugins/ubdma/test/)
         args: [-style=file, -i]
       - id: clang-tidy
         name: Run clang-tidy check
         entry: clang-tidy
         language: system
         files: ^(?!test/).*\.(h|c|cpp)$
+        exclude: ^(plugins/smap/test/|plugins/ubdma/test/)
         args: [-p=cmake-build-release, -header-filter=.*, --fix]
       - id: clang-tidy-test
         name: Run clang-tidy check for test files
         entry: clang-tidy
         language: system
         files: ^test/.*\.(h|c|cpp)$
+        exclude: ^(plugins/smap/test/|plugins/ubdma/test/)
         args: [-p=cmake-build-debug, --fix]
