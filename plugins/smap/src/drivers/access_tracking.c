@@ -333,8 +333,8 @@ static int access_tracking_add(void)
 	int ret;
 	int devno;
 	struct access_tracking_dev *adev, *n;
-	int access_devices_cnt = enable_hist ? nr_local_numa :
-					       SMAP_MAX_NUMNODES;
+	int access_devices_cnt = enable_hist ? nr_local_numa
+					     : SMAP_MAX_NUMNODES;
 
 	for (devno = 0; devno < access_devices_cnt; devno++) {
 		adev = kzalloc(sizeof(struct access_tracking_dev), GFP_KERNEL);

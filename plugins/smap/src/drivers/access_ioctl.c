@@ -397,9 +397,9 @@ static void update_tracking_data(actc_t *tracking_data,
 	u32 i, idx;
 	payload_info->length =
 		payload_info->length > (stat_info->page_num[L1] +
-					stat_info->page_num[L2]) ?
-			(stat_info->page_num[L1] + stat_info->page_num[L2]) :
-			payload_info->length;
+					stat_info->page_num[L2])
+			? (stat_info->page_num[L1] + stat_info->page_num[L2])
+			: payload_info->length;
 
 	for (idx = 0; idx + SCHEDULE_INTERVAL <= payload_info->length;
 	     idx += SCHEDULE_INTERVAL) {

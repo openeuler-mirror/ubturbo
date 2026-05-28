@@ -109,15 +109,15 @@ typedef enum {
 
 static inline u64 calc_huge_count(u64 range)
 {
-	return (range & ~TWO_MEGA_MASK) == 0 ?
-		       (u64)(range >> TWO_MEGA_SHIFT) :
-		       (u64)((range >> TWO_MEGA_SHIFT) + 1);
+	return (range & ~TWO_MEGA_MASK) == 0
+		       ? (u64)(range >> TWO_MEGA_SHIFT)
+		       : (u64)((range >> TWO_MEGA_SHIFT) + 1);
 }
 
 static inline u64 calc_normal_count(u64 range)
 {
-	return (range & ~PAGE_MASK) == 0 ? (u64)(range >> PAGE_SHIFT) :
-					   (u64)((range >> PAGE_SHIFT) + 1);
+	return (range & ~PAGE_MASK) == 0 ? (u64)(range >> PAGE_SHIFT)
+					 : (u64)((range >> PAGE_SHIFT) + 1);
 }
 
 static inline bool is_node_invalid(int node)

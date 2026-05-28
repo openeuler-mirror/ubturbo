@@ -506,8 +506,8 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 	__u64 pa;
 	unsigned long pfn;
 	struct page *page;
-	unsigned int page_size = is_smap_pg_huge() ? g_pagesize_huge :
-						     PAGE_SIZE;
+	unsigned int page_size = is_smap_pg_huge() ? g_pagesize_huge
+						   : PAGE_SIZE;
 #ifdef DEBUG
 	ktime_t start_time, end_time;
 	s64 delta_time_ms;
@@ -587,10 +587,10 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 		pr_err("migrate to node%d failed %d pages\n", task->src_nid,
 		       nr_migrate_fail);
 	}
-	task->status = (nr_migrate_fail ||
-			(!is_smap_pg_huge() && nr_pre_migrate_fail)) ?
-			       MB_SUBTASK_ERR :
-			       MB_SUBTASK_DONE;
+	task->status =
+		(nr_migrate_fail || (!is_smap_pg_huge() && nr_pre_migrate_fail))
+			? MB_SUBTASK_ERR
+			: MB_SUBTASK_DONE;
 }
 
 static void process_pages_for_migration(struct migrate_back_subtask *task,
@@ -689,9 +689,9 @@ void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 		}
 		vfree(migrate_folios[i]);
 	}
-	task->status = (nr_migrate_fail || nr_pre_migrate_fail) ?
-			       MB_SUBTASK_ERR :
-			       MB_SUBTASK_DONE;
+	task->status = (nr_migrate_fail || nr_pre_migrate_fail)
+			       ? MB_SUBTASK_ERR
+			       : MB_SUBTASK_DONE;
 }
 
 static unsigned int smu_migrate(struct folio **folios, unsigned int nr_folios,

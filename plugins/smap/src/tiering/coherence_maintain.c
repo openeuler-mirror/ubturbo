@@ -66,8 +66,8 @@ static int modify_hugetlb_prot(pte_t *pte, unsigned long hmask __always_unused,
 
 	info->hugetlb_cnt++;
 
-	prot = cacheable ? pgprot_tagged(pte_pgprot(entry)) :
-			   pgprot_writecombine(pte_pgprot(entry));
+	prot = cacheable ? pgprot_tagged(pte_pgprot(entry))
+			 : pgprot_writecombine(pte_pgprot(entry));
 	entry = pte_modify(entry, prot);
 	__set_pte(pte, entry);
 
@@ -287,8 +287,8 @@ int flush_cache_by_pa(phys_addr_t addr, size_t size,
 	down(&ham_sem);
 	while (remain_size != 0) {
 		size_t flush_size;
-		flush_size = remain_size <= MAX_FLUSH_SIZE ? remain_size :
-							     MAX_FLUSH_SIZE;
+		flush_size = remain_size <= MAX_FLUSH_SIZE ? remain_size
+							   : MAX_FLUSH_SIZE;
 		/* Retry if there is contention over hardware */
 		while (retry_times) {
 			pr_debug(

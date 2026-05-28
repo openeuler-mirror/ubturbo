@@ -50,8 +50,8 @@ struct pagemapread {
 
 static inline int get_max_pid_cnt(void)
 {
-	return smap_pgsize == HUGE_PAGE ? MAX_2M_PROCESSES_CNT :
-					  MAX_4K_PROCESSES_CNT;
+	return smap_pgsize == HUGE_PAGE ? MAX_2M_PROCESSES_CNT
+					: MAX_4K_PROCESSES_CNT;
 }
 
 extern void walk_pid_pagemap(struct pagemapread *pm);

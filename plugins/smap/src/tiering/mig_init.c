@@ -194,8 +194,8 @@ static int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist)
 
 static bool is_migrate_msg_valid(struct migrate_msg *msg)
 {
-	int max_cnt = smap_pgsize == HUGE_PAGE ? MAX_2M_MIGMSG_CNT :
-						 MAX_4K_MIGMSG_CNT;
+	int max_cnt = smap_pgsize == HUGE_PAGE ? MAX_2M_MIGMSG_CNT
+					       : MAX_4K_MIGMSG_CNT;
 	int page_size = smap_pgsize == HUGE_PAGE ? g_pagesize_huge : PAGE_SIZE;
 
 	if (msg->cnt <= 0 || msg->cnt > max_cnt) {
@@ -370,11 +370,11 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 					       HUNDRED;
 				mig_cnt = pm.mig_info.mig_cnt - keep_cnt;
 			} else {
-				mig_cnt = smap_pgsize == HUGE_PAGE ?
-						  (payloads[i].mem_size >>
-						   KB_TO_2M) :
-						  (payloads[i].mem_size >>
-						   KB_TO_4K);
+				mig_cnt = smap_pgsize == HUGE_PAGE
+						  ? (payloads[i].mem_size >>
+						     KB_TO_2M)
+						  : (payloads[i].mem_size >>
+						     KB_TO_4K);
 			}
 			if (smap_pgsize != HUGE_PAGE) {
 				for (int j = mig_cnt; j < pm.mig_info.mig_cnt;

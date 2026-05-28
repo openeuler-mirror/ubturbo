@@ -783,8 +783,8 @@ static int get_folios_freqs(struct ham_migrate_task *mig_task)
 static inline int ham_modify_pgtable(struct ham_migrate_task *mig_task,
 				     bool cacheable)
 {
-	return cacheable ? dst_resume_pgtable_maintain(mig_task) :
-			   src_suspend_pgtable_maintain(mig_task);
+	return cacheable ? dst_resume_pgtable_maintain(mig_task)
+			 : src_suspend_pgtable_maintain(mig_task);
 }
 
 static inline bool pid_legally(pid_t pid)

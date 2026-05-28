@@ -329,8 +329,8 @@ int calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
 	u64 offset = 0;
 	u64 acidx;
 	int last_nid = -1;
-	int shift = is_smap_pg_huge() ? __builtin_ctz(g_pagesize_huge) :
-					PAGE_SHIFT;
+	int shift = is_smap_pg_huge() ? __builtin_ctz(g_pagesize_huge)
+				      : PAGE_SHIFT;
 
 	list_for_each_entry(mem, &acpi_mem.mem, segment) {
 		if (last_nid != mem->node) {
