@@ -12,6 +12,8 @@ struct platform_device {
     bool id_auto;
     struct device dev;
     u64 platform_dma_mask;
+    struct resource *resource;
+    unsigned int num_resources;
 };
 
 #define ACPI_PTR(_ptr)	(_ptr)
