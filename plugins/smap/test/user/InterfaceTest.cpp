@@ -3225,3 +3225,225 @@ TEST_F(InterfaceTest, TestIsPidArrRemoteNumaMatchTwo)
     ret = IsPidArrRemoteNumaMatch(&msg);
     EXPECT_EQ(-ENXIO, ret);
 }
+
+extern "C" bool IsPidArrValid(pid_t *pidArr, int len, bool ignoreUnmanaged);
+extern "C" bool PidIsValid(pid_t pid);
+extern "C" int GetCurrentMaxNrPid();
+extern "C" bool IsLocalNidValid(int nid);
+extern "C" int InitAllThreads(struct ProcessManager *manager);
+
+// Test for IsRemoveRemoteNidValid coverage
+extern "C" struct ProcessManager g_processManager;
+TEST_F(InterfaceTest, TestSmapRemoveRemoteNidValid)
+{
+    struct RemoveMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 1;
+    msg.payload[0].nid[0] = 100; // Invalid remote nid
+
+    g_processManager.nrLocalNuma = 2;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(GetPidType).stubs().will(returnValue(0));
+    int ret = ubturbo_smap_remove(&msg, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+}
+
+TEST_F(InterfaceTest, TestSmapRemoveRemoteNidValidSuccess)
+{
+    struct RemoveMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 1;
+    msg.payload[0].nid[0] = 4; // Valid remote nid (>= nrLocalNuma)
+
+    g_processManager.nrLocalNuma = 2;
+    g_processManager.tracking.pageSize = 4096; // Set pageSize to match GetNormalPageSize
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(GetNormalPageSize).stubs().will(returnValue(4096));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&g_processManager));
+    MOCKER(AccessIoctlRemovePid).stubs().will(returnValue(0));
+    MOCKER(RemoveManagedProcess).stubs().will(ignoreReturnValue());
+    int ret = ubturbo_smap_remove(&msg, PAGETYPE_NORMAL);
+    EXPECT_EQ(0, ret);
+
+    GlobalMockObject::verify();
+}
+
+// Test for IsPidArrValid duplicate pid branch
+TEST_F(InterfaceTest, TestIsPidArrValidDuplicatePid)
+{
+    pid_t pidArr[2] = {1024, 1024}; // Duplicate pid
+    int len = 2;
+    ProcessManager manager;
+    EnvMutexInit(&manager.lock);
+    g_processManager.nrLocalNuma = 2;
+
+    MOCKER(GetCurrentMaxNrPid).stubs().will(returnValue(100));
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessAttr).stubs().will(returnValue((ProcessAttr*)1));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    bool ret = IsPidArrValid(pidArr, len, false);
+    EXPECT_EQ(false, ret);
+
+    GlobalMockObject::verify();
+}
+
+// Test for IsPidArrValid unmanaged pid branch
+TEST_F(InterfaceTest, TestIsPidArrValidUnmanagedPid)
+{
+    pid_t pidArr[1] = {1024};
+    int len = 1;
+    ProcessManager manager;
+    EnvMutexInit(&manager.lock);
+    g_processManager.nrLocalNuma = 2;
+
+    MOCKER(GetCurrentMaxNrPid).stubs().will(returnValue(100));
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessAttr).stubs().will(returnValue((ProcessAttr*)nullptr)); // Unmanaged pid
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    bool ret = IsPidArrValid(pidArr, len, false);
+    EXPECT_EQ(false, ret);
+
+    GlobalMockObject::verify();
+}
+
+// Test for InitAllThreads failure branch
+TEST_F(InterfaceTest, TestInitAllThreadsFailure)
+{
+    ProcessManager manager;
+    EnvMutexInit(&manager.threadLock);
+
+    MOCKER(InitThread).stubs().will(returnValue(-ENOMEM));
+    MOCKER(DestroyAllThread).stubs().will(ignoreReturnValue());
+    int ret = InitAllThreads(&manager);
+    EXPECT_EQ(-ENOMEM, ret);
+
+    GlobalMockObject::verify();
+}
+
+// Test for IsLocalNidValid boundary
+TEST_F(InterfaceTest, TestIsLocalNidValidBoundary)
+{
+    g_processManager.nrLocalNuma = 2;
+
+    ProcessManager manager;
+    manager.nrLocalNuma = 2;
+    EnvMutexInit(&manager.lock);
+
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    bool ret = IsLocalNidValid(-2); // nid < NUMA_NO_NODE
+    EXPECT_EQ(false, ret);
+
+    GlobalMockObject::verify();
+}
+
+// Test for IoctlClearProcessRemoteNuma with attr != NULL and L2Count > 0
+extern "C" int AccessIoctlAddPid(int cnt, struct AccessAddPidPayload *payload);
+TEST_F(InterfaceTest, TestSmapRemoveWithAttrNotNullAndL2CountGtZero)
+{
+    struct RemoveMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 1;
+    msg.payload[0].nid[0] = 4;
+
+    g_processManager.nrLocalNuma = 2;
+    g_processManager.tracking.pageSize = 4096;
+    ProcessAttr attr = {};
+    attr.pid = 1024;
+    attr.numaAttr.numaNodes = 0b11111111; // Set some L2 nodes
+    attr.scanTime = 100;
+    attr.duration = 200;
+    attr.scanType = (ScanType)0;
+    g_processManager.processes = &attr;
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(GetNormalPageSize).stubs().will(returnValue(4096));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&g_processManager));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
+    MOCKER(RemoveManagedProcess).stubs().will(ignoreReturnValue());
+    int ret = ubturbo_smap_remove(&msg, PAGETYPE_NORMAL);
+    EXPECT_EQ(0, ret);
+
+    GlobalMockObject::verify();
+}
+
+// Test for ubturbo_smap_same_remote_numa_migrate
+extern "C" int MigrateRemoteNuma(struct ProcessManager *manager, struct MigrateNumaIoctlMsg *msg);
+extern "C" bool IsRemoteNidValid(int nid);
+extern "C" int IsRemoteNumaMoveAllowed(int nid);
+extern "C" int ChangePidRemoteByNuma(int srcNid, int destNid);
+TEST_F(InterfaceTest, TestSmapSameRemoteNumaMigrate)
+{
+    struct MigrateNumaMsg msg = {};
+    msg.srcNid = 4;
+    msg.destNid = 4; // srcNid must equal destNid for same_remote_numa_migrate
+    msg.count = 1;
+    msg.memids[0] = 1;
+
+    g_processManager.nrLocalNuma = 2;
+    EnvAtomicSet(&g_status, 1);
+
+    MOCKER(GetProcessManager).stubs().will(returnValue(&g_processManager));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNumaMoveAllowed).stubs().will(returnValue(1));
+    MOCKER(MigrateRemoteNuma).stubs().will(returnValue(0));
+    MOCKER(ChangePidRemoteByNuma).stubs().will(returnValue(0));
+    int ret = ubturbo_smap_same_remote_numa_migrate(&msg);
+    EXPECT_EQ(0, ret);
+
+    GlobalMockObject::verify();
+}
+
+// Test for IsScanTypeValid
+extern "C" bool IsScanTypeValid(pid_t *pidArr, int len);
+TEST_F(InterfaceTest, TestIsScanTypeValid)
+{
+    pid_t pidArr[1] = {1024};
+    int len = 1;
+    ProcessAttr attr = {};
+    attr.scanType = NORMAL_SCAN; // Must be NORMAL_SCAN to pass
+
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+    bool ret = IsScanTypeValid(pidArr, len);
+    EXPECT_EQ(true, ret);
+
+    GlobalMockObject::verify();
+}
+
+// Test for IsScanTypeValid with invalid scanType
+TEST_F(InterfaceTest, TestIsScanTypeValidInvalid)
+{
+    pid_t pidArr[1] = {1024};
+    int len = 1;
+    ProcessAttr attr = {};
+    attr.scanType = (ScanType)99; // Invalid scanType
+
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+    bool ret = IsScanTypeValid(pidArr, len);
+    EXPECT_EQ(false, ret);
+
+    GlobalMockObject::verify();
+}
+
+// Test for GetAttrNidInitRatio
+extern "C" int GetAttrNidInitRatio(pid_t pid, int nid);
+TEST_F(InterfaceTest, TestGetAttrNidInitRatio)
+{
+    pid_t pid = 1024;
+    int nid = 4;
+    ProcessAttr attr = {};
+    attr.pid = pid;
+    attr.strategyAttr.initRemoteMemRatio[0][0] = 50;
+
+    g_processManager.nrLocalNuma = 2;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
+    int ret = GetAttrNidInitRatio(pid, nid);
+
+    GlobalMockObject::verify();
+}
