@@ -635,17 +635,17 @@ TEST_F(DriversAccessPidTest, AccessRemoveAllPid)
     EXPECT_EQ(1, ret);
 }
 
-extern "C" void free_ap_white_list_bm(struct access_pid *ap);
+extern "C" void free_ap_bm_white_list(struct access_pid *ap);
 TEST_F(DriversAccessPidTest, FreeApWhiteListBm)
 {
     struct access_pid ap;
     MOCKER(vfree).stubs();
     ap.bm_len[0] = 1;
-    free_ap_white_list_bm(&ap);
+    free_ap_bm_white_list(&ap);
     EXPECT_EQ(0, ap.bm_len[0]);
 }
 
-extern "C" int init_ap_bm(int node_len, u64 *node_page_count, struct access_pid *ap);
+extern "C" int init_ap_bm_white_list(int node_len, u64 *node_page_count, struct access_pid *ap);
 TEST_F(DriversAccessPidTest, InitApBm)
 {
     int ret;
@@ -653,14 +653,14 @@ TEST_F(DriversAccessPidTest, InitApBm)
 
     ap.numa_nodes = 0x10;
     u64 node_page_count[SMAP_MAX_NUMNODES] = { 0 };
-    ret = init_ap_bm(2, node_page_count, &ap);
+    ret = init_ap_bm_white_list(2, node_page_count, &ap);
     EXPECT_EQ(0, ret);
 
     GlobalMockObject::verify();
     node_page_count[0] = 1;
     MOCKER(vzalloc).stubs().will(returnValue((void *)nullptr));
     MOCKER(vfree).stubs();
-    ret = init_ap_bm(2, node_page_count, &ap);
+    ret = init_ap_bm_white_list(2, node_page_count, &ap);
     EXPECT_EQ(-ENOMEM, ret);
 }
 
@@ -716,7 +716,7 @@ TEST_F(DriversAccessPidTest, AccessWalkPagemap)
     adev.page_count = 1;
     list_add(&adev.list, &access_dev);
     MOCKER(clean_last_ap_data).stubs();
-    MOCKER(init_ap_bm).stubs().will(returnValue(0));
+    MOCKER(init_ap_bm_white_list).stubs().will(returnValue(0));
     MOCKER(walk_pid_pagemap).stubs().will(ignoreReturnValue());
     ret = access_walk_pagemap(ap);
     EXPECT_EQ(0, ret);
@@ -736,7 +736,7 @@ TEST_F(DriversAccessPidTest, AccessWalkPagemapFail)
     adev.page_count = 1;
     list_add(&adev.list, &access_dev);
     MOCKER(clean_last_ap_data).stubs();
-    MOCKER(init_ap_bm).stubs().will(returnValue(0)).then(returnValue(-ENOMEM));
+    MOCKER(init_ap_bm_white_list).stubs().will(returnValue(0)).then(returnValue(-ENOMEM));
     MOCKER(walk_pid_pagemap).stubs().will(ignoreReturnValue());
 
     ret = access_walk_pagemap(ap);

@@ -504,6 +504,10 @@ int init_access_pid(struct access_add_pid_payload *payload,
 	}
 	ret = access_walk_pagemap_prepare(ap);
 	if (ret) {
+		if (ap->info.mapping) {
+			vfree(ap->info.mapping);
+			ap->info.mapping = NULL;
+		}
 		kfree(ap);
 		return ret;
 	}
@@ -695,7 +699,7 @@ static int init_access_ham_pid(struct access_add_pid_payload *payload)
 	if (smap_create_tracking_info_file(tmp)) {
 		pr_err("unable to create tracking info file of pid: %d in process file system\n",
 		       tmp->pid);
-		kfree(tmp);
+		destroy_access_ham_pid(tmp);
 		return -ENXIO;
 	}
 
@@ -805,6 +809,8 @@ static int init_access_statistic_pid_2m(struct access_add_pid_payload *payload)
 				    &tmp->window_num);
 	if (ret) {
 		pr_err("failed to init statistic tracking windows\n");
+		vfree(tmp->vaddr[L1]);
+		tmp->vaddr[L1] = NULL;
 		kfree(tmp);
 		return ret;
 	}
@@ -873,6 +879,8 @@ static int init_access_statistic_pid_4k(struct access_add_pid_payload *payload)
 				    &tmp->window_num);
 	if (ret) {
 		pr_err("failed to init statistic tracking windows\n");
+		vfree(tmp->vaddr[L1]);
+		tmp->vaddr[L1] = NULL;
 		kfree(tmp);
 		return ret;
 	}
@@ -1148,7 +1156,7 @@ static inline void free_ap_bm(struct access_pid *ap)
 	}
 }
 
-static void free_ap_white_list_bm(struct access_pid *ap)
+static void free_ap_bm_white_list(struct access_pid *ap)
 {
 	int i;
 	if (!ap) {
@@ -1163,7 +1171,7 @@ static void free_ap_white_list_bm(struct access_pid *ap)
 	}
 }
 
-int init_ap_bm(int node_len, u64 *node_page_count, struct access_pid *ap)
+int init_ap_bm_white_list(int node_len, u64 *node_page_count, struct access_pid *ap)
 {
 	size_t nr_bytes = sizeof(unsigned long);
 	int i;
@@ -1186,7 +1194,7 @@ int init_ap_bm(int node_len, u64 *node_page_count, struct access_pid *ap)
 		if (!ap->white_list_bm[i]) {
 			pr_err("unable to allocate memory for white list bitmap on node %d of pid: %d\n",
 			       i, ap->pid);
-			free_ap_white_list_bm(ap);
+			free_ap_bm_white_list(ap);
 			return -ENOMEM;
 		}
 	}
@@ -1243,13 +1251,18 @@ int access_walk_pagemap_prepare(struct access_pid *ap)
 		up_read(&adev->buffer_lock);
 	}
 	clean_last_ap_data(ap);
-	ret = init_ap_bm(SMAP_MAX_NUMNODES, nodes_page_count, ap);
+	ret = init_ap_bm_white_list(SMAP_MAX_NUMNODES, nodes_page_count, ap);
 	if (ret) {
 		pr_err("unable to init access bitmap for pid: %d\n", ap->pid);
 		return ret;
 	}
 	ret = init_vm_mapping(&ap->info);
-	return ret;
+	if (ret) {
+		pr_err("unable to init vm mapping for pid: %d\n", ap->pid);
+		free_ap_bm_white_list(ap);
+		return ret;
+	}
+	return 0;
 }
 
 int access_walk_pagemap(struct access_pid *ap)

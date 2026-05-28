@@ -1112,6 +1112,7 @@ void RemoveAllManagedProcess(void)
 
 int DestroyProcessManager(void)
 {
+    RemoveAllManagedProcess();
     EnvMutexDestroy(&g_processManager.lock);
     EnvMutexDestroy(&g_processManager.threadLock);
     (void)memset_s(&g_processManager, sizeof(struct ProcessManager), 0, sizeof(struct ProcessManager));

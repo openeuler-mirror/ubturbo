@@ -848,7 +848,7 @@ static int check_migration_param(struct migration_param param,
 		if ((rbi->size >> PMD_SHIFT) > MAX_HUGEPAGE_NUM - sum) {
 			pr_err("the number of hugepages exceeds the maximum limit: %u\n",
 			       MAX_HUGEPAGE_NUM);
-			return -EINVAL;
+			goto exit_with_mmput;
 		}
 		sum += (rbi->size >> PMD_SHIFT);
 
