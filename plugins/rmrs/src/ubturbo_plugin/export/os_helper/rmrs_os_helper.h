@@ -15,8 +15,8 @@
 #include <mutex>
 #include <vector>
 
-#include "rmrs_resource_export.h"
 #include "rmrs_error.h"
+#include "rmrs_resource_export.h"
 
 namespace rmrs {
 using namespace rmrs::exports;

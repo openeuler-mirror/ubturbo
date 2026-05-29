@@ -13,4 +13,4 @@
 #include "rmrs_response_info_simpo.h"
 
 namespace rmrs {
-}  // namespace mempooling
+} // namespace rmrs

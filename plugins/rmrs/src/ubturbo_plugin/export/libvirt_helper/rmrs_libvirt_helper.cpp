@@ -340,7 +340,6 @@ void LibvirtHelper::UpdateVmMemInfoOnNuma(ResourceExport *vmInfoHandler, VmDomai
     (*uuidNumaMap)[vmInfo.metaData.uuid] = tNumaId;
 }
 
-
 void LibvirtHelper::FreeDomains(void **&domains, size_t domainNums)
 {
     if (domains == nullptr) {
@@ -370,15 +369,14 @@ void LibvirtHelper::FreeDomains(void **&domains, size_t domainNums)
     domains = nullptr; // 防止后续的双重释放
 }
 
-
 uint32_t LibvirtHelper::GetDomainList(void **&domains, int &numDomains)
 {
     libvirt::VirConnectListAllDomainsFunc virConnectListAllDomains = LibvirtModule::VirConnectListAllDomains();
     if (virConnectListAllDomains == nullptr) {
         return RMRS_ERROR;
     }
-    numDomains = virConnectListAllDomains(virConnect, &domains,
-        virConnectListAllDomainsFlags::VIR_CONNECT_LIST_DOMAINS_ACTIVE);
+    numDomains =
+        virConnectListAllDomains(virConnect, &domains, virConnectListAllDomainsFlags::VIR_CONNECT_LIST_DOMAINS_ACTIVE);
     if (numDomains < 0) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtHelper] Get vmDomain infos failed by libvirt. " << strerror(errno) << ".";

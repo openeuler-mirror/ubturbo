@@ -10,22 +10,22 @@
  * See the Mulan PSL v2 for more details.
  */
 #include <cstdint>
-#include <string>
 #include <filesystem>
 #include <fstream>
+#include <string>
 
+#include "bottleneck_detector.h"
 #include "callback_manager.h"
 #include "iostream"
 #include "rmrs_config.h"
 #include "rmrs_error.h"
 #include "rmrs_migrate_module.h"
 #include "rmrs_resource_export.h"
+#include "rmrs_serialize.h"
 #include "rmrs_smap_helper.h"
+#include "rmrs_smap_module.h"
 #include "turbo_conf.h"
 #include "turbo_logger.h"
-#include "rmrs_smap_module.h"
-#include "rmrs_serialize.h"
-#include "bottleneck_detector.h"
 
 using namespace rmrs::exports;
 using namespace turbo::config;
@@ -50,13 +50,13 @@ void RmrsReboot()
 {
     if (!std::filesystem::exists(MIGREATE_RECORD_FILE)) {
         UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[RmrsInit][RmrsReboot] No Record file.";
-        return ;
+        return;
     }
     std::ifstream fin;
     fin.open(MIGREATE_RECORD_FILE, std::ios::in | std::ios::binary);
     if (!fin.is_open()) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[RmrsInit][RmrsReboot] Record file open failed.";
-        return ;
+        return;
     }
     std::stringstream temp;
     temp << fin.rdbuf();
@@ -64,7 +64,7 @@ void RmrsReboot()
     fin.close();
     if (text.length() == 0) {
         UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[RmrsInit][RmrsReboot] Record file is empty.";
-        return ;
+        return;
     }
 
     rmrs::serialization::MigrateStrategyResult migrateStrategyResult;
@@ -81,9 +81,9 @@ void RmrsReboot()
         pidsIn.push_back(item.pid);
         memSizeList.push_back(0);
     }
-    
+
     auto ret = RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdsIn, pidsIn, memSizeList,
-        migrateStrategyResult.waitingTime);
+                                                               migrateStrategyResult.waitingTime);
     if (ret != RMRS_OK) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsInit][RmrsReboot] MigrateColdDataToRemoteNumaSync failed.";
@@ -91,7 +91,7 @@ void RmrsReboot()
     std::ofstream fout;
     fout.open(MIGREATE_RECORD_FILE, std::ios::out | std::ios::binary);
     fout.close();
-    return ;
+    return;
 }
 
 void LoadBasePageType()

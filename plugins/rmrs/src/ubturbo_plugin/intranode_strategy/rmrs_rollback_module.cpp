@@ -3,13 +3,13 @@
  */
 #include "rmrs_rollback_module.h"
 
-#include "turbo_logger.h"
-#include "turbo_conf.h"
-#include "rmrs_serialize.h"
-#include "rmrs_json_helper.h"
 #include "rmrs_config.h"
-#include "rmrs_smap_helper.h"
+#include "rmrs_json_helper.h"
 #include "rmrs_resource_export.h"
+#include "rmrs_serialize.h"
+#include "rmrs_smap_helper.h"
+#include "turbo_conf.h"
+#include "turbo_logger.h"
 
 namespace rmrs::migrate {
 
@@ -87,7 +87,8 @@ uint32_t RmrsRollbackModule::MemBorrowRollback(
 }
 
 bool RmrsRollbackModule::FillRollbackVmInfo(std::map<pid_t, VmDomainInfo> &vmInfoMap, std::vector<pid_t> &pidList,
-    std::unordered_map<pid_t, uint16_t> &vmPidRemoteNumaMap, std::vector<uint16_t> &remoteNumaIdList)
+                                            std::unordered_map<pid_t, uint16_t> &vmPidRemoteNumaMap,
+                                            std::vector<uint16_t> &remoteNumaIdList)
 {
     // 查询虚机采集信息
     std::vector<VmDomainInfo> vmDomainInfos;
@@ -121,7 +122,7 @@ bool RmrsRollbackModule::FillRollbackVmInfo(std::map<pid_t, VmDomainInfo> &vmInf
 }
 
 bool RmrsRollbackModule::CanMigrate(std::map<pid_t, VmDomainInfo> &vmInfoMap,
-    const std::set<rmrs::serialization::BorrowIdInfo> &pidInfoList)
+                                    const std::set<rmrs::serialization::BorrowIdInfo> &pidInfoList)
 {
     if (vmInfoMap.empty()) {
         LOG_INFO << "[MemRollback] VmInfoMap empty.";
@@ -145,8 +146,8 @@ bool RmrsRollbackModule::CanMigrate(std::map<pid_t, VmDomainInfo> &vmInfoMap,
 }
 
 bool RmrsRollbackModule::CanMigrateBack(std::map<pid_t, VmDomainInfo> &vmInfoMap,
-    std::map<uint16_t, NumaInfo> &numaInfoMap,
-    const std::set<rmrs::serialization::BorrowIdInfo> &pidInfoList)
+                                        std::map<uint16_t, NumaInfo> &numaInfoMap,
+                                        const std::set<rmrs::serialization::BorrowIdInfo> &pidInfoList)
 {
     // 最终需要占用本地numa内存大小
     std::unordered_map<uint16_t, uint64_t> fowardSumMemSizeMap;
@@ -185,7 +186,7 @@ bool RmrsRollbackModule::CanMigrateBack(std::map<pid_t, VmDomainInfo> &vmInfoMap
 }
 
 bool RmrsRollbackModule::DoMigrateRollback(std::unordered_map<pid_t, uint16_t> vmPidRemoteNumaMap,
-    const std::set<rmrs::serialization::BorrowIdInfo> &pidInfoList)
+                                           const std::set<rmrs::serialization::BorrowIdInfo> &pidInfoList)
 {
     if (vmPidRemoteNumaMap.empty()) {
         LOG_INFO << "[MemRollback] No vm need rollback.";
@@ -239,4 +240,4 @@ bool RmrsRollbackModule::DoMigrateRollback(std::unordered_map<pid_t, uint16_t> v
 #undef LOG_ERROR
 #undef LOG_INFO
 
-}
+} // namespace rmrs::migrate

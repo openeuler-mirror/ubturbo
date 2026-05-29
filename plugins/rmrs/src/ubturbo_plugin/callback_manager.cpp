@@ -13,30 +13,29 @@
 
 #include "turbo_resource_query.h"
 
+#include <sys/stat.h>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <thread>
-#include <fstream>
-#include <sys/stat.h>
 
-#include "rmrs_string_util.h"
+#include "bottleneck_detector.h"
 #include "libvirt_helper/rmrs_libvirt_helper.h"
 #include "rmrs_config.h"
 #include "rmrs_json_util.h"
-#include "rmrs_rollback_module.h"
 #include "rmrs_memfree_module.h"
 #include "rmrs_resource_export.h"
+#include "rmrs_rollback_module.h"
 #include "rmrs_serializer.h"
 #include "rmrs_smap_helper.h"
+#include "rmrs_string_util.h"
 #include "turbo_conf.h"
 #include "turbo_def.h"
 #include "turbo_ipc_server.h"
 #include "turbo_logger.h"
 #include "turbo_ucache_message.h"
 #include "ucache_migration_executor.h"
-#include "bottleneck_detector.h"
 
 namespace rmrs {
 #define LOG_DEBUG UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
@@ -159,8 +158,7 @@ RmrsResult CallbackManager::MigrateExecuteRecvHandler(const TurboByteBuffer &req
 
     for (auto &vm : migrateStrategyResult.vmInfoList) {
         if (vm.pid < 0) {
-            UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-                << "[MemMigrate][MemMigrate] Pid is invalid.";
+            UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[MemMigrate][MemMigrate] Pid is invalid.";
             return RMRS_ERROR;
         }
     }
@@ -247,7 +245,7 @@ RmrsResult CallbackManager::MigrateBackRecvHandler(const TurboByteBuffer &req, T
 
     if (resp.data == nullptr || resp.len == 0) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[MemMigrate][MemMigrate] Response data is null, len=" << resp.len <<".";
+            << "[MemMigrate][MemMigrate] Response data is null, len=" << resp.len << ".";
         return RMRS_ERROR;
     }
 
@@ -474,8 +472,7 @@ bool ValidateNumaIdParam(const UCacheMigrationStrategyParam &param)
 {
     const std::string basePath = "/sys/devices/system/node/";
     if (param.remoteNumaIds.empty()) {
-        UBTURBO_LOG_WARN(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-                << "[ucache] remoteNumaIds is empty!";
+        UBTURBO_LOG_WARN(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[ucache] remoteNumaIds is empty!";
         return false;
     }
     for (auto remoteNumaId : param.remoteNumaIds) {

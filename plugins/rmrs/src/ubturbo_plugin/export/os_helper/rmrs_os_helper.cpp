@@ -12,6 +12,7 @@
 #include "rmrs_os_helper.h"
 
 #include <dirent.h>
+#include <array>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
@@ -21,13 +22,12 @@
 #include <sstream>
 #include <string>
 #include <vector>
-#include <array>
 
 #include "rmrs_config.h"
 #include "rmrs_file_util.h"
 #include "rmrs_string_util.h"
-#include "turbo_logger.h"
 #include "securec.h"
+#include "turbo_logger.h"
 
 namespace rmrs {
 
@@ -65,9 +65,9 @@ const int HEX_BASE = 16;
 const int STANDARD_PAGESIZE = 4;
 constexpr uint64_t HUGE_PAGE_NUM_TO_KB = 2 * 1024;
 constexpr int CMD_BUFFER_SIZE = 256;
-constexpr const char* CAT_SCRIPT_CAT_PATH = "sudo /usr/local/bin/cat.sh";
-constexpr const char* CAT_SCRIPT_TAIL = "2>&1";
-constexpr const char* UID_EUID_ZERO = "UID=0, EUID=0";
+constexpr const char *CAT_SCRIPT_CAT_PATH = "sudo /usr/local/bin/cat.sh";
+constexpr const char *CAT_SCRIPT_TAIL = "2>&1";
+constexpr const char *UID_EUID_ZERO = "UID=0, EUID=0";
 
 /**
  * 读取/proc目录下指定PID的进程信息, 获取启动时间
@@ -196,7 +196,8 @@ uint32_t OsHelper::GetNumaCPUInfos(unordered_map<uint16_t, uint16_t> &cpuSocketM
     while ((entry = readdir(dir)) != nullptr) {
         if (RmrsFileUtil::IsSpecifiedPath(entry->d_name, "^node\\d+$") == RMRS_OK) {
             string nodePath = "";
-            nodePath.append(numaPathPrefix).append(&std::filesystem::path::preferred_separator, 1)
+            nodePath.append(numaPathPrefix)
+                .append(&std::filesystem::path::preferred_separator, 1)
                 .append(entry->d_name);
             string cpuPath = "";
             cpuPath.append(nodePath).append(&std::filesystem::path::preferred_separator, 1).append("cpulist");
@@ -205,7 +206,9 @@ uint32_t OsHelper::GetNumaCPUInfos(unordered_map<uint16_t, uint16_t> &cpuSocketM
                 closedir(dir);
                 return RMRS_ERROR;
             }
-            if (checkFileContent(nodeInfo, "cpulist", USUAL_INFO_SIZE) != RMRS_OK) {continue;}
+            if (checkFileContent(nodeInfo, "cpulist", USUAL_INFO_SIZE) != RMRS_OK) {
+                continue;
+            }
             NumaInfo tempNumaInfo{};
             auto numaId = ReadCpuInfo(nodeInfo, tempNumaInfo, cpuSocketMap, entry->d_name);
             tempNumaInfo.numaMetaInfo.logicId = logicNumaIndex++;
@@ -404,7 +407,7 @@ uint32_t OsHelper::GetVMUsedMemory(ResourceExport *resourceCollect)
     auto vPidList = resourceCollect->GetVPidList();
     auto pidUUIDMap = resourceCollect->GetPidUUIDMap();
     auto ret = RMRS_OK;
- 
+
     for (auto vPid : *vPidList) {
         auto vPidStr = std::to_string(vPid);
         ret |= GetInfoFromNumaMaps((*pidUUIDMap)[vPid], vPidStr, resourceCollect);
@@ -509,26 +512,27 @@ RmrsResult OsHelper::GetVmPageSizeFromNumaMaps(const std::string &uuid, const st
     return RMRS_OK;
 }
 
-RmrsResult OsHelper::checkUidEuid(const std::string &fileContent) {
+RmrsResult OsHelper::checkUidEuid(const std::string &fileContent)
+{
     std::istringstream stream(fileContent);
     std::string firstLine;
 
     // 获取第一行
     if (!std::getline(stream, firstLine)) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-			<< "[RmrsResourceExport] [OsHelper] Could not read the first line of fileContent.";
+            << "[RmrsResourceExport] [OsHelper] Could not read the first line of fileContent.";
         return RMRS_ERROR;
     }
 
     // 判断第一行是否为 "UID=0, EUID=0"
     if (firstLine != UID_EUID_ZERO) {
         UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-			<< "[RmrsResourceExport] [OsHelper] First line= " << firstLine << ".";
-		UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-			<< "[RmrsResourceExport] [OsHelper] Executing the cat.sh failed due to insufficient permission.";
+            << "[RmrsResourceExport] [OsHelper] First line= " << firstLine << ".";
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[RmrsResourceExport] [OsHelper] Executing the cat.sh failed due to insufficient permission.";
         return RMRS_ERROR;
     }
-	return RMRS_OK;
+    return RMRS_OK;
 }
 
 RmrsResult OsHelper::ReadNumaMap(const std::string &pidStr, std::string &fileContent)
@@ -543,10 +547,10 @@ RmrsResult OsHelper::ReadNumaMap(const std::string &pidStr, std::string &fileCon
         return RMRS_ERROR;
     }
     std::string cmd(cmdBuf);
- 
+
     UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
         << "[RmrsResourceExport] [OsHelper] Input Param pid=" << pidStr << ".";
- 
+
     // 调用脚本
     try {
         fileContent = ExecCommand(cmd);
@@ -558,12 +562,12 @@ RmrsResult OsHelper::ReadNumaMap(const std::string &pidStr, std::string &fileCon
         return RMRS_ERROR;
     }
 
-	auto checkRet = checkUidEuid(fileContent);
-	if (checkRet != RMRS_OK) {
-		UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-			<< "[RmrsResourceExport] [OsHelper] Executing the cat.sh script Failed.";
-		return RMRS_ERROR;
-	}
+    auto checkRet = checkUidEuid(fileContent);
+    if (checkRet != RMRS_OK) {
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[RmrsResourceExport] [OsHelper] Executing the cat.sh script Failed.";
+        return RMRS_ERROR;
+    }
 
     return RMRS_OK;
 }
@@ -641,7 +645,6 @@ uint32_t OsHelper::GetPidFromUUID(ResourceExport *resourceCollect)
     }
     return RMRS_OK;
 }
-
 
 /**
  * 读取/var/run/libvirt/qemu的文件，根据虚机name找到同名.pid文件，读取虚机对应的PID

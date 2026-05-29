@@ -21,20 +21,20 @@ namespace rmrs {
 struct VmMetaData {
     VmMetaData() = default;
 
-    std::string nodeId{};     // 物理节点id-管控面配置文件
-    std::string hostName{};   // 物理节点hostName-虚机xml定义文件
-    std::string uuid{};       // 虚拟机uuid-虚机xml定义文件
-    std::string name{};       // 虚拟机name-虚机xml定义文件
-    int16_t socketId{};       // cpu对应socketID
-    int16_t numaId{};         // cpu对应的NumaId
-    uint64_t cpuTime{};       // 虚机的cpu耗时
-    bool isProportionally;    // 虚机是否按比例创建-虚机xml定义文件-预留字段未采集未使用
-    time_t vmCreateTime{};    // 虚机创建时间-libvirt采集
-    uint16_t cpuNums{};       // 虚机CPU核数-虚机xml定义文件
-    uint64_t maxMem{};        // 虚机申请内存-虚机xml定义文件，单位KBytes
-    uint64_t usedMem{};       // 虚机已使用内存-虚机xml定义文件，单位KBytes
-    pid_t pid{};              // 虚机进程PID-操作系统提供
-    uint64_t pageSize{}; // 虚机页大小-默认2mBytes大页，即2048KBytes
+    std::string nodeId{};   // 物理节点id-管控面配置文件
+    std::string hostName{}; // 物理节点hostName-虚机xml定义文件
+    std::string uuid{};     // 虚拟机uuid-虚机xml定义文件
+    std::string name{};     // 虚拟机name-虚机xml定义文件
+    int16_t socketId{};     // cpu对应socketID
+    int16_t numaId{};       // cpu对应的NumaId
+    uint64_t cpuTime{};     // 虚机的cpu耗时
+    bool isProportionally;  // 虚机是否按比例创建-虚机xml定义文件-预留字段未采集未使用
+    time_t vmCreateTime{};  // 虚机创建时间-libvirt采集
+    uint16_t cpuNums{};     // 虚机CPU核数-虚机xml定义文件
+    uint64_t maxMem{};      // 虚机申请内存-虚机xml定义文件，单位KBytes
+    uint64_t usedMem{};     // 虚机已使用内存-虚机xml定义文件，单位KBytes
+    pid_t pid{};            // 虚机进程PID-操作系统提供
+    uint64_t pageSize{};    // 虚机页大小-默认2mBytes大页，即2048KBytes
 
     std::string toString() const
     {

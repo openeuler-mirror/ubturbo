@@ -10,9 +10,9 @@
  * See the Mulan PSL v2 for more details.
  */
 #include "rmrs_memory_info.h"
-#include "turbo_logger.h"
 #include "rmrs_error.h"
 #include "rmrs_string_util.h"
+#include "turbo_logger.h"
 
 namespace rmrs {
 using namespace turbo::log;
@@ -341,4 +341,4 @@ std::string NodeMemoryInfoWithReservedMem::ToString()
     return ss.str();
 }
 
-} // namespace mempooling
+} // namespace rmrs

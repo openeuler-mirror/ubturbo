@@ -15,11 +15,11 @@
 #include <mutex>
 
 #include <map>
-#include "turbo_logger.h"
-#include "rmrs_libvirt_module.h"
 #include "rmrs_error.h"
+#include "rmrs_libvirt_module.h"
 #include "rmrs_resource_export.h"
 #include "rmrs_vm_info.h"
+#include "turbo_logger.h"
 
 namespace rmrs {
 using std::string;
@@ -52,6 +52,6 @@ private:
 
     VirConnectPtr virConnect{};
 };
-} // namespace mempooling
+} // namespace rmrs
 
 #endif // MP_LIBVIRT_HELPER_H

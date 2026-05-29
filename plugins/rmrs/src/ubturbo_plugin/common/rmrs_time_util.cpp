@@ -11,10 +11,10 @@
  */
 #include "rmrs_time_util.h"
 
-#include <ctime>
-#include <sstream>
-#include <iomanip>
 #include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 #include <rmrs_error.h>
 
@@ -59,4 +59,4 @@ time_t RmrsTimeUtil::GetOneHourAgoTimeT()
     auto hours = std::chrono::duration_cast<std::chrono::hours>(oneHourAgo.time_since_epoch());
     return hours.count();
 }
-} // rmrs
+} // namespace rmrs

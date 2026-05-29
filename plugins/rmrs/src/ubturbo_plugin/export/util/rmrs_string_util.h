@@ -13,10 +13,10 @@
 #define RMRS_STRING_UTIL_H
 
 #include <cmath>
+#include <cstring>
+#include <set>
 #include <string>
 #include <vector>
-#include <set>
-#include <cstring>
 
 #include "rmrs_error.h"
 
@@ -37,6 +37,6 @@ public:
 
     static void Replace(std::string &src, const std::string &regex, const std::string &replaced);
 };
-}
+} // namespace rmrs
 
 #endif // RMRS_STRING_UTIL_H

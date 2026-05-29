@@ -11,12 +11,12 @@
  */
 #include "rmrs_libvirt_module.h"
 
-#include <cerrno>
 #include <dlfcn.h>
+#include <cerrno>
 
-#include "turbo_logger.h"
-#include "rmrs_error.h"
 #include "rmrs_config.h"
+#include "rmrs_error.h"
+#include "turbo_logger.h"
 
 namespace rmrs::libvirt {
 using namespace turbo::log;
@@ -129,8 +129,7 @@ VirDomainGetUUIDStringFunc LibvirtModule::VirDomainGetUUIDString()
     virDomainGetUUIDStringFunc = (VirDomainGetUUIDStringFunc)(dlsym(libvirtHandle, "virDomainGetUUIDString"));
     if (virDomainGetUUIDStringFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[RmrsResourceExport] [LibvirtModule] Get virDomainGetUUIDString ptr failed. "
-            << strerror(errno) << ".";
+            << "[RmrsResourceExport] [LibvirtModule] Get virDomainGetUUIDString ptr failed. " << strerror(errno) << ".";
         return nullptr;
     }
     return virDomainGetUUIDStringFunc;
@@ -215,8 +214,8 @@ VirEventRegisterDefaultImplFunc LibvirtModule::VirEventRegisterDefaultImpl()
         (VirEventRegisterDefaultImplFunc)(dlsym(libvirtHandle, "virEventRegisterDefaultImpl"));
     if (virEventRegisterDefaultImplFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[RmrsResourceExport] [LibvirtModule] Get virEventRegisterDefaultImpl ptr failed. "
-            << strerror(errno) << ".";
+            << "[RmrsResourceExport] [LibvirtModule] Get virEventRegisterDefaultImpl ptr failed. " << strerror(errno)
+            << ".";
         return nullptr;
     }
     return virEventRegisterDefaultImplFunc;
@@ -227,8 +226,7 @@ VirEventRunDefaultImplFunc LibvirtModule::VirEventRunDefaultImpl()
     if (virEventRunDefaultImplFunc != nullptr) {
         return virEventRunDefaultImplFunc;
     }
-    virEventRunDefaultImplFunc =
-        (VirEventRunDefaultImplFunc)(dlsym(libvirtHandle, "virEventRunDefaultImpl"));
+    virEventRunDefaultImplFunc = (VirEventRunDefaultImplFunc)(dlsym(libvirtHandle, "virEventRunDefaultImpl"));
     if (virEventRunDefaultImplFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get virEventRunDefaultImpl ptr failed. " << strerror(errno) << ".";
@@ -246,8 +244,8 @@ VirConnectDomainEventRegisterFunc LibvirtModule::VirConnectDomainEventRegister()
         (VirConnectDomainEventRegisterFunc)(dlsym(libvirtHandle, "virConnectDomainEventRegister"));
     if (virConnectDomainEventRegisterFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[RmrsResourceExport] [LibvirtModule] Get virConnectDomainEventRegister ptr failed. "
-            << strerror(errno) << ".";
+            << "[RmrsResourceExport] [LibvirtModule] Get virConnectDomainEventRegister ptr failed. " << strerror(errno)
+            << ".";
         return nullptr;
     }
     return virConnectDomainEventRegisterFunc;

@@ -34,7 +34,7 @@ using namespace rmrs;
 using namespace turbo::log;
 constexpr uint64_t PAGE_64K_BYTES = 64 * 1024;
 constexpr uint16_t SIXTY_FOUR_KB = 64; // 64k标准页
-constexpr uint16_t FOUR_KB = 4; // 4k标准页
+constexpr uint16_t FOUR_KB = 4;        // 4k标准页
 std::string ResourceExport::hostName{};
 std::string ResourceExport::nodeId{};
 std::unordered_map<uint16_t, uint16_t> ResourceExport::cpuSocketMap{};
@@ -331,7 +331,6 @@ bool ResourceExport::HandleMemInfoFile(const int numaid, const std::filesystem::
     return true;
 }
 
-
 // 获取系统中存在的NUMA本地节点编号
 std::set<uint16_t> ResourceExport::GetLocalNodeIds()
 {
@@ -481,9 +480,9 @@ bool ResourceExport::HandlePidNumaInfoFile(std::istringstream &iss, const pid_t 
             }
 
             for (std::sregex_iterator it(l.begin(), l.end(), nodePattern); it != std::sregex_iterator(); ++it) {
-                    uint16_t nodeIdHandle = static_cast<uint16_t>(std::stoi((*it)[1]));
-                    uint64_t pages = std::stoull((*it)[2]);
-                    nodePages[nodeIdHandle] += pages;
+                uint16_t nodeIdHandle = static_cast<uint16_t>(std::stoi((*it)[1]));
+                uint64_t pages = std::stoull((*it)[2]);
+                nodePages[nodeIdHandle] += pages;
             }
         }
     } catch (const std::exception &e) {
@@ -573,7 +572,7 @@ std::vector<int> ParseCpuList(const std::string &cpuList)
     }
     std::string cpusStr = cpusStream.str();
     UBTURBO_LOG_INFO(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[ContainerPidNumaInfo] ParseCpuList success, CpuList = "
-                                                       << "[" << cpusStr << "]";
+                                                         << "[" << cpusStr << "]";
     return cpus;
 }
 

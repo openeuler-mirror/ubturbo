@@ -15,19 +15,19 @@
 #include <sys/types.h>
 #include <cmath>
 #include <cstdint>
-#include <string>
-#include <vector>
 #include <map>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "rmrs_error.h"
-#include "rmrs_vm_info.h"
-#include "rmrs_numa_info.h"
-#include "turbo_def.h"
-#include "rmrs_serializer.h"
 #include "rmrs_json_helper.h"
+#include "rmrs_numa_info.h"
+#include "rmrs_serializer.h"
 #include "rmrs_smap_module.h"
+#include "rmrs_vm_info.h"
+#include "turbo_def.h"
 
 namespace rmrs::migrate {
 
@@ -65,8 +65,8 @@ struct NumaHugePageInfo {
 };
 
 struct NumaMemStatus {
-    std::vector<uint16_t> remoteNumaIdList;                    // 远端 NUMA 节点列表
-    std::map<uint16_t, NumaHugePageInfo> numaInfoMap;          // NUMA 节点对应的内存信息
+    std::vector<uint16_t> remoteNumaIdList;           // 远端 NUMA 节点列表
+    std::map<uint16_t, NumaHugePageInfo> numaInfoMap; // NUMA 节点对应的内存信息
 };
 
 struct VmMigrationContext {
@@ -78,24 +78,24 @@ struct VmMigrationContext {
 };
 
 struct MemSizeStats {
-    double targetMemSize;  // 目标内存大小
-    double memSizeSum;     // 当前累计的内存大小
+    double targetMemSize; // 目标内存大小
+    double memSizeSum;    // 当前累计的内存大小
 };
 
 struct SecondaryMigrateParam {
-    uint64_t memMigrateAbleTmp;   // 本次可迁出的内存
-    double remainingMigrateMem;   // 还需迁出的内存（double 表示更精确）
-    uint16_t remoteID;            // 远端 NUMA 节点 ID
-    uint64_t remoteMemMigrated;   // 当前远端已经迁出的内存
-    pid_t pid;                    // 虚拟机 PID
-    uint64_t remoteFreeMem;       // 远端NUMA内存空闲
+    uint64_t memMigrateAbleTmp; // 本次可迁出的内存
+    double remainingMigrateMem; // 还需迁出的内存（double 表示更精确）
+    uint16_t remoteID;          // 远端 NUMA 节点 ID
+    uint64_t remoteMemMigrated; // 当前远端已经迁出的内存
+    pid_t pid;                  // 虚拟机 PID
+    uint64_t remoteFreeMem;     // 远端NUMA内存空闲
 };
 
 struct NumaQueryInfo {
-    std::vector<rmrs::NumaInfo> numaInfos;                         // 当前节点 NUMA 信息
-    std::vector<uint16_t> remoteNumaIdList;                        // 远端 NUMA 节点 ID 列表
-    std::map<uint16_t, NumaHugePageInfo> numaInfoMap;             // 远端 NUMA 节点 ID -> 对应大页信息
-    std::vector<NumaHugePageInfo> numaHugePageInfoSumList;        // 所有远端节点大页统计信息
+    std::vector<rmrs::NumaInfo> numaInfos;                 // 当前节点 NUMA 信息
+    std::vector<uint16_t> remoteNumaIdList;                // 远端 NUMA 节点 ID 列表
+    std::map<uint16_t, NumaHugePageInfo> numaInfoMap;      // 远端 NUMA 节点 ID -> 对应大页信息
+    std::vector<NumaHugePageInfo> numaHugePageInfoSumList; // 所有远端节点大页统计信息
 };
 
 struct VMQueryInfo {
@@ -106,13 +106,13 @@ struct VMQueryInfo {
 };
 
 struct SmapVmHotnessQueryParam {
-    std::vector<pid_t> migrateVMPids;                                 // 虚拟机纳入 SMAP 管理的 PID 列表
-    std::map<pid_t, std::vector<uint16_t>> vmFreqMap;                 // 每个 VM 的冷热频次数组
-    std::map<pid_t, uint16_t> vmFreqPidRatioMap;                      // 每个 VM 的迁出比例
-    std::vector<pid_t> localNumaPidMap;                               // 属于本地 NUMA 的 VM PID 列表
-    std::map<uint16_t, std::vector<pid_t>> remoteNumaPidMap;          // 每个远端 NUMA 节点对应的 VM PID 列表
-    uint16_t remoteNumaId = 0;                                        // 当前迁出目标的远端 NUMA 节点 ID
-    std::vector<pid_t> vmHotnessPriorityVec;                          // 冷热优先级排列的 VM PID 列表（冷的在前）
+    std::vector<pid_t> migrateVMPids;                        // 虚拟机纳入 SMAP 管理的 PID 列表
+    std::map<pid_t, std::vector<uint16_t>> vmFreqMap;        // 每个 VM 的冷热频次数组
+    std::map<pid_t, uint16_t> vmFreqPidRatioMap;             // 每个 VM 的迁出比例
+    std::vector<pid_t> localNumaPidMap;                      // 属于本地 NUMA 的 VM PID 列表
+    std::map<uint16_t, std::vector<pid_t>> remoteNumaPidMap; // 每个远端 NUMA 节点对应的 VM PID 列表
+    uint16_t remoteNumaId = 0;                               // 当前迁出目标的远端 NUMA 节点 ID
+    std::vector<pid_t> vmHotnessPriorityVec;                 // 冷热优先级排列的 VM PID 列表（冷的在前）
 };
 
 struct VmInfo {
@@ -149,37 +149,37 @@ public:
     NoexceptString() noexcept = default;
     explicit NoexceptString(const std::string &str) noexcept : data_(str) {}
     explicit NoexceptString(const char *str) noexcept : data_(str) {}
- 
+
     // 允许从 std::string 赋值
     NoexceptString &operator=(const std::string &str) noexcept
     {
         data_ = str;
         return *this;
     }
- 
+
     // 允许从 const char* 赋值
     NoexceptString &operator=(const char *str) noexcept
     {
         data_ = str;
         return *this;
     }
- 
+
     // 转换为 const std::string&，不会抛异常
     operator const std::string &() const noexcept
     {
         return data_;
     }
- 
+
     void Clear() noexcept
     {
         data_.clear();
     }
- 
+
     const std::string &Str() const noexcept
     {
         return data_;
     }
- 
+
 private:
     std::string data_;
 };
@@ -203,10 +203,10 @@ public:
                                          const uint64_t &memMigrateTotalSize);
 
     static RmrsResult DoMigrateExecute(const std::vector<rmrs::serialization::VMMigrateOutParam> &vmMigrateOutParam,
-        uint64_t waitingTime);
- 
+                                       uint64_t waitingTime);
+
     static void RollbackVmMigrate(const std::vector<rmrs::serialization::VMMigrateMultiOutParam> &executedParamList,
-        std::unordered_map<pid_t, uint64_t> vmOriginSizeMap);
+                                  std::unordered_map<pid_t, uint64_t> vmOriginSizeMap);
 
     static RmrsResult GetNumaData(std::vector<rmrs::NumaInfo> &numaInfos, std::vector<uint16_t> &remoteNumaIdList,
                                   std::map<uint16_t, NumaHugePageInfo> &numaInfoMap,
@@ -245,7 +245,7 @@ public:
                                      std::vector<rmrs::serialization::VMMigrateOutParam> &vmMigrateOutParam);
 
     static RmrsResult FillVmOriginSize(std::vector<rmrs::serialization::VMMigrateOutParam> vmMigrateOutParamList,
-        std::unordered_map<pid_t, uint64_t> &vmOriginSizeMap);
+                                       std::unordered_map<pid_t, uint64_t> &vmOriginSizeMap);
 
     static RmrsResult SetBorrowPlaneParam(const std::map<pid_t, std::vector<uint16_t>> &pidRemoteNumaMap,
                                           const std::vector<uint16_t> timeOutNumas);
@@ -281,7 +281,7 @@ public:
     static const uint32_t smapMigrateUnitMem;           // 32G
     static const uint64_t byte2KB;                      // bite转为KB 1024单位转换
 private:
-    static std::vector<uint16_t> s_timeOutNumas; // 超时归还numa信息
+    static std::vector<uint16_t> s_timeOutNumas;                      // 超时归还numa信息
     static std::map<pid_t, std::vector<uint16_t>> s_pidRemoteNumaMap; // pid对应的远端numa信息Map
 };
 } // namespace rmrs::migrate
