@@ -39,7 +39,8 @@ private:
     void PThreadHandle(int fd);
     RetCode HandleFunction(const std::string &functionName, const TurboByteBuffer &messageBuffer, int fd);
     std::unordered_map<std::string, IpcHandlerFunc> funcTable;
-    struct sockaddr_un addr {};
+    struct sockaddr_un addr {
+    };
     int listenFd{};
     bool running{false};
     std::thread *pThread{nullptr};

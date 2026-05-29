@@ -46,14 +46,14 @@ TEST_F(TurboStrategyExecutorTest, ExecuteMigrationStrategyTest)
             },
     };
 
-    MOCKER_CPP(&MigrationExecutor::ExecuteNewMigrationStrategy, uint32_t (*)(MigrationStrategy *))
+    MOCKER_CPP(&MigrationExecutor::ExecuteNewMigrationStrategy, uint32_t(*)(MigrationStrategy *))
         .stubs()
         .will(returnValue(UCACHE_ERR));
     uint32_t ret = executor.ExecuteMigrationStrategy(strategy);
     EXPECT_EQ(ret, UCACHE_ERR);
     GlobalMockObject::verify();
 
-    MOCKER_CPP(&MigrationExecutor::ExecuteNewMigrationStrategy, uint32_t (*)(MigrationStrategy *))
+    MOCKER_CPP(&MigrationExecutor::ExecuteNewMigrationStrategy, uint32_t(*)(MigrationStrategy *))
         .stubs()
         .will(returnValue(UCACHE_OK));
     ret = executor.ExecuteMigrationStrategy(strategy);

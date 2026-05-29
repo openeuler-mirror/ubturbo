@@ -63,7 +63,7 @@ TEST_F(MigrationExecutorTest, ExecuteNewMigrationStrategy_RecordPids_ERR_TEST)
     MigrationStrategy newStrategy;
 
     MOCKER_CPP(&MigrationExecutor::IsLowWatermarkExceeded, bool (*)(void *)).stubs().will(returnValue(false));
-    MOCKER_CPP(&MigrationExecutor::RecordPids, uint32_t (*)(void *)).stubs().will(returnValue(UCACHE_ERR));
+    MOCKER_CPP(&MigrationExecutor::RecordPids, uint32_t(*)(void *)).stubs().will(returnValue(UCACHE_ERR));
     uint32_t ret = obj.MigrationExecutor::ExecuteNewMigrationStrategy(newStrategy);
 
     EXPECT_EQ(ret, UCACHE_OK);
@@ -77,7 +77,7 @@ TEST_F(MigrationExecutorTest, ExecuteNewMigrationStrategy_OK_TEST)
     obj.pidsToMigrate_.push_back(1);
 
     MOCKER_CPP(&MigrationExecutor::IsLowWatermarkExceeded, bool (*)(void *)).stubs().will(returnValue(false));
-    MOCKER_CPP(&MigrationExecutor::RecordPids, uint32_t (*)(void *)).stubs().will(returnValue(UCACHE_OK));
+    MOCKER_CPP(&MigrationExecutor::RecordPids, uint32_t(*)(void *)).stubs().will(returnValue(UCACHE_OK));
     uint32_t ret = obj.ExecuteNewMigrationStrategy(newStrategy);
 
     EXPECT_EQ(ret, UCACHE_OK);
@@ -88,7 +88,7 @@ TEST_F(MigrationExecutorTest, ExecuteNewMigrationStrategyAddtion)
     MigrationExecutor obj;
     obj.alreadyStarting_.store(false);
     MigrationStrategy newStrategy;
-    MOCKER_CPP(&MigrationExecutor::RecordPids, uint32_t (*)(void *)).stubs().will(returnValue(UCACHE_ERR));
+    MOCKER_CPP(&MigrationExecutor::RecordPids, uint32_t(*)(void *)).stubs().will(returnValue(UCACHE_ERR));
     uint32_t ret = obj.ExecuteNewMigrationStrategy(newStrategy);
 
     EXPECT_EQ(ret, UCACHE_OK);
@@ -161,7 +161,7 @@ TEST_F(MigrationExecutorTest, PerformMigration)
     MigrationStrategy strategy;
     strategy.srcNids = {1, 2, 3, 4, 5};
 
-    MOCKER_CPP(&DriverInteraction::MigrateFoliosInfo, uint32_t (*)(void *)).stubs().will(returnValue(UCACHE_ERR));
+    MOCKER_CPP(&DriverInteraction::MigrateFoliosInfo, uint32_t(*)(void *)).stubs().will(returnValue(UCACHE_ERR));
 
     obj.PerformMigration(strategy);
 }
@@ -266,7 +266,7 @@ TEST_F(MigrationExecutorTest, RecordPids)
         .dockerIds = {"0"},
         .srcNids = {},
     };
-    MOCKER_CPP(&MigrationExecutor::GetDockerPid, pid_t (*)(void *)).stubs().will(returnValue(-1)).then(returnValue(1));
+    MOCKER_CPP(&MigrationExecutor::GetDockerPid, pid_t(*)(void *)).stubs().will(returnValue(-1)).then(returnValue(1));
     uint32_t ret = obj.MigrationExecutor::RecordPids(newStrategy);
     EXPECT_EQ(ret, UCACHE_ERR);
     ret = obj.MigrationExecutor::RecordPids(newStrategy);

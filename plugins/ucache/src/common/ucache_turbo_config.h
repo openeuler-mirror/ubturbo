@@ -53,8 +53,8 @@ private:
     {
         uint32_t ret = func(section, key, value);
         if (ret != UCACHE_OK) {
-            UBTURBO_LOG_ERROR(UCACHE_MODULE_NAME, UCACHE_MODULE_CODE) <<
-                "get config value failed, section: " << section << ", key: " << key << ", ret: " << ret;
+            UBTURBO_LOG_ERROR(UCACHE_MODULE_NAME, UCACHE_MODULE_CODE)
+                << "get config value failed, section: " << section << ", key: " << key << ", ret: " << ret;
             return ret;
         }
         return UCACHE_OK;

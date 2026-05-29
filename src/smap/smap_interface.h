@@ -42,10 +42,15 @@ extern "C" {
 #define REMOTE_NUMA_BITS 18
 #define MAX_4K_PROCESSES_CNT 300
 
+typedef enum
+{
+    INPUT_PROCESS = 0,
+    INPUT_VM,
+    INPUT_MAX
+} InputPidType;
 
-typedef enum { INPUT_PROCESS = 0, INPUT_VM, INPUT_MAX } InputPidType;
-
-typedef enum {
+typedef enum
+{
     MIG_RATIO_MODE = 0,
     MIG_MEMSIZE_MODE
 } MigrateMode;
@@ -53,7 +58,7 @@ typedef enum {
 struct MigrateOutPayloadInner {
     int destNid;
     int ratio;
-    uint64_t memSize; // 内存迁移大小(KB)
+    uint64_t memSize;        // 内存迁移大小(KB)
     MigrateMode migrateMode; // 内存迁移模式，按照比例或是大小
 };
 

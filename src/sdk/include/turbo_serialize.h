@@ -200,15 +200,17 @@ RmrsOutStream &RmrsOutStream::operator<<(const T &data)
     } else {
         constexpr auto n = CountMember<T>::value;
         auto members = MemberTupleHelper<T, n>::GetTuple(data);
-        [&]<std::size_t... index>(std::index_sequence<index...>) {
+        [&]<std::size_t... index>(std::index_sequence<index...>)
+        {
             ((*this << std::get<index>(members)), ...);
-        }(std::make_index_sequence<n>{});
+        }
+        (std::make_index_sequence<n>{});
     }
     return *this;
 }
 
 template <>
-inline RmrsOutStream &RmrsOutStream::operator<< <std::string>(const std::string &data)
+inline RmrsOutStream &RmrsOutStream::operator<<<std::string>(const std::string &data)
 {
     size_t len = data.size();
     this->Write(reinterpret_cast<const char *>(&len), sizeof(len));
@@ -286,15 +288,17 @@ RmrsInStream &RmrsInStream::operator>>(T &data)
     } else {
         constexpr auto n = CountMember<T>::value;
         auto members = MemberTupleHelper<T, n>::GetTuple(data);
-        [&]<std::size_t... index>(std::index_sequence<index...>) {
+        [&]<std::size_t... index>(std::index_sequence<index...>)
+        {
             ((*this >> std::get<index>(members)), ...);
-        }(std::make_index_sequence<n>{});
+        }
+        (std::make_index_sequence<n>{});
     }
     return *this;
 }
 
 template <>
-inline RmrsInStream &RmrsInStream::operator>> <std::string>(std::string &data)
+inline RmrsInStream &RmrsInStream::operator>><std::string>(std::string &data)
 {
     size_t len = 0;
     this->Read(reinterpret_cast<char *>(&len), sizeof(len));

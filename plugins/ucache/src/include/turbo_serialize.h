@@ -228,7 +228,7 @@ UCacheOutStream &UCacheOutStream::operator<<(const T &data)
 }
 
 template <>
-inline UCacheOutStream &UCacheOutStream::operator<< <std::string>(const std::string &data)
+inline UCacheOutStream &UCacheOutStream::operator<<<std::string>(const std::string &data)
 {
     size_t len = data.size();
     this->Write(reinterpret_cast<const char *>(&len), sizeof(len));

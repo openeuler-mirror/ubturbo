@@ -1,19 +1,19 @@
 /*
  * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  */
+#include <dlfcn.h>
 #include <gtest/gtest.h>
 #include <mockcpp/mockcpp.h>
 #include <mockcpp/mokc.h>
-#include <cerrno>
 #include <unistd.h>
-#include <dlfcn.h>
-#include "turbo_ipc_server.h"
-#include "turbo_error.h"
-#include "smap_interface.h"
+#include <cerrno>
+#include <fstream>
 #include "smap_handler_msg.h"
+#include "smap_interface.h"
+#include "turbo_error.h"
+#include "turbo_ipc_server.h"
 #include "turbo_module_smap.h"
 #include "ulog.h"
-#include <fstream>
 
 constexpr int NUM_MINUS_2 = -2;
 constexpr int NUM_2 = 2;
@@ -39,7 +39,7 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutHandlerTest)
 {
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
-    MigrateOutMsg msg = { 0 };
+    MigrateOutMsg msg = {0};
     msg.count = 1;
     msg.payload[0].count = 1;
     msg.payload[0].inner[0].destNid = 4;
@@ -62,7 +62,7 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutHandlerEncodeResponseFailed)
     int ret;
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
-    MigrateOutMsg msg = { 0 };
+    MigrateOutMsg msg = {0};
     msg.count = 1;
     msg.payload[0].count = 1;
     msg.payload[0].inner[0].destNid = 4;
@@ -70,14 +70,13 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutHandlerEncodeResponseFailed)
     msg.payload[0].inner[0].ratio = 25;
     int pidType = 1;
 
-    MOCKER_CPP(&SmapMigrateOutCodec::DecodeRequest, int(*)(const TurboByteBuffer &buffer,
-        MigrateOutMsg &msg, int &pidType))
+    MOCKER_CPP(&SmapMigrateOutCodec::DecodeRequest,
+               int (*)(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pidType))
         .stubs()
         .will(returnValue(0))
         .then(returnValue(1));
 
-    MOCKER_CPP(&SmapMigrateOutCodec::EncodeResponse, int(*)(TurboByteBuffer &buffer,
-        int returnValue))
+    MOCKER_CPP(&SmapMigrateOutCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(1));
 
@@ -92,7 +91,7 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutGroupedHandlerTest)
 {
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
-    GroupedMigrateOutMsg msg = { 0 };
+    GroupedMigrateOutMsg msg = {0};
     msg.count = 1;
     msg.payload[0].pid = 1;
     msg.payload[0].groupCount = 1;
@@ -121,14 +120,13 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutGroupedHandlerEncodeResponseFailed)
     TurboByteBuffer outputBuffer;
 
     StubSmapPtr();
-    MOCKER_CPP(&SmapMigrateOutGroupedCodec::DecodeRequest, int(*)(const TurboByteBuffer &buffer,
-        GroupedMigrateOutMsg &msg, int &pidType))
+    MOCKER_CPP(&SmapMigrateOutGroupedCodec::DecodeRequest,
+               int (*)(const TurboByteBuffer &buffer, GroupedMigrateOutMsg &msg, int &pidType))
         .stubs()
         .will(returnValue(0))
         .then(returnValue(1));
 
-    MOCKER_CPP(&SmapMigrateOutGroupedCodec::EncodeResponse, int(*)(TurboByteBuffer &buffer,
-        int returnValue))
+    MOCKER_CPP(&SmapMigrateOutGroupedCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(1));
 
@@ -143,7 +141,7 @@ TEST_F(TestTurboModuleSmap, SmapMigrateBackHandlerTest)
 {
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
-    MigrateBackMsg msg = { 0 } ;
+    MigrateBackMsg msg = {0};
     msg.count = 1;
     msg.payload[0].srcNid = 4;
     msg.payload[0].destNid = 0;
@@ -163,19 +161,17 @@ TEST_F(TestTurboModuleSmap, SmapMigrateBackHandlerEncodeResponseFailed)
     int ret;
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
-    MigrateBackMsg msg = { 0 } ;
+    MigrateBackMsg msg = {0};
     msg.count = 1;
     msg.payload[0].srcNid = 4;
     msg.payload[0].destNid = 0;
 
-    MOCKER_CPP(&SmapMigrateBackCodec::DecodeRequest, int(*)(const TurboByteBuffer &buffer,
-        MigrateBackMsg &msg))
+    MOCKER_CPP(&SmapMigrateBackCodec::DecodeRequest, int (*)(const TurboByteBuffer &buffer, MigrateBackMsg &msg))
         .stubs()
         .will(returnValue(0))
         .then(returnValue(1));
 
-    MOCKER_CPP(&SmapMigrateBackCodec::EncodeResponse, int(*)(TurboByteBuffer &buffer,
-        int returnValue))
+    MOCKER_CPP(&SmapMigrateBackCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(1));
 
@@ -190,7 +186,7 @@ TEST_F(TestTurboModuleSmap, SmapRemoveHandlerTest)
 {
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
-    RemoveMsg msg = { 0 };
+    RemoveMsg msg = {0};
     msg.count = 1;
     int pidType = 1;
 
@@ -209,18 +205,16 @@ TEST_F(TestTurboModuleSmap, SmapRemoveHandEncodeResponseFailed)
     int ret;
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
-    RemoveMsg msg = { 0 };
+    RemoveMsg msg = {0};
     msg.count = 1;
     int pidType = 1;
 
-    MOCKER_CPP(&SmapRemoveCodec::DecodeRequest, int(*)(const TurboByteBuffer &buffer,
-        RemoveMsg &msg, int &pidType))
+    MOCKER_CPP(&SmapRemoveCodec::DecodeRequest, int (*)(const TurboByteBuffer &buffer, RemoveMsg &msg, int &pidType))
         .stubs()
         .will(returnValue(0))
         .then(returnValue(1));
 
-    MOCKER_CPP(&SmapRemoveCodec::EncodeResponse, int(*)(TurboByteBuffer &buffer,
-        int returnValue))
+    MOCKER_CPP(&SmapRemoveCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(1));
 
@@ -258,14 +252,12 @@ TEST_F(TestTurboModuleSmap, SmapEnableNodeHandlerEncodeResponseFailed)
     msg.nid = 4;
     msg.enable = 1;
 
-    MOCKER_CPP(&SmapEnableNodeCodec::DecodeRequest, int(*)(const TurboByteBuffer &buffer,
-        EnableNodeMsg &msg))
+    MOCKER_CPP(&SmapEnableNodeCodec::DecodeRequest, int (*)(const TurboByteBuffer &buffer, EnableNodeMsg &msg))
         .stubs()
         .will(returnValue(0))
         .then(returnValue(1));
 
-    MOCKER_CPP(&SmapEnableNodeCodec::EncodeResponse, int(*)(TurboByteBuffer &buffer,
-        int returnValue))
+    MOCKER_CPP(&SmapEnableNodeCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(1));
 
@@ -280,13 +272,13 @@ namespace turbo {
 namespace smap {
 void SmapToTurboLog(int level, const char *str, const char *moduleName);
 void SmapHandlerMsgToTurboLog(int level, const char *str, const char *moduleName);
-}
-}
+} // namespace smap
+} // namespace turbo
 
 TEST_F(TestTurboModuleSmap, SmapToTurboLogTest)
 {
-    const char* moduleName = "TestModule";
-    const char* logMessage = "Test log message";
+    const char *moduleName = "TestModule";
+    const char *logMessage = "Test log message";
 
     int level = static_cast<int>(LoggerLevel::LOGGER_INFO_LEVEL);
     SmapToTurboLog(level, logMessage, moduleName);
@@ -303,8 +295,8 @@ TEST_F(TestTurboModuleSmap, SmapToTurboLogTest)
 
 TEST_F(TestTurboModuleSmap, SmapHandlerMsgToTurboLogTest)
 {
-    const char* moduleName = "TestModule";
-    const char* logMessage = "Test log message";
+    const char *moduleName = "TestModule";
+    const char *logMessage = "Test log message";
 
     int level = static_cast<int>(LoggerLevel::LOGGER_INFO_LEVEL);
     SmapHandlerMsgToTurboLog(level, logMessage, moduleName);
@@ -342,14 +334,12 @@ TEST_F(TestTurboModuleSmap, SmapInitHandlerEncodeResponseFailed)
     TurboByteBuffer outputBuffer;
     uint32_t pageType = 1;
 
-    MOCKER_CPP(&SmapInitCodec::DecodeRequest, int(*)(const TurboByteBuffer &buffer,
-        uint32_t &pageType))
+    MOCKER_CPP(&SmapInitCodec::DecodeRequest, int (*)(const TurboByteBuffer &buffer, uint32_t &pageType))
         .stubs()
         .will(returnValue(0))
         .then(returnValue(1));
 
-    MOCKER_CPP(&SmapInitCodec::EncodeResponse, int(*)(TurboByteBuffer &buffer,
-        int returnValue))
+    MOCKER_CPP(&SmapInitCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(1));
 
@@ -380,8 +370,7 @@ TEST_F(TestTurboModuleSmap, SmapStopHandlerEncodeResponseFailed)
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
 
-    MOCKER_CPP(&SmapStopCodec::EncodeResponse, int(*)(TurboByteBuffer &buffer,
-        int returnValue))
+    MOCKER_CPP(&SmapStopCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(1));
 
@@ -411,8 +400,7 @@ TEST_F(TestTurboModuleSmap, SmapUrgentMigrateOutHandlerDecodeResponseFailed)
     TurboByteBuffer outputBuffer;
     uint64_t size = 1024;
 
-    MOCKER_CPP(&SmapUrgentMigrateOutCodec::DecodeRequest, int(*)(const TurboByteBuffer &buffer,
-        uint64_t &size))
+    MOCKER_CPP(&SmapUrgentMigrateOutCodec::DecodeRequest, int (*)(const TurboByteBuffer &buffer, uint64_t &size))
         .stubs()
         .will(returnValue(1));
 
@@ -427,12 +415,11 @@ TEST_F(TestTurboModuleSmap, SmapUrgentMigrateOutHandlerEncodeResponseFailed)
     TurboByteBuffer outputBuffer;
     uint64_t size = 1024;
 
-    MOCKER_CPP(&SmapUrgentMigrateOutCodec::DecodeRequest, int(*)(const TurboByteBuffer &buffer,
-        uint64_t &size))
+    MOCKER_CPP(&SmapUrgentMigrateOutCodec::DecodeRequest, int (*)(const TurboByteBuffer &buffer, uint64_t &size))
         .stubs()
         .will(returnValue(0));
 
-    MOCKER_CPP(&SmapUrgentMigrateOutCodec::EncodeResponse, int(*)(TurboByteBuffer &buffer))
+    MOCKER_CPP(&SmapUrgentMigrateOutCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer))
         .stubs()
         .will(returnValue(1));
 
@@ -475,7 +462,7 @@ TEST_F(TestTurboModuleSmap, SmapAddProcessTrackingHandlerFailed)
     RetCode result = SmapAddProcessTrackingHandler(inputBuffer, outputBuffer);
     EXPECT_EQ(result, TURBO_ERROR);
 
-    MOCKER_CPP(&SmapAddProcessTrackingCodec::EncodeResponse, int (*)(TurboByteBuffer &buffer, int returnValue))
+    MOCKER_CPP(&SmapAddProcessTrackingCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
     result = SmapAddProcessTrackingHandler(inputBuffer, outputBuffer);
@@ -514,7 +501,7 @@ TEST_F(TestTurboModuleSmap, SmapRemoveProcessTrackingHandlerFailed)
     RetCode result = SmapRemoveProcessTrackingHandler(inputBuffer, outputBuffer);
     EXPECT_EQ(result, TURBO_ERROR);
 
-    MOCKER_CPP(&SmapRemoveProcessTrackingCodec::EncodeResponse, int (*)(TurboByteBuffer &buffer, int returnValue))
+    MOCKER_CPP(&SmapRemoveProcessTrackingCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
     result = SmapRemoveProcessTrackingHandler(inputBuffer, outputBuffer);
@@ -554,7 +541,7 @@ TEST_F(TestTurboModuleSmap, SmapEnableProcessMigrateHandlerFailed)
     RetCode result = SmapEnableProcessMigrateHandler(inputBuffer, outputBuffer);
     EXPECT_EQ(result, TURBO_ERROR);
 
-    MOCKER_CPP(&SmapEnableProcessMigrateCodec::EncodeResponse, int (*)(TurboByteBuffer &buffer, int returnValue))
+    MOCKER_CPP(&SmapEnableProcessMigrateCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
     result = SmapEnableProcessMigrateHandler(inputBuffer, outputBuffer);
@@ -565,7 +552,7 @@ TEST_F(TestTurboModuleSmap, SetSmapRemoteNumaInfoHandlerTest)
 {
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
-    SetRemoteNumaInfoMsg msg = { 0 };
+    SetRemoteNumaInfoMsg msg = {0};
     msg.srcNid = 0;
     msg.destNid = 4;
     msg.size = 100;
@@ -594,7 +581,7 @@ TEST_F(TestTurboModuleSmap, SetSmapRemoteNumaInfoHandlerFailed)
     RetCode result = SetSmapRemoteNumaInfoHandler(inputBuffer, outputBuffer);
     EXPECT_EQ(result, TURBO_ERROR);
 
-    MOCKER_CPP(&SetSmapRemoteNumaInfoCodec::EncodeResponse, int (*)(TurboByteBuffer &buffer, int returnValue))
+    MOCKER_CPP(&SetSmapRemoteNumaInfoCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
     result = SetSmapRemoteNumaInfoHandler(inputBuffer, outputBuffer);
@@ -630,7 +617,7 @@ TEST_F(TestTurboModuleSmap, SmapQueryFreqHandlerFailed)
     EXPECT_EQ(result, TURBO_ERROR);
 
     MOCKER_CPP(&SmapQueryVmFreqCodec::EncodeResponse,
-               int (*)(TurboByteBuffer &buffer, uint16_t * data, uint16_t lengthOut, int returnValue))
+               int (*)(TurboByteBuffer & buffer, uint16_t * data, uint16_t lengthOut, int returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
     result = SmapQueryFreqHandler(inputBuffer, outputBuffer);
@@ -666,7 +653,7 @@ TEST_F(TestTurboModuleSmap, SetSmapRunModeHandlerFailed)
     RetCode result = SetSmapRunModeHandler(inputBuffer, outputBuffer);
     EXPECT_EQ(result, TURBO_ERROR);
 
-    MOCKER_CPP(&SetSmapRunModeCodec::EncodeResponse, int (*)(TurboByteBuffer &buffer, int returnValue))
+    MOCKER_CPP(&SetSmapRunModeCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
     result = SetSmapRunModeHandler(inputBuffer, outputBuffer);
@@ -692,7 +679,7 @@ TEST_F(TestTurboModuleSmap, SmapIsRunningHandlerFailed)
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
     StubSmapPtr();
-    MOCKER_CPP(&SmapIsRunningCodec::EncodeResponse, int (*)(TurboByteBuffer &buffer, bool returnValue))
+    MOCKER_CPP(&SmapIsRunningCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, bool returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
     RetCode result = SmapIsRunningHandler(inputBuffer, outputBuffer);
@@ -703,7 +690,7 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutSyncHandlerTest)
 {
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
-    MigrateOutMsg msg = { 0 };
+    MigrateOutMsg msg = {0};
     msg.count = 1;
     msg.payload[0].count = 1;
     msg.payload[0].inner[0].destNid = 4;
@@ -736,7 +723,7 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutSyncHandlerFailed)
     RetCode result = SmapMigrateOutSyncHandler(inputBuffer, outputBuffer);
     EXPECT_EQ(result, TURBO_ERROR);
 
-    MOCKER_CPP(&SmapMigrateOutSyncCodec::EncodeResponse, int (*)(TurboByteBuffer &buffer, int returnValue))
+    MOCKER_CPP(&SmapMigrateOutSyncCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
     result = SmapMigrateOutSyncHandler(inputBuffer, outputBuffer);
@@ -747,7 +734,7 @@ TEST_F(TestTurboModuleSmap, SmapMigrateRemoteNumaHandlerTest)
 {
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
-    MigrateNumaMsg msg = { 0 };
+    MigrateNumaMsg msg = {0};
     msg.count = 1;
     msg.srcNid = 4;
     msg.destNid = 5;
@@ -775,7 +762,7 @@ TEST_F(TestTurboModuleSmap, SmapMigrateRemoteNumaHandlerFailed)
     RetCode result = SmapMigrateRemoteNumaHandler(inputBuffer, outputBuffer);
     EXPECT_EQ(result, TURBO_ERROR);
 
-    MOCKER_CPP(&SmapMigrateRemoteNumaCodec::EncodeResponse, int (*)(TurboByteBuffer &buffer, int returnValue))
+    MOCKER_CPP(&SmapMigrateRemoteNumaCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
     result = SmapMigrateRemoteNumaHandler(inputBuffer, outputBuffer);
@@ -819,7 +806,7 @@ TEST_F(TestTurboModuleSmap, SmapMigratePidRemoteNumaHandlerFailed)
     StubSmapPtr();
     SmapMigratePidRemoteNumaCodec codec;
     codec.EncodeRequest(inputBuffer, &msg);
-    MOCKER_CPP(&SmapMigratePidRemoteNumaCodec::EncodeResponse, int (*)(TurboByteBuffer &buffer, int returnValue))
+    MOCKER_CPP(&SmapMigratePidRemoteNumaCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
     RetCode result = SmapMigratePidRemoteNumaHandler(inputBuffer, outputBuffer);
@@ -838,7 +825,7 @@ TEST_F(TestTurboModuleSmap, SmapQueryProcessConfigHandlerTest)
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
     int nid = 1;
-    struct ProcessPayload payload = { 0 };
+    struct ProcessPayload payload = {0};
     int inLen = 1;
     int outLen;
 
@@ -858,7 +845,7 @@ TEST_F(TestTurboModuleSmap, SmapQueryProcessConfigHandlerLenLessZero)
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
     int nid = 1;
-    struct ProcessPayload payload = { 0 };
+    struct ProcessPayload payload = {0};
     int inLen = -1;
     int outLen;
 
@@ -874,7 +861,7 @@ TEST_F(TestTurboModuleSmap, SmapQueryProcessConfigHandlerFailed)
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
     int nid = 1;
-    struct ProcessPayload payload = { 0 };
+    struct ProcessPayload payload = {0};
     int inLen = 1;
     int outLen;
 
@@ -882,7 +869,7 @@ TEST_F(TestTurboModuleSmap, SmapQueryProcessConfigHandlerFailed)
     SmapQueryProcessConfigCodec codec;
     codec.EncodeRequest(inputBuffer, nid, inLen);
     MOCKER_CPP(&SmapQueryProcessConfigCodec::EncodeResponse,
-               int (*)(TurboByteBuffer &buffer, struct ProcessPayload *result, int outLen, int returnValue))
+               int (*)(TurboByteBuffer & buffer, struct ProcessPayload * result, int outLen, int returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
     RetCode result = SmapQueryProcessConfigHandler(inputBuffer, outputBuffer);
@@ -910,7 +897,7 @@ TEST_F(TestTurboModuleSmap, SmapQueryRemoteNumaFreqHandler)
     EXPECT_EQ(result, TURBO_OK);
 
     MOCKER_CPP(&SmapQueryRemoteNumaFreqCodec::EncodeResponse,
-               int (*)(TurboByteBuffer &buffer, uint64_t *freq, uint16_t len, int returnValue))
+               int (*)(TurboByteBuffer & buffer, uint64_t * freq, uint16_t len, int returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
     result = SmapQueryRemoteNumaFreqHandler(inputBuffer, outputBuffer);
@@ -926,14 +913,10 @@ TEST_F(TestTurboModuleSmap, OpenSmapHandlerTest)
 
 TEST_F(TestTurboModuleSmap, ReturnZeroWhenAllSymbolsFound)
 {
-    MOCKER((void* (*)(const char*, int))(dlopen))
-        .stubs()
-        .will(returnValue((void *)0x1234));
+    MOCKER((void *(*)(const char *, int))(dlopen)).stubs().will(returnValue((void *)0x1234));
 
     for (int i = 0; i < 18; ++i) {
-        MOCKER((void* (*)(void*, const char*))(dlsym))
-            .stubs()
-            .will(returnValue((void *)0x5678));
+        MOCKER((void *(*)(void *, const char *))(dlsym)).stubs().will(returnValue((void *)0x5678));
     }
 
     int ret = OpenSmapHandler();
@@ -942,18 +925,12 @@ TEST_F(TestTurboModuleSmap, ReturnZeroWhenAllSymbolsFound)
 
 TEST_F(TestTurboModuleSmap, ReturnEINVALWhenAnySymbolMissing)
 {
-    MOCKER((void* (*)(const char*, int))(dlopen))
-        .stubs()
-        .will(returnValue((void *)0x1234));
+    MOCKER((void *(*)(const char *, int))(dlopen)).stubs().will(returnValue((void *)0x1234));
 
-    MOCKER((void* (*)(void*, const char*))(dlsym))
-        .stubs()
-        .will(returnValue((void *)nullptr));
+    MOCKER((void *(*)(void *, const char *))(dlsym)).stubs().will(returnValue((void *)nullptr));
 
     for (int i = 1; i < 18; ++i) {
-        MOCKER((void* (*)(void*, const char*))(dlsym))
-            .stubs()
-            .will(returnValue((void *)0x5678));
+        MOCKER((void *(*)(void *, const char *))(dlsym)).stubs().will(returnValue((void *)0x5678));
     }
 
     int ret = OpenSmapHandler();
@@ -962,9 +939,7 @@ TEST_F(TestTurboModuleSmap, ReturnEINVALWhenAnySymbolMissing)
 
 TEST_F(TestTurboModuleSmap, CloseSmapHandlerTest)
 {
-    MOCKER((int (*)(void*))(dlclose))
-        .stubs()
-        .will(returnValue(0));
+    MOCKER((int (*)(void *))(dlclose)).stubs().will(returnValue(0));
 
     CloseSmapHandler();
 }
@@ -998,16 +973,13 @@ TEST_F(TestTurboModuleSmap, StartTest)
         .stubs()
         .will(repeat(true, NUM_3))
         .then(returnValue(false));
-    MOCKER_CPP(&TurboModuleSmap::LoadPageType, RetCode (*)(uint32_t &pageType))
+    MOCKER_CPP(&TurboModuleSmap::LoadPageType, RetCode(*)(uint32_t & pageType))
         .stubs()
         .will(repeat(TURBO_OK, NUM_2))
         .then(returnValue(TURBO_ERROR));
 
     StubSmapPtr();
-    MOCKER(StubSmapInit)
-        .stubs()
-        .will(returnValue(0))
-        .then(returnValue(-1));
+    MOCKER(StubSmapInit).stubs().will(returnValue(0)).then(returnValue(-1));
     RetCode result = module.Start();
     EXPECT_EQ(result, TURBO_OK);
 
@@ -1024,23 +996,14 @@ TEST_F(TestTurboModuleSmap, StartTest)
 TEST_F(TestTurboModuleSmap, StartFailed)
 {
     TurboModuleSmap module;
-    MOCKER(OpenSmapHandler)
-        .stubs()
-        .will(returnValue(0))
-        .then(returnValue(-EINVAL));
+    MOCKER(OpenSmapHandler).stubs().will(returnValue(0)).then(returnValue(-EINVAL));
     MOCKER(RegSmapHandler).stubs();
     MOCKER_CPP(&turbo::smap::ulog::UpstreamSubscribeLogger, void (*)(Logfunc extlog)).stubs();
-    MOCKER_CPP(&TurboModuleSmap::PageTypeFileExists, bool (*)())
-        .stubs()
-        .will(returnValue(true));
-    MOCKER_CPP(&TurboModuleSmap::LoadPageType, RetCode (*)(uint32_t &pageType))
-        .stubs()
-        .will(returnValue(TURBO_OK));
+    MOCKER_CPP(&TurboModuleSmap::PageTypeFileExists, bool (*)()).stubs().will(returnValue(true));
+    MOCKER_CPP(&TurboModuleSmap::LoadPageType, RetCode(*)(uint32_t & pageType)).stubs().will(returnValue(TURBO_OK));
 
     StubSmapPtr();
-    MOCKER(StubSmapInit)
-        .stubs()
-        .will(returnValue(NUM_MINUS_2));
+    MOCKER(StubSmapInit).stubs().will(returnValue(NUM_MINUS_2));
 
     RetCode result = module.Start();
     EXPECT_EQ(result, TURBO_ERROR);

@@ -22,10 +22,10 @@
 
 #include "driver_interaction.h"
 #include "turbo_logger.h"
+#include "ucache_file_util.h"
+#include "ucache_string_util.h"
 #include "ucache_turbo_config.h"
 #include "ucache_turbo_error.h"
-#include "ucache_string_util.h"
-#include "ucache_file_util.h"
 
 namespace turbo::ucache {
 using namespace turbo::log;
@@ -201,8 +201,8 @@ void MigrationExecutor::PerformMigration(const MigrationStrategy &strategy)
             if (filePages < MIN_PAGE_CACHE_PER_NUMA_KB) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(migrateInterval_));
                 UBTURBO_LOG_DEBUG(UCACHE_MODULE_NAME, UCACHE_MODULE_CODE)
-                    << "FilePages below the limit MIN_PAGE_CACHE_PER_NUMA_KB" << ", srcNid=" << srcNid
-                    << ", filePages=" << filePages << ".";
+                    << "FilePages below the limit MIN_PAGE_CACHE_PER_NUMA_KB"
+                    << ", srcNid=" << srcNid << ", filePages=" << filePages << ".";
                 continue;
             }
             uint32_t ret = DriverInteraction::GetInstance().MigrateFoliosInfo(strategy.dstNid, srcNid, pid);

@@ -90,11 +90,11 @@ TEST_F(TestTurboRmrsPlugin, RmrsRebootFailed2)
                bool (*)(const std::filesystem::path &))
         .stubs()
         .will(returnValue(true));
-    MOCKER_CPP((void(std::ifstream::*)(const std::string &, std::ios_base::openmode))(&std::ifstream::open),
+    MOCKER_CPP((void (std::ifstream::*)(const std::string &, std::ios_base::openmode))(&std::ifstream::open),
                void (*)(std::ifstream *, const std::string &, std::ios_base::openmode))
         .stubs()
         .will(ignoreReturnValue());
-    MOCKER_CPP((bool(std::ifstream::*)())(&std::ifstream::is_open), bool (*)(std::ifstream *))
+    MOCKER_CPP((bool (std::ifstream::*)())(&std::ifstream::is_open), bool (*)(std::ifstream *))
         .stubs()
         .will(returnValue(false));
     EXPECT_NO_THROW(RmrsReboot());
@@ -131,7 +131,7 @@ TEST_F(TestTurboRmrsPlugin, RmrsRebootFailed3)
                bool (*)(const std::filesystem::path &))
         .stubs()
         .will(returnValue(true));
-    MOCKER_CPP((void(std::ifstream::*)(const std::string &, std::ios_base::openmode))(&std::ifstream::open),
+    MOCKER_CPP((void (std::ifstream::*)(const std::string &, std::ios_base::openmode))(&std::ifstream::open),
                void (*)(std::ifstream *, const std::string &, std::ios_base::openmode))
         .stubs()
         .will(invoke(ifstreamOpenForTest));
@@ -139,11 +139,11 @@ TEST_F(TestTurboRmrsPlugin, RmrsRebootFailed3)
                RmrsResult(*)(std::vector<uint16_t> &, std::vector<pid_t> &, std::vector<uint64_t>, uint64_t waitTime))
         .stubs()
         .will(returnValue(0));
-    MOCKER_CPP((void(std::ofstream::*)(const std::string &, std::ios_base::openmode))(&std::ofstream::open),
+    MOCKER_CPP((void (std::ofstream::*)(const std::string &, std::ios_base::openmode))(&std::ofstream::open),
                void (*)(std::ofstream *, const std::string &, std::ios_base::openmode))
         .stubs()
         .will(ignoreReturnValue());
-    MOCKER_CPP((void(std::ofstream::*)())(&std::ofstream::close), void (*)(std::ofstream *))
+    MOCKER_CPP((void (std::ofstream::*)())(&std::ofstream::close), void (*)(std::ofstream *))
         .stubs()
         .will(ignoreReturnValue());
     EXPECT_NO_THROW(RmrsReboot());

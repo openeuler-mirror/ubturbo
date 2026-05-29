@@ -10,7 +10,6 @@
 #include <stdarg.h>
 #include <stddef.h>
 
-
 #ifndef errno_t
 typedef int errno_t;
 #endif

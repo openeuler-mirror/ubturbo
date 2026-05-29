@@ -155,7 +155,7 @@ uint32_t GetNodeMemInfo(const std::string &nodeId, NodeInfo &infos)
 
     static const char *kTotal = "MemTotal:";
     static const char *kFree = "MemFree:";
-    static const char *kUsed = "MemUsed:";  // 注意：标准内核通常没有这个字段，如果是定制内核则保留
+    static const char *kUsed = "MemUsed:"; // 注意：标准内核通常没有这个字段，如果是定制内核则保留
     static const char *kActive = "Active(file):";
     static const char *kInactive = "Inactive(file):";
 

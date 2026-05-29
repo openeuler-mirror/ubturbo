@@ -63,7 +63,7 @@ TEST_F(TaskExecutorTest, Init_Success)
 TEST_F(TaskExecutorTest, GetCurrentTimestamp_TEST)
 {
     time_t testTime = 1234567890;
-    MOCKER_CPP(std::time, time_t (*)(time_t *)).stubs().will(returnValue(testTime));
+    MOCKER_CPP(std::time, time_t(*)(time_t *)).stubs().will(returnValue(testTime));
 
     uint64_t result = GetCurrentTimestamp();
     EXPECT_EQ(result, static_cast<uint64_t>(testTime));
@@ -216,7 +216,7 @@ TEST_F(TaskExecutorTest, HandleMigrationStrategy_Success)
     out << param;
     tReq.payload = out.Str();
 
-    MOCKER_CPP(TurboStrategyExecutor::ExecuteMigrationStrategy, uint32_t (*)(const MigrationStrategy &))
+    MOCKER_CPP(TurboStrategyExecutor::ExecuteMigrationStrategy, uint32_t(*)(const MigrationStrategy &))
         .stubs()
         .will(returnValue(UCACHE_OK));
 
@@ -241,7 +241,7 @@ TEST_F(TaskExecutorTest, HandleMigrationStrategy_ExecuteFailed)
     out << param;
     tReq.payload = out.Str();
 
-    MOCKER_CPP(TurboStrategyExecutor::ExecuteMigrationStrategy, uint32_t (*)(const MigrationStrategy &))
+    MOCKER_CPP(TurboStrategyExecutor::ExecuteMigrationStrategy, uint32_t(*)(const MigrationStrategy &))
         .stubs()
         .will(returnValue(UCACHE_ERR));
 
@@ -402,7 +402,7 @@ TEST_F(TaskExecutorTest, ValidateTaskParams_CollectResource_Valid)
 
     MOCKER_CPP(IsValidTaskType, bool (*)(TaskType)).expects(once()).will(returnValue(true));
 
-    MOCKER_CPP(ValidateCollectResourceParam, uint32_t (*)(const std::string &))
+    MOCKER_CPP(ValidateCollectResourceParam, uint32_t(*)(const std::string &))
         .expects(once())
         .will(returnValue(UCACHE_OK));
 
@@ -429,7 +429,7 @@ TEST_F(TaskExecutorTest, ValidateTaskParams_MigrationStrategy_Valid)
 
     MOCKER_CPP(IsValidTaskType, bool (*)(TaskType)).expects(once()).will(returnValue(true));
 
-    MOCKER_CPP(ValidateMigrationStrategyParams, uint32_t (*)(const std::string &))
+    MOCKER_CPP(ValidateMigrationStrategyParams, uint32_t(*)(const std::string &))
         .expects(once())
         .will(returnValue(UCACHE_OK));
 
@@ -496,11 +496,11 @@ TEST_F(TaskExecutorTest, UCacheExecuteTask_CollectResource)
 
     MOCKER_CPP(IsValidTaskType, bool (*)(TaskType)).expects(once()).will(returnValue(true));
 
-    MOCKER_CPP(ValidateCollectResourceParam, uint32_t (*)(const std::string &))
+    MOCKER_CPP(ValidateCollectResourceParam, uint32_t(*)(const std::string &))
         .expects(once())
         .will(returnValue(UCACHE_OK));
 
-    MOCKER_CPP(HandleCollectResource, uint32_t (*)(const TaskRequest &, TaskResponse &))
+    MOCKER_CPP(HandleCollectResource, uint32_t(*)(const TaskRequest &, TaskResponse &))
         .expects(once())
         .will(returnValue(UCACHE_OK));
 
@@ -543,11 +543,11 @@ TEST_F(TaskExecutorTest, UCacheExecuteTask_MigrationStrategy)
 
     MOCKER_CPP(IsValidTaskType, bool (*)(TaskType)).expects(once()).will(returnValue(true));
 
-    MOCKER_CPP(ValidateMigrationStrategyParams, uint32_t (*)(const std::string &))
+    MOCKER_CPP(ValidateMigrationStrategyParams, uint32_t(*)(const std::string &))
         .expects(once())
         .will(returnValue(UCACHE_OK));
 
-    MOCKER_CPP(HandleMigrationStrategy, uint32_t (*)(const TaskRequest &, TaskResponse &))
+    MOCKER_CPP(HandleMigrationStrategy, uint32_t(*)(const TaskRequest &, TaskResponse &))
         .expects(once())
         .will(returnValue(UCACHE_OK));
 
