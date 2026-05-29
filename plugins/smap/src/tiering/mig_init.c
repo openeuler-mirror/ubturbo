@@ -463,6 +463,7 @@ static int __ioctl_migrate_pid_remote_numa(void __user *argp)
 
 	if (check_mig_msg(payloads, msg.pid_cnt)) {
 		pr_err("invalid params passed to migrate pid remote NUMA\n");
+		kfree(payloads);
 		return -EINVAL;
 	}
 

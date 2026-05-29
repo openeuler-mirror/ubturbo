@@ -590,6 +590,9 @@ err_cdev:
 
 void access_ioctl_exit(void)
 {
+	vfree(smap_bitmap_buf);
+	smap_bitmap_buf = NULL;
+	smap_buf_len = 0;
 	access_remove_all_pid();
 	remove_procfs_root();
 	access_dev_exit();

@@ -11,4 +11,6 @@ struct dentry {
     struct dentry *d_parent;
 };
 
+void dput(struct dentry *dentry);
+
 #endif	/* __LINUX_DCACHE_H */

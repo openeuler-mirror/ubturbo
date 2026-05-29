@@ -844,11 +844,34 @@ TEST_F(AccessIoctlTestKernel, AccessDevInitTwo)
 }
 
 extern "C" void access_remove_all_pid(void);
+extern "C" char *smap_bitmap_buf;
+extern "C" size_t smap_buf_len;
 TEST_F(AccessIoctlTestKernel, AccessIoctlExit)
 {
+    // Test with null bitmap buffer
+    smap_bitmap_buf = nullptr;
+    smap_buf_len = 0;
+    MOCKER(vfree).stubs();
     MOCKER(access_remove_all_pid).stubs().will(ignoreReturnValue());
     MOCKER(access_dev_exit).stubs().will(ignoreReturnValue());
     access_ioctl_exit();
+    EXPECT_EQ(nullptr, smap_bitmap_buf);
+    EXPECT_EQ(0, smap_buf_len);
+}
+
+TEST_F(AccessIoctlTestKernel, AccessIoctlExitWithBitmapBuf)
+{
+    // Test with valid bitmap buffer - should call vfree
+    smap_bitmap_buf = (char *)vmalloc(BITMAP_BUF_LEN);
+    ASSERT_NE(nullptr, smap_bitmap_buf);
+    smap_buf_len = BITMAP_BUF_LEN;
+
+    MOCKER(vfree).stubs();
+    MOCKER(access_remove_all_pid).stubs().will(ignoreReturnValue());
+    MOCKER(access_dev_exit).stubs().will(ignoreReturnValue());
+    access_ioctl_exit();
+    EXPECT_EQ(nullptr, smap_bitmap_buf);
+    EXPECT_EQ(0, smap_buf_len);
 }
 
 extern "C" int access_ioctl_init(void);

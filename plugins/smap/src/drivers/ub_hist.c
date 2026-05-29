@@ -373,17 +373,22 @@ static int ub_hist_probe(struct platform_device *pdev)
 
 	ret = ub_hist_ba_init(ba_dev);
 	if (ret)
-		return ret;
+		goto err_ba_init;
 
 	ret = ub_hist_rd_clr_sts(ba_dev, NULL, 0);
 	if (ret)
-		return ret;
+		goto err_rd_clr;
 
 	spin_lock_irqsave(&ub_hist_ba_list_lock, flags);
 	list_add_tail(&ba_dev->list, &ub_hist_ba_list);
 	spin_unlock_irqrestore(&ub_hist_ba_list_lock, flags);
 	pr_debug("ub_hist_probe success\n");
 	return 0;
+
+err_rd_clr:
+err_ba_init:
+	iounmap(ba_dev->base_addr);
+	return ret;
 }
 
 static int ub_hist_remove(struct platform_device *pdev)
@@ -467,8 +472,10 @@ int ub_hist_init(void)
 		return ret;
 	}
 	ret = ub_hist_set_hw_type();
-	if (ret)
+	if (ret) {
+		platform_driver_unregister(&ub_hist_platform_driver);
 		return ret;
+	}
 
 	pr_debug("UB histogram init successfully\n");
 	return ret;
