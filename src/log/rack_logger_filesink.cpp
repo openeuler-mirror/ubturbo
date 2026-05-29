@@ -90,7 +90,8 @@ bool RackLoggerFilesink::Write(TurboLoggerEntry &loggerEntry)
 
 bool RackLoggerFilesink::IsFileStatusChanged(const std::string &fileName)
 {
-    struct stat fileStat {};
+    struct stat fileStat {
+    };
     if (stat(fileMap[fileName].filePath.c_str(), &fileStat) != 0) {
         return true; // 文件不存在或无法访问
     }
@@ -145,7 +146,8 @@ bool RackLoggerFilesink::OpenFile(const std::string &fileName)
     }
 
     if (fileMap[fileName].logFile.is_open()) {
-        struct stat fileStat {};
+        struct stat fileStat {
+        };
         stat(fileMap[fileName].filePath.c_str(), &fileStat);
         fileMap[fileName].inode = fileStat.st_ino;
         try {

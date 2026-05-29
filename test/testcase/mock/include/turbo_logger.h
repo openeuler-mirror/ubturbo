@@ -63,7 +63,8 @@ namespace turbo::log {
     } else                                        \
         std::cout
 
-enum class TurboLogLevel : uint32_t {
+enum class TurboLogLevel : uint32_t
+{
     DEBUG = 0,
     INFO = 1,
     WARN = 2,
@@ -86,7 +87,8 @@ void TurboLogOutput(const char *moduleName, TurboLogLevel level, const char *msg
  */
 std::string FormatRetCode(uint32_t retCode);
 
-enum class TurboLoggerTypeId : uint8_t {
+enum class TurboLoggerTypeId : uint8_t
+{
     CHAR = 0,
     UINT32,
     UINT64,

@@ -59,8 +59,10 @@ struct CgroupPageCacheInfo {
 };
 
 struct CgroupInfos {
-    struct CgroupIoInfo ioInfo {};
-    struct CgroupPageCacheInfo pageCacheInfo {};
+    struct CgroupIoInfo ioInfo {
+    };
+    struct CgroupPageCacheInfo pageCacheInfo {
+    };
     std::string ToString() const
     {
         std::ostringstream oss;

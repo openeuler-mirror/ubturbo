@@ -45,7 +45,7 @@ struct LogKeyHash {
     std::size_t operator()(const LogKey &k) const
     {
         return (std::hash<std::string>{}(k.fileName)) ^ (std::hash<uint32_t>{}(k.fileLine) << 1) ^
-            (std::hash<size_t>{}(k.length) << 2); // 左移2位增加哈希值复杂度
+               (std::hash<size_t>{}(k.length) << 2); // 左移2位增加哈希值复杂度
     }
 };
 

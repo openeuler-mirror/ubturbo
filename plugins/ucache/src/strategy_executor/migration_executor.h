@@ -16,9 +16,9 @@
 #include <sys/types.h>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <mutex>
 #include <optional>
-#include <cstring>
 #include <thread>
 #include <vector>
 

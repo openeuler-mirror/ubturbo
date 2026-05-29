@@ -6,8 +6,8 @@
 #include <mockcpp/mockcpp.h>
 #include <mockcpp/mokc.h>
 #include <cerrno>
-#include "smap_handler_msg.h"
 #include "securec.h"
+#include "smap_handler_msg.h"
 
 constexpr int NUM_2 = 2;
 constexpr int NUM_3 = 3;

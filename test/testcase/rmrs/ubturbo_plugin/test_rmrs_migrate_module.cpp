@@ -130,8 +130,8 @@ TEST_F(TestRmrsMigrateModule, MemBorrowRollbackFail1)
     borrowIdsPidsMap["example_key"] = pidsSet;
     MOCKER_CPP(
         &RmrsRollbackModule::FillRollbackVmInfo,
-        bool (*)(std::map<pid_t, VmDomainInfo> &vmInfoMap, std::vector<pid_t> &pidList,
-                 std::unordered_map<pid_t, uint16_t> &vmPidRemoteNumaMap, std::vector<uint16_t> &remoteNumaIdList))
+        bool (*)(std::map<pid_t, VmDomainInfo> & vmInfoMap, std::vector<pid_t> & pidList,
+                 std::unordered_map<pid_t, uint16_t> & vmPidRemoteNumaMap, std::vector<uint16_t> & remoteNumaIdList))
         .stubs()
         .will(returnValue(false));
     auto res = RmrsRollbackModule::MemBorrowRollback(borrowIdsPidsMap);
@@ -189,11 +189,11 @@ TEST_F(TestRmrsMigrateModule, MemBorrowRollbackFail2)
     borrowIdsPidsMap["example_key"] = pidsSet;
     MOCKER_CPP(
         &RmrsRollbackModule::FillRollbackVmInfo,
-        bool (*)(std::map<pid_t, VmDomainInfo> &vmInfoMap, std::vector<pid_t> &pidList,
-                 std::unordered_map<pid_t, uint16_t> &vmPidRemoteNumaMap, std::vector<uint16_t> &remoteNumaIdList))
+        bool (*)(std::map<pid_t, VmDomainInfo> & vmInfoMap, std::vector<pid_t> & pidList,
+                 std::unordered_map<pid_t, uint16_t> & vmPidRemoteNumaMap, std::vector<uint16_t> & remoteNumaIdList))
         .stubs()
         .will(invoke(TestFillRollbackVmInfoRmrs));
-    MOCKER_CPP(&RmrsRollbackModule::CanMigrate, bool (*)(std::map<pid_t, VmDomainInfo> &vmInfoMap))
+    MOCKER_CPP(&RmrsRollbackModule::CanMigrate, bool (*)(std::map<pid_t, VmDomainInfo> & vmInfoMap))
         .stubs()
         .will(returnValue(true));
     MOCKER_CPP(&RmrsRollbackModule::DoMigrateRollback, bool (*)(std::unordered_map<pid_t, uint16_t> vmPidRemoteNumaMap))
@@ -216,11 +216,11 @@ TEST_F(TestRmrsMigrateModule, MemBorrowRollbackSucceed)
     borrowIdsPidsMap["example_key"] = pidsSet;
     MOCKER_CPP(
         &RmrsRollbackModule::FillRollbackVmInfo,
-        bool (*)(std::map<pid_t, VmDomainInfo> &vmInfoMap, std::vector<pid_t> &pidList,
-                 std::unordered_map<pid_t, uint16_t> &vmPidRemoteNumaMap, std::vector<uint16_t> &remoteNumaIdList))
+        bool (*)(std::map<pid_t, VmDomainInfo> & vmInfoMap, std::vector<pid_t> & pidList,
+                 std::unordered_map<pid_t, uint16_t> & vmPidRemoteNumaMap, std::vector<uint16_t> & remoteNumaIdList))
         .stubs()
         .will(returnValue(true));
-    MOCKER_CPP(&RmrsRollbackModule::CanMigrate, bool (*)(std::map<pid_t, VmDomainInfo> &vmInfoMap))
+    MOCKER_CPP(&RmrsRollbackModule::CanMigrate, bool (*)(std::map<pid_t, VmDomainInfo> & vmInfoMap))
         .stubs()
         .will(returnValue(true));
     MOCKER_CPP(&RmrsRollbackModule::DoMigrateRollback, bool (*)(std::unordered_map<pid_t, uint16_t> vmPidRemoteNumaMap))
@@ -522,8 +522,8 @@ TEST_F(TestRmrsMigrateModule, MemFreeImplFailed3)
         .stubs()
         .will(returnValue(0));
     MOCKER_CPP(&RmrsMemFreeModule::SortRemoteNumaByMemUse,
-               void (*)(std::vector<rmrs::migrate::ReturnNumaInfo> &returnNumaInfoSumList,
-                        std::vector<uint16_t> &remoteNumaIdList))
+               void (*)(std::vector<rmrs::migrate::ReturnNumaInfo> & returnNumaInfoSumList,
+                        std::vector<uint16_t> & remoteNumaIdList))
         .stubs()
         .will(invoke(TestSortRemoteNumaByMemUse));
     auto res = RmrsMemFreeModule::MemFreeImpl(numaIds);
@@ -1044,7 +1044,7 @@ TEST_F(TestRmrsMigrateModule, MigrateStrategyRmrsFail4)
         .stubs()
         .will(invoke(TestGetVmInfoImmediately1));
     MOCKER_CPP(&RmrsMigrateModule::ISRemoteMemorySufficient,
-               bool (*)(std::vector<uint16_t> &remoteNumaIdList, std::map<uint16_t, NumaHugePageInfo> &numaInfoMap,
+               bool (*)(std::vector<uint16_t> & remoteNumaIdList, std::map<uint16_t, NumaHugePageInfo> & numaInfoMap,
                         const uint64_t &memMigrateTotalSize))
         .stubs()
         .will(returnValue(false));
@@ -1074,7 +1074,7 @@ TEST_F(TestRmrsMigrateModule, MigrateStrategyRmrsFail5)
         .stubs()
         .will(invoke(TestGetVmInfoImmediately1));
     MOCKER_CPP(&RmrsMigrateModule::ISRemoteMemorySufficient,
-               bool (*)(std::vector<uint16_t> &remoteNumaIdList, std::map<uint16_t, NumaHugePageInfo> &numaInfoMap,
+               bool (*)(std::vector<uint16_t> & remoteNumaIdList, std::map<uint16_t, NumaHugePageInfo> & numaInfoMap,
                         const uint64_t &memMigrateTotalSize))
         .stubs()
         .will(returnValue(true));
@@ -1109,7 +1109,7 @@ TEST_F(TestRmrsMigrateModule, MigrateStrategyRmrsFail7)
         .stubs()
         .will(invoke(TestGetVmInfoImmediately1));
     MOCKER_CPP(&RmrsMigrateModule::ISRemoteMemorySufficient,
-               bool (*)(std::vector<uint16_t> &remoteNumaIdList, std::map<uint16_t, NumaHugePageInfo> &numaInfoMap,
+               bool (*)(std::vector<uint16_t> & remoteNumaIdList, std::map<uint16_t, NumaHugePageInfo> & numaInfoMap,
                         const uint64_t &memMigrateTotalSize))
         .stubs()
         .will(returnValue(true));

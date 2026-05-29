@@ -263,7 +263,7 @@ TEST_F(TestUcacheBottleneckDetector, GetContainerIdFromPidsTest)
     uint32_t ret = GetContainerIdFromPids(pids, containerIds);
     EXPECT_EQ(ret, RMRS_ERROR);
 
-    MOCKER_CPP((bool(std::ifstream::*)())(&std::ifstream::is_open), bool (*)(std::ifstream *))
+    MOCKER_CPP((bool (std::ifstream::*)())(&std::ifstream::is_open), bool (*)(std::ifstream *))
         .stubs()
         .will(returnValue(true));
     ret = GetContainerIdFromPids(pids, containerIds);
@@ -532,10 +532,10 @@ TEST_F(TestUcacheBottleneckDetector, GetCurContainerListTest)
     std::vector<ContainerInfo> list;
     list.push_back({"container-1"});
 
-    MOCKER_CPP(GetIoBytesInfo, bool (*)(std::vector<ContainerInfo> &containerInfoList))
+    MOCKER_CPP(GetIoBytesInfo, bool (*)(std::vector<ContainerInfo> & containerInfoList))
         .stubs()
         .will(returnValue(false));
-    MOCKER_CPP(GetPageCacheInfo, bool (*)(std::vector<ContainerInfo> &containerInfoList))
+    MOCKER_CPP(GetPageCacheInfo, bool (*)(std::vector<ContainerInfo> & containerInfoList))
         .stubs()
         .will(returnValue(false));
 
@@ -544,8 +544,10 @@ TEST_F(TestUcacheBottleneckDetector, GetCurContainerListTest)
     EXPECT_EQ(list.size(), 1u);
 
     GlobalMockObject::verify();
-    MOCKER_CPP(GetIoBytesInfo, bool (*)(std::vector<ContainerInfo> &containerInfoList)).stubs().will(returnValue(true));
-    MOCKER_CPP(GetPageCacheInfo, bool (*)(std::vector<ContainerInfo> &containerInfoList))
+    MOCKER_CPP(GetIoBytesInfo, bool (*)(std::vector<ContainerInfo> & containerInfoList))
+        .stubs()
+        .will(returnValue(true));
+    MOCKER_CPP(GetPageCacheInfo, bool (*)(std::vector<ContainerInfo> & containerInfoList))
         .stubs()
         .will(returnValue(true));
     MOCKER_CPP(ExtractContainerCpuStat, uint32_t(*)(std::vector<ContainerInfo> & containerInfoList))
@@ -555,8 +557,10 @@ TEST_F(TestUcacheBottleneckDetector, GetCurContainerListTest)
     EXPECT_EQ(ret, RMRS_ERROR);
 
     GlobalMockObject::verify();
-    MOCKER_CPP(GetIoBytesInfo, bool (*)(std::vector<ContainerInfo> &containerInfoList)).stubs().will(returnValue(true));
-    MOCKER_CPP(GetPageCacheInfo, bool (*)(std::vector<ContainerInfo> &containerInfoList))
+    MOCKER_CPP(GetIoBytesInfo, bool (*)(std::vector<ContainerInfo> & containerInfoList))
+        .stubs()
+        .will(returnValue(true));
+    MOCKER_CPP(GetPageCacheInfo, bool (*)(std::vector<ContainerInfo> & containerInfoList))
         .stubs()
         .will(returnValue(true));
     MOCKER_CPP(ExtractContainerCpuStat, uint32_t(*)(std::vector<ContainerInfo> & containerInfoList))

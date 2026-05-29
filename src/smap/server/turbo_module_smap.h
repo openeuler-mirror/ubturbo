@@ -12,16 +12,17 @@
 #ifndef TURBO_SMAP_MODULE_H
 #define TURBO_SMAP_MODULE_H
 
-#include "turbo_common.h"
-#include "turbo_module.h"
-#include "turbo_def.h"
 #include "smap_interface.h"
+#include "turbo_common.h"
+#include "turbo_def.h"
+#include "turbo_module.h"
 
 namespace turbo::smap {
 using namespace turbo::common;
 using namespace turbo::module;
 
-enum class LoggerLevel : uint32_t {
+enum class LoggerLevel : uint32_t
+{
     LOGGER_DEBUG_LEVEL = 0,
     LOGGER_INFO_LEVEL = 1,
     LOGGER_WARNING_LEVEL = 2,
@@ -41,8 +42,8 @@ using SmapQueryFreqFunc = int (*)(int pid, uint16_t *data, uint32_t lengthIn, ui
 using SetSmapRunModeFunc = int (*)(int runMode);
 using SmapIsRunningFunc = bool (*)(void);
 using SmapMigrateOutSyncFunc = int (*)(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime);
-using SmapAddProcessTrackingFunc = int (*)(pid_t *pidArr, uint32_t *scanTime, uint32_t *duration,
-    int len, int scanType);
+using SmapAddProcessTrackingFunc = int (*)(pid_t *pidArr, uint32_t *scanTime, uint32_t *duration, int len,
+                                           int scanType);
 using SmapRemoveProcessTrackingFunc = int (*)(pid_t *pidArr, int len, int flag);
 using SmapEnableProcessMigrateFunc = int (*)(pid_t *pidArr, int len, int enable, int flags);
 using SmapMigrateRemoteNumaFunc = int (*)(struct MigrateNumaMsg *msg);
@@ -98,5 +99,5 @@ void UnRegSmapHandler();
 void StubSmapPtr();
 int StubSmapInit(uint32_t pageType, Logfunc extlog);
 #endif
-}
-#endif  // TURBO_SMAP_MODULE_H
+} // namespace turbo::smap
+#endif // TURBO_SMAP_MODULE_H

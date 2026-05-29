@@ -15,4 +15,4 @@ uint32_t UBTurboUnRegIpcService(const std::string &name)
     return 0;
 }
 
-}
+} // namespace turbo::ipc::server

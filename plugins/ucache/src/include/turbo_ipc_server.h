@@ -32,6 +32,6 @@ uint32_t UBTurboRegIpcService(const std::string &name, IpcHandlerFunc function);
 */
 uint32_t UBTurboUnRegIpcService(const std::string &name);
 
-}
+} // namespace turbo::ipc::server
 
 #endif

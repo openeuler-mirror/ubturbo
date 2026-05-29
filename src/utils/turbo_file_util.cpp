@@ -24,8 +24,8 @@ std::string TurboFileUtil::GetExecutablePath()
     // 读取符号链接 获取可执行文件的路径
     const auto count = readlink("/proc/self/exe", filePath, sizeof(filePath) - 1);
     if (count <= 0) {
-        std::cerr << "[Conf] Failed to read /proc/self/exe: " << strerror(errno) <<
-            " (errno=" << errno << ")" << std::endl;
+        std::cerr << "[Conf] Failed to read /proc/self/exe: " << strerror(errno) << " (errno=" << errno << ")"
+                  << std::endl;
         return {};
     }
 

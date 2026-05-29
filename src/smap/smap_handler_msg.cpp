@@ -9,17 +9,17 @@
  * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
  * See the Mulan PSL v2 for more details.
  */
-#include <iostream>
-#include <cstring>
 #include <sys/un.h>
 #include <unistd.h>
 #include <cerrno>
+#include <cstring>
+#include <iostream>
 
-#include "smap_interface.h"
-#include "securec.h"
-#include "turbo_def.h"
 #include "../log/client/ulog.h"
+#include "securec.h"
 #include "smap_handler_msg.h"
+#include "smap_interface.h"
+#include "turbo_def.h"
 
 namespace turbo::smap::codec {
 
@@ -484,8 +484,8 @@ int SmapAddProcessTrackingCodec::DecodeRequest(const TurboByteBuffer &buffer, pi
         return -EINVAL;
     }
     len = *static_cast<int *>(static_cast<void *>(buffer.data));
-    if (buffer.len < sizeof(int) + sizeof(int) +
-                     sizeof(pid_t) * len + sizeof(uint32_t) * len + sizeof(uint32_t) * len) {
+    if (buffer.len <
+        sizeof(int) + sizeof(int) + sizeof(pid_t) * len + sizeof(uint32_t) * len + sizeof(uint32_t) * len) {
         return -EINVAL;
     }
     size_t copied = sizeof(int);
@@ -745,8 +745,8 @@ int SmapQueryVmFreqCodec::EncodeRequest(TurboByteBuffer &buffer, int pid, uint32
         SmapResetBuf(&buffer);
         return ret;
     }
-    ret = memcpy_s(buffer.data + sizeof(int) + sizeof(uint32_t), size - sizeof(int) - sizeof(uint32_t),
-        &dataSource, sizeof(int));
+    ret = memcpy_s(buffer.data + sizeof(int) + sizeof(uint32_t), size - sizeof(int) - sizeof(uint32_t), &dataSource,
+                   sizeof(int));
     if (ret) {
         SmapResetBuf(&buffer);
         return ret;
@@ -762,7 +762,7 @@ int SmapQueryVmFreqCodec::DecodeRequest(const TurboByteBuffer &buffer, int &pid,
     }
     pid = *static_cast<int *>(static_cast<void *>(buffer.data));
     lengthIn = *static_cast<uint32_t *>(static_cast<void *>(buffer.data + sizeof(int)));
-    dataSource= *static_cast<int *>(static_cast<void *>(buffer.data + sizeof(int) + sizeof(uint32_t)));
+    dataSource = *static_cast<int *>(static_cast<void *>(buffer.data + sizeof(int) + sizeof(uint32_t)));
     return 0;
 }
 
@@ -1111,8 +1111,8 @@ int SmapQueryProcessConfigCodec::EncodeResponse(TurboByteBuffer &buffer, struct 
 {
     int out = outLen;
     if (out < 0 || out > MAX_NR_MIGOUT) {
-        IPC_CLIENT_LOGGER_ERROR("EncodeResponse: out value %d is invalid; must be between 0 and %d\n",
-                                out, MAX_NR_MIGOUT);
+        IPC_CLIENT_LOGGER_ERROR("EncodeResponse: out value %d is invalid; must be between 0 and %d\n", out,
+                                MAX_NR_MIGOUT);
         return -1;
     }
     size_t size = sizeof(int) + sizeof(int) + sizeof(struct ProcessPayload) * out;
@@ -1154,8 +1154,8 @@ int SmapQueryProcessConfigCodec::DecodeResponse(TurboByteBuffer &buffer, struct 
     returnValue = *static_cast<int *>(static_cast<void *>(buffer.data));
     int out = *static_cast<int *>(static_cast<void *>(buffer.data + sizeof(int)));
     if (out < 0 || out > MAX_NR_MIGOUT) {
-        IPC_CLIENT_LOGGER_ERROR("DecodeResponse: out value %d is invalid; must be between 0 and %d\n",
-                                out, MAX_NR_MIGOUT);
+        IPC_CLIENT_LOGGER_ERROR("DecodeResponse: out value %d is invalid; must be between 0 and %d\n", out,
+                                MAX_NR_MIGOUT);
         return IPC_ERROR;
     }
     if (out) {
@@ -1217,8 +1217,8 @@ int SmapQueryRemoteNumaFreqCodec::DecodeRequest(const TurboByteBuffer &buffer, u
 int SmapQueryRemoteNumaFreqCodec::EncodeResponse(TurboByteBuffer &buffer, uint64_t *freq, uint16_t len, int returnValue)
 {
     if (len > REMOTE_NUMA_BITS) {
-        IPC_CLIENT_LOGGER_ERROR("DecodeResponse: out value %d is invalid; must be between 0 and %d\n",
-                                len, REMOTE_NUMA_BITS);
+        IPC_CLIENT_LOGGER_ERROR("DecodeResponse: out value %d is invalid; must be between 0 and %d\n", len,
+                                REMOTE_NUMA_BITS);
         return -1;
     }
     size_t size = sizeof(uint16_t) + sizeof(uint64_t) * len + sizeof(int);
@@ -1258,15 +1258,14 @@ int SmapQueryRemoteNumaFreqCodec::DecodeResponse(TurboByteBuffer &buffer, uint64
     returnValue = *static_cast<int *>(static_cast<void *>(buffer.data));
     uint16_t out = *static_cast<uint16_t *>(static_cast<void *>(buffer.data + sizeof(int)));
     if (out > REMOTE_NUMA_BITS) {
-        IPC_CLIENT_LOGGER_ERROR("DecodeResponse: out value %d is invalid; must be between 0 and %d\n",
-                                out, REMOTE_NUMA_BITS);
+        IPC_CLIENT_LOGGER_ERROR("DecodeResponse: out value %d is invalid; must be between 0 and %d\n", out,
+                                REMOTE_NUMA_BITS);
         return IPC_ERROR;
     }
     if (buffer.len < sizeof(int) + sizeof(uint16_t) + out * sizeof(uint64_t)) {
         return IPC_ERROR;
     }
-    ret = memcpy_s(freq, out * sizeof(uint64_t), buffer.data + sizeof(int) + sizeof(uint16_t),
-                   out * sizeof(uint64_t));
+    ret = memcpy_s(freq, out * sizeof(uint64_t), buffer.data + sizeof(int) + sizeof(uint16_t), out * sizeof(uint64_t));
     if (ret) {
         return IPC_ERROR;
     }
@@ -1274,4 +1273,4 @@ int SmapQueryRemoteNumaFreqCodec::DecodeResponse(TurboByteBuffer &buffer, uint64
     return ret;
 }
 
-}
+} // namespace turbo::smap::codec

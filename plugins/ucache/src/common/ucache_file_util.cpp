@@ -64,8 +64,8 @@ uint32_t UCacheFileUtil::GetFileInfo(const std::string &pathStr, std::vector<std
 
     while (getline(file, line)) {
         if (++lineCount > maxLines) {
-            UBTURBO_LOG_WARN(UCACHE_MODULE_NAME, UCACHE_MODULE_CODE) <<
-                "File too large, truncated at " << maxLines << " lines.";
+            UBTURBO_LOG_WARN(UCACHE_MODULE_NAME, UCACHE_MODULE_CODE)
+                << "File too large, truncated at " << maxLines << " lines.";
             break;
         }
         info.push_back(line);
