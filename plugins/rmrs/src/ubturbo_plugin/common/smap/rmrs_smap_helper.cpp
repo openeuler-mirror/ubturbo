@@ -11,15 +11,15 @@
  */
 #include "rmrs_smap_helper.h"
 
-#include <unordered_map>
 #include <fstream>
 #include <limits>
+#include <unordered_map>
 
 #include "rmrs_config.h"
 #include "rmrs_error.h"
+#include "rmrs_pointer_process.h"
 #include "turbo_conf.h"
 #include "turbo_logger.h"
-#include "rmrs_pointer_process.h"
 
 #define LOG_ERROR UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
 #define LOG_DEBUG UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
@@ -496,17 +496,17 @@ bool RmrsSmapHelper::GetMigrateOutMsgByMemSizeBigVm(MigrateOutMsg &migrateOutMsg
         aggPidInfoMap[pidList[i]].push_back(NumaMemInfo{remoteNumaIdList[i], memSizeList[i]});
     }
     migrateOutMsg.count = 0;
-    for (const auto& [pid, items] : aggPidInfoMap) {
+    for (const auto &[pid, items] : aggPidInfoMap) {
         if (migrateOutMsg.count >= MAX_NR_MIGOUT_RMRS) {
             LOG_ERROR << "[RmrsSmapHelper] Parameter payload limit exceeded.";
             return false;
         }
-        auto& payload = migrateOutMsg.payload[migrateOutMsg.count];
+        auto &payload = migrateOutMsg.payload[migrateOutMsg.count];
         payload.pid = pid;
         payload.srcNid = -1;
         payload.count = 0;
 
-        for (const auto& item: items) {
+        for (const auto &item : items) {
             if (payload.count >= REMOTE_NUMA_NUM_RMRS) {
                 LOG_ERROR << "[RmrsSmapHelper] Parameter inner limit exceeded.";
                 return false;
@@ -538,8 +538,8 @@ RmrsResult RmrsSmapHelper::SmapQueryProcessConfigHelper(int nid, std::vector<Pro
     int realLen = 0;
     int res = smapQueryProcessConfigFunc(nid, payloadArr, SMAP_QUERY_PID_NUM, &realLen);
     if (res != SMAP_OK || realLen < 0 || realLen > SMAP_QUERY_PID_NUM) {
-        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[RmrsSmapHelper] SmapQueryProcessConfig error."
-            << nid << " "<< realLen << " " << res;
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[RmrsSmapHelper] SmapQueryProcessConfig error." << nid << " " << realLen << " " << res;
         return RMRS_ERROR;
     }
     for (int i = 0; i < realLen; i++) {

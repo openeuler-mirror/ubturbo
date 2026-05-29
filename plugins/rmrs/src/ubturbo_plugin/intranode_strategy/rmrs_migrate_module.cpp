@@ -12,13 +12,13 @@
 #include "rmrs_migrate_module.h"
 
 #include <algorithm>
-#include <map>
-#include <unordered_set>
-#include <unordered_map>
-#include <set>
-#include <vector>
 #include <cstdint>
 #include <limits>
+#include <map>
+#include <set>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "rmrs_resource_export.h"
 
@@ -27,9 +27,9 @@
 #include "rmrs_json_helper.h"
 #include "rmrs_libvirt_module.h"
 #include "rmrs_smap_helper.h"
-#include "turbo_logger.h"
-#include "turbo_conf.h"
 #include "securec.h"
+#include "turbo_conf.h"
+#include "turbo_logger.h"
 
 namespace rmrs::migrate {
 
@@ -61,7 +61,7 @@ const uint32_t RmrsMigrateModule::smapMigrate32GCycle = 3;              // 每�
 const uint32_t RmrsMigrateModule::smapMigrateUnitMem = 32;              // 32G
 const uint64_t RmrsMigrateModule::byte2KB = 1024;                       // bite转为KB 1024单位转换
 
-std::vector<uint16_t> RmrsMigrateModule::s_timeOutNumas; // 超时归还的numa信息
+std::vector<uint16_t> RmrsMigrateModule::s_timeOutNumas;                      // 超时归还的numa信息
 std::map<pid_t, std::vector<uint16_t>> RmrsMigrateModule::s_pidRemoteNumaMap; // pid对应的远端numa信息Map
 
 #define LOG_DEBUG UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
@@ -96,8 +96,8 @@ void RmrsMigrateModule::DistributeNumaMemInfo(std::vector<rmrs::NumaInfo> &numaI
         LOG_DEBUG << "[MemMigrate][Strategy][DistributeNumaMemInfo] NUMA node info: numaId = " << info.numaId
                   << ", hugePageFree = " << info.hugePageFree << ", hugePageTotal = " << info.hugePageTotal
                   << ", isRemote = " << info.isRemote << ", isLocal = " << info.isLocal
-                  << ", isTimeOut = " << info.isTimeOut
-                  << ", socketId = " << NumaInfoWithSize.numaMetaInfo.socketId << ".";
+                  << ", isTimeOut = " << info.isTimeOut << ", socketId = " << NumaInfoWithSize.numaMetaInfo.socketId
+                  << ".";
     }
 }
 
@@ -434,8 +434,8 @@ RmrsResult RmrsMigrateModule::FillVmOriginSize(
             }
         }
         if (notFind) {
-            UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_NAME) << "[MemMigrate] [MemMigrate] Vm not exist, pid="
-                << migrateParam.pid << ".";
+            UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_NAME)
+                << "[MemMigrate] [MemMigrate] Vm not exist, pid=" << migrateParam.pid << ".";
             return RMRS_ERROR;
         }
     }
@@ -448,8 +448,7 @@ RmrsResult RmrsMigrateModule::DoMigrateExecute(
     // 获取迁移前虚机在远端大小
     std::unordered_map<pid_t, uint64_t> vmOriginSizeMap;
     if (waitingTime != 0 && FillVmOriginSize(vmMigrateOutParam, vmOriginSizeMap)) {
-        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[MemMigrate][MemMigrate] Fill vm origin size failed.";
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[MemMigrate][MemMigrate] Fill vm origin size failed.";
         return RMRS_ERROR;
     }
     // 这里把相同pid的拼起来
@@ -787,11 +786,11 @@ RmrsResult RmrsMigrateModule::SetBorrowPlaneParam(const std::map<pid_t, std::vec
     // 清空原有数据
     s_pidRemoteNumaMap.clear();
     s_timeOutNumas.clear();
- 
+
     // 赋值
     s_pidRemoteNumaMap = pidRemoteNumaMap;
     s_timeOutNumas = timeOutNumas;
- 
+
     UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
         << "[MemMigrate][Strategy] The s_timeOutNumas size=" << s_timeOutNumas.size() << ".";
     for (const auto &numa : s_timeOutNumas) {

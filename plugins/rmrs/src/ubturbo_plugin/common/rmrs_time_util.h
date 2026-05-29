@@ -18,7 +18,8 @@
 #include "rmrs_error.h"
 
 namespace rmrs {
-enum class DateFormatMode {
+enum class DateFormatMode
+{
     SPACE_SEPARATOR_MODE = 0, // %Y-%m-%d %H:%M:%S
     T_SEPARATOR_MODE          // %Y-%m-%dT%H:%M:%S
 };
@@ -36,6 +37,6 @@ public:
 private:
     static std::string Convert(DateFormatMode mode);
 };
-}
+} // namespace rmrs
 
 #endif // RMRS_TIME_UTIL_H

@@ -28,6 +28,6 @@ public:
     static RMRS_RES IsPathExist(const string &path);
     static RMRS_RES IsSpecifiedPath(const string &dirPath, const string &pattern);
 };
-}
+} // namespace rmrs
 
 #endif // RMRS_FILE_UTIL_H

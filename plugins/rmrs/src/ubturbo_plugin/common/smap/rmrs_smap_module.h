@@ -17,7 +17,7 @@
 #include "rmrs_error.h"
 
 namespace rmrs::smap {
-const char * const SMAP_LIBSMAPSO_PATH_RMRS = "/usr/lib64/libsmap.so";
+const char *const SMAP_LIBSMAPSO_PATH_RMRS = "/usr/lib64/libsmap.so";
 const int RUN_MODE_RMRS = 1;
 const int SMAP_RATIO_RMRS = 25;
 const int MAX_NR_MIGOUT_RMRS = 40;
@@ -29,7 +29,8 @@ const int REMOTE_NUMA_NUM_RMRS = 18;
 const int MIGRATEOUT_TIMEOUT_RES = -16;
 
 // 迁移模式
-typedef enum {
+typedef enum
+{
     MIG_RATIO_MODE = 0, // 按照比例迁移
     MIG_MEMSIZE_MODE,   // 按照内存大小迁移
 } MigrateMode;

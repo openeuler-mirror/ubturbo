@@ -13,8 +13,8 @@
 #define RMRS_CALLBACK_MANAGER_H
 
 #include "rmrs_error.h"
-#include "turbo_ipc_server.h"
 #include "rmrs_response_info_simpo.h"
+#include "turbo_ipc_server.h"
 namespace rmrs {
 
 class CallbackManager {
@@ -28,7 +28,7 @@ public:
     static RmrsResult DeInitExport();
 
     static RmrsResult SetResponse(RMRSResponseInfoSimpo &response, const RmrsResult &retCode, const std::string &msg,
-                                                   TurboByteBuffer &resBuffer);
+                                  TurboByteBuffer &resBuffer);
     static RmrsResult MigrateBackRecvHandler(const TurboByteBuffer &req, TurboByteBuffer &resp);
 
     static RmrsResult BorrowRollbackRecvHandler(const TurboByteBuffer &req, TurboByteBuffer &resp);
@@ -48,12 +48,13 @@ public:
     static RmrsResult UCacheMigrateStopRecvHandler(const TurboByteBuffer &req, TurboByteBuffer &resp);
 
     static RmrsResult UpdateUCacheRatioRecvHandler(const TurboByteBuffer &req, TurboByteBuffer &resp);
+
 private:
     static bool isSetSmapMode;
 
     static const int memFragmentationMode; // smapRunmode设置为碎片场景--参数为1
 };
 
-}  // namespace rmrs
+} // namespace rmrs
 
 #endif

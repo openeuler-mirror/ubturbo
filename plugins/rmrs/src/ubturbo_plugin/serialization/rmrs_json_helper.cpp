@@ -10,9 +10,9 @@
  * See the Mulan PSL v2 for more details.
  */
 #include "rmrs_json_helper.h"
-#include "turbo_logger.h"
-#include "rmrs_json_util.h"
 #include "rmrs_config.h"
+#include "rmrs_json_util.h"
+#include "turbo_logger.h"
 
 namespace rmrs::serialization {
 using namespace rmrs;

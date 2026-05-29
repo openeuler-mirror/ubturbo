@@ -12,14 +12,14 @@
 #ifndef RMRS_SMAP_HELPER_H
 #define RMRS_SMAP_HELPER_H
 
+#include <csignal>
 #include <mutex>
 #include <string>
 #include <vector>
-#include <csignal>
-#include "turbo_over_commit_def.h"
 #include "rmrs_error.h"
-#include "rmrs_smap_module.h"
 #include "rmrs_file_util.h"
+#include "rmrs_smap_module.h"
+#include "turbo_over_commit_def.h"
 
 namespace rmrs::smap {
 
@@ -28,7 +28,8 @@ using std::mutex;
 
 const int SMAP_RATIO = 25;
 
-enum class RmrsLogLevel : uint32_t {
+enum class RmrsLogLevel : uint32_t
+{
     DEBUG = 0,
     INFO = 1,
     WARN = 2,

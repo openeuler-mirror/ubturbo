@@ -33,8 +33,8 @@ uint32_t DriverInteraction::GetMigrateSuccess(struct MigrateSuccess &queryArg)
     }
 
     if (ioctl(fd, UCACHE_QUERY_MIGRATE_SUCCESS, &queryArg)) {
-        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[ucache] Failed to get migrate success." << "ERROR=" << strerror(errno) << ".";
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[ucache] Failed to get migrate success."
+                                                              << "ERROR=" << strerror(errno) << ".";
         return RMRS_ERROR;
     }
     return RMRS_OK;

@@ -26,9 +26,9 @@ using RmrsResult = uint32_t;
  * 高字节0x1008表示模块ID：即0x1000 + 8，表示communication子系统的net模块，可在本头文件找到RMRS_COMMUNICATION_MID_NET
  * 低字节0x1000表示错误类型：0x1000 + 0，表示模块内的私有错误码基础值 + 错误码，可在头文件RMRS_net_error.h中找到错误类型
  */
-#define RMRS_ERROR_BEGIN_USER 0X1000                               /* 模块内的私有错误码基础值 */
+#define RMRS_ERROR_BEGIN_USER 0X1000                                 /* 模块内的私有错误码基础值 */
 #define RMRS_ERROR_USERNO(n) (uint32_t(RMRS_ERROR_BEGIN_USER + (n))) /* 计算模块内的私有错误码加基础值 */
-#define RMRS_MID_HI16(MID) (uint32_t((MID) << 16))                 /* 模块ID左移到高字节 */
+#define RMRS_MID_HI16(MID) (uint32_t((MID) << 16))                   /* 模块ID左移到高字节 */
 
 /* 各个子系统，MID分段起始ID定义，各个模块定义时选择相应的起始ID */
 #define RMRS_MID_BEGIN0 0x0000 /* common        */
@@ -61,7 +61,7 @@ using RmrsResult = uint32_t;
 /* common错误码定义，全局唯一，记录系统的标准错误返回 */
 /* ********************************************* */
 
-#define RMRS_ERROR_SIGN_INT (-1)                           /* 错误, 有符号数-1 */
+#define RMRS_ERROR_SIGN_INT (-1)                             /* 错误, 有符号数-1 */
 #define RMRS_OK RMRS_COMMON_ERROR(0)                         /* 正确 */
 #define RMRS_ERROR RMRS_COMMON_ERROR(1)                      /* 错误 */
 #define RMRS_ERROR_NOENT RMRS_COMMON_ERROR(2)                /* No such file or directory */
@@ -86,20 +86,16 @@ using RmrsResult = uint32_t;
 /* **************************************** */
 
 /* 0x10021000 rack master vm invalid strategy */
-#define RMRS_INVALID_STRATEGY_ERROR (RMRS_MID_HI16(RMRS_MASTER_MID_VM) | \
-		RMRS_ERROR_USERNO(0x00))
+#define RMRS_INVALID_STRATEGY_ERROR (RMRS_MID_HI16(RMRS_MASTER_MID_VM) | RMRS_ERROR_USERNO(0x00))
 
 /* 0x10021001 rack master vm reclaim mem error */
-#define RMRS_RECLAIM_MEMORY_ERROR (RMRS_MID_HI16(RMRS_MASTER_MID_VM) | \
-		RMRS_ERROR_USERNO(0x01))
+#define RMRS_RECLAIM_MEMORY_ERROR (RMRS_MID_HI16(RMRS_MASTER_MID_VM) | RMRS_ERROR_USERNO(0x01))
 
 /* 0x10021002 rack master vm migrate error */
-#define RMRS_MIGRATE_ERROR (RMRS_MID_HI16(RMRS_MASTER_MID_VM) | \
-		RMRS_ERROR_USERNO(0x02))
+#define RMRS_MIGRATE_ERROR (RMRS_MID_HI16(RMRS_MASTER_MID_VM) | RMRS_ERROR_USERNO(0x02))
 
 /* 0x10021003 rack master return memory invalid param error */
-#define RMRS_INVALID_PARAM_ERROR (RMRS_MID_HI16(RMRS_MASTER_MID_VM) | \
-		RMRS_ERROR_USERNO(0x03))
+#define RMRS_INVALID_PARAM_ERROR (RMRS_MID_HI16(RMRS_MASTER_MID_VM) | RMRS_ERROR_USERNO(0x03))
 
 #define RMRS_RESULT_FAIL(ret) (static_cast<VmResult>(ret) != RMRS_OK)
 #define RMRS_RESULT_OK(ret) (static_cast<VmResult>(ret) == RMRS_OK)
@@ -109,16 +105,13 @@ using RmrsResult = uint32_t;
 /* **************************************** */
 
 /* 0x100B1000  序列化错误 */
-#define RMRS_ERROR_SERIALIZE_ERROR (RMRS_MID_HI16(RMRS_SERIALIZE_MID_BASE) | \
-		RMRS_ERROR_USERNO(0x00))
+#define RMRS_ERROR_SERIALIZE_ERROR (RMRS_MID_HI16(RMRS_SERIALIZE_MID_BASE) | RMRS_ERROR_USERNO(0x00))
 
 /* 0x100B1001 反序列化错误 */
-#define RMRS_ERROR_DESERIALIZE_ERROR (RMRS_MID_HI16(RMRS_SERIALIZE_MID_BASE) | \
-		RMRS_ERROR_USERNO(0x01))
+#define RMRS_ERROR_DESERIALIZE_ERROR (RMRS_MID_HI16(RMRS_SERIALIZE_MID_BASE) | RMRS_ERROR_USERNO(0x01))
 
 /* 0x100B1002 序列化反序列化公共错误 */
-#define RMRS_ERROR_SERIALIZE_DESERIALIZE_COMMON_ERROR (RMRS_MID_HI16(RMRS_SERIALIZE_MID_BASE) | \
-		RMRS_ERROR_USERNO(0x02))
-}
+#define RMRS_ERROR_SERIALIZE_DESERIALIZE_COMMON_ERROR (RMRS_MID_HI16(RMRS_SERIALIZE_MID_BASE) | RMRS_ERROR_USERNO(0x02))
+} // namespace rmrs
 
 #endif // RMRS_ERROR_H

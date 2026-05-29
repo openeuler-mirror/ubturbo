@@ -20,7 +20,7 @@
 namespace rmrs {
 
 /* 将document对象打印成string字符串 */
-JSON_STR JsonUtil::PrintJsonString(const rapidjson::Document& doc)
+JSON_STR JsonUtil::PrintJsonString(const rapidjson::Document &doc)
 {
     rapidjson::StringBuffer buffer;
     rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
@@ -30,7 +30,7 @@ JSON_STR JsonUtil::PrintJsonString(const rapidjson::Document& doc)
 }
 
 /* 将Value对象打印成string字符串 */
-JSON_STR JsonUtil::PrintJsonString(const rapidjson::Value& value)
+JSON_STR JsonUtil::PrintJsonString(const rapidjson::Value &value)
 {
     rapidjson::StringBuffer buffer;
     rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
@@ -51,7 +51,7 @@ bool JsonUtil::RackMemGetJsonItemStr(const rapidjson::Document &doc, const char 
         return false;
     }
 
-    const rapidjson::Value& child = doc[key];
+    const rapidjson::Value &child = doc[key];
     jsonStr = PrintJsonString(child);
     return true;
 }

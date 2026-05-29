@@ -12,8 +12,8 @@
 #ifndef RMRS_LIBVIRT_MODULE_H
 #define RMRS_LIBVIRT_MODULE_H
 
-#include <cstdint>
 #include <libvirt/libvirt.h>
+#include <cstdint>
 #include "rmrs_error.h"
 
 namespace rmrs::libvirt {
@@ -88,6 +88,6 @@ private:
     static VirConnectDomainEventRegisterFunc virConnectDomainEventRegisterFunc;
     static VirConnectDomainEventDeRegisterFunc virConnectDomainEventDeRegisterFunc;
 };
-} // mempooling::libvirt
+} // namespace rmrs::libvirt
 
 #endif // RMRS_LIBVIRT_MODULE_H

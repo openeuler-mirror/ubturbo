@@ -14,19 +14,18 @@
 #define RMRS_JSON_UTIL_H
 
 #include <map>
-#include <string>
-#include <vector>
 #include <set>
-#include <unordered_set>
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include <rapidjson/document.h>
-#include <rapidjson/stringbuffer.h>
 #include <rapidjson/prettywriter.h>
+#include <rapidjson/stringbuffer.h>
 
-
-#include "turbo_logger.h"
 #include "rmrs_config.h"
+#include "turbo_logger.h"
 
 namespace rmrs {
 using namespace turbo::log;
@@ -40,10 +39,10 @@ using JSON_SET = std::set<std::string>;
 class JsonUtil {
 public:
     /* 将document对象打印成string字符串 */
-    static JSON_STR PrintJsonString(const rapidjson::Document& doc);
+    static JSON_STR PrintJsonString(const rapidjson::Document &doc);
 
     /* 将Value对象打印成string字符串 */
-    static JSON_STR PrintJsonString(const rapidjson::Value& value);
+    static JSON_STR PrintJsonString(const rapidjson::Value &value);
 
     /* 返回pstJson中key对应的子节点的json字符串 */
     static bool RackMemGetJsonItemStr(const rapidjson::Document &doc, const char *key, JSON_STR &jsonStr);
