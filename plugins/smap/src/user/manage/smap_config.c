@@ -475,14 +475,13 @@ static int RecoverProcessConfig(char *processBase)
             break;
         }
         AssignProcessAttr(attr, payload);
-        SMAP_LOGGER_INFO(
-            "ProcessPayload %d, type %hu, numaNodes %#x, state %hu, scan type %hu, scan time %u.",
-            payload->pid, payload->type, payload->numaNodes, payload->state, payload->scanType,
-            payload->scanTime);
+        SMAP_LOGGER_INFO("ProcessPayload %d, type %hu, numaNodes %#x, state %hu, scan type %hu, scan time %u.",
+                         payload->pid, payload->type, payload->numaNodes, payload->state, payload->scanType,
+                         payload->scanTime);
         for (int j = 0; j < payload->count; j++) {
-            SMAP_LOGGER_INFO(
-                "ProcessPayload %d, destNid %d, ratio %d, memsize %llu.", payload->pid,
-                payload->migrateParam[j].nid, payload->migrateParam[j].ratio, payload->migrateParam[j].memSize);
+            SMAP_LOGGER_INFO("ProcessPayload %d, destNid %d, ratio %d, memsize %llu.", payload->pid,
+                             payload->migrateParam[j].nid, payload->migrateParam[j].ratio,
+                             payload->migrateParam[j].memSize);
         }
         LinkedListAdd(&manager->processes, &attr);
         manager->nr[attr->type]++;

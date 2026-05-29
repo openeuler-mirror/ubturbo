@@ -264,7 +264,8 @@ static inline bool stage2_pte_executable(kvm_pte_t pte)
 	return !(pte & KVM_PTE_LEAF_ATTR_HI_S2_XN);
 }
 
-static int smap_stage2_test_clear_young_walker(const struct kvm_pgtable_visit_ctx *ctx,
+static int
+smap_stage2_test_clear_young_walker(const struct kvm_pgtable_visit_ctx *ctx,
 				    enum kvm_pgtable_walk_flags visit)
 {
 	kvm_pte_t pte = ctx->old;

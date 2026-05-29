@@ -16,7 +16,7 @@
 #define SCAN_PERIOD_UNIT_MS 50
 
 #define MMAPLOCK_BATCH_SIZE (64UL * 1024 * 1024)
-#define SCAN_GROUP_SIZE (64UL * 1024)  /* 64KiB分组扫描优化 */
+#define SCAN_GROUP_SIZE (64UL * 1024) /* 64KiB分组扫描优化 */
 
 #define SCAN_RESULT_CAPACITY (MMAPLOCK_BATCH_SIZE / PAGE_SIZE)
 
@@ -76,7 +76,7 @@ struct pte_walk {
 	bool group_hot;
 	u64 group_hot_skip_cnt;
 	struct scan_result_entry *scan_results;
-	u64 scan_result_cnt;		/* 当前缓冲区计数 */
+	u64 scan_result_cnt; /* 当前缓冲区计数 */
 };
 
 struct freq_info {

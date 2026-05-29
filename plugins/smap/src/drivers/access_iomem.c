@@ -236,7 +236,7 @@ int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size)
 
 	read_lock(&rem_ram_list_lock);
 	list_for_each_entry(seg, &remote_ram_list, node) {
-		if (seg->numa_node >=  SMAP_MAX_NUMNODES) {
+		if (seg->numa_node >= SMAP_MAX_NUMNODES) {
 			pr_err("numa %d is invalid\n", seg->numa_node);
 			read_unlock(&rem_ram_list_lock);
 			return -ERANGE;

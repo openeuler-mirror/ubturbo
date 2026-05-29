@@ -10,14 +10,15 @@
 #include "urma.h"
 
 struct urma_trans_segment_info {
-    uint64_t addr;
-    uint32_t len;
-    struct ubcore_target_seg *sge;
+	uint64_t addr;
+	uint32_t len;
+	struct ubcore_target_seg *sge;
 };
 
 int urma_meta_sge_init(void);
 
-int get_urma_trans_segment(struct urma_trans_segment_info *src_info, struct urma_trans_segment_info *dst_info);
+int get_urma_trans_segment(struct urma_trans_segment_info *src_info,
+			   struct urma_trans_segment_info *dst_info);
 
 int ub_dma_register_segment(u64 pa_start, u64 pa_end);
 

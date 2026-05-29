@@ -16,7 +16,7 @@
 #define BA_STS_VALUE_N7_COUNT 32768
 #define BA_STS_VALUE_N6_COUNT 8192
 #define BA_STS_TOTAL_LEHGTH(ba_sts_value_count) \
-	((ba_sts_value_count) * BA_STS_VALUE_SIZE)
+	(ba_sts_value_count) * BA_STS_VALUE_SIZE
 #define BA_STS_WORD_COUNT(ba_sts_value_count) \
 	(BA_STS_TOTAL_LEHGTH(ba_sts_value_count) / sizeof(u32))
 

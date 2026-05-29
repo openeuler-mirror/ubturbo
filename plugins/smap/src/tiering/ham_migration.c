@@ -103,7 +103,8 @@ static int config_system_huge_page(unsigned long huge_page_number,
 		nr_page = h->nr_huge_pages_node[node_id];
 		if (nr_page == huge_page_number) {
 			pr_info("hugepage configuration succeeded: NUMA id = %u, nr_hugepages = %u, "
-				"retry times = %d\n", node_id, nr_page, retry_times);
+				"retry times = %d\n",
+				node_id, nr_page, retry_times);
 			filp_close(file, NULL);
 			return 0;
 		}
@@ -112,8 +113,8 @@ static int config_system_huge_page(unsigned long huge_page_number,
 	}
 
 	filp_close(file, NULL);
-	pr_err("nr_hugepages on node%d: %u, retry times: %d\n", node_id, nr_page,
-	       retry_times);
+	pr_err("nr_hugepages on node%d: %u, retry times: %d\n", node_id,
+	       nr_page, retry_times);
 	return -EFAULT;
 }
 
@@ -129,13 +130,14 @@ static int compare_page_list(const void *a, const void *b)
 
 static int compare_page_freq(const void *a, const void *b)
 {
-	struct list_head * const *list_a = a;
-	struct list_head * const *list_b = b;
-	struct ham_page_map *hpm_a = list_entry(*list_a, struct ham_page_map, list);
-	struct ham_page_map *hpm_b = list_entry(*list_b, struct ham_page_map, list);
+	struct list_head *const *list_a = a;
+	struct list_head *const *list_b = b;
+	struct ham_page_map *hpm_a =
+		list_entry(*list_a, struct ham_page_map, list);
+	struct ham_page_map *hpm_b =
+		list_entry(*list_b, struct ham_page_map, list);
 
-	return (hpm_a->freq > hpm_b->freq) -
-	       (hpm_a->freq < hpm_b->freq);
+	return (hpm_a->freq > hpm_b->freq) - (hpm_a->freq < hpm_b->freq);
 }
 
 static int init_numa_page_map(struct ham_migrate_task *mig_task,
@@ -165,8 +167,8 @@ static int init_numa_page_map(struct ham_migrate_task *mig_task,
 		mig_task->ram_maps[i].hva_start = rbi->hva_start;
 		page_num = rbi->size / PAGE_SIZE_2M;
 		mig_task->ram_maps[i].page_num = page_num;
-		mig_task->ram_maps[i].hpms = vzalloc(
-			page_num * sizeof(struct ham_page_map));
+		mig_task->ram_maps[i].hpms =
+			vzalloc(page_num * sizeof(struct ham_page_map));
 		if (!mig_task->ram_maps[i].hpms) {
 			pr_err("unable to allocate memory for HAM page map\n");
 			ret = -ENOMEM;
@@ -411,7 +413,8 @@ static void sort_hpm_list(struct list_head *head, unsigned int nr_hpm)
  * of the ret_hpm_list.
  */
 static unsigned int queue_qualified_pages(struct ham_migrate_task *mig_task,
-					  bool migrated, struct list_head *ret_hpm_list)
+					  bool migrated,
+					  struct list_head *ret_hpm_list)
 {
 	struct ram_block_map *ram_map;
 	struct ham_page_map *hpm;
@@ -421,7 +424,8 @@ static unsigned int queue_qualified_pages(struct ham_migrate_task *mig_task,
 		ram_map = &mig_task->ram_maps[i];
 		for (j = 0; j < ram_map->page_num; j++) {
 			hpm = &ram_map->hpms[j];
-			if (!hpm_test_present(hpm) || hpm_test_migrate(hpm) != migrated) {
+			if (!hpm_test_present(hpm) ||
+			    hpm_test_migrate(hpm) != migrated) {
 				continue;
 			}
 
@@ -438,8 +442,10 @@ static unsigned int queue_qualified_pages(struct ham_migrate_task *mig_task,
 	return nr_hpm;
 }
 
-static unsigned int construct_page_list(struct list_head *hpm_list,
-	get_migration_folio_t get_migration_folio, struct folio **folios)
+static unsigned int
+construct_page_list(struct list_head *hpm_list,
+		    get_migration_folio_t get_migration_folio,
+		    struct folio **folios)
 {
 	struct ham_page_map *hpm;
 	struct folio *folio;
@@ -499,7 +505,8 @@ static int handle_ham_migration(struct list_head *hpm_list,
 		if (retry_times)
 			msleep(MIGRATE_INTERVAL_MSEC);
 		/* Filter out the qualified folios and place them into an array. */
-		nr_folios = construct_page_list(hpm_list, get_migration_folio, folios);
+		nr_folios = construct_page_list(hpm_list, get_migration_folio,
+						folios);
 		if (nr_folios == 0) {
 			pr_warn("no qualified folios were found in the hpm_list\n");
 			kfree(folios);
@@ -508,10 +515,12 @@ static int handle_ham_migration(struct list_head *hpm_list,
 
 		nr_succeeded = 0;
 		/* Use the MIGRATE_SYNC migrate_mode and keep retrying until successful. */
-		ret = isolate_and_migrate_folios(folios, nr_folios, get_new_folio,
-						put_new_folio, (uintptr_t)hpm_list,
-						MIGRATE_SYNC, &nr_succeeded);
-		nr_left = (nr_folios << (PMD_SHIFT - PAGE_SHIFT)) - nr_succeeded;
+		ret = isolate_and_migrate_folios(folios, nr_folios,
+						 get_new_folio, put_new_folio,
+						 (uintptr_t)hpm_list,
+						 MIGRATE_SYNC, &nr_succeeded);
+		nr_left =
+			(nr_folios << (PMD_SHIFT - PAGE_SHIFT)) - nr_succeeded;
 		if (!nr_left && !ret)
 			break;
 		pr_info("isolate and migrate folios failed, retry_times: %u, ret: %d, "
@@ -576,12 +585,13 @@ struct folio *get_new_folio_rollback(struct folio *folio, unsigned long private)
 
 	list_for_each_entry(hpm, hpm_list, list) {
 		if (hpm_test_rollback(hpm) || !hpm_test_present(hpm) ||
-			!hpm_test_migrate(hpm))
+		    !hpm_test_migrate(hpm))
 			continue;
 
 		if (hpm->dst_folio == folio) {
 			hpm_set_rollback(hpm);
-			hpm->src_folio = ham_alloc_huge_page_node(hpm->src_numa_id);
+			hpm->src_folio =
+				ham_alloc_huge_page_node(hpm->src_numa_id);
 			return hpm->src_folio;
 		}
 	}
@@ -599,7 +609,7 @@ void put_new_folio_rollback(struct folio *folio, unsigned long private)
 
 	list_for_each_entry(hpm, hpm_list, list) {
 		if (!hpm_test_rollback(hpm) || !hpm_test_present(hpm) ||
-			!hpm_test_migrate(hpm))
+		    !hpm_test_migrate(hpm))
 			continue;
 
 		if (hpm->src_folio == folio) {
@@ -666,7 +676,8 @@ static int src_suspend_pgtable_maintain(struct ham_migrate_task *mig_task)
 		elapsed_kernel = ktime_to_us(ktime_sub(t2, t1));
 		elapsed_task = ktime_to_us(ktime_sub(t3, t2));
 		pr_info("[KERNEL_PGTABLE_MNT] elapsed time: %lld us\n"
-			"[TASK_PGTABLE_MNT] elapsed time: %lld us\n", elapsed_kernel, elapsed_task);
+			"[TASK_PGTABLE_MNT] elapsed time: %lld us\n",
+			elapsed_kernel, elapsed_task);
 
 		ram_map->cacheable = false;
 	}
@@ -772,8 +783,8 @@ static int get_folios_freqs(struct ham_migrate_task *mig_task)
 static inline int ham_modify_pgtable(struct ham_migrate_task *mig_task,
 				     bool cacheable)
 {
-	return cacheable ? dst_resume_pgtable_maintain(mig_task) :
-			   src_suspend_pgtable_maintain(mig_task);
+	return cacheable ? dst_resume_pgtable_maintain(mig_task)
+			 : src_suspend_pgtable_maintain(mig_task);
 }
 
 static inline bool pid_legally(pid_t pid)
@@ -789,9 +800,10 @@ static int check_rmt_numa_info(struct ram_block_info *rbi)
 		return 0;
 	}
 
-    if (rbi->rmt_numa_id < 0 || rbi->rmt_numa_id >= MAX_NUMNODES ||
+	if (rbi->rmt_numa_id < 0 || rbi->rmt_numa_id >= MAX_NUMNODES ||
 	    !numa_is_remote_node(rbi->rmt_numa_id)) {
-        pr_err("node: %d is not a remote NUMA node\n", rbi->rmt_numa_id);
+		pr_err("node: %d is not a remote NUMA node\n",
+		       rbi->rmt_numa_id);
 		return -EINVAL;
 	}
 
@@ -1029,7 +1041,8 @@ static long ioctl_rollback_pages(unsigned long arg)
 	}
 
 	ret = handle_ham_migration(&hpm_list, nr_hpm, get_folio_migrate_back,
-				   get_new_folio_rollback, put_new_folio_rollback);
+				   get_new_folio_rollback,
+				   put_new_folio_rollback);
 	if (ret) {
 		pr_err("failed to rollback pages, pid: %d\n", mig_task->pid);
 	}
@@ -1207,14 +1220,14 @@ static const struct file_operations g_ham_fops = {
 };
 
 static ssize_t global_cache_mnt_show(struct device *dev,
-					struct device_attribute *attr, char *buf)
+				     struct device_attribute *attr, char *buf)
 {
 	return sprintf(buf, "%d\n", global_cache_mnt);
 }
 
 static ssize_t global_cache_mnt_store(struct device *dev,
-					struct device_attribute *attr,
-					const char *buf, size_t count)
+				      struct device_attribute *attr,
+				      const char *buf, size_t count)
 {
 	int val;
 	if (kstrtoint(buf, DECIMAL, &val) == 0)
@@ -1223,7 +1236,7 @@ static ssize_t global_cache_mnt_store(struct device *dev,
 }
 
 static DEVICE_ATTR(global_cache_mnt, 0664, global_cache_mnt_show,
-			global_cache_mnt_store);
+		   global_cache_mnt_store);
 
 int ham_init(void)
 {
@@ -1251,7 +1264,7 @@ int ham_init(void)
 	}
 
 	g_ham_device = device_create(g_ham_class, NULL, g_ham_dev, NULL,
-				   "ham_migrate");
+				     "ham_migrate");
 	if (IS_ERR(g_ham_device)) {
 		ret = -EBUSY;
 		pr_err("failed to init HAM device\n");

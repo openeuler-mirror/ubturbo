@@ -53,15 +53,19 @@ struct ksm_rmap_item {
 	};
 };
 
-struct vm_area_struct *smap_vma_interval_tree_iter_first(
-	struct rb_root_cached *root, unsigned long start, unsigned long last);
-struct vm_area_struct *smap_vma_interval_tree_iter_next(
-	struct vm_area_struct *node, unsigned long start, unsigned long last);
+struct vm_area_struct *
+smap_vma_interval_tree_iter_first(struct rb_root_cached *root,
+				  unsigned long start, unsigned long last);
+struct vm_area_struct *
+smap_vma_interval_tree_iter_next(struct vm_area_struct *node,
+				 unsigned long start, unsigned long last);
 
-struct anon_vma_chain *smap_anon_vma_interval_tree_iter_first(
-	struct rb_root_cached *root, unsigned long start, unsigned long last);
-struct anon_vma_chain *smap_anon_vma_interval_tree_iter_next(
-	struct anon_vma_chain *node, unsigned long start, unsigned long last);
+struct anon_vma_chain *
+smap_anon_vma_interval_tree_iter_first(struct rb_root_cached *root,
+				       unsigned long start, unsigned long last);
+struct anon_vma_chain *
+smap_anon_vma_interval_tree_iter_next(struct anon_vma_chain *node,
+				      unsigned long start, unsigned long last);
 
 #define smap_anon_vma_interval_tree_foreach(avc, root, start, last)      \
 	for ((avc) = smap_anon_vma_interval_tree_iter_first(root, start, \

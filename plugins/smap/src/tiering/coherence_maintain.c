@@ -66,8 +66,8 @@ static int modify_hugetlb_prot(pte_t *pte, unsigned long hmask __always_unused,
 
 	info->hugetlb_cnt++;
 
-	prot = cacheable ? pgprot_tagged(pte_pgprot(entry)) :
-			   pgprot_writecombine(pte_pgprot(entry));
+	prot = cacheable ? pgprot_tagged(pte_pgprot(entry))
+			 : pgprot_writecombine(pte_pgprot(entry));
 	entry = pte_modify(entry, prot);
 	__set_pte(pte, entry);
 
@@ -287,8 +287,8 @@ int flush_cache_by_pa(phys_addr_t addr, size_t size,
 	down(&ham_sem);
 	while (remain_size != 0) {
 		size_t flush_size;
-		flush_size = remain_size <= MAX_FLUSH_SIZE ? remain_size :
-							     MAX_FLUSH_SIZE;
+		flush_size = remain_size <= MAX_FLUSH_SIZE ? remain_size
+							   : MAX_FLUSH_SIZE;
 		/* Retry if there is contention over hardware */
 		while (retry_times) {
 			pr_debug(
@@ -335,16 +335,16 @@ int flush_cache_by_pa(phys_addr_t addr, size_t size,
  * symbolically exported, so stub a dummy implementation here.
 */
 void __mmu_notifier_arch_invalidate_secondary_tlbs(struct mm_struct *mm,
-							  unsigned long start,
-							  unsigned long end)
+						   unsigned long start,
+						   unsigned long end)
 {
 }
 
 static int modify_single_hugetlb_prot(pte_t *pte,
-				     unsigned long hmask __always_unused,
-				     unsigned long addr,
-				     unsigned long next __always_unused,
-				     struct mm_walk *walk)
+				      unsigned long hmask __always_unused,
+				      unsigned long addr,
+				      unsigned long next __always_unused,
+				      struct mm_walk *walk)
 {
 	struct vm_area_struct *vma = walk->vma;
 	spinlock_t *ptl;
@@ -395,7 +395,7 @@ static int modify_single_hugetlb_prot(pte_t *pte,
  * 4. set the corresponding task page table attribute to valid.
  */
 int set_pid_pgtable_cacheable(pid_t pid, unsigned long start,
-					unsigned long size)
+			      unsigned long size)
 {
 	struct mm_struct *mm;
 	int ret = -EINVAL;
@@ -406,7 +406,8 @@ int set_pid_pgtable_cacheable(pid_t pid, unsigned long start,
 	unsigned long end = start + size;
 
 	pr_info("Start modify task and kernel pgtable to cacheable and valid, "
-			"pid: %d, size: %#lx\n", pid, size);
+		"pid: %d, size: %#lx\n",
+		pid, size);
 	/* Get process information */
 	mm = find_get_mm_by_vpid(pid);
 	if (!mm) {

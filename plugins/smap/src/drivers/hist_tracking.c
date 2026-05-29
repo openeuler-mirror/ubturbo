@@ -113,7 +113,8 @@ static int actc_buffer_reinit(struct access_tracking_dev *hdev)
 	}
 	actc_buffer_deinit(hdev);
 	if (page_count) {
-		hdev->access_bit_actc_data = vzalloc(page_count * sizeof(actc_t));
+		hdev->access_bit_actc_data =
+			vzalloc(page_count * sizeof(actc_t));
 		if (!hdev->access_bit_actc_data) {
 			return -ENOMEM;
 		}
@@ -198,7 +199,6 @@ static int actc_buffer_init(struct access_tracking_dev *hdev)
 	}
 	return 0;
 }
-
 
 static void hist_tracking_deinit(void)
 {

@@ -298,8 +298,9 @@ static void update_obmm_dev_pa(void)
 		if (mr->memid == 0)
 			continue;
 
-		ret = scnprintf(filepath, sizeof(filepath), "%s/%s%llu/import_info",
-			OBMM_SYS_DIR, OBMM_SHM_DIR, mr->memid);
+		ret = scnprintf(filepath, sizeof(filepath),
+				"%s/%s%llu/import_info", OBMM_SYS_DIR,
+				OBMM_SHM_DIR, mr->memid);
 		if (ret <= 0)
 			continue;
 
@@ -309,27 +310,29 @@ static void update_obmm_dev_pa(void)
 			continue;
 		path_put(&path);
 
-		ret = scnprintf(filepath, sizeof(filepath), "%s/%s%llu/import_info/pa",
-			OBMM_SYS_DIR, OBMM_SHM_DIR, mr->memid);
- 	 	if (ret <= 0)
-			continue;
-
- 	 	ret = extract_hex_content(filepath, &pa);
- 	 	if (ret != 0)
-			continue;
- 	 
- 	 	ret = scnprintf(filepath, sizeof(filepath), "%s/%s%llu/size",
-			OBMM_SYS_DIR, OBMM_SHM_DIR, mr->memid);
+		ret = scnprintf(filepath, sizeof(filepath),
+				"%s/%s%llu/import_info/pa", OBMM_SYS_DIR,
+				OBMM_SHM_DIR, mr->memid);
 		if (ret <= 0)
 			continue;
- 	 
- 	 	ret = extract_hex_content(filepath, &size);
+
+		ret = extract_hex_content(filepath, &pa);
 		if (ret != 0)
 			continue;
-			
+
+		ret = scnprintf(filepath, sizeof(filepath), "%s/%s%llu/size",
+				OBMM_SYS_DIR, OBMM_SHM_DIR, mr->memid);
+		if (ret <= 0)
+			continue;
+
+		ret = extract_hex_content(filepath, &size);
+		if (ret != 0)
+			continue;
+
 		mr->start = pa;
 		mr->end = mr->start + size - 1;
-		pr_debug("update memid: %llu, pa: %#llx, size: %#llx\n", mr->memid, pa, size);
+		pr_debug("update memid: %llu, pa: %#llx, size: %#llx\n",
+			 mr->memid, pa, size);
 	}
 }
 
@@ -489,7 +492,8 @@ int calc_acidx_paddr_iomem(u64 index, int nid, u64 *paddr)
 {
 	struct ram_segment *seg;
 	u64 range;
-	int shift = is_smap_pg_huge() ? __builtin_ctz(g_pagesize_huge) : PAGE_SHIFT;
+	int shift = is_smap_pg_huge() ? __builtin_ctz(g_pagesize_huge)
+				      : PAGE_SHIFT;
 	u64 tmp_index = index << shift;
 
 	list_for_each_entry(seg, &remote_ram_list, node) {

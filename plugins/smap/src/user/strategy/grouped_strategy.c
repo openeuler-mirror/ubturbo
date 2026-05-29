@@ -799,9 +799,8 @@ static uint64_t SelectSwapPairs(ProcessAttr *process, const MigrationGroupAttr *
     return nrPairs;
 }
 
-static int BuildSwapMigList(ProcessAttr *process, MigrationGroupAttr *group,
-                            struct MigList mlist[MAX_NODES][MAX_NODES], uint64_t localUsed, uint64_t remoteUsed,
-                            uint64_t *nrBuilt)
+static int BuildSwapMigList(ProcessAttr *process, MigrationGroupAttr *group, struct MigList mlist[MAX_NODES][MAX_NODES],
+                            uint64_t localUsed, uint64_t remoteUsed, uint64_t *nrBuilt)
 {
     uint64_t remoteOffsets[MAX_NODES] = { 0 };
     GroupPageData *localPages = NULL;
@@ -834,11 +833,11 @@ static int BuildSwapMigList(ProcessAttr *process, MigrationGroupAttr *group,
         free(remotePages);
         return -ENOMEM;
     }
-    uint64_t nrPairs = SelectSwapPairs(process, group, localPages, nrLocalPages, remotePages, nrRemotePages, swapCap,
-                                       pairs);
+    uint64_t nrPairs =
+        SelectSwapPairs(process, group, localPages, nrLocalPages, remotePages, nrRemotePages, swapCap, pairs);
     if (nrPairs > 0) {
-        SMAP_LOGGER_INFO("grouped pid %d swap %llu pages, localUsed %llu remoteUsed %llu.",
-                         process->pid, nrPairs, localUsed, remoteUsed);
+        SMAP_LOGGER_INFO("grouped pid %d swap %llu pages, localUsed %llu remoteUsed %llu.", process->pid, nrPairs,
+                         localUsed, remoteUsed);
         ret = BuildSwapMigListsFromPairs(pairs, nrPairs, mlist);
         if (!ret) {
             *nrBuilt = nrPairs;
@@ -881,8 +880,8 @@ static int RunPromoteStage(ProcessAttr *process, struct MigList mlist[MAX_NODES]
     for (int i = 0; i < groupCnt; i++) {
         MigrationGroupAttr *group = &process->groupPolicy.groups[promoteGroups[i].groupIdx];
         uint64_t promoteNeed = MIN(promoteGroups[i].deficit, promoteGroups[i].remoteUsed);
-        SMAP_LOGGER_INFO("grouped pid %d group %d warm-up promote %llu pages.",
-                         process->pid, promoteGroups[i].groupIdx, promoteNeed);
+        SMAP_LOGGER_INFO("grouped pid %d group %d warm-up promote %llu pages.", process->pid, promoteGroups[i].groupIdx,
+                         promoteNeed);
         ret = BuildPromoteMigList(process, group, remoteOffsets, mlist, promoteNeed);
         if (ret) {
             return ret;
@@ -910,8 +909,8 @@ static int RunDemoteStage(ProcessAttr *process, struct MigList mlist[MAX_NODES][
             demoteAllowed += CalcRemoteRemaining(group, j);
         }
         uint64_t actualDemote = MIN(excess, demoteAllowed);
-        SMAP_LOGGER_INFO("grouped pid %d group %d cool-down demote %llu pages, allowed %llu.",
-                         process->pid, i, actualDemote, demoteAllowed);
+        SMAP_LOGGER_INFO("grouped pid %d group %d cool-down demote %llu pages, allowed %llu.", process->pid, i,
+                         actualDemote, demoteAllowed);
         int ret = BuildDemoteMigList(process, group, mlist, actualDemote);
         if (ret) {
             return ret;
@@ -929,8 +928,8 @@ static int RunLocalRebalanceStage(ProcessAttr *process, struct MigList mlist[MAX
         if (deficit == 0 || excess == 0) {
             continue;
         }
-        SMAP_LOGGER_INFO("grouped pid %d group %d local rebalance candidate deficit %llu excess %llu.",
-                         process->pid, i, deficit, excess);
+        SMAP_LOGGER_INFO("grouped pid %d group %d local rebalance candidate deficit %llu excess %llu.", process->pid, i,
+                         deficit, excess);
         int ret = BuildLocalRebalanceMigList(process, group, mlist);
         if (ret) {
             return ret;
@@ -956,8 +955,8 @@ static int RunSwapStage(ProcessAttr *process, struct MigList mlist[MAX_NODES][MA
             group->swapCandidateRounds++;
         }
         if (group->swapCandidateRounds < GROUP_SWAP_READY_ROUNDS) {
-            SMAP_LOGGER_INFO("grouped pid %d group %d swap candidate round %u.",
-                             process->pid, i, group->swapCandidateRounds);
+            SMAP_LOGGER_INFO("grouped pid %d group %d swap candidate round %u.", process->pid, i,
+                             group->swapCandidateRounds);
             continue;
         }
         EnsureGroupedSwapParam(process, localUsed, remoteUsed);
@@ -1017,8 +1016,8 @@ void UpdateGroupedMigrationResult(ProcessAttr *process, int fromNid, int toNid, 
             int targetIdx = GroupTargetIndex(group, toNid);
             if (targetIdx >= 0) {
                 group->targets[targetIdx].usedPages += successPages;
-                SMAP_LOGGER_INFO("grouped pid %d group %d target %d used pages %llu.",
-                                 process->pid, i, toNid, group->targets[targetIdx].usedPages);
+                SMAP_LOGGER_INFO("grouped pid %d group %d target %d used pages %llu.", process->pid, i, toNid,
+                                 group->targets[targetIdx].usedPages);
                 return;
             }
         }
@@ -1026,18 +1025,17 @@ void UpdateGroupedMigrationResult(ProcessAttr *process, int fromNid, int toNid, 
             int targetIdx = GroupTargetIndex(group, fromNid);
             if (targetIdx >= 0) {
                 if (successPages > group->targets[targetIdx].usedPages) {
-                    SMAP_LOGGER_WARNING("grouped pid %d group %d target %d used pages underflow.",
-                                        process->pid, i, fromNid);
+                    SMAP_LOGGER_WARNING("grouped pid %d group %d target %d used pages underflow.", process->pid, i,
+                                        fromNid);
                     group->targets[targetIdx].usedPages = 0;
                 } else {
                     group->targets[targetIdx].usedPages -= successPages;
                 }
-                SMAP_LOGGER_INFO("grouped pid %d group %d target %d used pages %llu.",
-                                 process->pid, i, fromNid, group->targets[targetIdx].usedPages);
+                SMAP_LOGGER_INFO("grouped pid %d group %d target %d used pages %llu.", process->pid, i, fromNid,
+                                 group->targets[targetIdx].usedPages);
                 return;
             }
         }
     }
-    SMAP_LOGGER_WARNING("grouped pid %d cannot match migration result from %d to %d.",
-                        process->pid, fromNid, toNid);
+    SMAP_LOGGER_WARNING("grouped pid %d cannot match migration result from %d to %d.", process->pid, fromNid, toNid);
 }

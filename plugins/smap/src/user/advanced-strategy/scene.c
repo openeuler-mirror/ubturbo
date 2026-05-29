@@ -501,9 +501,9 @@ static void GetMaxNuma(struct ProcessManager *manager, int *maxL1node, int *maxL
 static bool ProcessMultiNumaVmNode(ProcessAttr *process)
 {
     if (IsMultiNumaVm(process)) {
-        errno_t ret = memcpy_s(process->strategyAttr.l3RemoteMemRatio,
-            sizeof(double) * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM,
-            process->strategyAttr.l2RemoteMemRatio, sizeof(double) * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM);
+        errno_t ret =
+            memcpy_s(process->strategyAttr.l3RemoteMemRatio, sizeof(double) * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM,
+                     process->strategyAttr.l2RemoteMemRatio, sizeof(double) * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM);
         if (ret != EOK) {
             SMAP_LOGGER_ERROR("memcpy l3 remote mem ratio failed.");
             return false;

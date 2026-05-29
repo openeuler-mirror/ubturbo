@@ -397,21 +397,24 @@ static void update_tracking_data(actc_t *tracking_data,
 	u32 i, idx;
 	payload_info->length =
 		payload_info->length > (stat_info->page_num[L1] +
-					stat_info->page_num[L2]) ?
-			(stat_info->page_num[L1] + stat_info->page_num[L2]) :
-			payload_info->length;
+					stat_info->page_num[L2])
+			? (stat_info->page_num[L1] + stat_info->page_num[L2])
+			: payload_info->length;
 
-	for (idx = 0; idx + SCHEDULE_INTERVAL <= payload_info->length; idx += SCHEDULE_INTERVAL) {
+	for (idx = 0; idx + SCHEDULE_INTERVAL <= payload_info->length;
+	     idx += SCHEDULE_INTERVAL) {
 		for (i = 0; i < SCHEDULE_INTERVAL; i++) {
 			for (j = 0; j < stat_info->window_num; j++)
-				tracking_data[idx + i] += stat_info->sliding_windows[j][idx + i];
+				tracking_data[idx + i] +=
+					stat_info->sliding_windows[j][idx + i];
 		}
 		cond_resched();
 	}
 
 	for (; idx < payload_info->length; idx++) {
 		for (j = 0; j < stat_info->window_num; j++)
-			tracking_data[idx] += stat_info->sliding_windows[j][idx];
+			tracking_data[idx] +=
+				stat_info->sliding_windows[j][idx];
 	}
 }
 
@@ -465,12 +468,12 @@ out_free_payload:
 
 static long ioctl_get_nr_local_numa(void __user *argp)
 {
-    if (copy_to_user(argp, &nr_local_numa, sizeof(int))) {
+	if (copy_to_user(argp, &nr_local_numa, sizeof(int))) {
 		pr_err("copy_to_user nr_local_numa failed\n");
-        return -EFAULT;
+		return -EFAULT;
 	}
-    pr_info("passed nr_local_numa %d to user space\n", nr_local_numa);
-    return 0;
+	pr_info("passed nr_local_numa %d to user space\n", nr_local_numa);
+	return 0;
 }
 
 static long smap_access_ioctl(struct file *file, unsigned int cmd,
@@ -497,7 +500,7 @@ static long smap_access_ioctl(struct file *file, unsigned int cmd,
 	case SMAP_ACCESS_CREATE_PROCFS:
 		return ioctl_create_smap_procfs(argp);
 	case SMAP_ACCESS_GET_NR_LOCAL_NUMA:
-    	return ioctl_get_nr_local_numa(argp);
+		return ioctl_get_nr_local_numa(argp);
 	default:
 		rc = -ENOTTY;
 	}

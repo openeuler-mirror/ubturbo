@@ -70,8 +70,8 @@ static inline struct access_tracking_dev *get_first_access_dev(void)
 
 static inline int get_page_size(struct access_tracking_dev *adev)
 {
-	return adev->page_size_mode == PAGE_MODE_2M ? g_pagesize_huge :
-						      PAGE_SIZE;
+	return adev->page_size_mode == PAGE_MODE_2M ? g_pagesize_huge
+						    : PAGE_SIZE;
 }
 
 void cancel_ap_scan_work(struct access_pid *ap);

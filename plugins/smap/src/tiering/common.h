@@ -85,20 +85,20 @@ struct migrate_numa_msg {
 };
 
 struct mig_payload {
-    pid_t pid;
-    int src_nid;
-    int dest_nid;
-    int ratio;
+	pid_t pid;
+	int src_nid;
+	int dest_nid;
+	int ratio;
 	int keep_ratio;
-    u64 mem_size;
-    bool is_ratio_mode;
-    u64 success_cnt;
+	u64 mem_size;
+	bool is_ratio_mode;
+	u64 success_cnt;
 };
 
 struct migrate_pid_remote_numa_msg {
-    int pid_cnt;
-    struct mig_payload *payloads;
-    int *mig_res_array; // 迁移结果
+	int pid_cnt;
+	struct mig_payload *payloads;
+	int *mig_res_array; // 迁移结果
 };
 
 typedef enum {
@@ -109,15 +109,15 @@ typedef enum {
 
 static inline u64 calc_huge_count(u64 range)
 {
-	return (range & ~TWO_MEGA_MASK) == 0 ?
-		       (u64)(range >> TWO_MEGA_SHIFT) :
-		       (u64)((range >> TWO_MEGA_SHIFT) + 1);
+	return (range & ~TWO_MEGA_MASK) == 0
+		       ? (u64)(range >> TWO_MEGA_SHIFT)
+		       : (u64)((range >> TWO_MEGA_SHIFT) + 1);
 }
 
 static inline u64 calc_normal_count(u64 range)
 {
-	return (range & ~PAGE_MASK) == 0 ? (u64)(range >> PAGE_SHIFT) :
-					   (u64)((range >> PAGE_SHIFT) + 1);
+	return (range & ~PAGE_MASK) == 0 ? (u64)(range >> PAGE_SHIFT)
+					 : (u64)((range >> PAGE_SHIFT) + 1);
 }
 
 static inline bool is_node_invalid(int node)

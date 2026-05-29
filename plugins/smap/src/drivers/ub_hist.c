@@ -136,16 +136,16 @@ static int ub_hist_ba_init(struct ub_hist_ba_device *ba_dev)
 
 static inline u32 ub_hist_get_smap_sts_value_reg_addr(void)
 {
-	return (g_ub_hist_smap_type == UB_HIST_SMAP_TYPE_N7) ?
-		       UDIE_PHY_ADDR_STS_REGS_N7_OFFSET :
-		       UDIE_PHY_ADDR_STS_REGS_N6_OFFSET;
+	return (g_ub_hist_smap_type == UB_HIST_SMAP_TYPE_N7)
+		       ? UDIE_PHY_ADDR_STS_REGS_N7_OFFSET
+		       : UDIE_PHY_ADDR_STS_REGS_N6_OFFSET;
 }
 
 static inline u32 ub_hist_get_ba_sts_value_count(void)
 {
-	return (g_ub_hist_smap_type == UB_HIST_SMAP_TYPE_N7) ?
-		       BA_STS_VALUE_N7_COUNT :
-		       BA_STS_VALUE_N6_COUNT;
+	return (g_ub_hist_smap_type == UB_HIST_SMAP_TYPE_N7)
+		       ? BA_STS_VALUE_N7_COUNT
+		       : BA_STS_VALUE_N6_COUNT;
 }
 
 int ub_hist_rd_clr_sts(struct ub_hist_ba_device *ba_dev, u32 *buf, size_t len)
@@ -296,10 +296,9 @@ static int ub_hist_get_ba_resource(struct platform_device *pdev,
 {
 	int ret;
 	uint64_t value;
-	uint64_t device_mem_len =
-		(g_ub_hist_smap_type == UB_HIST_SMAP_TYPE_N7) ?
-			DEVICE_MEM_LEN_N7 :
-			DEVICE_MEM_LEN_N6;
+	uint64_t device_mem_len = (g_ub_hist_smap_type == UB_HIST_SMAP_TYPE_N7)
+					  ? DEVICE_MEM_LEN_N7
+					  : DEVICE_MEM_LEN_N6;
 
 	if (!ACPI_COMPANION(&pdev->dev)) {
 		pr_err("ACPI companion not found\n");

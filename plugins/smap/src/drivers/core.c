@@ -87,7 +87,8 @@ int node_tracking_set_page_size(struct tracking_node_dev *node_dev,
 	struct tracking_dev *trk_dev;
 	list_for_each_entry(trk_dev, &node_dev->dev_list, list) {
 		if (trk_dev->ops && trk_dev->ops->tracking_set_page_size &&
-			trk_dev->ops->tracking_set_page_size(trk_dev->dev, page_size))
+		    trk_dev->ops->tracking_set_page_size(trk_dev->dev,
+							 page_size))
 			return -EINVAL;
 	}
 	return 0;
@@ -105,7 +106,7 @@ int node_tracking_set_trk_mode(struct tracking_node_dev *node_dev, u8 mode)
 }
 
 static long handle_tracking_cmd(struct tracking_node_dev *node_dev,
-								unsigned long arg)
+				unsigned long arg)
 {
 	if (arg == TRACKING_DISABLED) {
 		return node_tracking_disable(node_dev);
@@ -279,7 +280,7 @@ init_ok:
 }
 
 static void node_tracking_set_reinit_pending(struct tracking_node_dev *node_dev,
-					      int nid)
+					     int nid)
 {
 	struct tracking_dev *trk_dev;
 	list_for_each_entry(trk_dev, &node_dev->dev_list, list) {

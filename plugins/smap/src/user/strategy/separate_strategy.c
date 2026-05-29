@@ -575,8 +575,8 @@ static void UpdateSwapNum(ProcessAttr *process, uint64_t swapNum[LOCAL_NUMA_BITS
             if (NotInAttrL1(process, localNid)) {
                 continue;
             }
-            uint64_t newAddedNum = CalcAdditionalPage(process, localNid, remoteNid,
-                                                    remoteGuarantee - numaOffset[remoteNid], numaOffset, numaFreePage);
+            uint64_t newAddedNum = CalcAdditionalPage(
+                process, localNid, remoteNid, remoteGuarantee - numaOffset[remoteNid], numaOffset, numaFreePage);
             swapNum[localNid][remoteNid] += newAddedNum;
             numaOffset[localNid] += newAddedNum;
             numaOffset[remoteNid] += newAddedNum;

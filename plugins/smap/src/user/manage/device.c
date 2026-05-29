@@ -147,11 +147,9 @@ static int GetNrLocalNumaFromKernel(struct ProcessManager *manager)
     }
 
     int nrLocalNuma = 0;
-    int ret = ioctl(manager->fds.access, SMAP_ACCESS_GET_NR_LOCAL_NUMA,
-                &nrLocalNuma);
+    int ret = ioctl(manager->fds.access, SMAP_ACCESS_GET_NR_LOCAL_NUMA, &nrLocalNuma);
     if (ret < 0) {
-        SMAP_LOGGER_ERROR("failed to get nr_local_numa from kernel: %d, errno: %d",
-                          ret, errno);
+        SMAP_LOGGER_ERROR("failed to get nr_local_numa from kernel: %d, errno: %d", ret, errno);
         return ret;
     }
     if (nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM) {
@@ -159,8 +157,7 @@ static int GetNrLocalNumaFromKernel(struct ProcessManager *manager)
         return -EINVAL;
     }
     manager->nrLocalNuma = nrLocalNuma;
-    SMAP_LOGGER_INFO("get nr_local_numa %d from kernel successfully",
-                     manager->nrLocalNuma);
+    SMAP_LOGGER_INFO("get nr_local_numa %d from kernel successfully", manager->nrLocalNuma);
     return 0;
 }
 
