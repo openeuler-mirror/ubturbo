@@ -1152,8 +1152,8 @@ TEST_F(SmapConfigTest, TestSyncOneNumaConfigInvalidLocal)
 {
     int ret;
     int nrLocal = 2;
-    int local = -1;
-    int remote = 6;
+    int local = 10;
+    int remote = 1;
     size_t size = 256;
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(nrLocal));
