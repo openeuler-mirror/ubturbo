@@ -16,35 +16,34 @@
 #include <set>
 #include <string>
 
-    namespace rmrs::serialization
-{
-    class RmrsJsonHelper {
-        static std::string ToJson()
-        {
-            return "";
-        }
-        static bool FromJson()
-        {
-            return true;
-        }
-    };
+namespace rmrs::serialization {
+class RmrsJsonHelper {
+    static std::string ToJson()
+    {
+        return "";
+    }
+    static bool FromJson()
+    {
+        return true;
+    }
+};
 
-    struct BorrowIdInfo {
-        pid_t pid;
-        uint64_t oriSize;
+struct BorrowIdInfo {
+    pid_t pid;
+    uint64_t oriSize;
 
-        friend bool operator<(const BorrowIdInfo &x, const BorrowIdInfo &y)
-        {
-            if (x.pid != y.pid) {
-                return x.pid < y.pid;
-            }
-            return x.oriSize < y.oriSize;
+    friend bool operator<(const BorrowIdInfo &x, const BorrowIdInfo &y)
+    {
+        if (x.pid != y.pid) {
+            return x.pid < y.pid;
         }
-        friend bool operator==(const BorrowIdInfo &x, const BorrowIdInfo &y)
-        {
-            return x.pid == y.pid && x.oriSize == y.oriSize;
-        }
-    };
+        return x.oriSize < y.oriSize;
+    }
+    friend bool operator==(const BorrowIdInfo &x, const BorrowIdInfo &y)
+    {
+        return x.pid == y.pid && x.oriSize == y.oriSize;
+    }
+};
 
 } // namespace rmrs::serialization
 

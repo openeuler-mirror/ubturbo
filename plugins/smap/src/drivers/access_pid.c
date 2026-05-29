@@ -1174,7 +1174,8 @@ static void free_ap_bm_white_list(struct access_pid *ap)
 	}
 }
 
-int init_ap_bm_white_list(int node_len, u64 *node_page_count, struct access_pid *ap)
+int init_ap_bm_white_list(int node_len, u64 *node_page_count,
+			  struct access_pid *ap)
 {
 	size_t nr_bytes = sizeof(unsigned long);
 	int i;
