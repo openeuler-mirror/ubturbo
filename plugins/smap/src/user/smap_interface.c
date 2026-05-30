@@ -948,6 +948,35 @@ static int AddProcessNumaBitMap(struct MigrateOutMsg *msg, uint32_t *nodeBitmap,
     return 0;
 }
 
+static int CheckNodeBitmap(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap)
+{
+    struct ProcessManager *manager = GetProcessManager();
+
+    if (GetRunMode() != WATERLINE_MODE || pidType != PAGETYPE_HUGE) {
+        return 0;
+    }
+
+    for (int i = 0; i < msg->count; ++i) {
+        if (GetL1Count(nodeBitmap[i]) > 1) {
+            pid_t invalidPid = msg->payload[i].pid;
+            ProcessAttr *attr = GetProcessAttrLocked(invalidPid);
+
+            if (attr) {
+                struct AccessRemovePidPayload rp = { .pid = invalidPid };
+                AccessIoctlRemovePid(1, &rp);
+                LinkedListRemove(&attr, &manager->processes);
+                manager->nr[pidType]--;
+            }
+            SMAP_LOGGER_ERROR("Pid %d has %d local NUMA nodes, "
+                              "not supported in WATERLINE_MODE, remove it.",
+                              msg->payload[i].pid, GetL1Count(nodeBitmap[i]));
+            return -EINVAL;
+        }
+    }
+
+    return 0;
+}
+
 int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
 {
     struct ProcessManager *manager = GetProcessManager();
@@ -971,6 +1000,13 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
     ret = AddProcessNumaBitMap(msg, nodeBitmap, pidType);
     if (ret) {
         SMAP_LOGGER_ERROR("Pid remote nid check failed: %d.", ret);
+        EnvMutexUnlock(&manager->lock);
+        return ret;
+    }
+
+    ret = CheckNodeBitmap(msg, pidType, nodeBitmap);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Pid numa bitmap check failed: %d.", ret);
         EnvMutexUnlock(&manager->lock);
         return ret;
     }

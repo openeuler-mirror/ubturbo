@@ -46,6 +46,7 @@ void destroy_access_pid(struct access_pid *elem)
 		return;
 	}
 	elem->numa_nodes = 0;
+	proc_remove(elem->proc_root);
 	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
 		vfree(elem->paddr_bm[i]);
 		elem->paddr_bm[i] = NULL;
@@ -59,7 +60,6 @@ void destroy_access_pid(struct access_pid *elem)
 		vfree(elem->info.mapping);
 		elem->info.mapping = NULL;
 	}
-	proc_remove(elem->proc_root);
 	kfree(elem);
 	return;
 }
@@ -288,7 +288,8 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 		actc[len_cnt].freq = adev->access_bit_actc_data[acidx];
 
 		/* 填充prior - 从mapping获取 */
-		if (ap->info.vm_size && ap->info.mapping) {
+		if (ap->info.vm_size && ap->info.mapping &&
+		    (mapping_offset + len_cnt) < ap->info.vm_size) {
 			actc[len_cnt].prior =
 				ap->info.mapping[mapping_offset + len_cnt] &
 				0xff;
@@ -359,10 +360,12 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 		goto out;
 	}
 
+	down_read(&ap_data.lock);
 	total_len = calc_process_page_number(ap) * sizeof(struct actc_data);
 	actc = kvmalloc(total_len, GFP_KERNEL);
 	if (!actc) {
 		len = -ENOMEM;
+		up_read(&ap_data.lock);
 		goto out;
 	}
 
@@ -390,6 +393,7 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 		*ppos += len;
 out_free:
 	kvfree(actc);
+	up_read(&ap_data.lock);
 out:
 	if (len < 0) {
 		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ |
