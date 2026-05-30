@@ -11,8 +11,7 @@
  */
 #include "rmrs_serializer.h"
 
-    namespace rmrs::serialization
-{
-    using namespace mempooling;
+namespace rmrs::serialization {
+using namespace mempooling;
 
 } // namespace rmrs::serialization
