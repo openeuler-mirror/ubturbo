@@ -864,7 +864,7 @@ again:
 
 		cnt = nr_folios = 0;
 		for (j = folio_index; j < mig_list[i].nr &&
-		     cnt < nr_this_migrate; j++, cnt++) {
+			cnt < nr_this_migrate; j++, cnt++) {
 			int err;
 
 			mig_num++;
@@ -1012,7 +1012,7 @@ static unsigned int smap_migrate_range(int nid, u64 start_pa, u64 end_pa)
 		return -ENOMEM;
 	}
 	nr_pre_migrate_cnt = smap_pre_migrate_range(migrate_folios, &nr_folios,
-						start_pfn, end_pfn);
+							start_pfn, end_pfn);
 	do {
 		nr_folios_min = MIN(nr_pre_migrate_cnt, NR_BATCHED_MIGRATION);
 		nr_migrate_fail += smap_migrate(

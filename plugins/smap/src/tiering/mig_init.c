@@ -384,10 +384,8 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 				mig_cnt = pm.mig_info.mig_cnt - keep_cnt;
 			} else {
 				mig_cnt = smap_pgsize == HUGE_PAGE ?
-						  (payloads[i].mem_size >>
-						   KB_TO_2M) :
-						  (payloads[i].mem_size >>
-						   KB_TO_4K);
+						(payloads[i].mem_size >> KB_TO_2M) :
+						(payloads[i].mem_size >> KB_TO_4K);
 			}
 			if (smap_pgsize != HUGE_PAGE) {
 				for (int j = mig_cnt; j < pm.mig_info.mig_cnt;
@@ -404,13 +402,12 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 			cnt = 0;
 			do {
 				if (node_is_critical_err(payloads[i].src_nid) ||
-				    node_is_critical_err(payloads[i].dest_nid)) {
+					node_is_critical_err(payloads[i].dest_nid)) {
 					pr_err_ratelimited("critical error on node %d or %d",
 						payloads[i].src_nid, payloads[i].dest_nid);
 					break;
 				}
-				mig_cnt_min = MIN(mig_cnt_backup,
-						  NR_BATCHED_MIGRATION);
+				mig_cnt_min = MIN(mig_cnt_backup, NR_BATCHED_MIGRATION);
 				failed_cnt += smap_migrate(
 					&pm.mig_info
 						 .folios[cnt *
