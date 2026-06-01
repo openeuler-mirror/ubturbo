@@ -2119,8 +2119,10 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
         if (memSize >= srcMemSize) {
             ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
             attr->migrateParam[remoteNidIndex].nid = 0;
+            attr->migrateParam[remoteNidIndex].memSize = 0;
+        } else {
+            attr->migrateParam[remoteNidIndex].memSize -= memSize;
         }
-        attr->migrateParam[remoteNidIndex].memSize -= memSize;
 
         for (int i = 0; i < g_processManager.nrLocalNuma; i++) {
             attr->strategyAttr.memSize[i][destNodeIndex] += memSize;
@@ -2130,9 +2132,26 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
 
     AddAttrL2(attr, destNodeIndex + nrLocalNuma);
     attr->remoteNumaCnt = GetL2Count(attr->numaAttr.numaNodes);
-    attr->migrateParam[attr->remoteNumaCnt].nid = destNodeIndex + nrLocalNuma;
-    attr->migrateParam[attr->remoteNumaCnt].memSize += memSize;
     SMAP_LOGGER_INFO("========= remoteNumaCnt %d", attr->remoteNumaCnt);
+    int targetIdx = -1;
+    int zeroIdx = -1;
+
+    for (int i = 0; i < attr->remoteNumaCnt; i++) {
+        if (attr->migrateParam[i].nid == (destNodeIndex + nrLocalNuma)) {
+            targetIdx = i;
+            break;
+        }
+        if (zeroIdx == -1 && attr->migrateParam[i].nid == 0) {
+            zeroIdx = i;
+        }
+    }
+
+    if (targetIdx != -1) {
+        attr->migrateParam[targetIdx].memSize += memSize;
+    } else if (zeroIdx != -1) {
+        attr->migrateParam[zeroIdx].nid = destNodeIndex + nrLocalNuma;
+        attr->migrateParam[zeroIdx].memSize = memSize;
+    }
 }
 
 static void ChangePidRemoteMemoryByNuma(ProcessAttr *attr, int srcNode, int destNode)
