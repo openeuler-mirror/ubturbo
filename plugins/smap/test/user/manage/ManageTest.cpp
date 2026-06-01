@@ -1695,3 +1695,265 @@ TEST_F(ManageTest, TestMigOutIsDoneSuccess)
     ret = MigOutIsDone(&attr, &isMultiNumaPid);
     EXPECT_EQ(true, ret);
 }
+
+// Helper function to convert KB to pages for testing
+static uint64_t KBToPages(uint64_t kb, uint32_t pageSize)
+{
+    return kb * KIB / pageSize;
+}
+
+// Global array for mocking GetPidNumaPagesFromNumaMaps
+static uint64_t g_testPagesPerNuma[MAX_NODES] = { 0 };
+
+// Static mock function for GetPidNumaPagesFromNumaMaps
+static int MockGetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge)
+{
+    memcpy(numaPages, g_testPagesPerNuma, sizeof(g_testPagesPerNuma));
+    return 0;
+}
+
+extern "C" void SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma);
+extern "C" void MigratePagesToRemote(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES],
+                                     uint64_t pagesToMigrate);
+extern "C" void RecallPagesFromRemote(ProcessAttr *attr, int l2Index, uint64_t pagesToRecall);
+
+/*
+ * Test SetSingleRemoteNumaConfig: First migration (no existing pages on remote)
+ * Scenario: Process with 3GB memory, first migration set to 2GB
+ * Expected: memSize[0][0] should be 2GB (pages based on local NUMA 0)
+ */
+TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_FirstMigration)
+{
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.numaAttr.numaNodes = 0b00000001;  // L1: NUMA 0
+
+    ProcessParam param = {};
+    param.count = 1;
+    param.numaParam[0].nid = 4;  // Remote NUMA 4 (l2Index = 0)
+    param.numaParam[0].memSize = 2 * GIB / KIB;  // 2GB in KB
+    param.numaParam[0].ratio = 50;
+
+    memset(g_testPagesPerNuma, 0, sizeof(g_testPagesPerNuma));
+    g_testPagesPerNuma[0] = KBToPages(3 * GIB / KIB, PAGESIZE_4K);  // Local NUMA 0 has 3GB (in pages)
+    g_testPagesPerNuma[4] = 0;  // Remote NUMA has 0 pages
+
+    MOCKER(GetPidNumaPagesFromNumaMaps).stubs().will(invoke(MockGetPidNumaPagesFromNumaMaps));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(InAttrL1).stubs().will(returnValue(true));
+
+    SetSingleRemoteNumaConfig(&attr, &param, 4);
+
+    // First migration: 2GB target, 0 existing -> should allocate 2GB
+    uint64_t expectedPages = KBToPages(2 * GIB / KIB, PAGESIZE_4K);
+    uint64_t expectedMemSize = expectedPages * (PAGESIZE_4K / KIB);
+    EXPECT_EQ(expectedMemSize, attr.strategyAttr.memSize[0][0]);
+    EXPECT_EQ(4, attr.migrateParam[0].nid);
+    EXPECT_EQ(2 * GIB / KIB, attr.migrateParam[0].memSize);
+}
+
+/*
+ * Test SetSingleRemoteNumaConfig: Migration size increased (positive migration)
+ * Scenario: Remote already has 2GB, user sets new target to 3GB
+ * Expected: memSize should increase by 1GB (using +=)
+ */
+TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_IncreaseMigration)
+{
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.numaAttr.numaNodes = 0b00000001;  // L1: NUMA 0
+
+    // Simulate existing migration: remote already has 2GB
+    uint64_t existingPages = KBToPages(2 * GIB / KIB, PAGESIZE_4K);
+    attr.strategyAttr.memSize[0][0] = existingPages * (PAGESIZE_4K / KIB);
+
+    ProcessParam param = {};
+    param.count = 1;
+    param.numaParam[0].nid = 4;  // Remote NUMA 4 (l2Index = 0)
+    param.numaParam[0].memSize = 3 * GIB / KIB;  // New target: 3GB in KB
+    param.numaParam[0].ratio = 50;
+
+    memset(g_testPagesPerNuma, 0, sizeof(g_testPagesPerNuma));
+    g_testPagesPerNuma[0] = KBToPages(1 * GIB / KIB, PAGESIZE_4K);  // Local NUMA 0 now has 1GB
+    g_testPagesPerNuma[4] = existingPages;  // Remote NUMA has 2GB (already migrated)
+
+    MOCKER(GetPidNumaPagesFromNumaMaps).stubs().will(invoke(MockGetPidNumaPagesFromNumaMaps));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(InAttrL1).stubs().will(returnValue(true));
+
+    SetSingleRemoteNumaConfig(&attr, &param, 4);
+
+    // Increase: 3GB target - 2GB existing = 1GB to add
+    // Local NUMA 0 has 1GB, so can add 1GB
+    uint64_t expectedPages = KBToPages(3 * GIB / KIB, PAGESIZE_4K);
+    uint64_t expectedMemSize = expectedPages * (PAGESIZE_4K / KIB);
+    EXPECT_EQ(expectedMemSize, attr.strategyAttr.memSize[0][0]);
+    EXPECT_EQ(3 * GIB / KIB, attr.migrateParam[0].memSize);
+}
+
+/*
+ * Test SetSingleRemoteNumaConfig: Migration size unchanged (no operation)
+ * Scenario: Remote already has 2GB, user sets new target to 2GB
+ * Expected: memSize should remain unchanged
+ */
+TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_NoChange)
+{
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.numaAttr.numaNodes = 0b00000001;  // L1: NUMA 0
+
+    // Simulate existing migration: remote already has 2GB
+    uint64_t existingPages = KBToPages(2 * GIB / KIB, PAGESIZE_4K);
+    attr.strategyAttr.memSize[0][0] = existingPages * (PAGESIZE_4K / KIB);
+
+    ProcessParam param = {};
+    param.count = 1;
+    param.numaParam[0].nid = 4;  // Remote NUMA 4 (l2Index = 0)
+    param.numaParam[0].memSize = 2 * GIB / KIB;  // New target: 2GB in KB (same as existing)
+    param.numaParam[0].ratio = 50;
+
+    memset(g_testPagesPerNuma, 0, sizeof(g_testPagesPerNuma));
+    g_testPagesPerNuma[0] = KBToPages(1 * GIB / KIB, PAGESIZE_4K);  // Local NUMA 0 has 1GB
+    g_testPagesPerNuma[4] = existingPages;  // Remote NUMA has 2GB
+
+    MOCKER(GetPidNumaPagesFromNumaMaps).stubs().will(invoke(MockGetPidNumaPagesFromNumaMaps));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(InAttrL1).stubs().will(returnValue(true));
+
+    SetSingleRemoteNumaConfig(&attr, &param, 4);
+
+    // No change: memSize should remain the same
+    uint64_t expectedMemSize = existingPages * (PAGESIZE_4K / KIB);
+    EXPECT_EQ(expectedMemSize, attr.strategyAttr.memSize[0][0]);
+    EXPECT_EQ(2 * GIB / KIB, attr.migrateParam[0].memSize);
+}
+
+/*
+ * Test SetSingleRemoteNumaConfig: Migration size decreased (negative migration / recall)
+ * Scenario: Remote already has 2GB, user sets new target to 1GB
+ * Expected: memSize should decrease by 1GB (using -=)
+ */
+TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_DecreaseMigration)
+{
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.numaAttr.numaNodes = 0b00000001;  // L1: NUMA 0
+
+    // Simulate existing migration: remote already has 2GB
+    uint64_t existingPages = KBToPages(2 * GIB / KIB, PAGESIZE_4K);
+    attr.strategyAttr.memSize[0][0] = existingPages * (PAGESIZE_4K / KIB);
+
+    ProcessParam param = {};
+    param.count = 1;
+    param.numaParam[0].nid = 4;  // Remote NUMA 4 (l2Index = 0)
+    param.numaParam[0].memSize = 1 * GIB / KIB;  // New target: 1GB in KB (less than existing 2GB)
+    param.numaParam[0].ratio = 25;
+
+    memset(g_testPagesPerNuma, 0, sizeof(g_testPagesPerNuma));
+    g_testPagesPerNuma[0] = KBToPages(1 * GIB / KIB, PAGESIZE_4K);  // Local NUMA 0 has 1GB
+    g_testPagesPerNuma[4] = existingPages;  // Remote NUMA has 2GB
+
+    MOCKER(GetPidNumaPagesFromNumaMaps).stubs().will(invoke(MockGetPidNumaPagesFromNumaMaps));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(InAttrL1).stubs().will(returnValue(true));
+
+    SetSingleRemoteNumaConfig(&attr, &param, 4);
+
+    // Decrease: 2GB existing - 1GB target = 1GB to recall
+    // memSize should decrease from 2GB to 1GB
+    uint64_t expectedPages = KBToPages(1 * GIB / KIB, PAGESIZE_4K);
+    uint64_t expectedMemSize = expectedPages * (PAGESIZE_4K / KIB);
+    EXPECT_EQ(expectedMemSize, attr.strategyAttr.memSize[0][0]);
+    EXPECT_EQ(1 * GIB / KIB, attr.migrateParam[0].memSize);
+}
+
+/*
+ * Test RecallPagesFromRemote: Recall from multi-local NUMA in reverse order
+ * Scenario: NUMA0 has 2GB, NUMA1 has 1GB on remote, recall 2GB
+ * Expected: Recall from NUMA1 first (1GB), then from NUMA0 (1GB), remaining: NUMA0 has 1GB
+ */
+TEST_F(ManageTest, TestRecallPagesFromRemote_MultiLocalNuma)
+{
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.numaAttr.numaNodes = 0b00000011;  // L1: NUMA 0 and NUMA 1
+
+    // Setup existing allocation: NUMA0->2GB, NUMA1->1GB on remote
+    uint64_t pagesNuma0 = KBToPages(2 * GIB / KIB, PAGESIZE_4K);
+    uint64_t pagesNuma1 = KBToPages(1 * GIB / KIB, PAGESIZE_4K);
+    attr.strategyAttr.memSize[0][0] = pagesNuma0 * (PAGESIZE_4K / KIB);  // NUMA0: 2GB
+    attr.strategyAttr.memSize[1][0] = pagesNuma1 * (PAGESIZE_4K / KIB);  // NUMA1: 1GB
+
+    uint64_t pagesPerNuma[MAX_NODES] = { 0 };
+    pagesPerNuma[0] = KBToPages(1 * GIB / KIB, PAGESIZE_4K);
+    pagesPerNuma[1] = KBToPages(1 * GIB / KIB, PAGESIZE_4K);
+
+    // Recall 2GB: should recall from NUMA1 first (reverse order), then NUMA0
+    uint64_t pagesToRecall = KBToPages(2 * GIB / KIB, PAGESIZE_4K);
+
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(InAttrL1).stubs().will(returnValue(true));
+
+    RecallPagesFromRemote(&attr, 0, pagesToRecall);
+
+    // After recall: NUMA1 should have 0, NUMA0 should have 1GB (2GB - 1GB)
+    uint64_t expectedNuma0Pages = KBToPages(1 * GIB / KIB, PAGESIZE_4K);
+    uint64_t expectedNuma0MemSize = expectedNuma0Pages * (PAGESIZE_4K / KIB);
+    EXPECT_EQ(expectedNuma0MemSize, attr.strategyAttr.memSize[0][0]);
+    EXPECT_EQ(0, attr.strategyAttr.memSize[1][0]);
+}
+
+/*
+ * Test MigratePagesToRemote: Forward allocation order
+ * Scenario: NUMA0 has 3GB, NUMA1 has 2GB, migrate 4GB
+ * Expected: Allocate from NUMA0 first (3GB), then NUMA1 (1GB)
+ */
+TEST_F(ManageTest, TestMigratePagesToRemote_MultiLocalNuma)
+{
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.numaAttr.numaNodes = 0b00000011;  // L1: NUMA 0 and NUMA 1
+
+    uint64_t pagesPerNuma[MAX_NODES] = { 0 };
+    pagesPerNuma[0] = KBToPages(3 * GIB / KIB, PAGESIZE_4K);  // NUMA0: 3GB
+    pagesPerNuma[1] = KBToPages(2 * GIB / KIB, PAGESIZE_4K);  // NUMA1: 2GB
+
+    uint64_t pagesToMigrate = KBToPages(4 * GIB / KIB, PAGESIZE_4K);  // Migrate 4GB
+
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(InAttrL1).stubs().will(returnValue(true));
+
+    MigratePagesToRemote(&attr, 0, pagesPerNuma, pagesToMigrate);
+
+    // After migration: NUMA0 should have 3GB, NUMA1 should have 1GB
+    uint64_t expectedNuma0Pages = KBToPages(3 * GIB / KIB, PAGESIZE_4K);
+    uint64_t expectedNuma1Pages = KBToPages(1 * GIB / KIB, PAGESIZE_4K);
+    uint64_t expectedNuma0MemSize = expectedNuma0Pages * (PAGESIZE_4K / KIB);
+    uint64_t expectedNuma1MemSize = expectedNuma1Pages * (PAGESIZE_4K / KIB);
+    EXPECT_EQ(expectedNuma0MemSize, attr.strategyAttr.memSize[0][0]);
+    EXPECT_EQ(expectedNuma1MemSize, attr.strategyAttr.memSize[1][0]);
+}

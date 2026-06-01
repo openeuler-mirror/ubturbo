@@ -499,6 +499,39 @@ static void SetMultiNumaVmConfig(ProcessAttr *attr, ProcessParam *param, int nrL
     }
 }
 
+/* Migrate additional pages to remote NUMA in forward order (NUMA0 -> NUMA1 -> ...) */
+static void MigratePagesToRemote(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES], uint64_t pages)
+{
+    uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
+    int nrLocalNuma = GetNrLocalNuma();
+    uint64_t pagesToMigrate = pages;
+
+    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM && pagesToMigrate > 0; i++) {
+        if (InAttrL1(attr, i)) {
+            uint64_t allocPages = MIN(pagesPerNuma[i], pagesToMigrate);
+            attr->strategyAttr.memSize[i][l2Index] += allocPages * (pageSize / KIB);
+            pagesToMigrate -= allocPages;
+        }
+    }
+}
+
+/* Recall pages from remote NUMA in reverse order (NUMA(n-1) -> ... -> NUMA1 -> NUMA0) */
+static void RecallPagesFromRemote(ProcessAttr *attr, int l2Index, uint64_t pages)
+{
+    uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
+    int nrLocalNuma = GetNrLocalNuma();
+    uint64_t pagesToRecall = pages;
+
+    for (int i = nrLocalNuma - 1; i >= 0 && pagesToRecall > 0; i--) {
+        if (InAttrL1(attr, i)) {
+            uint64_t existingMemSizePages = attr->strategyAttr.memSize[i][l2Index] / (pageSize / KIB);
+            uint64_t recallPages = MIN(existingMemSizePages, pagesToRecall);
+            attr->strategyAttr.memSize[i][l2Index] -= recallPages * (pageSize / KIB);
+            pagesToRecall -= recallPages;
+        }
+    }
+}
+
 /* Handle single remote NUMA scenario: single local+single remote, or multi-local+single remote */
 static void SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
 {
@@ -520,20 +553,21 @@ static void SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, in
         return;
     }
 
-    /* Calculate pages to migrate and distribute by local NUMA */
-    uint64_t remainingPages = IsHugeMode() ? KBToHugePage(param->numaParam[0].memSize) :
-                                             KBToNormalPage(param->numaParam[0].memSize);
-    uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
+    /* Calculate target pages and pages already on remote NUMA */
+    uint64_t targetPages = IsHugeMode() ? KBToHugePage(param->numaParam[0].memSize) :
+                                          KBToNormalPage(param->numaParam[0].memSize);
+    uint64_t remoteExistingPages = pagesPerNuma[remoteNid];
 
+    /* Set ratio for all local NUMAs */
     for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
         attr->strategyAttr.initRemoteMemRatio[i][l2Index] = param->numaParam[0].ratio;
+    }
 
-        /* Allocate memSize based on actual page distribution for L1 nodes */
-        if (InAttrL1(attr, i)) {
-            uint64_t allocPages = MIN(pagesPerNuma[i], remainingPages);
-            attr->strategyAttr.memSize[i][l2Index] = allocPages * (pageSize / KIB);
-            remainingPages -= allocPages;
-        }
+    /* Handle migration based on comparison between target and existing */
+    if (targetPages > remoteExistingPages) {
+        MigratePagesToRemote(attr, l2Index, pagesPerNuma, targetPages - remoteExistingPages);
+    } else if (targetPages < remoteExistingPages) {
+        RecallPagesFromRemote(attr, l2Index, remoteExistingPages - targetPages);
     }
 
     attr->migrateParam[0].memSize = param->numaParam[0].memSize;
