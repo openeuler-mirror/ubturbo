@@ -182,6 +182,13 @@ typedef struct {
 } GroupMigrationPolicy;
 
 typedef struct {
+    /* Runtime-only grouped policy staged while the active policy is migrating. */
+    bool valid;
+    uint32_t nodeBitmap;
+    GroupMigrationPolicy policy;
+} PendingGroupMigrationPolicy;
+
+typedef struct {
     int index;
     unsigned short nrVcpu;
     unsigned long long *cpuTime[MAX_RES_LEN];
@@ -274,6 +281,7 @@ struct ProcessAttribute {
     WalkPage walkPage;
     AdaptMem adaptMem;
     GroupMigrationPolicy groupPolicy;
+    PendingGroupMigrationPolicy pendingGroupPolicy;
     StrategyAttribute strategyAttr;
     ScanAttribute scanAttr;
     VMPidAttribute vmPidAttr;
@@ -437,6 +445,8 @@ int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
 
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap);
 int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
+int ProcessSetPendingGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
+int ApplyPendingGroupedPolicy(ProcessAttr *attr);
 
 void CheckAndRemoveInvalidProcess(void);
 
