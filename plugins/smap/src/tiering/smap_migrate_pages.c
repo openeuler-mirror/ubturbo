@@ -863,8 +863,8 @@ again:
 		}
 
 		cnt = nr_folios = 0;
-		for (j = folio_index; j < mig_list[i].nr &&
-			cnt < nr_this_migrate; j++, cnt++) {
+		for (j = folio_index;
+		     j < mig_list[i].nr && cnt < nr_this_migrate; j++, cnt++) {
 			int err;
 
 			mig_num++;
@@ -1012,7 +1012,7 @@ static unsigned int smap_migrate_range(int nid, u64 start_pa, u64 end_pa)
 		return -ENOMEM;
 	}
 	nr_pre_migrate_cnt = smap_pre_migrate_range(migrate_folios, &nr_folios,
-							start_pfn, end_pfn);
+						    start_pfn, end_pfn);
 	do {
 		nr_folios_min = MIN(nr_pre_migrate_cnt, NR_BATCHED_MIGRATION);
 		nr_migrate_fail += smap_migrate(
@@ -1038,7 +1038,8 @@ unsigned int smap_migrate_numa(struct migrate_numa_inner_msg *msg)
 	int i;
 	int nid = msg->dest_nid;
 
-	if (node_is_critical_err(msg->src_nid) || node_is_critical_err(msg->dest_nid)) {
+	if (node_is_critical_err(msg->src_nid) ||
+	    node_is_critical_err(msg->dest_nid)) {
 		pr_err_ratelimited("critical error on node %d or %d\n",
 				   msg->src_nid, msg->dest_nid);
 		return -EINVAL;
@@ -1053,7 +1054,8 @@ unsigned int smap_migrate_numa(struct migrate_numa_inner_msg *msg)
 				break;
 			pr_info("migrate range to %d failed %d pages\n", nid,
 				ret);
-			if (node_is_critical_err(msg->src_nid) || node_is_critical_err(msg->dest_nid)) {
+			if (node_is_critical_err(msg->src_nid) ||
+			    node_is_critical_err(msg->dest_nid)) {
 				pr_err_ratelimited(
 					"critical error on node %d or %d\n",
 					msg->src_nid, msg->dest_nid);
