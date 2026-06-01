@@ -500,8 +500,7 @@ static void SetMultiNumaVmConfig(ProcessAttr *attr, ProcessParam *param, int nrL
 }
 
 /* Migrate additional pages to remote NUMA in forward order (NUMA0 -> NUMA1 -> ...) */
-static void MigratePagesToRemote(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES],
-                                 uint64_t pages)
+static void MigratePagesToRemote(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES], uint64_t pages)
 {
     uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
     int nrLocalNuma = GetNrLocalNuma();
