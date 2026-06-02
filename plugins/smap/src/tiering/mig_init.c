@@ -14,6 +14,7 @@
 #include <linux/ioctl.h>
 #include <linux/sort.h>
 #include <linux/fs.h>
+#include <linux/mm.h>
 
 #include "common.h"
 #include "acpi_mem.h"
@@ -339,14 +340,26 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 				 int *mig_res)
 {
 	int i;
+	int cnt;
 	unsigned int failed_cnt;
 	u64 mig_cnt;
+	u64 mig_cnt_backup;
+	u64 mig_cnt_min;
 	int successful_cnt = 0;
 
 	int retry = MAX_MIGRATE_PID_NUMA_RETRY_TIME;
 	do {
 		for (i = 0; i < len; i++) {
 			struct pagemapread pm = { 0 };
+
+			if (node_is_critical_err(payloads[i].src_nid) ||
+			    node_is_critical_err(payloads[i].dest_nid)) {
+				pr_err_ratelimited(
+					"critical error on node %d or %d\n",
+					payloads[i].src_nid,
+					payloads[i].dest_nid);
+				continue;
+			}
 			if (mig_res[i] == 1) {
 				continue;
 			}
@@ -387,10 +400,29 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 			pr_info("pid:%d migrate page count: %llu, from: %d to: %d\n",
 				payloads[i].pid, mig_cnt, payloads[i].src_nid,
 				payloads[i].dest_nid);
-
-			failed_cnt = smap_migrate(pm.mig_info.folios, mig_cnt,
-						  payloads[i].dest_nid,
-						  MIGRATE_TYPE_REMOTE);
+			mig_cnt_backup = mig_cnt;
+			cnt = 0;
+			do {
+				if (node_is_critical_err(payloads[i].src_nid) ||
+				    node_is_critical_err(
+					    payloads[i].dest_nid)) {
+					pr_err_ratelimited(
+						"critical error on node %d or %d",
+						payloads[i].src_nid,
+						payloads[i].dest_nid);
+					break;
+				}
+				mig_cnt_min = MIN(mig_cnt_backup,
+						  NR_BATCHED_MIGRATION);
+				failed_cnt += smap_migrate(
+					&pm.mig_info
+						 .folios[cnt *
+							 NR_BATCHED_MIGRATION],
+					mig_cnt_min, payloads[i].dest_nid,
+					MIGRATE_TYPE_REMOTE);
+				mig_cnt_backup -= mig_cnt_min;
+				cnt++;
+			} while (mig_cnt_backup != 0);
 			payloads[i].success_cnt += (mig_cnt - failed_cnt);
 			vfree(pm.mig_info.folios);
 			if (failed_cnt == 0) {

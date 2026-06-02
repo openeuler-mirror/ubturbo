@@ -19,6 +19,7 @@
 #include <linux/time64.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <linux/mm.h>
 
 #include "migrate_task.h"
 #include "smap_migrate_wrapper.h"
@@ -153,16 +154,24 @@ next:
 
 	task = prev_task;
 	list_for_each_entry(subtask, &task->subtask, task_list) {
-		for (i = 0; i < SUBTASK_RETRY_TIME; i++) {
-			if (is_smap_pg_huge())
-				smap_handle_migrate_back_subtask(subtask);
-			else
-				smap_handle_migrate_back_subtask_4k(subtask);
-			if (subtask->status != MB_SUBTASK_ERR) {
-				break;
+		if (node_is_critical_err(subtask->src_nid)) {
+			pr_err_ratelimited("critical error on node %d\n",
+					   subtask->src_nid);
+			subtask->status = MB_SUBTASK_ERR;
+		} else {
+			for (i = 0; i < SUBTASK_RETRY_TIME; i++) {
+				if (is_smap_pg_huge())
+					smap_handle_migrate_back_subtask(
+						subtask);
+				else
+					smap_handle_migrate_back_subtask_4k(
+						subtask);
+				if (subtask->status != MB_SUBTASK_ERR) {
+					break;
+				}
+				msleep(SUBTASK_SLEEP_TIME);
+				pr_debug("migrate back retry time %d\n", i);
 			}
-			msleep(SUBTASK_SLEEP_TIME);
-			pr_debug("migrate back retry time %d\n", i);
 		}
 		if (subtask->status == MB_SUBTASK_ERR) {
 			task->status = MB_TASK_ERR;

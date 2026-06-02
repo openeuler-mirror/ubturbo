@@ -44,6 +44,7 @@
 #define pr_warn_once(fmt, ...)      printk_once(KERN_WARNING pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_notice_once(fmt, ...)    printk_once(KERN_NOTICE pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_info_once(fmt, ...)      printk_once(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__)
+#define pr_err_ratelimited(fmt, ...)      printk_once(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__)
 
 #endif
 
