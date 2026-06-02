@@ -607,8 +607,27 @@ static void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeB
     attr->initLocalMemRatio = HUNDRED;
     attr->numaAttr.numaNodes = nodeBitmap;
     attr->groupPolicy = *policy;
+    attr->pendingGroupPolicy.valid = false;
     if (time(&attr->scanStart) == (time_t)-1) {
         SMAP_LOGGER_ERROR("get time error");
+    }
+}
+
+static void ResetGroupedPolicyRuntime(GroupMigrationPolicy *policy)
+{
+    if (!policy) {
+        return;
+    }
+    /*
+     * Pending policy is copied from a new user request. Rebuild runtime counters
+     * from current numa_maps before it replaces the active policy.
+     */
+    for (int i = 0; i < policy->groupCount; i++) {
+        MigrationGroupAttr *group = &policy->groups[i];
+        group->swapCandidateRounds = 0;
+        for (int j = 0; j < group->targetCount; j++) {
+            group->targets[j].usedPages = 0;
+        }
     }
 }
 
@@ -1014,6 +1033,76 @@ int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigration
     if (ret) {
         SMAP_LOGGER_WARNING("Synchronize grouped pid %d config maybe failed: %d.", pid, ret);
     }
+    return 0;
+}
+
+int ProcessSetPendingGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy)
+{
+    if (!policy || !policy->enabled) {
+        SMAP_LOGGER_ERROR("pending grouped policy of pid %d is invalid.", pid);
+        return -EINVAL;
+    }
+
+    ProcessAttr *current = GetProcessAttrLocked(pid);
+    if (!current || !current->groupPolicy.enabled || current->state != PROC_MIGRATE) {
+        SMAP_LOGGER_ERROR("pid %d cannot save pending grouped policy.", pid);
+        return -EINVAL;
+    }
+
+    /* Only an already-managed grouped PID in PROC_MIGRATE can defer refresh. */
+    current->pendingGroupPolicy.valid = true;
+    current->pendingGroupPolicy.nodeBitmap = nodeBitmap;
+    current->pendingGroupPolicy.policy = *policy;
+    SMAP_LOGGER_INFO("Save pending grouped policy for pid %d, group count %d.", pid, policy->groupCount);
+    return 0;
+}
+
+int ApplyPendingGroupedPolicy(ProcessAttr *attr)
+{
+    if (!attr || !attr->pendingGroupPolicy.valid) {
+        return 0;
+    }
+
+    GroupMigrationPolicy policy = attr->pendingGroupPolicy.policy;
+    uint32_t nodeBitmap = attr->pendingGroupPolicy.nodeBitmap;
+    uint64_t numaPages[MAX_NODES] = { 0 };
+
+    /* Apply is atomic at manager level: initialize the new policy first. */
+    ResetGroupedPolicyRuntime(&policy);
+    int ret = GetPidNumaPagesFromNumaMaps(attr->pid, numaPages, true);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Get pending grouped pid %d numa pages failed: %d.", attr->pid, ret);
+        attr->pendingGroupPolicy.valid = false;
+        return ret;
+    }
+
+    ret = InitGroupedUsedPages(attr->pid, &policy, numaPages);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Init pending grouped pid %d used pages failed: %d.", attr->pid, ret);
+        attr->pendingGroupPolicy.valid = false;
+        return ret;
+    }
+
+    struct AccessAddPidPayload payload = {
+        .type = NORMAL_SCAN,
+        .pid = attr->pid,
+        .scanTime = SCAN_TIME_2M,
+        .numaNodes = nodeBitmap,
+    };
+    ret = AccessIoctlAddPid(1, &payload);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Update pending grouped pid %d tracking failed: %d.", attr->pid, ret);
+        return ret;
+    }
+
+    /* Tracking has accepted the new node scope; publish policy to manager. */
+    SetGroupedProcessConfig(attr, attr->pid, nodeBitmap, &policy);
+    attr->pendingGroupPolicy.valid = false;
+    ret = SyncAllProcessConfig();
+    if (ret) {
+        SMAP_LOGGER_WARNING("Synchronize pending grouped pid %d config maybe failed: %d.", attr->pid, ret);
+    }
+    SMAP_LOGGER_INFO("Apply pending grouped policy for pid %d success.", attr->pid);
     return 0;
 }
 

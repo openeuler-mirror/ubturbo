@@ -549,7 +549,7 @@ static int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int pay
         SMAP_LOGGER_ERROR("pid %d already uses normal migrate out.", payload->pid);
         return -EINVAL;
     }
-    if (attr && attr->state != PROC_IDLE) {
+    if (attr && attr->state != PROC_IDLE && attr->state != PROC_MIGRATE) {
         SMAP_LOGGER_ERROR("pid %d state %d is busy for grouped policy update.", payload->pid, attr->state);
         return -EAGAIN;
     }
@@ -669,25 +669,41 @@ static int BuildGroupPolicy(const struct GroupedMigrateOutPayload *payload, cons
     return InitGroupedUsedPages(payload->pid, policy, numaPages);
 }
 
-static int ProcessAddGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap)
+static int ProcessAddGroupedTrackingManageFiltered(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                                   const bool *skipTracking)
 {
     struct AccessAddPidPayload payload[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    int count = 0;
     for (int i = 0; i < msg->count; i++) {
-        payload[i].type = NORMAL_SCAN;
-        payload[i].pid = msg->payload[i].pid;
-        payload[i].scanTime = SCAN_TIME_2M;
-        payload[i].numaNodes = nodeBitmap[i];
+        if (skipTracking && skipTracking[i]) {
+            /* The active policy is still migrating; refresh tracking when pending is applied. */
+            SMAP_LOGGER_INFO("skip grouped pid %d tracking update for pending policy.", msg->payload[i].pid);
+            continue;
+        }
+        payload[count].type = NORMAL_SCAN;
+        payload[count].pid = msg->payload[i].pid;
+        payload[count].scanTime = SCAN_TIME_2M;
+        payload[count].numaNodes = nodeBitmap[i];
         if (!PidIsValid(msg->payload[i].pid)) {
             SMAP_LOGGER_WARNING("grouped pid %d doesn't exist.", msg->payload[i].pid);
-            payload[i].pid = NON_EXIST_PID;
+            payload[count].pid = NON_EXIST_PID;
         }
-        SMAP_LOGGER_INFO("grouped pid %d numaNodes %#x.", msg->payload[i].pid, payload[i].numaNodes);
+        SMAP_LOGGER_INFO("grouped pid %d numaNodes %#x.", msg->payload[i].pid, payload[count].numaNodes);
+        count++;
     }
-    int ret = AccessIoctlAddPid(msg->count, payload);
+    if (count == 0) {
+        return 0;
+    }
+    int ret = AccessIoctlAddPid(count, payload);
     if (ret) {
         SMAP_LOGGER_ERROR("grouped access module add pids error: %d.", ret);
     }
     return ret;
+}
+
+static int ProcessAddGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap)
+{
+    return ProcessAddGroupedTrackingManageFiltered(msg, nodeBitmap, NULL);
 }
 
 static int BuildGroupedPolicies(struct GroupedMigrateOutMsg *msg, GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT])
@@ -714,10 +730,22 @@ static int BuildGroupedPolicies(struct GroupedMigrateOutMsg *msg, GroupMigration
 
 static void RollbackGroupedManagerAdds(const pid_t *addedPids, int addedCnt);
 static void RollbackGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, const bool *keepTracking);
+static int AddGroupedProcessesToGlobalManagerFiltered(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                                      GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT],
+                                                      bool keepTracking[MAX_NR_GROUPED_MIGOUT],
+                                                      const bool *pendingUpdate);
 
 static int AddGroupedProcessesToGlobalManager(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
                                               GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT],
                                               bool keepTracking[MAX_NR_GROUPED_MIGOUT])
+{
+    return AddGroupedProcessesToGlobalManagerFiltered(msg, nodeBitmap, policies, keepTracking, NULL);
+}
+
+static int AddGroupedProcessesToGlobalManagerFiltered(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                                      GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT],
+                                                      bool keepTracking[MAX_NR_GROUPED_MIGOUT],
+                                                      const bool *pendingUpdate)
 {
     pid_t addedPids[MAX_NR_GROUPED_MIGOUT] = { 0 };
     int addedCnt = 0;
@@ -725,12 +753,22 @@ static int AddGroupedProcessesToGlobalManager(struct GroupedMigrateOutMsg *msg, 
     bool existedBefore[MAX_NR_GROUPED_MIGOUT] = { 0 };
 
     for (int i = 0; i < msg->count; i++) {
+        if (pendingUpdate && pendingUpdate[i]) {
+            /* Pending PIDs keep their current manager/tracking state until apply time. */
+            keepTracking[i] = true;
+            continue;
+        }
         existedBefore[i] = GetProcessAttrLocked(msg->payload[i].pid) != NULL;
         int ret = ProcessAddGroupedManage(msg->payload[i].pid, nodeBitmap[i], &policies[i]);
         if (ret) {
             SMAP_LOGGER_ERROR("add grouped process %d failed: %d.", msg->payload[i].pid, ret);
             RollbackGroupedManagerAdds(addedPids, addedCnt);
             for (int j = 0; j < i; j++) {
+                if (pendingUpdate && pendingUpdate[j]) {
+                    /* Mixed batches must not rollback tracking for deferred existing PIDs. */
+                    keepTracking[j] = true;
+                    continue;
+                }
                 keepTracking[j] = succeeded[j] && existedBefore[j];
             }
             return ret;
@@ -785,6 +823,39 @@ static void RollbackGroupedManagerAdds(const pid_t *addedPids, int addedCnt)
     if (ret) {
         SMAP_LOGGER_WARNING("Synchronize grouped rollback config maybe failed: %d.", ret);
     }
+}
+
+static bool IsGroupedPendingUpdate(pid_t pid)
+{
+    ProcessAttr *attr = GetProcessAttrLocked(pid);
+    return attr && attr->groupPolicy.enabled && attr->state == PROC_MIGRATE;
+}
+
+static bool HasGroupedPendingUpdate(const bool *pendingUpdate, int count)
+{
+    for (int i = 0; i < count; i++) {
+        if (pendingUpdate[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int SetPendingGroupedPolicies(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                     GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT], const bool *pendingUpdate)
+{
+    for (int i = 0; i < msg->count; i++) {
+        if (!pendingUpdate[i]) {
+            continue;
+        }
+        /* Save the fully validated policy; no external ABI changes are needed. */
+        int ret = ProcessSetPendingGroupedManage(msg->payload[i].pid, nodeBitmap[i], &policies[i]);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Set pending grouped pid %d failed: %d.", msg->payload[i].pid, ret);
+            return ret;
+        }
+    }
+    return 0;
 }
 
 static bool IsGroupedAttrByRemoteNid(ProcessAttr *attr, int remoteNid)
@@ -1060,7 +1131,19 @@ int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidTy
         return ret;
     }
 
-    ret = ProcessAddGroupedTrackingManage(msg, nodeBitmap);
+    bool pendingUpdate[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    for (int i = 0; i < msg->count; i++) {
+        pendingUpdate[i] = IsGroupedPendingUpdate(msg->payload[i].pid);
+    }
+    bool hasPendingUpdate = HasGroupedPendingUpdate(pendingUpdate, msg->count);
+
+    /*
+     * New grouped PIDs still enter tracking immediately. Existing grouped PIDs
+     * in PROC_MIGRATE are staged and refresh tracking after migration results
+     * have been accounted.
+     */
+    ret = hasPendingUpdate ? ProcessAddGroupedTrackingManageFiltered(msg, nodeBitmap, pendingUpdate) :
+                             ProcessAddGroupedTrackingManage(msg, nodeBitmap);
     if (ret) {
         SMAP_LOGGER_ERROR("Add grouped process tracking failed: %d.", ret);
         EnvMutexUnlock(&manager->lock);
@@ -1068,10 +1151,16 @@ int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidTy
     }
 
     bool keepTracking[MAX_NR_GROUPED_MIGOUT] = { 0 };
-    ret = AddGroupedProcessesToGlobalManager(msg, nodeBitmap, policies, keepTracking);
+    ret = hasPendingUpdate ?
+              AddGroupedProcessesToGlobalManagerFiltered(msg, nodeBitmap, policies, keepTracking, pendingUpdate) :
+              AddGroupedProcessesToGlobalManager(msg, nodeBitmap, policies, keepTracking);
     if (ret) {
         RollbackGroupedTrackingManage(msg, keepTracking);
+        EnvMutexUnlock(&manager->lock);
+        return ret;
     }
+
+    ret = SetPendingGroupedPolicies(msg, nodeBitmap, policies, pendingUpdate);
     EnvMutexUnlock(&manager->lock);
     return ret;
 }

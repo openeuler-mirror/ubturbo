@@ -49,7 +49,7 @@ TEST_F(ManageTest, TestRemoteNumaInfoInit)
 {
     g_processManager.remoteNumaInfo.usedInfo[0].size = 10;
     RemoteNumaInfoInit();
-    EXPECT_EQ(0,  g_processManager.remoteNumaInfo.usedInfo[0].size);
+    EXPECT_EQ(0, g_processManager.remoteNumaInfo.usedInfo[0].size);
 }
 
 extern "C" errno_t memset_s(void *dest, size_t destMax, int c, size_t count);
@@ -75,8 +75,8 @@ TEST_F(ManageTest, TestProcessManagerInitTwo)
     int ret = 0;
     uint32_t pageType = PAGETYPE_HUGE;
     MOCKER(EnvMutexInit).stubs().will(returnValue(0));
-    g_processManager.threadCtx[0] = (void*)&period;
-    g_processManager.processes = (ProcessAttr*)&period;
+    g_processManager.threadCtx[0] = (void *)&period;
+    g_processManager.processes = (ProcessAttr *)&period;
     ret = ProcessManagerInit(pageType);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(nullptr, g_processManager.processes);
@@ -103,9 +103,7 @@ TEST_F(ManageTest, TestPidIsValid)
 {
     bool ret;
 
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
-        .stubs()
-        .will(returnValue(0));
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
     MOCKER(access).stubs().will(returnValue(0));
     ret = PidIsValid(1);
     EXPECT_EQ(ret, true);
@@ -133,9 +131,7 @@ TEST_F(ManageTest, TestIsQemuTaskPath)
     EXPECT_EQ(-EINVAL, ret);
 
     GlobalMockObject::verify();
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
-        .stubs()
-        .will(returnValue(0));
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
     MOCKER(fopen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
     ret = IsQemuTask(1);
     EXPECT_EQ(-1, ret);
@@ -145,9 +141,7 @@ TEST_F(ManageTest, TestIsQemuTaskFile)
 {
     int ret;
 
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
-        .stubs()
-        .will(returnValue(0));
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
     static FILE fake_file;
     MOCKER(fopen).stubs().will(returnValue(&fake_file));
     MOCKER(fgets).stubs().will(returnValue(static_cast<char *>(nullptr)));
@@ -156,9 +150,7 @@ TEST_F(ManageTest, TestIsQemuTaskFile)
     EXPECT_EQ(-1, ret);
 
     GlobalMockObject::verify();
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
-        .stubs()
-        .will(returnValue(0));
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
     MOCKER(fopen).stubs().will(returnValue(&fake_file));
     char buf[] = "1";
     MOCKER(fgets).stubs().will(returnValue(&buf[0]));
@@ -386,13 +378,13 @@ TEST_F(ManageTest, TestSetProcessConfig)
     EXPECT_EQ(attr.numaAttr.numaNodes, 17);
 }
 
-extern "C" FILE* OpenNumaMaps(pid_t pid);
+extern "C" FILE *OpenNumaMaps(pid_t pid);
 TEST_F(ManageTest, TestOpenNumaMaps)
 {
     int pid = 1;
-    MOCKER(fopen).stubs().will(returnValue(reinterpret_cast<FILE*>(0x1234)));
+    MOCKER(fopen).stubs().will(returnValue(reinterpret_cast<FILE *>(0x1234)));
 
-    FILE* ret = OpenNumaMaps(pid);
+    FILE *ret = OpenNumaMaps(pid);
     EXPECT_NE(ret, nullptr);
 }
 
@@ -505,7 +497,7 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
     EXPECT_NE(nullptr, g_processManager.processes);
-    EXPECT_EQ(DEFAULT_SCAN_PERIOD, g_processManager.processes->scanTime);  // 首次扫描使用DEFAULT_SCAN_PERIOD
+    EXPECT_EQ(DEFAULT_SCAN_PERIOD, g_processManager.processes->scanTime); // 首次扫描使用DEFAULT_SCAN_PERIOD
     EXPECT_EQ(param.duration, g_processManager.processes->duration);
     EXPECT_EQ(50, g_processManager.processes->initLocalMemRatio);
     EXPECT_EQ(0x10, g_processManager.processes->numaAttr.numaNodes);
@@ -520,7 +512,7 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
     EXPECT_NE(nullptr, g_processManager.processes);
-    EXPECT_EQ(DEFAULT_SCAN_PERIOD, g_processManager.processes->scanTime);  // 首次扫描使用DEFAULT_SCAN_PERIOD
+    EXPECT_EQ(DEFAULT_SCAN_PERIOD, g_processManager.processes->scanTime); // 首次扫描使用DEFAULT_SCAN_PERIOD
     EXPECT_EQ(param.duration, g_processManager.processes->duration);
     EXPECT_EQ(50, g_processManager.processes->initLocalMemRatio);
     EXPECT_EQ(0x10, g_processManager.processes->numaAttr.numaNodes);
@@ -596,6 +588,7 @@ TEST_F(ManageTest, TestProcessAddGroupedManageUpdateExistingPid)
 
     current.pid = 1234;
     current.next = nullptr;
+    current.pendingGroupPolicy.valid = true;
     g_processManager.processes = &current;
     MOCKER(CheckPid).stubs().will(returnValue(0));
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
@@ -605,6 +598,7 @@ TEST_F(ManageTest, TestProcessAddGroupedManageUpdateExistingPid)
     EXPECT_EQ(1234, current.pid);
     EXPECT_EQ((uint32_t)0x21, current.numaAttr.numaNodes);
     EXPECT_TRUE(current.groupPolicy.enabled);
+    EXPECT_FALSE(current.pendingGroupPolicy.valid);
     EXPECT_EQ((uint64_t)6, current.groupPolicy.groups[0].targets[0].usedPages);
     g_processManager.processes = nullptr;
 }
@@ -628,6 +622,73 @@ TEST_F(ManageTest, TestProcessAddGroupedManageRejectsInvalidInputs)
     MOCKER(CheckPid).stubs().will(returnValue(0));
     ret = ProcessAddGroupedManage(1234, 0x11, &policy);
     EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int ProcessSetPendingGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
+TEST_F(ManageTest, TestProcessSetPendingGroupedManage)
+{
+    ProcessAttr current = {};
+    GroupMigrationPolicy policy = {};
+    FillPolicyForManageTest(&policy);
+
+    current.pid = 1234;
+    current.state = PROC_MIGRATE;
+    current.groupPolicy.enabled = true;
+    g_processManager.processes = &current;
+
+    int ret = ProcessSetPendingGroupedManage(1234, 0x31, &policy);
+    EXPECT_EQ(0, ret);
+    EXPECT_TRUE(current.pendingGroupPolicy.valid);
+    EXPECT_EQ((uint32_t)0x31, current.pendingGroupPolicy.nodeBitmap);
+    EXPECT_EQ((uint64_t)3, current.pendingGroupPolicy.policy.groups[0].targets[0].usedPages);
+
+    policy.groups[0].targets[0].usedPages = 6;
+    ret = ProcessSetPendingGroupedManage(1234, 0x41, &policy);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ((uint32_t)0x41, current.pendingGroupPolicy.nodeBitmap);
+    EXPECT_EQ((uint64_t)6, current.pendingGroupPolicy.policy.groups[0].targets[0].usedPages);
+
+    current.state = PROC_IDLE;
+    ret = ProcessSetPendingGroupedManage(1234, 0x31, &policy);
+    EXPECT_EQ(-EINVAL, ret);
+    g_processManager.processes = nullptr;
+}
+
+static int FillPendingGroupedNumaPages(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge)
+{
+    (void)pid;
+    (void)onlyHuge;
+    numaPages[4] = 2;
+    return 0;
+}
+
+extern "C" int ApplyPendingGroupedPolicy(ProcessAttr *attr);
+TEST_F(ManageTest, TestApplyPendingGroupedPolicy)
+{
+    ProcessAttr current = {};
+    GroupMigrationPolicy active = {};
+    GroupMigrationPolicy pending = {};
+    FillPolicyForManageTest(&active);
+    FillPolicyForManageTest(&pending);
+    pending.groups[0].targets[0].usedPages = 6;
+    pending.groups[0].swapCandidateRounds = 3;
+
+    current.pid = 1234;
+    current.groupPolicy = active;
+    current.pendingGroupPolicy.valid = true;
+    current.pendingGroupPolicy.nodeBitmap = 0x31;
+    current.pendingGroupPolicy.policy = pending;
+    g_processManager.nrLocalNuma = 4;
+    MOCKER(GetPidNumaPagesFromNumaMaps).expects(once()).will(invoke(FillPendingGroupedNumaPages));
+    MOCKER(AccessIoctlAddPid).expects(once()).will(returnValue(0));
+    MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
+
+    int ret = ApplyPendingGroupedPolicy(&current);
+    EXPECT_EQ(0, ret);
+    EXPECT_FALSE(current.pendingGroupPolicy.valid);
+    EXPECT_EQ((uint32_t)0x31, current.numaAttr.numaNodes);
+    EXPECT_EQ((uint64_t)2, current.groupPolicy.groups[0].targets[0].usedPages);
+    EXPECT_EQ((uint8_t)0, current.groupPolicy.groups[0].swapCandidateRounds);
 }
 
 TEST_F(ManageTest, TestProcessAddGroupedManageRejectsLimitAndPreprocessFailure)
@@ -762,7 +823,7 @@ TEST_F(ManageTest, TestRemoveManagedProcessInvalidPid)
 
     g_processManager.processes = &mockProcess;
     g_processManager.nr[PROCESS_TYPE] = 1;
-    pid_t pidArr[1] = {1};
+    pid_t pidArr[1] = { 1 };
 
     MOCKER(GetPidType).stubs().will(returnValue(PROCESS_TYPE));
     RemoveManagedProcess(1, pidArr);
@@ -846,7 +907,7 @@ extern "C" void ResetActcData(ActcData *actcData[], int len);
 TEST_F(ManageTest, TestResetActcData)
 {
     int len = 10;
-    ActcData **data = (ActcData **)malloc(sizeof(ActcData*) * len);
+    ActcData **data = (ActcData **)malloc(sizeof(ActcData *) * len);
     for (int i = 0; i < len; i++) {
         data[i] = (ActcData *)malloc(sizeof(ActcData));
     }
@@ -883,7 +944,8 @@ TEST_F(ManageTest, TestProcessSmapsFile)
     size_t divisor = 1;
     MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
         .stubs()
-        .will(returnValue(-1)).then(returnValue(0));
+        .will(returnValue(-1))
+        .then(returnValue(0));
     unsigned long ret = ProcessSmapsFile(pid, targetLinePrefix, prefixLength, divisor);
     EXPECT_EQ(ret, 0);
     static FILE fake_file;
@@ -891,9 +953,7 @@ TEST_F(ManageTest, TestProcessSmapsFile)
     char buf[] = "1";
     MOCKER(fgets).stubs().will(returnValue(&buf[0])).then(returnValue((static_cast<char *>(nullptr))));
     MOCKER(fclose).stubs().will(returnValue(1));
-    MOCKER((int (*)(char const *, char const *, void *))sscanf_s)
-        .stubs()
-        .will(returnValue(0));
+    MOCKER((int (*)(char const *, char const *, void *))sscanf_s).stubs().will(returnValue(0));
     ret = ProcessSmapsFile(pid, targetLinePrefix, prefixLength, divisor);
     EXPECT_EQ(ret, 0);
 }
@@ -1101,10 +1161,10 @@ TEST_F(ManageTest, TestCalNrPagesLocalTotal)
 }
 
 extern "C" void CalRemoteNumaAllocPerPid(int i, int j, uint32_t tmpNrPagesToUse,
-    uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]);
+                                         uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]);
 TEST_F(ManageTest, TestCalRemoteNumaAllocPerPid)
 {
-    uint32_t tmp[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = {0};
+    uint32_t tmp[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
 
     ProcessAttr attr = {};
     g_processManager.processes = &attr;
@@ -1335,7 +1395,7 @@ TEST_F(ManageTest, TestIsPidArrInStateInvalid)
 
     int ret = IsPidArrayStateChangeReady(nullptr, 2, 1);
     EXPECT_EQ(-EINVAL, ret);
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttr*)nullptr)).then(returnValue(&pid));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttr *)nullptr)).then(returnValue(&pid));
     ret = IsPidArrayStateChangeReady(pidArr, 2, 1);
     EXPECT_EQ(1, ret);
 }

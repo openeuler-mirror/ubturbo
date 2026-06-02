@@ -464,6 +464,15 @@ static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
         if (current->scanType != NORMAL_SCAN) {
             continue;
         }
+        if (current->state == PROC_IDLE && current->pendingGroupPolicy.valid) {
+            /* Retry a previously failed deferred refresh before building new migrations. */
+            ret = ApplyPendingGroupedPolicy(current);
+            if (ret) {
+                SMAP_LOGGER_ERROR("Apply pending grouped policy before migration failed, pid %d ret %d.", current->pid,
+                                  ret);
+                continue;
+            }
+        }
         SMAP_LOGGER_INFO("+++++++scan_and_strategy_thread: processing pid %d.", current->pid);
         NumaMigReduceDeal(current);
         if (current->state != PROC_IDLE) {
@@ -491,6 +500,12 @@ static void PostMigration(struct ProcessManager *manager, struct MigrateMsg *mMs
     mMsg->migList = NULL;
     for (ProcessAttr *current = manager->processes; current; current = current->next) {
         if (current->state == PROC_MIGRATE) {
+            /* The old migration result is now settled; it is safe to publish pending policy. */
+            int ret = ApplyPendingGroupedPolicy(current);
+            if (ret) {
+                SMAP_LOGGER_ERROR("Apply pending grouped policy after migration failed, pid %d ret %d.", current->pid,
+                                  ret);
+            }
             SMAP_LOGGER_DEBUG("set pid %d state from migrate to idle.", current->pid);
             current->state = PROC_IDLE;
         }

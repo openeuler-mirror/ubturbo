@@ -257,13 +257,8 @@ TEST_F(MigrationTest, TestBuildMigrationMsgSuccess)
 extern "C" int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager);
 TEST_F(MigrationTest, TestDoMigration)
 {
-    struct MigList migList = {
-        .nr = 0
-    };
-    struct MigrateMsg mMsg = {
-        .cnt = 1,
-        .migList = &migList
-    };
+    struct MigList migList = { .nr = 0 };
+    struct MigrateMsg mMsg = { .cnt = 1, .migList = &migList };
 
     struct ProcessManager manager;
     int ret = DoMigration(&mMsg, &manager);
@@ -272,9 +267,7 @@ TEST_F(MigrationTest, TestDoMigration)
 
 TEST_F(MigrationTest, TestDoMigrationInitialized)
 {
-    struct MigList migList = {
-        .nr = 2
-    };
+    struct MigList migList = { .nr = 2 };
 
     migList.addr = (uint64_t *)malloc(sizeof(uint64_t) * migList.nr);
 
@@ -282,10 +275,7 @@ TEST_F(MigrationTest, TestDoMigrationInitialized)
         migList.addr[i] = 0x1000 + i * 0x1000;
     }
 
-    struct MigrateMsg mMsg = {
-        .cnt = 1,
-        .migList = &migList
-    };
+    struct MigrateMsg mMsg = { .cnt = 1, .migList = &migList };
 
     struct ProcessManager manager;
     int ret = DoMigration(&mMsg, &manager);
@@ -294,13 +284,8 @@ TEST_F(MigrationTest, TestDoMigrationInitialized)
 
 TEST_F(MigrationTest, DoMigrationMinusCnt)
 {
-    struct MigList migList = {
-        .nr = 0
-    };
-    struct MigrateMsg mMsg = {
-        .cnt = -1,
-        .migList = &migList
-    };
+    struct MigList migList = { .nr = 0 };
+    struct MigrateMsg mMsg = { .cnt = -1, .migList = &migList };
 
     struct ProcessManager manager;
     int ret = DoMigration(&mMsg, &manager);
@@ -505,8 +490,8 @@ typedef struct {
 extern "C" int CompareMigIn(const void *a, const void *b);
 TEST_F(MigrationTest, TestCompareMigIn)
 {
-    NumaMemReduce* a = (NumaMemReduce *)malloc(sizeof(NumaMemReduce));
-    NumaMemReduce* b = (NumaMemReduce *)malloc(sizeof(NumaMemReduce));
+    NumaMemReduce *a = (NumaMemReduce *)malloc(sizeof(NumaMemReduce));
+    NumaMemReduce *b = (NumaMemReduce *)malloc(sizeof(NumaMemReduce));
     a->amount = 100;
     b->amount = 200;
 
@@ -519,8 +504,8 @@ TEST_F(MigrationTest, TestCompareMigIn)
 extern "C" int CompareMigOut(const void *b, const void *a);
 TEST_F(MigrationTest, TestCompareMigOut)
 {
-    NumaMemReduce* a = (NumaMemReduce *)malloc(sizeof(NumaMemReduce));
-    NumaMemReduce* b = (NumaMemReduce *)malloc(sizeof(NumaMemReduce));
+    NumaMemReduce *a = (NumaMemReduce *)malloc(sizeof(NumaMemReduce));
+    NumaMemReduce *b = (NumaMemReduce *)malloc(sizeof(NumaMemReduce));
     a->amount = 200;
     b->amount = 100;
 
@@ -574,8 +559,7 @@ TEST_F(MigrationTest, TestNumaMigReduceDeal)
     EXPECT_EQ(150, attr.strategyAttr.nrMigratePages[4][0]);
 }
 
-extern "C" int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
-    uint64_t *migratePages);
+extern "C" int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg, uint64_t *migratePages);
 TEST_F(MigrationTest, TestPerformMigration)
 {
     int ret;
@@ -704,7 +688,7 @@ TEST_F(MigrationTest, TestUpdateMigResultLocalToRemote)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList*)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 0;
     mMsg.migList[0].to = 4;
@@ -730,7 +714,7 @@ TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalUnexpectedMigCount)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList*)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 4;
     mMsg.migList[0].to = 0;
@@ -756,7 +740,7 @@ TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalExpectedMigCount)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList*)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 4;
     mMsg.migList[0].to = 0;
@@ -781,7 +765,7 @@ TEST_F(MigrationTest, TestUpdateMigResultTwo)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList*)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 0;
     mMsg.migList[0].to = 5;
@@ -808,7 +792,7 @@ TEST_F(MigrationTest, TestUpdateMigResultThree)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList*)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 0;
     mMsg.migList[0].to = 5;
@@ -835,7 +819,7 @@ TEST_F(MigrationTest, TestUpdateMigResultFour)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList*)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 0;
     mMsg.migList[0].to = 4;
@@ -866,7 +850,7 @@ TEST_F(MigrationTest, TestUpdateMigResultFive)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 2;
-    mMsg.migList = (struct MigList*)malloc(sizeof(struct MigList) * 2);
+    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 2);
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 0;
     mMsg.migList[0].to = 4;
@@ -901,7 +885,7 @@ TEST_F(MigrationTest, TestUpdateMigResultSix)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList*)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 4;
     mMsg.migList[0].to = 0;
@@ -932,7 +916,7 @@ TEST_F(MigrationTest, TestUpdateMigResultSeven)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 2;
-    mMsg.migList = (struct MigList*)malloc(sizeof(struct MigList) * 2);
+    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 2);
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 4;
     mMsg.migList[0].to = 0;
@@ -971,7 +955,7 @@ TEST_F(MigrationTest, TestUpdateMigResultEight)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 2;
-    mMsg.migList = (struct MigList*)malloc(sizeof(struct MigList) * 2);
+    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 2);
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 0;
     mMsg.migList[0].to = 4;
@@ -999,12 +983,7 @@ extern "C" int MigrateRemoteNuma(struct ProcessManager *manager, struct MigrateN
 TEST_F(MigrationTest, TestMigrateRemoteNumaOne)
 {
     struct ProcessManager manager;
-    struct MigrateNumaIoctlMsg msg = {
-        .srcNid = 4,
-        .destNid = 5,
-        .count = 1,
-        .memids = { 1 }
-    };
+    struct MigrateNumaIoctlMsg msg = { .srcNid = 4, .destNid = 5, .count = 1, .memids = { 1 } };
     MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-ENOMEM));
     int ret = MigrateRemoteNuma(&manager, &msg);
     EXPECT_EQ(-ENOMEM, ret);
@@ -1038,8 +1017,7 @@ TEST_F(MigrationTest, TestPrintMigSpeed)
     PrintMigSpeed(&manager, 1000, start, end);
 }
 
-extern "C" int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
-    uint64_t *migratePages);
+extern "C" int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg, uint64_t *migratePages);
 TEST_F(MigrationTest, TestPreMigration)
 {
     struct ProcessManager manager = {};
@@ -1095,9 +1073,9 @@ TEST_F(MigrationTest, TestPreMigrationTwo)
 extern "C" void PostMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg);
 TEST_F(MigrationTest, TestPostMigration)
 {
-    struct ProcessManager manager;
-    ProcessAttr current;
-    struct MigrateMsg mMsg;
+    struct ProcessManager manager = {};
+    ProcessAttr current = {};
+    struct MigrateMsg mMsg = {};
     manager.processes = &current;
     current.pid = 1;
     current.next = NULL;
@@ -1113,9 +1091,9 @@ TEST_F(MigrationTest, TestPostMigration)
 
 TEST_F(MigrationTest, TestPostMigrationTwo)
 {
-    struct ProcessManager manager;
-    ProcessAttr current;
-    struct MigrateMsg mMsg;
+    struct ProcessManager manager = {};
+    ProcessAttr current = {};
+    struct MigrateMsg mMsg = {};
     manager.processes = &current;
     current.pid = 1;
     current.next = NULL;
@@ -1124,6 +1102,26 @@ TEST_F(MigrationTest, TestPostMigrationTwo)
     MOCKER(UpdateMigResult).stubs();
     mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList));
     EnvMutexInit(&manager.lock);
+    PostMigration(&manager, &mMsg);
+    EXPECT_EQ(PROC_IDLE, current.state);
+    free(mMsg.migList);
+}
+
+TEST_F(MigrationTest, TestPostMigrationAppliesPendingGroupedPolicy)
+{
+    struct ProcessManager manager = {};
+    ProcessAttr current = {};
+    struct MigrateMsg mMsg = {};
+
+    manager.processes = &current;
+    current.pid = 1;
+    current.state = PROC_MIGRATE;
+    current.pendingGroupPolicy.valid = true;
+    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList));
+    EnvMutexInit(&manager.lock);
+    MOCKER(UpdateMigResult).stubs();
+    MOCKER(ApplyPendingGroupedPolicy).expects(once()).will(returnValue(0));
+
     PostMigration(&manager, &mMsg);
     EXPECT_EQ(PROC_IDLE, current.state);
     free(mMsg.migList);
