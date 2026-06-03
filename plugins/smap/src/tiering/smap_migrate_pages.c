@@ -71,6 +71,7 @@ static struct migrate_node {
 	unsigned long nr[SMAP_MAX_NUMNODES];
 } migrate_node;
 
+#ifdef CONFIG_MIGRATE_PAGES_DMA_OFFLOADING
 void set_remote_migrate_mode(unsigned int mode)
 {
 	if (mode) {
@@ -80,6 +81,11 @@ void set_remote_migrate_mode(unsigned int mode)
 	}
 	pr_info("set remote migrate mode: %u\n", remote_migrate_mode);
 }
+#else
+void set_remote_migrate_mode(unsigned int mode)
+{
+}
+#endif
 
 static int smap_check_huge_page_for_migration(struct page *page, pid_t pid)
 {

@@ -43,14 +43,22 @@ pte_t kernel_huge_ptep_get(pte_t *ptep)
 {
 	int ncontig, i;
 	size_t pgsize;
+#ifdef KERNEL_VELINUX
+	pte_t orig_pte = ptep_get(ptep);
+#else
 	pte_t orig_pte = __ptep_get(ptep);
+#endif
 	if (!pte_present(orig_pte) || !pte_cont(orig_pte))
 		return orig_pte;
 
 	ncontig =
 		kernel_num_contig_ptes(page_size(pte_page(orig_pte)), &pgsize);
 	for (i = 0; i < ncontig; i++, ptep++) {
+#ifdef KERNEL_VELINUX
+		pte_t pte = ptep_get(ptep);
+#else
 		pte_t pte = __ptep_get(ptep);
+#endif
 		if (pte_dirty(pte))
 			orig_pte = pte_mkdirty(orig_pte);
 
