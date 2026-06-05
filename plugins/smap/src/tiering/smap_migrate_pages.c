@@ -913,6 +913,8 @@ again:
 		if (nr_folios == 0) {
 			pr_debug("no page to migrate\n");
 			vfree(migrate_folios);
+			if (nr_remain_folios > 0)
+				goto again;
 			continue;
 		}
 		mig_list[i].failed_mig_nr +=
