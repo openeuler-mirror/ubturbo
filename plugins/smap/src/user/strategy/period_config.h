@@ -45,6 +45,8 @@ uint32_t GetGroupSwapMinRemoteFreqConfig(void);
 
 uint32_t GetGroupSwapMinFreqGainConfig(void);
 
+bool GetZeroFreqMigrateEnableConfig(void);
+
 bool GetFileConfSwitchConfig(void);
 
 int32_t GeneratePeriodConfigFile(const char *configFile);

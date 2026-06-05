@@ -20,7 +20,7 @@
 #include "securec.h"
 #include "period_config.h"
 
-#define PERIOD_CONFIG_ENTRY 10
+#define PERIOD_CONFIG_ENTRY 11
 #define PERIOD_CONFIG_BUFFSIZE 500
 
 #define RETURN_OK 0
@@ -69,6 +69,7 @@ typedef struct {
     uint32_t groupSwapRatio;
     uint32_t groupSwapMinRemoteFreq;
     uint32_t groupSwapMinFreqGain;
+    bool zeroFreqMigrateEnable;
     bool fileConfSwitch;
     bool scanPeriodChanged;
     bool migratePeriodChanged;
@@ -130,6 +131,11 @@ uint32_t GetGroupSwapMinRemoteFreqConfig(void)
 uint32_t GetGroupSwapMinFreqGainConfig(void)
 {
     return g_periodConfig.groupSwapMinFreqGain;
+}
+
+bool GetZeroFreqMigrateEnableConfig(void)
+{
+    return g_periodConfig.zeroFreqMigrateEnable;
 }
 
 bool GetFileConfSwitchConfig(void)
@@ -336,6 +342,21 @@ static int32_t ConfigGroupSwapMinFreqGain(char *substr, char *value)
     return RETURN_OK;
 }
 
+static int32_t ConfigZeroFreqMigrateEnable(char *substr, char *value)
+{
+    SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
+    if (strcmp(value, "true") == 0) {
+        g_tmpPeriodConfig.zeroFreqMigrateEnable = true;
+    } else if (strcmp(value, "false") == 0) {
+        g_tmpPeriodConfig.zeroFreqMigrateEnable = false;
+    } else {
+        SMAP_LOGGER_ERROR("Config zero freq migrate enable(%s) failed, need config true or false, key:%s.", value,
+                          substr);
+        return RETURN_ERROR;
+    }
+    return RETURN_OK;
+}
+
 static int32_t ConfigFileConfSwitch(char *substr, char *value)
 {
     SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
@@ -402,6 +423,12 @@ static PeriodConfigReadElem g_periodConfigRead[] = {
     {
         "smap.group.swap.min.freq.gain",
         ConfigGroupSwapMinFreqGain,
+        1UL,
+        0UL,
+    },
+    {
+        "smap.zero.freq.migrate.enable",
+        ConfigZeroFreqMigrateEnable,
         1UL,
         0UL,
     },
@@ -559,6 +586,7 @@ static void InitPeriodConfig(void)
     g_periodConfig.groupSwapRatio = DEFAULT_GROUP_SWAP_RATIO;
     g_periodConfig.groupSwapMinRemoteFreq = DEFAULT_GROUP_SWAP_MIN_REMOTE_FREQ;
     g_periodConfig.groupSwapMinFreqGain = DEFAULT_GROUP_SWAP_MIN_FREQ_GAIN;
+    g_periodConfig.zeroFreqMigrateEnable = true;
     g_periodConfig.fileConfSwitch = false;
     g_periodConfig.scanPeriodChanged = false;
     g_periodConfig.migratePeriodChanged = false;
@@ -615,9 +643,17 @@ static int32_t InitPeriodConfigFileBuffer(char periodDefaultConfig[PERIOD_CONFIG
             return RETURN_ERROR;
         }
     }
+    const char *zeroFreqMigrateEnableStr = "smap.zero.freq.migrate.enable = true\n";
+    size_t zeroFreqStrLen = strlen(zeroFreqMigrateEnableStr);
+    errno_t res = strncpy_s(periodDefaultConfig[numConfigs], PERIOD_CONFIG_BUFFSIZE, zeroFreqMigrateEnableStr,
+                            zeroFreqStrLen);
+    if (res != EOK) {
+        SMAP_LOGGER_ERROR("Strncpy smap zero freq migrate enable failed.");
+        return RETURN_ERROR;
+    }
     const char *switchConfigStr = "smap.period.file.config.switch = false\n";
     size_t configStrLen = strlen(switchConfigStr);
-    errno_t res = strncpy_s(periodDefaultConfig[numConfigs], PERIOD_CONFIG_BUFFSIZE, switchConfigStr, configStrLen);
+    res = strncpy_s(periodDefaultConfig[numConfigs + 1], PERIOD_CONFIG_BUFFSIZE, switchConfigStr, configStrLen);
     if (res != EOK) {
         SMAP_LOGGER_ERROR("Strncpy smap period switch failed.");
         return RETURN_ERROR;
@@ -689,6 +725,7 @@ static bool UpdatePeriodConfigChanged(void)
     uint32_t oldGroupSwapRatio, oldGroupSwapMinRemoteFreq, oldGroupSwapMinFreqGain;
     uint32_t groupSwapRatio, groupSwapMinRemoteFreq, groupSwapMinFreqGain;
     uint64_t oldFreqWt, freqWt;
+    bool oldZeroFreqMigrateEnable, zeroFreqMigrateEnable;
 
     if (!g_tmpPeriodConfig.fileConfSwitch) {
         return false;
@@ -703,6 +740,7 @@ static bool UpdatePeriodConfigChanged(void)
     oldGroupSwapRatio = g_periodConfig.groupSwapRatio;
     oldGroupSwapMinRemoteFreq = g_periodConfig.groupSwapMinRemoteFreq;
     oldGroupSwapMinFreqGain = g_periodConfig.groupSwapMinFreqGain;
+    oldZeroFreqMigrateEnable = g_periodConfig.zeroFreqMigrateEnable;
 
     scanPeriod = g_tmpPeriodConfig.scanPeriod;
     migratePeriod = g_tmpPeriodConfig.migratePeriod;
@@ -713,11 +751,13 @@ static bool UpdatePeriodConfigChanged(void)
     groupSwapRatio = g_tmpPeriodConfig.groupSwapRatio;
     groupSwapMinRemoteFreq = g_tmpPeriodConfig.groupSwapMinRemoteFreq;
     groupSwapMinFreqGain = g_tmpPeriodConfig.groupSwapMinFreqGain;
+    zeroFreqMigrateEnable = g_tmpPeriodConfig.zeroFreqMigrateEnable;
 
     if (oldScanPeriod == scanPeriod && oldMigratePeriod == migratePeriod &&
         oldRemoteHotThreshold == remoteHotThreshold && oldRemoteFreqPercentile == remoteFreqPercentile &&
         oldSlowThreshold == slowThreshold && oldFreqWt == freqWt && oldGroupSwapRatio == groupSwapRatio &&
-        oldGroupSwapMinRemoteFreq == groupSwapMinRemoteFreq && oldGroupSwapMinFreqGain == groupSwapMinFreqGain) {
+        oldGroupSwapMinRemoteFreq == groupSwapMinRemoteFreq && oldGroupSwapMinFreqGain == groupSwapMinFreqGain &&
+        oldZeroFreqMigrateEnable == zeroFreqMigrateEnable) {
         return false;
     }
 
@@ -755,6 +795,11 @@ static bool UpdatePeriodConfigChanged(void)
 
     if (oldGroupSwapMinFreqGain != groupSwapMinFreqGain) {
         SMAP_LOGGER_INFO("Start update group swap min freq gain from config to %u.", groupSwapMinFreqGain);
+    }
+
+    if (oldZeroFreqMigrateEnable != zeroFreqMigrateEnable) {
+        SMAP_LOGGER_INFO("Start update zero freq migrate enable from config to %s.",
+                          zeroFreqMigrateEnable ? "true" : "false");
     }
 
     return true;

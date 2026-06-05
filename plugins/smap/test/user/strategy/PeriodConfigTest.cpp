@@ -48,6 +48,7 @@ typedef struct {
     uint32_t groupSwapRatio;
     uint32_t groupSwapMinRemoteFreq;
     uint32_t groupSwapMinFreqGain;
+    bool zeroFreqMigrateEnable;
     bool fileConfSwitch;
     bool scanPeriodChanged;
     bool migratePeriodChanged;
@@ -78,6 +79,17 @@ TEST_F(PeriodConfigTest, GetMigratePeriodConfigTest)
     g_periodConfig.migratePeriod = 2;
     uint32_t ret = GetMigratePeriodConfig();
     EXPECT_EQ(2, ret);
+}
+
+extern "C" bool GetZeroFreqMigrateEnableConfig(void);
+TEST_F(PeriodConfigTest, GetZeroFreqMigrateEnableConfigTest)
+{
+    g_periodConfig.zeroFreqMigrateEnable = true;
+    bool ret = GetZeroFreqMigrateEnableConfig();
+    EXPECT_EQ(true, ret);
+    g_periodConfig.zeroFreqMigrateEnable = false;
+    ret = GetZeroFreqMigrateEnableConfig();
+    EXPECT_EQ(false, ret);
 }
 
 extern "C" bool GetFileConfSwitchConfig(void);
@@ -280,6 +292,27 @@ TEST_F(PeriodConfigTest, ConfigFreqWtTest)
     EXPECT_EQ(40, g_tmpPeriodConfig.freqWt);
 }
 
+extern "C" int32_t ConfigZeroFreqMigrateEnable(char *substr, char *value);
+TEST_F(PeriodConfigTest, ConfigZeroFreqMigrateEnableTest)
+{
+    char *substr = "test";
+    char *value1 = "true";
+    g_tmpPeriodConfig.zeroFreqMigrateEnable = false;
+    int32_t ret = ConfigZeroFreqMigrateEnable(substr, value1);
+    EXPECT_EQ(true, g_tmpPeriodConfig.zeroFreqMigrateEnable);
+    EXPECT_EQ(0, ret);
+
+    char *value2 = "false";
+    g_tmpPeriodConfig.zeroFreqMigrateEnable = true;
+    ret = ConfigZeroFreqMigrateEnable(substr, value2);
+    EXPECT_EQ(false, g_tmpPeriodConfig.zeroFreqMigrateEnable);
+    EXPECT_EQ(0, ret);
+
+    char *value3 = "test";
+    ret = ConfigZeroFreqMigrateEnable(substr, value3);
+    EXPECT_EQ(-1, ret);
+}
+
 extern "C" int32_t ConfigFileConfSwitch(char *substr, char *value);
 extern "C" int32_t ConfigGroupSwapRatio(char *substr, char *value);
 TEST_F(PeriodConfigTest, ConfigGroupSwapRatioTest)
@@ -420,7 +453,7 @@ TEST_F(PeriodConfigTest, PeriodConfigReviewTest)
     int32_t ret = PeriodConfigReview();
     EXPECT_EQ(-1, ret);
 
-    uint32_t num = 10;
+    uint32_t num = 11;
     for (int i = 0; i < num; i++) {
         g_periodConfigRead[i].needCfg = 2UL;
         g_periodConfigRead[i].realCfg = 2UL;
@@ -461,6 +494,7 @@ TEST_F(PeriodConfigTest, InitPeriodConfigTest)
     EXPECT_EQ(1, g_periodConfig.groupSwapRatio);
     EXPECT_EQ(0, g_periodConfig.groupSwapMinRemoteFreq);
     EXPECT_EQ(0, g_periodConfig.groupSwapMinFreqGain);
+    EXPECT_EQ(true, g_periodConfig.zeroFreqMigrateEnable);
     EXPECT_EQ(false, g_periodConfig.fileConfSwitch);
     EXPECT_EQ(false, g_periodConfig.scanPeriodChanged);
     EXPECT_EQ(false, g_periodConfig.migratePeriodChanged);
