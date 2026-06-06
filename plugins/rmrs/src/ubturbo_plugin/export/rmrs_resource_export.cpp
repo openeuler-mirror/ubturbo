@@ -428,6 +428,7 @@ RmrsResult ResourceExport::CollectPidNumaInfo(const std::vector<pid_t> &pids,
                                               std::vector<mempooling::PidInfo> &pidInfos)
 {
     std::set<uint16_t> localNodeIds = GetLocalNodeIds();
+    bool hasReadNumaMap = false;
     for (auto &pid : pids) {
         UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[ContainerPidNumaInfo] Start to collect pid=" << pid << ".";
@@ -436,6 +437,7 @@ RmrsResult ResourceExport::CollectPidNumaInfo(const std::vector<pid_t> &pids,
         if (rmrs::OsHelper::ReadNumaMap(vPidStr, fileContent) != RMRS_OK || fileContent.empty()) {
             continue;
         }
+        hasReadNumaMap = true;
 
         std::istringstream iss(fileContent);
 
@@ -444,10 +446,15 @@ RmrsResult ResourceExport::CollectPidNumaInfo(const std::vector<pid_t> &pids,
         }
     }
 
-    if (pidInfos.empty()) {
+    if (pidInfos.empty() && !hasReadNumaMap) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[ContainerPidNumaInfo] PidInfos is empty. Collect failed.";
         return RMRS_ERROR;
+    }
+
+    if (pidInfos.empty()) {
+        UBTURBO_LOG_INFO(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[ContainerPidNumaInfo] PidInfos is empty. All pids skipped due to no anon/libvirt.";
     }
 
     return RMRS_OK;
