@@ -1051,16 +1051,16 @@ TEST_F(ManageTest, TestClearRemoteMemUsed)
     EXPECT_EQ(0, g_processManager.remoteNumaInfo.usedInfo[1].used);
 }
 
-extern "C" uint64_t CalcRemoteBorrowPages(uint64_t size);
+extern "C" uint64_t MBToPage(uint64_t size);
 TEST_F(ManageTest, TestCalcRemoteBorrowPages)
 {
     uint32_t ret;
     g_processManager.tracking.pageSize = PAGESIZE_4K;
-    ret = CalcRemoteBorrowPages(100);
+    ret = MBToPage(100);
     EXPECT_EQ(25600, ret);
 
     g_processManager.tracking.pageSize = PAGESIZE_2M;
-    ret = CalcRemoteBorrowPages(100);
+    ret = MBToPage(100);
     EXPECT_EQ(50, ret);
 }
 

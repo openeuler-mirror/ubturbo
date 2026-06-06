@@ -347,7 +347,7 @@ static int RecoverNumaConfig(char *numaBase)
         for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
             // only called during initialization, no need to lock
             numaInfo->privateSize[i][j] = payload->size;
-            numaInfo->privateUsedInfo[i][j].size = CalcRemoteBorrowPages(payload->size);
+            numaInfo->privateUsedInfo[i][j].size = MBToPage(payload->size);
             SMAP_LOGGER_INFO("Numa privateSize[%d][%d] %u.", i, j, payload->size);
             payload++;
         }
@@ -358,9 +358,9 @@ static int RecoverNumaConfig(char *numaBase)
         payload++;
     }
     for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-        numaInfo->usedInfo[j].size = CalcRemoteBorrowPages(numaInfo->sharedSize[j]);
+        numaInfo->usedInfo[j].size = MBToPage(numaInfo->sharedSize[j]);
         for (int i = 0; i < GetNrLocalNuma(); i++) {
-            numaInfo->usedInfo[j].size += CalcRemoteBorrowPages(numaInfo->privateSize[i][j]);
+            numaInfo->usedInfo[j].size += MBToPage(numaInfo->privateSize[i][j]);
         }
         SMAP_LOGGER_INFO("Numa usedInfo[%d] %u.", j, numaInfo->usedInfo[j].size);
     }

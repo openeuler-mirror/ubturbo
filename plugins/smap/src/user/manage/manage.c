@@ -1506,13 +1506,6 @@ static int ParseBitmap(size_t bufLen, char *buf, size_t *offset, struct ProcessM
     return 0;
 }
 
-uint64_t CalcRemoteBorrowPages(uint64_t size)
-{
-    uint64_t result = size;
-    result = result * MIB / GetPageSize();
-    return result;
-}
-
 static void NoAccountAlloc(int remoteNid, ProcessAttr *attr)
 {
     int i;
@@ -1784,9 +1777,9 @@ static void CalTmpBorrowPage(uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_
     struct RemoteNumaInfo remoteNumaInfo = g_processManager.remoteNumaInfo;
     for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
         if (remoteNumaInfo.sharedSize[j] > 0) {
-            tmpSharedBorrowPageToUse[j] = CalcRemoteBorrowPages(remoteNumaInfo.sharedSize[j]) -
-                                          MIN(CalcRemoteBorrowPages(remoteNumaInfo.sharedSize[j]) * RESERVED_RATIO,
-                                              CalcRemoteBorrowPages(RESERVED_MEMORY));
+            tmpSharedBorrowPageToUse[j] = MBToPage(remoteNumaInfo.sharedSize[j]) -
+                                          MIN(MBToPage(remoteNumaInfo.sharedSize[j]) * RESERVED_RATIO,
+                                              MBToPage(RESERVED_MEMORY));
             SMAP_LOGGER_DEBUG("tmpSharedBorrowPageToUse[%d] %llu.", j, tmpSharedBorrowPageToUse[j]);
         }
         for (int i = 0; i < GetNrLocalNuma(); i++) {
@@ -1795,9 +1788,9 @@ static void CalTmpBorrowPage(uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_
             }
             if (remoteNumaInfo.privateSize[i][j] > 0) {
                 tmpPrivateBorrowPageToUse[i][j] =
-                    CalcRemoteBorrowPages(remoteNumaInfo.privateSize[i][j]) -
-                    MIN(CalcRemoteBorrowPages(remoteNumaInfo.privateSize[i][j]) * RESERVED_RATIO,
-                        CalcRemoteBorrowPages(RESERVED_MEMORY));
+                    MBToPage(remoteNumaInfo.privateSize[i][j]) -
+                    MIN(MBToPage(remoteNumaInfo.privateSize[i][j]) * RESERVED_RATIO,
+                        MBToPage(RESERVED_MEMORY));
                 SMAP_LOGGER_DEBUG("tmpPrivateBorrowPageToUse[%d][%d] %llu.", i, j, tmpPrivateBorrowPageToUse[i][j]);
             }
         }
@@ -2003,12 +1996,12 @@ int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size)
     }
     for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
         numaInfo->usedInfo[j].ifUsedFreshed = false;
-        numaInfo->usedInfo[j].size = CalcRemoteBorrowPages(numaInfo->sharedSize[j]);
+        numaInfo->usedInfo[j].size = MBToPage(numaInfo->sharedSize[j]);
         SMAP_LOGGER_DEBUG("Node%d shared size: %llu.", j, numaInfo->usedInfo[j].size);
         for (int i = 0; i < g_processManager.nrLocalNuma; i++) {
-            numaInfo->usedInfo[j].size += CalcRemoteBorrowPages(numaInfo->privateSize[i][j]);
+            numaInfo->usedInfo[j].size += MBToPage(numaInfo->privateSize[i][j]);
             numaInfo->privateUsedInfo[i][j].ifUsedFreshed = false;
-            numaInfo->privateUsedInfo[i][j].size = CalcRemoteBorrowPages(numaInfo->privateSize[i][j]);
+            numaInfo->privateUsedInfo[i][j].size = MBToPage(numaInfo->privateSize[i][j]);
             SMAP_LOGGER_INFO("local %d borrow remote %d private size: %llu.", i, j,
                              numaInfo->privateUsedInfo[i][j].size);
         }

@@ -407,8 +407,6 @@ typedef struct {
     } numaParam[REMOTE_NUMA_NUM];
 } ProcessParam;
 
-uint64_t CalcRemoteBorrowPages(uint64_t size);
-
 void DebugProcessAttr(struct ProcessManager *manager);
 
 int GetNrLocalNuma(void);
@@ -588,6 +586,11 @@ static inline uint64_t KBToNormalPage(uint64_t memSize)
 {
     int size = GetNormalPageSize();
     return memSize / (size / KIB);
+}
+
+static inline uint64_t MBToPage(uint64_t memSize)
+{
+    return memSize * MIB / GetPageSize();
 }
 
 static inline int GetCurrentMaxNrPid(void)

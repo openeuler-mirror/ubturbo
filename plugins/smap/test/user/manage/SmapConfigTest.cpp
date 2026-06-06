@@ -503,7 +503,6 @@ TEST_F(SmapConfigTest, TestRecoverNumaConfig)
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(nrLocal));
     MOCKER(JumpToNumaPayload).stubs().will(returnValue(reinterpret_cast<char *>(payload)));
-    MOCKER(CalcRemoteBorrowPages).stubs().will(returnValue((unsigned long)0));
     ret = RecoverNumaConfig(&numaBase);
     EXPECT_EQ(0, ret);
     free(payload);
