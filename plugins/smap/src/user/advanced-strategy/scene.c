@@ -532,6 +532,11 @@ static void ConfigMultiVmRatioInGroups(struct ProcessManager *manager)
             continue;
         }
 
+        if (current->migrateMode == MIG_MEMSIZE_MODE) {
+            current = current->next;
+            continue;
+        }
+
         int l1 = GetAttrL1(current);
         int l2 = GetAttrL2(current);
         if (processed[l1][l2]) { // 如果这个近端-远端组处理过了则跳过
