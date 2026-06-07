@@ -550,9 +550,11 @@ static void UpdateSwapNum(ProcessAttr *process, uint64_t swapNum[LOCAL_NUMA_BITS
                           uint64_t numaFreePage[MAX_NODES])
 {
     uint64_t numaOffset[MAX_NODES] = { 0 };
+    StrategyAttribute *sa = &process->strategyAttr;
+
     for (int nid1 = 0; nid1 < MAX_NODES; nid1++) {
         for (int nid2 = 0; nid2 < MAX_NODES; nid2++) {
-            numaOffset[nid1] += process->strategyAttr.nrMigratePages[nid1][nid2];
+            numaOffset[nid1] += sa->nrMigratePages[nid1][nid2];
         }
     }
     for (int remoteNid = localNumaNum; remoteNid < localNumaNum + REMOTE_NUMA_NUM; remoteNid++) {
@@ -561,6 +563,10 @@ static void UpdateSwapNum(ProcessAttr *process, uint64_t swapNum[LOCAL_NUMA_BITS
         }
         for (int localNid = 0; localNid < localNumaNum; localNid++) {
             if (NotInAttrL1(process, localNid)) {
+                continue;
+            }
+            // nrMigratePages being zero means no swap should happen for processes in MIG_MEMSIZE_MODE.
+            if (process->migrateMode == MIG_MEMSIZE_MODE && sa->nrMigratePages[localNid][remoteNid] == 0) {
                 continue;
             }
             swapNum[localNid][remoteNid] = CalcSwapNum4K(process, localNid, remoteNid, numaOffset, numaFreePage);

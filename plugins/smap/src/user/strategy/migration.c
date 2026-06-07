@@ -413,18 +413,34 @@ static void NumaSwapMemPool(ProcessAttr *current)
     if (IsMultiNumaVm(current)) {
         return;
     }
+
     for (int i = 0; i < LOCAL_NUMA_NUM; i++) {
+        if (!InAttrL1(current, i)) {
+            continue;
+        }
+
         for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
+            StrategyAttribute *sa = &current->strategyAttr;
             int l2Node = GetNrLocalNuma() + j;
-            int32_t tmpNum = IsHugeMode() ? KBToHugePage(current->strategyAttr.memSize[i][j]) :
-                                            KBToNormalPage(current->strategyAttr.memSize[i][j]);
-            int32_t migNum = current->strategyAttr.allocRemoteNrPages[i][j] - tmpNum;
-            if (migNum > 0) {
-                migNum = MIN(migNum, current->scanAttr.actcLen[l2Node]);
-                current->strategyAttr.nrMigratePages[l2Node][i] = migNum;
+            uint32_t targetNum = KBToPage(sa->memSize[i][j]);
+            uint32_t localNum = current->walkPage.nrPages[i];
+            uint32_t remoteNum = sa->remoteNrPagesAfterMigrate[i][j];
+            uint32_t migNum;
+
+            if (remoteNum == 0 && targetNum == 0) {
+                continue;
+            }
+
+            if (remoteNum > targetNum) {
+                migNum = remoteNum - targetNum;
+                sa->nrMigratePages[l2Node][i] = migNum;
+                SMAP_LOGGER_INFO("[swap_pool] pid=%d src=%d dst=%d remote_pages=%u target_pages=%u mig_pages=%u",
+                                 current->pid, l2Node, i, remoteNum, targetNum, migNum);
             } else {
-                migNum = MIN(-migNum, current->scanAttr.actcLen[i]);
-                current->strategyAttr.nrMigratePages[i][l2Node] = migNum;
+                migNum = MIN(localNum, targetNum - remoteNum);
+                sa->nrMigratePages[i][l2Node] = migNum;
+                SMAP_LOGGER_INFO("[swap_pool] pid=%d src=%d dst=%d remote_pages=%u target_pages=%u mig_pages=%u",
+                                 current->pid, i, l2Node, remoteNum, targetNum, migNum);
             }
         }
     }

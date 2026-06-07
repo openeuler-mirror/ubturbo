@@ -582,10 +582,32 @@ static inline uint64_t KBToHugePage(uint64_t memSize)
     return memSize / (size / KIB);
 }
 
+static inline uint64_t HugePageToKB(uint64_t nr)
+{
+    int size = GetHugePageSize();
+    return nr * (size / KIB);
+}
+
 static inline uint64_t KBToNormalPage(uint64_t memSize)
 {
     int size = GetNormalPageSize();
     return memSize / (size / KIB);
+}
+
+static inline uint64_t NormalPageToKB(uint64_t nr)
+{
+    int size = GetNormalPageSize();
+    return nr * (size / KIB);
+}
+
+static inline uint64_t KBToPage(uint64_t memSize)
+{
+    return IsHugeMode() ? KBToHugePage(memSize) : KBToNormalPage(memSize);
+}
+
+static inline uint64_t PageToKB(uint64_t nr)
+{
+    return IsHugeMode() ? HugePageToKB(nr) : NormalPageToKB(nr);
 }
 
 static inline uint64_t MBToPage(uint64_t memSize)
