@@ -617,23 +617,23 @@ TEST_F(MigInitTest, __IoctlMigrateE2ETest)
     msg.mul_mig.page_size = TWO_MEGA_SIZE;
     msg.mul_mig.is_mul_thread = false;
 
-    // 10 huge page can migrate, 5120 page migrate success
+    // 10 huge page can migrate, all remaining pages processed via goto again
     IoctlMigrateE2ETestMock(&msg, HUGE_PAGE, 5120, 10);
     ret = __ioctl_migrate(&argp);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(1014, migList[0].failed_pre_migrated_nr);
+    EXPECT_EQ(5110, migList[0].failed_pre_migrated_nr);
     EXPECT_EQ(0, migList[0].failed_mig_nr);
-    EXPECT_EQ(1014, migList[1].failed_pre_migrated_nr);
+    EXPECT_EQ(10230, migList[1].failed_pre_migrated_nr);
     EXPECT_EQ(0, migList[1].failed_mig_nr);
 
     GlobalMockObject::verify();
-    // 10 huge page can migrate, 0 page migrate success
+    // 10 huge page can migrate, 0 page migrate success, all batches processed via goto again
     IoctlMigrateE2ETestMock(&msg, HUGE_PAGE, 0, 10);
     ret = __ioctl_migrate(&argp);
     EXPECT_EQ(20, ret);
-    EXPECT_EQ(1014, migList[0].failed_pre_migrated_nr);
+    EXPECT_EQ(5110, migList[0].failed_pre_migrated_nr);
     EXPECT_EQ(10, migList[0].failed_mig_nr);
-    EXPECT_EQ(1014, migList[1].failed_pre_migrated_nr);
+    EXPECT_EQ(10230, migList[1].failed_pre_migrated_nr);
     EXPECT_EQ(10, migList[1].failed_mig_nr);
 
     for (int i = 0; i < cnt; ++i) {

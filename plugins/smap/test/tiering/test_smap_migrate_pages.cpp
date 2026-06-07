@@ -922,3 +922,128 @@ TEST_F(SmapMigratePagesTest, TestIsFolioInMigrateBackRange)
     EXPECT_EQ(true, ret);
     list_del(&task.task_node);
 }
+
+TEST_F(SmapMigratePagesTest, DoMigrateNrFoliosZeroGotoAgainFiltered)
+{
+    // When nr_folios == 0 and nr_remain_folios > 0, goto again instead of continue
+    // First batch: all pages filtered by is_filter_4k, nr_folios = 0
+    // Second batch: page passes filter, added for migration
+    struct page page;
+    int arr[1] = {0};
+    unsigned int nr_folios = 1;
+    const u64 nr_total = NR_BATCHED_MIGRATION + 1;
+    struct migrate_msg *msg = (struct migrate_msg *)kmalloc(sizeof(struct migrate_msg), GFP_KERNEL);
+    struct mig_list *mig_list = (struct mig_list *)kmalloc(sizeof(struct mig_list), GFP_KERNEL);
+
+    mig_list[0].from = NUMA_NO_NODE + 1;
+    mig_list[0].nr = nr_total;
+    mig_list[0].addr = (u64*)vzalloc(nr_total * sizeof(u64));
+    ASSERT_NE(nullptr, mig_list[0].addr);
+    for (u64 j = 0; j < nr_total; j++) {
+        mig_list[0].addr[j] = 0x100000 + j * 0x1000;
+    }
+    msg->cnt = 1;
+    msg->mul_mig.page_size = 0x1000;
+    msg->mig_list = mig_list;
+
+    MOCKER(kzalloc).stubs().will(returnValue((void*)arr));
+    MOCKER(pfn_valid).stubs().will(returnValue(true));
+    MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
+    MOCKER(is_filter_4k).stubs().will(repeat(0, NR_BATCHED_MIGRATION)).then(returnValue(-1));
+    MOCKER(smap_add_page_for_migration)
+        .stubs()
+        .with(any(), any(), outBoundP(&nr_folios, sizeof(nr_folios)), any(), any())
+        .will(returnValue(0));
+    MOCKER(smu_migrate).stubs().will(returnValue(0));
+    MOCKER(kfree).stubs().will(ignoreReturnValue());
+
+    int ret = do_migrate(msg, mig_list);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(0, mig_list[0].failed_mig_nr);
+    EXPECT_EQ(NR_BATCHED_MIGRATION, mig_list[0].failed_pre_migrated_nr);
+
+    vfree(mig_list[0].addr);
+    kfree(msg);
+    kfree(mig_list);
+}
+
+TEST_F(SmapMigratePagesTest, DoMigrateNrFoliosZeroGotoAgainInvalidPfn)
+{
+    // When nr_folios == 0 and nr_remain_folios > 0, goto again
+    // First batch: all pages have invalid pfn, nr_folios = 0
+    // Second batch: page has valid pfn and succeeds migration
+    struct page page;
+    int arr[1] = {0};
+    unsigned int nr_folios = 1;
+    const u64 nr_total = NR_BATCHED_MIGRATION + 1;
+    struct migrate_msg *msg = (struct migrate_msg *)kmalloc(sizeof(struct migrate_msg), GFP_KERNEL);
+    struct mig_list *mig_list = (struct mig_list *)kmalloc(sizeof(struct mig_list), GFP_KERNEL);
+
+    mig_list[0].from = NUMA_NO_NODE + 1;
+    mig_list[0].nr = nr_total;
+    mig_list[0].addr = (u64*)vzalloc(nr_total * sizeof(u64));
+    ASSERT_NE(nullptr, mig_list[0].addr);
+    for (u64 j = 0; j < nr_total; j++) {
+        mig_list[0].addr[j] = 0x100000 + j * 0x1000;
+    }
+    msg->cnt = 1;
+    msg->mul_mig.page_size = 0x1000;
+    msg->mig_list = mig_list;
+
+    MOCKER(kzalloc).stubs().will(returnValue((void*)arr));
+    MOCKER(pfn_valid).stubs().will(repeat(false, NR_BATCHED_MIGRATION)).then(returnValue(true));
+    MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
+    MOCKER(is_filter_4k).stubs().will(returnValue(-1));
+    MOCKER(smap_add_page_for_migration)
+        .stubs()
+        .with(any(), any(), outBoundP(&nr_folios, sizeof(nr_folios)), any(), any())
+        .will(returnValue(0));
+    MOCKER(smu_migrate).stubs().will(returnValue(0));
+    MOCKER(kfree).stubs().will(ignoreReturnValue());
+
+    int ret = do_migrate(msg, mig_list);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(0, mig_list[0].failed_mig_nr);
+    EXPECT_EQ(NR_BATCHED_MIGRATION, mig_list[0].failed_pre_migrated_nr);
+
+    vfree(mig_list[0].addr);
+    kfree(msg);
+    kfree(mig_list);
+}
+
+TEST_F(SmapMigratePagesTest, DoMigrateNrFoliosZeroNoRemainContinue)
+{
+    // When nr_folios == 0 and nr_remain_folios == 0, continue (no goto again)
+    struct page page;
+    int arr[1] = {0};
+    unsigned int nr_folios = 0;
+    const u64 nr_total = NR_BATCHED_MIGRATION;
+    struct migrate_msg *msg = (struct migrate_msg *)kmalloc(sizeof(struct migrate_msg), GFP_KERNEL);
+    struct mig_list *mig_list = (struct mig_list *)kmalloc(sizeof(struct mig_list), GFP_KERNEL);
+
+    mig_list[0].from = NUMA_NO_NODE + 1;
+    mig_list[0].nr = nr_total;
+    mig_list[0].addr = (u64*)vzalloc(nr_total * sizeof(u64));
+    ASSERT_NE(nullptr, mig_list[0].addr);
+    for (u64 j = 0; j < nr_total; j++) {
+        mig_list[0].addr[j] = 0x100000 + j * 0x1000;
+    }
+    msg->cnt = 1;
+    msg->mul_mig.page_size = 0x1000;
+    msg->mig_list = mig_list;
+
+    MOCKER(kzalloc).stubs().will(returnValue((void*)arr));
+    MOCKER(pfn_valid).stubs().will(returnValue(true));
+    MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
+    MOCKER(is_filter_4k).stubs().will(returnValue(0));
+    MOCKER(kfree).stubs().will(ignoreReturnValue());
+
+    int ret = do_migrate(msg, mig_list);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(0, mig_list[0].failed_mig_nr);
+    EXPECT_EQ(NR_BATCHED_MIGRATION, mig_list[0].failed_pre_migrated_nr);
+
+    vfree(mig_list[0].addr);
+    kfree(msg);
+    kfree(mig_list);
+}
