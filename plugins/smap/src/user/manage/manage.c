@@ -1519,29 +1519,36 @@ static void NoAccountAlloc(int remoteNid, ProcessAttr *attr)
     int nrLocalNuma = GetNrLocalNuma();
     int l1Nid[nrLocalNuma];
     int l1Len = 0;
-    uint32_t tmpUsedTotal = 0;
-    double ratio;
+
     for (i = 0; i < nrLocalNuma; i++) {
         if (InAttrL1(attr, i)) {
             l1Nid[l1Len++] = i;
         }
     }
-    if (l1Len != 0 && attr->walkPage.nrPages[remoteNid] != 0) {
-        ratio = (double)attr->walkPage.nrPages[remoteNid] / l1Len / attr->walkPage.nrPages[remoteNid];
-        for (i = 0; i < l1Len; i++) {
-            if (i == l1Len - 1) {
-                attr->strategyAttr.allocRemoteNrPages[l1Nid[i]][remoteNid - nrLocalNuma] =
-                    attr->walkPage.nrPages[remoteNid] - tmpUsedTotal;
-                break;
-            }
-            uint32_t tmpUsed = attr->walkPage.nrPages[remoteNid] * ratio;
-            tmpUsedTotal += tmpUsed;
-            attr->strategyAttr.allocRemoteNrPages[l1Nid[i]][remoteNid - nrLocalNuma] = tmpUsed;
-            SMAP_LOGGER_DEBUG("NoAccountAlloc pid: %d, allocRemoteNrPages[%d][%d] %u.", attr->pid, l1Nid[i],
-                              remoteNid - nrLocalNuma,
-                              attr->strategyAttr.allocRemoteNrPages[l1Nid[i]][remoteNid - nrLocalNuma]);
+    if (l1Len == 0) {
+        SMAP_LOGGER_WARNING("Aborted alloc account rebuild for pid %d due to missing L1 node", attr->pid);
+        return;
+    }
+
+    StrategyAttribute *sa = &attr->strategyAttr;
+    uint32_t nrLeft = attr->walkPage.nrPages[remoteNid];
+    uint32_t nrChunk = nrLeft / l1Len;
+
+    SMAP_LOGGER_INFO("Rebuilding alloc account for pid %d", attr->pid);
+    for (i = 0; i < l1Len; i++) {
+        int l1Index = l1Nid[i];
+        int l2Index = remoteNid - nrLocalNuma;
+
+        if (i == l1Len - 1) {
+            sa->allocRemoteNrPages[l1Index][l2Index] = nrLeft;
+            SMAP_LOGGER_DEBUG("[alloc_remote*] pid=%d local=%d remote=%d pages=%u", attr->pid, i, remoteNid, nrLeft);
+        } else {
+            sa->allocRemoteNrPages[l1Index][l2Index] = nrChunk;
+            nrLeft -= nrChunk;
+            SMAP_LOGGER_DEBUG("[alloc_remote*] pid=%d local=%d remote=%d pages=%u", attr->pid, i, remoteNid, nrLeft);
         }
     }
+    SMAP_LOGGER_INFO("Rebuild alloc account complete for pid %d", attr->pid);
 }
 
 static void ClearNormalPidAccount(ProcessAttr *attr, int remoteNode, int nrLocalNuma)
@@ -1590,70 +1597,109 @@ static void CheckAccountAndNrPage(ProcessAttr *attr, bool returnFlag[REMOTE_NUMA
 
 static void CalNrPagesPerLocalNuma(ProcessAttr *attr)
 {
-    int nrLocalNuma = GetNrLocalNuma();
-    for (int i = 0; i < nrLocalNuma; i++) {
-        uint32_t tmpPidNrPagesLocalTotal = 0;
+    StrategyAttribute *sa = &attr->strategyAttr;
+
+    for (int i = 0; i < GetNrLocalNuma(); i++) {
+        uint32_t nrLocal = attr->walkPage.nrPages[i];
+        uint32_t nrRemote = 0;
+
         for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-            tmpPidNrPagesLocalTotal += attr->strategyAttr.allocRemoteNrPages[i][j];
+            nrRemote += sa->allocRemoteNrPages[i][j];
         }
-        SMAP_LOGGER_DEBUG("pid: %d, CalNrPagesPerLocalNuma 1 [%d]: %u %u.", attr->pid, i, tmpPidNrPagesLocalTotal,
-                          attr->walkPage.nrPages[i]);
-        attr->strategyAttr.nrPagesPerLocalNuma[i] = tmpPidNrPagesLocalTotal + attr->walkPage.nrPages[i];
-        SMAP_LOGGER_DEBUG("pid: %d, CalNrPagesPerLocalNuma 2 [%d]: %u.", attr->pid, i,
-                          attr->strategyAttr.nrPagesPerLocalNuma[i]);
+        sa->nrPagesPerLocalNuma[i] = nrLocal + nrRemote;
+
+        SMAP_LOGGER_DEBUG("[cal_local_total] pid=%d, local_node=%d total_pages=%u local_pages=%u remote_pages=%u",
+                          attr->pid, i, sa->nrPagesPerLocalNuma[i], nrLocal, nrRemote);
     }
 }
 
-static void CalRemotePerLocalWithAccount(int j, ProcessAttr *attr)
+/**
+ * CalRemoteAllocRatio - 根据历史贡献度计算各本地NUMA迁往某远端NUMA的比例
+ *
+ * @param attr:    进程结构体指针
+ * @param l2Index: L2索引
+ * @param ratio:   比例数组
+ * @param len:     比例数组长度
+ */
+static void CalRemoteAllocRatio(ProcessAttr *attr, int l2Index, double *ratio, int *len)
 {
     int i;
     int nrLocalNuma = GetNrLocalNuma();
-    uint32_t tmpRemoteNrPages = 0;
-    for (i = 0; i < nrLocalNuma; i++) {
-        SMAP_LOGGER_DEBUG("pid: %d, remoteNrPagesAfterMigrate [%d][%d]: %u.", attr->pid, i, j,
-                          attr->strategyAttr.remoteNrPagesAfterMigrate[i][j]);
-        tmpRemoteNrPages += attr->strategyAttr.remoteNrPagesAfterMigrate[i][j];
-    }
-    if (tmpRemoteNrPages == 0) {
-        return;
-    }
-    double tmpPairRatio[LOCAL_NUMA_NUM];
-    int ratioLen = 0;
-    for (i = 0; i < nrLocalNuma; i++) {
-        tmpPairRatio[i] = (double)attr->strategyAttr.remoteNrPagesAfterMigrate[i][j] / tmpRemoteNrPages;
-        if (tmpPairRatio[i] > 0) {
-            ratioLen++;
-        }
+    int l2Nid = l2Index + nrLocalNuma;
+    StrategyAttribute *sa = &attr->strategyAttr;
+    uint32_t acctTotal = 0;
+
+    for (i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+        acctTotal += sa->remoteNrPagesAfterMigrate[i][l2Index];
     }
 
-    uint32_t tmpUsedTotal = 0;
-    // 2、Pid远端使用量：pid本地单一numa占比 * PID对应的远端numa数量
-    for (i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-        if (tmpPairRatio[i] == 0) {
+    if (acctTotal == 0) {
+        *len = 0;
+    } else {
+        for (i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+            ratio[i] = (double)sa->remoteNrPagesAfterMigrate[i][l2Index] / acctTotal;
+            SMAP_LOGGER_DEBUG("[alloc_remote_ratio] pid=%d local=%d remote=%d pages=%u/%u remote_ratio=%.2lf",
+                              attr->pid, i, l2Nid, sa->remoteNrPagesAfterMigrate[i][l2Index], acctTotal, ratio[i]);
+        }
+        *len = i;
+    }
+}
+
+/**
+ * CalRemoteAllocPages - 根据比例计算各本地NUMA的迁移页数
+ *
+ * @param attr:    进程结构体指针
+ * @param l2Index: L2索引
+ * @param ratio:   比例数组
+ * @param len:     比例数组长度
+ */
+static void CalRemoteAllocPages(ProcessAttr *attr, int l2Index, double *ratio, int ratioLen)
+{
+    int l2Nid = l2Index + GetNrLocalNuma();
+    StrategyAttribute *sa = &attr->strategyAttr;
+    uint32_t nrTotal = attr->walkPage.nrPages[l2Nid];
+    uint32_t nrLeft = nrTotal;
+
+    for (int i = 0; i < ratioLen; i++) {
+        if (ratio[i] == 0) {
             continue;
         }
-        SMAP_LOGGER_DEBUG(
-            "CalNrPagesLocalTotalPerPid pid: %d tmp ratio info: i:[%d] j:[%d] nrPage: %u, tmpRatio: %.2lf.", attr->pid,
-            i, j, attr->walkPage.nrPages[j + nrLocalNuma], tmpPairRatio[i]);
-        if (ratioLen == 1) {
-            attr->strategyAttr.allocRemoteNrPages[i][j] = attr->walkPage.nrPages[j + nrLocalNuma] - tmpUsedTotal;
-            SMAP_LOGGER_DEBUG("CalNrPagesLocalTotalPerPid pid: %d [%d][%d]: has remote page num: %u.", attr->pid, i, j,
-                              attr->strategyAttr.allocRemoteNrPages[i][j]);
-            break;
+
+        if (i == ratioLen - 1) {
+            sa->allocRemoteNrPages[i][l2Index] = nrLeft;
+            SMAP_LOGGER_DEBUG("[alloc_remote] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrLeft);
+        } else {
+            uint32_t nrTmp = nrTotal * ratio[i];
+            sa->allocRemoteNrPages[i][l2Index] = nrTmp;
+            nrLeft -= nrTmp;
+            SMAP_LOGGER_DEBUG("[alloc_remote] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrTmp);
         }
-        ratioLen--;
-        uint32_t tmpUsed = attr->walkPage.nrPages[j + nrLocalNuma] * tmpPairRatio[i];
-        tmpUsedTotal += tmpUsed;
-        attr->strategyAttr.allocRemoteNrPages[i][j] = tmpUsed;
-        SMAP_LOGGER_DEBUG("CalNrPagesLocalTotalPerPid pid: %d [%d][%d]: has remote page num: %u, tmpUsed: %u.",
-                          attr->pid, i, j, attr->strategyAttr.allocRemoteNrPages[i][j], tmpUsed);
     }
+}
+
+static void CalRemotePerLocalWithAccount(int l2Index, ProcessAttr *attr)
+{
+    double ratioArr[LOCAL_NUMA_NUM];
+    int ratioLen = 0;
+
+    // 1. 根据 remoteNrPagesAfterMigrate 账本计算分配比例
+    CalRemoteAllocRatio(attr, l2Index, ratioArr, &ratioLen);
+    if (ratioLen == 0) {
+        return;
+    }
+    // 2. 根据分配比例计算分配的页面数量
+    CalRemoteAllocPages(attr, l2Index, ratioArr, ratioLen);
 }
 
 static void CalRemotePerLocal(ProcessAttr *attr)
 {
     int i, j;
-    bool returnFlag[REMOTE_NUMA_NUM] = { true };
+    bool returnFlag[REMOTE_NUMA_NUM];
+
+    for (i = 0; i < REMOTE_NUMA_NUM; i++) {
+        returnFlag[i] = true;
+    }
+
     // 检查账本和当前内存页分布情况，处理有远端内存，但是没有账本的情况
     CheckAccountAndNrPage(attr, returnFlag);
     int nrLocalNuma = GetNrLocalNuma();
@@ -1673,9 +1719,6 @@ static void CalRemotePerLocal(ProcessAttr *attr)
 
 static void CalNrPagesLocalTotalPerPid(ProcessAttr *attr)
 {
-    uint32_t tmpRemoteNrPages;
-    int i, j;
-
     // 计算每个本地numa，对应可迁出到远端每个numa的内存量
     CalRemotePerLocal(attr);
 

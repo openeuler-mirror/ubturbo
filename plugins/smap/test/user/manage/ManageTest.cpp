@@ -1458,6 +1458,7 @@ TEST_F(ManageTest, TestChangePidRemoteByNuma)
     pid2.numaAttr.numaNodes = 0b00110000;
     pid1.next = &pid2;
     g_processManager.processes = &pid1;
+    g_processManager.nrLocalNuma = 4;
 
     EnvMutexInit(&g_processManager.lock);
     MOCKER(GetCurrentMaxNrPid).stubs().will(returnValue(2));
