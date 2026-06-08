@@ -17,6 +17,10 @@
 using namespace std;
 
 static cpu_set_t g_fake_cpu_mask;
+extern "C" struct ProcessManager g_processManager;
+extern "C" uint32_t g_pageSizeHuge;
+extern "C" RunMode g_runMode;
+extern "C" void RemoteNumaInfoInit();
 
 static int fake_sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t *mask)
 {
@@ -31,20 +35,18 @@ protected:
     void SetUp() override
     {
         cout << "[Phase SetUp Begin]" << endl;
+        g_processManager.processes = nullptr;
         cout << "[Phase SetUp End]" << endl;
     }
     void TearDown() override
     {
         cout << "[Phase TearDown Begin]" << endl;
         GlobalMockObject::verify();
+        g_processManager.processes = nullptr;
         cout << "[Phase TearDown End]" << endl;
     }
 };
 
-extern "C" struct ProcessManager g_processManager;
-extern "C" uint32_t g_pageSizeHuge;
-extern "C" RunMode g_runMode;
-extern "C" void RemoteNumaInfoInit();
 TEST_F(ManageTest, TestRemoteNumaInfoInit)
 {
     g_processManager.remoteNumaInfo.usedInfo[0].size = 10;

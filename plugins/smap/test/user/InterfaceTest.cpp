@@ -30,12 +30,14 @@ protected:
     void SetUp() override
     {
         cout << "[Phase SetUp Begin]" << endl;
+        g_processManager.processes = nullptr;
         cout << "[Phase SetUp End]" << endl;
     }
     void TearDown() override
     {
         cout << "[Phase TearDown Begin]" << endl;
         GlobalMockObject::verify();
+        g_processManager.processes = nullptr;
         cout << "[Phase TearDown End]" << endl;
     }
 
