@@ -1298,9 +1298,9 @@ static void CalcActcStats(ProcessAttr *attr)
             count->freqMin = MIN(count->freqMin, freq);
         }
 
-        SMAP_LOGGER_INFO("Node%d actcLen %llu, freqMax %u, freqMin %u, freqNum %llu, "
-                         "freqSum %llu, remoteHotNum %llu, whiteNum %llu",
-                         nid, actcLen, count->freqMax, count->freqMin, count->freqNum, count->freqSum,
+        SMAP_LOGGER_INFO("[pid_stats] pid=%d node=%d actcLen=%llu freqMax=%u freqMin=%u freqNum=%llu freqSum=%llu "
+                         "remoteHotNum=%llu whiteNum=%llu",
+                         attr->pid, nid, actcLen, count->freqMax, count->freqMin, count->freqNum, count->freqSum,
                          count->remoteHotNum, count->whiteNum);
 
         /* 打印各频次桶的页面数（仅本地NUMA，跳过页面数为零的） */
@@ -1309,6 +1309,55 @@ static void CalcActcStats(ProcessAttr *attr)
                 if (count->freqBuckets[f] > 0) {
                     SMAP_LOGGER_DEBUG("Node%d freq=%d pages=%u", nid, f, count->freqBuckets[f]);
                 }
+            }
+        }
+    }
+}
+
+/**
+ * CalibrateMigratePages - 根据最新统计的远端页面数量校准迁移量
+ */
+static void CalibrateMigratePages(ProcessAttr *attr)
+{
+    StrategyAttribute *sa = &attr->strategyAttr;
+    WalkPage *wp = &attr->walkPage;
+    int nrLocalNuma = GetNrLocalNuma();
+
+    for (int l2Index = 0; l2Index < REMOTE_NUMA_NUM; l2Index++) {
+        uint64_t remotePages = 0;
+        uint32_t arr[LOCAL_NUMA_NUM] = { 0 };
+        int arrLen = 0;
+        int local;
+        int remote = l2Index + nrLocalNuma;
+
+        for (local = 0; local < LOCAL_NUMA_NUM; local++) {
+            uint32_t nrMig = sa->remoteNrPagesAfterMigrate[local][l2Index];
+            if (nrMig) {
+                remotePages += nrMig;
+                arr[arrLen++] = local;
+                SMAP_LOGGER_INFO("[nr_mig] pid=%d local=%d remote=%d pages=%u", attr->pid, local, remote, nrMig);
+            }
+        }
+
+        if (remotePages == wp->nrPages[remote]) {
+            continue;
+        }
+
+        double ratio;
+        uint32_t nrLeft = wp->nrPages[remote];
+        uint32_t nrChunk;
+
+        for (int i = 0; i < arrLen; i++) {
+            local = arr[i];
+            if (i == arrLen - 1) {
+                sa->remoteNrPagesAfterMigrate[local][l2Index] = nrLeft;
+                SMAP_LOGGER_INFO("[cali_mig] pid=%d local=%d remote=%d pages=%u", attr->pid, local, remote, nrLeft);
+            } else {
+                ratio = (double)sa->remoteNrPagesAfterMigrate[local][l2Index] / remotePages;
+                nrChunk = wp->nrPages[remote] * ratio;
+                sa->remoteNrPagesAfterMigrate[local][l2Index] = nrChunk;
+                nrLeft -= nrChunk;
+                SMAP_LOGGER_INFO("[cali_mig] pid=%d local=%d remote=%d pages=%u", attr->pid, local, remote, nrChunk);
             }
         }
     }
@@ -1424,6 +1473,11 @@ static int FillPidData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
     }
 
     CalcActcStats(attr);
+
+    if (GetRunMode() == WATERLINE_MODE) {
+        CalibrateMigratePages(attr);
+    }
+
     return 0;
 }
 

@@ -2276,3 +2276,142 @@ TEST_F(ManageTest, TestAllocBorrowPagesForMemsizeHugePage)
     EXPECT_EQ((uint32_t)4, availPrivatePages[0][0]);
     EXPECT_EQ((uint64_t)2048, attr.strategyAttr.memSize[0][0]);
 }
+
+extern "C" void CalibrateMigratePages(ProcessAttr *attr);
+
+TEST_F(ManageTest, TestCalibrateMigratePagesNoChange)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 50;
+    attr.walkPage.nrPages[4] = 150;  // remotePages(150) == wp->nrPages[4](150), skip
+
+    CalibrateMigratePages(&attr);
+
+    // No change: values stay as-is
+    EXPECT_EQ((uint32_t)100, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ((uint32_t)50, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+}
+
+TEST_F(ManageTest, TestCalibrateMigratePagesSingleLocal)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    attr.walkPage.nrPages[4] = 50;  // actual pages dropped from 100 to 50
+
+    CalibrateMigratePages(&attr);
+
+    // arrLen=1, last(only) gets nrLeft=50
+    EXPECT_EQ((uint32_t)50, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+}
+
+TEST_F(ManageTest, TestCalibrateMigratePagesMultiLocal)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    // Two local NUMAs contribute to remote NUMA 4 (l2Index=0)
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 100;
+    attr.walkPage.nrPages[4] = 150;  // actual dropped from 200 to 150
+
+    CalibrateMigratePages(&attr);
+
+    // remotePages=200, arr=[0,1], nrLeft=150
+    // i=0: ratio=100/200=0.5, nrChunk=150*0.5=75, nrLeft=75
+    // i=1 (last): gets nrLeft=75
+    EXPECT_EQ((uint32_t)75, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ((uint32_t)75, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+}
+
+TEST_F(ManageTest, TestCalibrateMigratePagesSkipZeroEntries)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    // Local NUMA 0 has 0 entries — excluded from arr[]
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 0;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 100;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[2][0] = 100;
+    attr.walkPage.nrPages[4] = 300;  // actual increased from 200 to 300
+
+    CalibrateMigratePages(&attr);
+
+    // remotePages=200, arr=[1,2], nrLeft=300
+    // i=0 (arr[0]=1): ratio=100/200=0.5, nrChunk=300*0.5=150, nrLeft=150
+    // i=1 (arr[1]=2, last): gets nrLeft=150
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);   // unchanged (was 0)
+    EXPECT_EQ((uint32_t)150, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+    EXPECT_EQ((uint32_t)150, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
+}
+
+TEST_F(ManageTest, TestCalibrateMigratePagesMultiRemote)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    // l2Index=0: remotePages=100, actual=100 → skip
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    attr.walkPage.nrPages[4] = 100;
+    // l2Index=1: remotePages=200, actual=100 → calibrate
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][1] = 200;
+    attr.walkPage.nrPages[5] = 100;  // l2Index=1, remote=5
+
+    CalibrateMigratePages(&attr);
+
+    // l2Index=0: unchanged (remotePages==actual)
+    EXPECT_EQ((uint32_t)100, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    // l2Index=1: arrLen=1, last gets nrLeft=100
+    EXPECT_EQ((uint32_t)100, attr.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
+}
+
+TEST_F(ManageTest, TestCalibrateMigratePagesToZero)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 50;
+    attr.walkPage.nrPages[4] = 0;  // all pages gone from remote NUMA 4
+
+    CalibrateMigratePages(&attr);
+
+    // remotePages=150, arr=[0,1], nrLeft=0
+    // i=0: ratio=100/150≈0.667, nrChunk=0*0.667=0, nrLeft=0
+    // i=1 (last): gets nrLeft=0
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+}
+
+TEST_F(ManageTest, TestCalibrateMigratePagesThreeLocals)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    // Three local NUMAs with different proportions
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 10;   // 10%
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 30;   // 30%
+    attr.strategyAttr.remoteNrPagesAfterMigrate[2][0] = 60;   // 60%
+    attr.walkPage.nrPages[4] = 200;  // actual doubled from 100 to 200
+
+    CalibrateMigratePages(&attr);
+
+    // remotePages=100, arr=[0,1,2], nrLeft=200
+    // i=0 (arr[0]=0): ratio=10/100=0.1, nrChunk=200*0.1=20, nrLeft=180
+    // i=1 (arr[1]=1): ratio=30/100=0.3, nrChunk=200*0.3=60, nrLeft=120
+    // i=2 (arr[2]=2, last): gets nrLeft=120
+    EXPECT_EQ((uint32_t)20, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ((uint32_t)60, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+    EXPECT_EQ((uint32_t)120, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
+}
