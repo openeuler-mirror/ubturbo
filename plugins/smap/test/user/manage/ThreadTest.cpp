@@ -3,6 +3,7 @@
  * Description: smap5.0 user thread ut code
  */
 
+#include <cerrno>
 #include <cstdlib>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
@@ -56,13 +57,28 @@ TEST_F(ThreadTest, TestInitThread)
     uint32_t period;
     int ret;
 
-    MOCKER(pthread_create).stubs().will(ignoreReturnValue());
+    MOCKER(pthread_create).stubs().will(returnValue(0));
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     ret = InitThread(&pm, period, TmpWorkFunc);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, pm.nrThread);
     free(pm.threadCtx[0]);
+}
+
+TEST_F(ThreadTest, TestInitThreadCreateFailed)
+{
+    struct ProcessManager pm = {
+        .nrThread = 0
+    };
+    uint32_t period = 50;
+    int ret;
+
+    MOCKER(pthread_create).stubs().will(returnValue(EAGAIN));
+    ret = InitThread(&pm, period, TmpWorkFunc);
+    EXPECT_EQ(-EAGAIN, ret);
+    EXPECT_EQ(0, pm.nrThread);
+    EXPECT_EQ(nullptr, pm.threadCtx[0]);
 }
 
 TEST_F(ThreadTest, TestDestroyAllThread)

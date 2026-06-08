@@ -423,13 +423,12 @@ static bool IsReadyForAdapt(ProcessAttr *attr)
 static void AdjustVmMemRatio(struct ProcessManager *manager, int *surpluses, int len)
 {
     int i = 0;
-    int nrVms = manager->nr[VM_TYPE];
-    BalanceSurpluses(surpluses, nrVms);
-    ProcessAttr *current = manager->processes;
-    if (len == 0) {
+    if (len <= 0) {
         return;
     }
-    while (current) {
+    BalanceSurpluses(surpluses, len);
+    ProcessAttr *current = manager->processes;
+    while (current && i < len) {
         if (IsReadyForAdapt(current)) {
             SceneInfo *info = &current->sceneInfo;
             PageInfo *p = &info->pageInfo[info->pageInfoIndex];
@@ -443,12 +442,9 @@ static void AdjustVmMemRatio(struct ProcessManager *manager, int *surpluses, int
                 info->currScene = MAX(LIGHT_STABLE_SCENE, (int)info->currScene - 1);
             }
             UpdateMemRatio(current);
+            i++;
         }
-        i++;
         current = current->next;
-        if (i >= len) {
-            break;
-        }
     }
 }
 
@@ -461,12 +457,16 @@ void ConfigMultiVmRatio(struct ProcessManager *manager)
     }
     int i = 0, surpluses[nrVms];
     ProcessAttr *current = manager->processes;
-    while (current) {
+    while (current && i < nrVms) {
+        if (!IsReadyForAdapt(current)) {
+            current = current->next;
+            continue;
+        }
         SceneInfo *info = &current->sceneInfo;
         PageInfo *p = &info->pageInfo[info->pageInfoIndex];
         int l1Node = GetAttrL1(current);
         int l2Node = GetAttrL2(current) - manager->nrLocalNuma;
-        if (l1Node >= 0 && l2Node >= 0 && IsReadyForAdapt(current)) {
+        if (l1Node >= 0 && l2Node >= 0) {
             int localPages = p->nrPages * (HUNDRED - current->strategyAttr.l2RemoteMemRatio[l1Node][l2Node]) / HUNDRED;
             surpluses[i] = localPages - p->nrL1Guarantee;
         } else {
@@ -475,7 +475,7 @@ void ConfigMultiVmRatio(struct ProcessManager *manager)
         i++;
         current = current->next;
     }
-    AdjustVmMemRatio(manager, surpluses, nrVms);
+    AdjustVmMemRatio(manager, surpluses, i);
 }
 
 static void GetMaxNuma(struct ProcessManager *manager, int *maxL1node, int *maxL2node)

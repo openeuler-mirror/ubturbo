@@ -3810,7 +3810,7 @@ TEST_F(InterfaceTest, TestIsPidArrRemoteNumaMatchTwo)
 }
 
 extern "C" int GetAttrNidInitRatio(pid_t pid, int nid);
-extern "C" uint64_t GetAttrNidInitMemSize(pid_t pid, int nid);
+extern "C" int GetAttrNidInitMemSize(pid_t pid, int nid, uint64_t *memSize);
 extern "C" bool IsRemoteNidMemSizeValid(pid_t pid, int nid, uint64_t memSize);
 extern "C" int SmapMigratePidRemoteNumaCheckInner(struct MigrateEscapeMsg *msg);
 extern "C" int BuildMigRemoteNumaMsg(struct MigrateEscapeMsg *msg, struct MigPidRemoteNumaIoctlMsg *ioctlMsg);
@@ -3838,15 +3838,17 @@ TEST_F(InterfaceTest, TestGetAttrNidInitMemSize)
 {
     ProcessAttr attr = { .pid = 1 };
     attr.strategyAttr.memSize[0][0] = 1024;
+    attr.numaAttr.numaNodes = 0b00010001;
     g_processManager.nrLocalNuma = 4;
     g_processManager.processes = &attr;
+    uint64_t memSize = 0;
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
-    MOCKER(GetAttrL1).stubs().will(returnValue(0));
 
-    // Test that function can be called (coverage purpose)
-    GetAttrNidInitMemSize(1, 4);
+    EXPECT_EQ(0, GetAttrNidInitMemSize(1, 4, &memSize));
+    EXPECT_EQ(1024, memSize);
+    EXPECT_EQ(-EINVAL, GetAttrNidInitMemSize(1, 4, nullptr));
 
     g_processManager.processes = nullptr;
 }
@@ -3855,15 +3857,14 @@ TEST_F(InterfaceTest, TestIsRemoteNidMemSizeValid)
 {
     ProcessAttr attr = { .pid = 1 };
     attr.strategyAttr.memSize[0][0] = 2048;
+    attr.numaAttr.numaNodes = 0b00010001;
     g_processManager.nrLocalNuma = 4;
     g_processManager.processes = &attr;
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
-    MOCKER(GetAttrL1).stubs().will(returnValue(0));
 
-    // Test that function can be called (coverage purpose)
-    IsRemoteNidMemSizeValid(1, 4, 2048);
+    EXPECT_TRUE(IsRemoteNidMemSizeValid(1, 4, 2048));
 
     g_processManager.processes = nullptr;
 }

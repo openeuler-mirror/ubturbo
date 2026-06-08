@@ -960,7 +960,7 @@ static long ioctl_migration_pages(unsigned long arg)
 						  HAM_TASK_ALLOW_MIGR);
 	if (ret) {
 		pr_err("pre task status is not satisfied, migration is not allowed\n");
-		return ret;
+		goto out_put;
 	}
 
 	ret = fill_task_pages(mig_task);
@@ -990,6 +990,9 @@ static long ioctl_migration_pages(unsigned long arg)
 	pr_info("migration successed\n");
 out:
 	put_migrate_task(mig_task, HAM_TASK_MIGRATED);
+	return ret;
+out_put:
+	put_migrate_task(mig_task, mig_task->status);
 	return ret;
 }
 
@@ -1072,7 +1075,7 @@ static long ioctl_stop_migration(unsigned long arg)
 	ret = check_task_status(mig_task, HAM_TASK_INITED | HAM_TASK_MIGRATED);
 	if (ret) {
 		pr_err("pre task status is not satisfied, stop migration is not allowed\n");
-		return ret;
+		goto out;
 	}
 
 	if (!(mig_task->status & HAM_TASK_ALLOW_MIGR)) {
@@ -1087,6 +1090,9 @@ static long ioctl_stop_migration(unsigned long arg)
 	pr_info("stop migration successfully\n");
 	put_migrate_task(mig_task, HAM_TASK_STOPPED);
 	return 0;
+out:
+	put_migrate_task(mig_task, mig_task->status);
+	return ret;
 }
 
 static long ioctl_modify_pagetable(unsigned long arg)
@@ -1111,7 +1117,7 @@ static long ioctl_modify_pagetable(unsigned long arg)
 	ret = check_task_status(mig_task, HAM_TASK_INITED);
 	if (ret) {
 		pr_err("pre task status is not satisfied, page table modification is not allowed\n");
-		return ret;
+		goto out;
 	}
 
 	pr_info("start to modify page, pid: %d, cacheable: %d\n", mt_info.pid,
@@ -1124,6 +1130,7 @@ static long ioctl_modify_pagetable(unsigned long arg)
 			mt_info.pid);
 	}
 
+out:
 	put_migrate_task(mig_task, mig_task->status);
 	return ret;
 }
@@ -1151,21 +1158,22 @@ static long ioctl_cache_clear(unsigned long arg)
 	ret = check_task_status(mig_task, HAM_TASK_MIGRATED);
 	if (ret) {
 		pr_err("pre task status is not satisfied, cache clear is not allowed\n");
-		return ret;
+		goto out;
 	}
 
 	t1 = ktime_get();
 	ret = ham_cache_clear(pid, mig_task);
 	if (ret) {
 		pr_err("failed to clear cache, pid: %d\n", pid);
-		return ret;
+		goto out;
 	}
 	t2 = ktime_get();
 	elapsed_cache = ktime_to_us(ktime_sub(t2, t1));
 	pr_info("[CACHE_MNT] elapsed time: %lld us\n", elapsed_cache);
 
+out:
 	put_migrate_task(mig_task, mig_task->status);
-	return 0;
+	return ret;
 }
 
 static int ham_open(struct inode *inode, struct file *file)

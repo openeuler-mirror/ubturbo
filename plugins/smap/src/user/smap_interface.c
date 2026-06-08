@@ -2731,20 +2731,24 @@ static bool IsRemoteNidRatioValid(pid_t pid, int nid, int ratio)
     return true;
 }
 
-static uint64_t GetAttrNidInitMemSize(pid_t pid, int nid)
+static int GetAttrNidInitMemSize(pid_t pid, int nid, uint64_t *memSize)
 {
     int nrLocalNuma = GetNrLocalNuma();
-    uint64_t memsize = 0;
+    uint64_t curMemSize = 0;
     ProcessAttr *attr = GetProcessAttr(pid);
+    if (!memSize) {
+        return -EINVAL;
+    }
     if (!attr) {
         return -EINVAL;
     }
     for (int i = 0; i < nrLocalNuma; i++) {
         if (InAttrL1(attr, i)) {
-            memsize += attr->strategyAttr.memSize[i][nid - nrLocalNuma];
+            curMemSize += attr->strategyAttr.memSize[i][nid - nrLocalNuma];
         }
     }
-    return memsize;
+    *memSize = curMemSize;
+    return 0;
 }
 
 static bool IsRemoteNidMemSizeValid(pid_t pid, int nid, uint64_t memSize)
@@ -2752,8 +2756,8 @@ static bool IsRemoteNidMemSizeValid(pid_t pid, int nid, uint64_t memSize)
     if (memSize % KB_PER_4KB != 0 || memSize == 0) {
         return false;
     }
-    uint64_t curMemSize = GetAttrNidInitMemSize(pid, nid);
-    if (curMemSize < 0) {
+    uint64_t curMemSize;
+    if (GetAttrNidInitMemSize(pid, nid, &curMemSize)) {
         return false;
     }
     if (memSize > curMemSize) {
@@ -2840,7 +2844,12 @@ static int SmapMigratePidRemoteNumaCheck(struct MigrateEscapeMsg *msg)
         }
         if (msg->payload[i].migrateMode == MIG_MEMSIZE_MODE) {
             if (msg->payload[i].memSize == 0) {
-                msg->payload[i].memSize = GetAttrNidInitMemSize(msg->payload[i].pid, msg->payload[i].srcNid);
+                uint64_t curMemSize;
+                if (GetAttrNidInitMemSize(msg->payload[i].pid, msg->payload[i].srcNid, &curMemSize)) {
+                    SMAP_LOGGER_ERROR("[%d] pid: %d get current memSize failed.", i, msg->payload[i].pid);
+                    return -EINVAL;
+                }
+                msg->payload[i].memSize = curMemSize;
                 SMAP_LOGGER_INFO("[%d] pid: %d memSize is 0, set to curMemSize %llu.", i, msg->payload[i].pid,
                                  msg->payload[i].memSize);
             }

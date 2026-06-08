@@ -1252,6 +1252,10 @@ static int scan_forward_2M(struct access_pid *ap, int page_size)
 		return 0;
 	}
 	pid_s = find_get_pid(ap->pid);
+	if (!pid_s) {
+		pr_err("failed to find pid: %d\n", ap->pid);
+		return -EINVAL;
+	}
 	task = get_pid_task(pid_s, PIDTYPE_PID);
 	if (!task) {
 		put_pid(pid_s);
