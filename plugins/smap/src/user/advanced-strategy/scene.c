@@ -570,7 +570,7 @@ static void ConfigMultiVmRatioInGroups(struct ProcessManager *manager)
     EnvMutexUnlock(&manager->lock);
 }
 
-static void ConfigMultiProcessRatio(struct ProcessManager *manager)
+static void SkipMultiProcessRatio(struct ProcessManager *manager)
 {
     EnvMutexLock(&manager->lock);
     ProcessAttr *current = manager->processes;
@@ -592,10 +592,12 @@ static void ConfigMultiProcessRatio(struct ProcessManager *manager)
 void ConfigRatios(struct ProcessManager *manager)
 {
     if (GetPidType(manager) == VM_TYPE) {
-        ConfigMultiVmRatioInGroups(manager);
-    } else {
-        ConfigMultiProcessRatio(manager);
+        if (GetAdaptMem()) {
+            ConfigMultiVmRatioInGroups(manager);
+            return;
+        }
     }
+    SkipMultiProcessRatio(manager);
 }
 
 bool GetAdaptMem(void)

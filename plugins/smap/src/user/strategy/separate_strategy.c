@@ -18,7 +18,7 @@
 #include "smap_user_log.h"
 #include "manage/manage.h"
 #include "strategy.h"
-#include "period_config.h"
+#include "strategy_config.h"
 #include "separate_strategy.h"
 
 #define DEFAULT_FREQ_WT_2M 1
@@ -99,7 +99,7 @@ static uint64_t CalLowMigrateNum(uint64_t migrateNum, uint64_t freqWt, uint32_t 
         }
         uint64_t freqL1 = freqWt * process->scanAttr.actcData[l1Node][mid - 1].freq;
         uint64_t freqL2 = process->scanAttr.actcData[l2Node][mid - 1].freq;
-        if (((freqL1 == 0) && (freqL2 > 0)) || (freqL1 + slowThred < freqL2)) {
+        if ((GetZeroFreqMigrateEnableConfig() && (freqL1 == 0) && (freqL2 > 0)) || (freqL1 + slowThred < freqL2)) {
             low = mid;
         } else {
             high = mid - 1;
@@ -671,7 +671,7 @@ static uint64_t CalMultiNumaVmLowMigrateNum(uint64_t migrateNum, uint64_t freqWt
         }
         uint64_t freqL1 = freqWt * levelActcData[L1][mid - 1].freq;
         uint64_t freqL2 = levelActcData[L2][mid - 1].freq;
-        if (((freqL1 == 0) && (freqL2 > 0)) || (freqL1 + slowThred < freqL2)) {
+        if ((GetZeroFreqMigrateEnableConfig() && (freqL1 == 0) && (freqL2 > 0)) || (freqL1 + slowThred < freqL2)) {
             low = mid;
         } else {
             high = mid - 1;

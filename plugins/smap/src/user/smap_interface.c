@@ -36,7 +36,7 @@
 #include "manage/virt.h"
 #include "manage/smap_config.h"
 #include "strategy/migration.h"
-#include "strategy/period_config.h"
+#include "strategy/strategy_config.h"
 #include "smap_interface.h"
 #define DEFAULT_NODE_NUMBER_SIZE 16
 #define REMOTE_NUMA_MEMORY_MAX (TIB / MIB)

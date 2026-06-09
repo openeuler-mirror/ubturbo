@@ -26,7 +26,7 @@
 #include "manage/device.h"
 #include "strategy.h"
 #include "grouped_strategy.h"
-#include "period_config.h"
+#include "strategy_config.h"
 #include "securec.h"
 #include "smap_env.h"
 #include "migration.h"
@@ -706,6 +706,10 @@ int ScanMigrateWork(ThreadCtx *ctx)
         goto out;
     }
     SMAP_LOGGER_DEBUG("Tracking disabled.");
+    StrategyConfigRead(STRATEGY_CONFIG_PATH); // 从配置文件中读取策略配置
+    if (GetFileConfSwitchConfig()) {
+        SetAdaptMem(GetAdaptiveRatioEnableConfig());
+    }
     // 由于进程销毁是异步，后续涉及ProcessAttr需要合理处理异常
     CheckAndRemoveInvalidProcess();
     ret = PerformMigrationPreparation(manager);
@@ -720,7 +724,6 @@ int ScanMigrateWork(ThreadCtx *ctx)
     ConfigRatios(manager);
     SMAP_LOGGER_DEBUG("Ratio configured.");
     // 处理迁移参数
-    PeriodConfigRead(PERIOD_CONFIG_PATH); // 从配置文件中读取周期配置
     if (GetFileConfSwitchConfig()) {
         SMAP_LOGGER_DEBUG("Updating period from config.");
         UpdatePeriodFromConfig(ctx);

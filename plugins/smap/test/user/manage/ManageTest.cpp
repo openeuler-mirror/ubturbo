@@ -11,7 +11,7 @@
 #include "manage/access_ioctl.h"
 #include "manage/smap_config.h"
 #include "manage/manage.h"
-#include "strategy/period_config.h"
+#include "strategy/strategy_config.h"
 #include "securec.h"
 
 using namespace std;
