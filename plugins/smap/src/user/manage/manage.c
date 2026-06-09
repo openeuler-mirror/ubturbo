@@ -30,7 +30,7 @@
 #include "virt.h"
 #include "advanced-strategy/scene.h"
 #include "smap_config.h"
-#include "strategy/period_config.h"
+#include "strategy/strategy_config.h"
 #include "strategy/strategy.h"
 #include "strategy/migration.h"
 #include "manage.h"
@@ -124,11 +124,11 @@ int ProcessManagerInit(uint32_t pageType)
         SMAP_LOGGER_ERROR("Clear process manager memory failed: %d.", ret);
         return -ret;
     }
-    ret = GeneratePeriodConfigFile(PERIOD_CONFIG_PATH);
+    ret = GenerateStrategyConfigFile(STRATEGY_CONFIG_PATH);
     if (ret != 0) {
         SMAP_LOGGER_ERROR("Generat period config file failed, ret is %d.", ret);
     }
-    PeriodConfigRead(PERIOD_CONFIG_PATH);
+    StrategyConfigRead(STRATEGY_CONFIG_PATH);
     int size = sysconf(_SC_PAGESIZE);
     if (size != PAGESIZE_4K && size != PAGESIZE_64K) {
         SMAP_LOGGER_ERROR("Get pagesize failed.");

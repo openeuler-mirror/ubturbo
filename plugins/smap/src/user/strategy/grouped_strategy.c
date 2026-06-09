@@ -19,7 +19,7 @@
 #include "smap_user_log.h"
 #include "strategy.h"
 #include "grouped_strategy.h"
-#include "period_config.h"
+#include "strategy_config.h"
 
 #define GROUP_SWAP_READY_ROUNDS 2
 #define GROUP_SWAP_PERCENT_BASE 100

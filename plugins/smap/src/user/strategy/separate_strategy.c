@@ -18,7 +18,7 @@
 #include "smap_user_log.h"
 #include "manage/manage.h"
 #include "strategy.h"
-#include "period_config.h"
+#include "strategy_config.h"
 #include "separate_strategy.h"
 
 #define DEFAULT_FREQ_WT_2M 1

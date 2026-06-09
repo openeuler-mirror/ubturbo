@@ -10,8 +10,8 @@
  * See the Mulan PSL v2 for more details.
  */
 
-#ifndef PERIOD_CONFIG_H
-#define PERIOD_CONFIG_H
+#ifndef STRATEGY_CONFIG_H
+#define STRATEGY_CONFIG_H
 
 #include <stdint.h>
 
@@ -47,9 +47,11 @@ uint32_t GetGroupSwapMinFreqGainConfig(void);
 
 bool GetZeroFreqMigrateEnableConfig(void);
 
+bool GetAdaptiveRatioEnableConfig(void);
+
 bool GetFileConfSwitchConfig(void);
 
-int32_t GeneratePeriodConfigFile(const char *configFile);
+int32_t GenerateStrategyConfigFile(const char *configFile);
 
 bool GetScanPeriodChanged(void);
 
@@ -59,7 +61,7 @@ void SetScanPeriodChanged(bool val);
 
 void SetMigratePeriodChanged(bool val);
 
-void PeriodConfigRead(const char *configFile);
+void StrategyConfigRead(const char *configFile);
 
 #ifdef __cplusplus
 }

@@ -533,8 +533,8 @@ TEST_F(SceneTest, TestConfigMultiVmRatioInGroupsTwo)
     EXPECT_EQ(false, current.adaptMem.enableAdaptMem);
 }
 
-extern "C" void ConfigMultiProcessRatio(struct ProcessManager *manager);
-TEST_F(SceneTest, TestConfigMultiProcessRatio)
+extern "C" void SkipMultiProcessRatio(struct ProcessManager *manager);
+TEST_F(SceneTest, TestSkipMultiProcessRatio)
 {
     struct ProcessManager manager = {};
     ProcessAttr current = {};
@@ -544,12 +544,14 @@ TEST_F(SceneTest, TestConfigMultiProcessRatio)
     current.strategyAttr.l2RemoteMemRatio[0][0] = 30;
     current.strategyAttr.l3RemoteMemRatio[0][0] = 10;
 
-    ConfigMultiProcessRatio(&manager);
+    SkipMultiProcessRatio(&manager);
     EXPECT_EQ(30, current.strategyAttr.l3RemoteMemRatio[0][0]);
 }
 
 extern "C" void ConfigRatios(struct ProcessManager *manager);
-TEST_F(SceneTest, TestConfigRatios)
+extern "C" PidType GetPidType(struct ProcessManager *manager);
+extern "C" void ConfigMultiVmRatioInGroups(struct ProcessManager *manager);
+TEST_F(SceneTest, TestConfigRatiosProcessType)
 {
     struct ProcessManager manager = {};
     ProcessAttr current = {};
@@ -560,8 +562,39 @@ TEST_F(SceneTest, TestConfigRatios)
     current.strategyAttr.l2RemoteMemRatio[0][0] = 30;
     current.strategyAttr.l3RemoteMemRatio[0][0] = 10;
 
-    ConfigMultiProcessRatio(&manager);
-    EXPECT_EQ(30, current.strategyAttr.l3RemoteMemRatio[0][0]);
+    MOCKER(GetPidType).stubs().will(returnValue(PROCESS_TYPE));
+    MOCKER(SkipMultiProcessRatio).expects(once());
+    ConfigRatios(&manager);
+}
+
+TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemTrue)
+{
+    struct ProcessManager manager = {};
+    ProcessAttr current = {};
+    manager.processes = &current;
+    manager.tracking.pageSize = PAGESIZE_4K;
+    current.next = NULL;
+
+    MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
+    MOCKER(GetAdaptMem).stubs().will(returnValue(true));
+    MOCKER(ConfigMultiVmRatioInGroups).expects(once());
+    ConfigRatios(&manager);
+}
+
+TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemFalse)
+{
+    struct ProcessManager manager = {};
+    ProcessAttr current = {};
+    manager.processes = &current;
+    manager.tracking.pageSize = PAGESIZE_4K;
+    current.next = NULL;
+    current.strategyAttr.l2RemoteMemRatio[0][0] = 30;
+    current.strategyAttr.l3RemoteMemRatio[0][0] = 10;
+
+    MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
+    MOCKER(GetAdaptMem).stubs().will(returnValue(false));
+    MOCKER(SkipMultiProcessRatio).expects(once());
+    ConfigRatios(&manager);
 }
 
 extern "C" bool GetAdaptMem(void);

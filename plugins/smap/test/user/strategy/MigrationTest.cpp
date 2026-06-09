@@ -13,7 +13,9 @@
 #include "manage/thread.h"
 #include "manage/device.h"
 #include "advanced-strategy/scene_info.h"
+#include "advanced-strategy/scene.h"
 #include "strategy/strategy.h"
+#include "strategy/strategy_config.h"
 #include "strategy/migration.h"
 
 using namespace std;
@@ -354,7 +356,8 @@ extern "C" int ScanMigrateWork(ThreadCtx *ctx);
 extern "C" int PerformMigration(struct ProcessManager *manager);
 extern "C" int HandleScene(ThreadCtx *ctx);
 extern "C" void UpdateScene(struct ProcessManager *manager);
-TEST_F(MigrationTest, TestScanMigrateWork)
+extern "C" void UpdatePeriodFromConfig(ThreadCtx *ctx);
+TEST_F(MigrationTest, TestScanMigrateWorkFileConfOn)
 {
     int ret;
     ProcessAttr process = { .pid = 1025 };
@@ -362,6 +365,31 @@ TEST_F(MigrationTest, TestScanMigrateWork)
     ThreadCtx ctx = { .processManager = &manager };
 
     MOCKER(DisableTracking).stubs().will(returnValue(0));
+    MOCKER(StrategyConfigRead).stubs().will(ignoreReturnValue());
+    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(true));
+    MOCKER(SetAdaptMem).expects(once()).will(ignoreReturnValue());
+    MOCKER(GetAdaptiveRatioEnableConfig).stubs().will(returnValue(true));
+    MOCKER(CheckAndRemoveInvalidProcess).stubs();
+    MOCKER(PerformMigrationPreparation).stubs().will(returnValue(0));
+    MOCKER(UpdateScene).stubs();
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(UpdatePeriodFromConfig).stubs().will(ignoreReturnValue());
+    MOCKER(PerformMigration).stubs().will(returnValue(0));
+    ret = ScanMigrateWork(&ctx);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(MigrationTest, TestScanMigrateWorkFileConfOff)
+{
+    int ret;
+    ProcessAttr process = { .pid = 1025 };
+    struct ProcessManager manager = { .processes = &process };
+    ThreadCtx ctx = { .processManager = &manager };
+
+    MOCKER(DisableTracking).stubs().will(returnValue(0));
+    MOCKER(StrategyConfigRead).stubs().will(ignoreReturnValue());
+    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
     MOCKER(CheckAndRemoveInvalidProcess).stubs();
     MOCKER(PerformMigrationPreparation).stubs().will(returnValue(0));
     MOCKER(UpdateScene).stubs();

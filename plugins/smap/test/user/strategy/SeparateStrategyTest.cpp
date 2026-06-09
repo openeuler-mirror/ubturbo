@@ -12,7 +12,7 @@
 #include "manage/manage.h"
 #include "strategy/strategy.h"
 #include "strategy/separate_strategy.h"
-#include "strategy/period_config.h"
+#include "strategy/strategy_config.h"
 #include "smap_user_log.h"
 
 #include "gtest/gtest.h"
@@ -48,9 +48,10 @@ extern "C" int InitSeparateParam(ProcessAttr *process);
 TEST_F(SeparateStrategyTest, TestInitSeparateParam)
 {
     ProcessAttr process;
+    MOCKER(GetSlowThresholdConfig).stubs().will(returnValue(40));
     InitSeparateParam(&process);
     EXPECT_EQ(DEFAULT_FREQ_WT_2M, process.separateParam.freqWt);
-    EXPECT_EQ(DEFAULT_SLOW_THRED_2M, process.separateParam.slowThred);
+    EXPECT_EQ(40, process.separateParam.slowThred);
 }
 
 extern "C" bool ShouldMigrate(ProcessAttr *process);
@@ -166,8 +167,79 @@ TEST_F(SeparateStrategyTest, TestCalcMigrateNumByFreqOne)
     process.scanAttr.actcData[1] = actcDataL2;
 
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue(3));
+    MOCKER(GetZeroFreqMigrateEnableConfig).stubs().will(returnValue(true));
     uint64_t ret = CalcMigrateNumByFreq(&process);
     EXPECT_EQ(0, ret);
+}
+
+TEST_F(SeparateStrategyTest, TestCalcMigrateNumByFreqZeroFreqDisabled)
+{
+    ProcessAttr process = {};
+
+    process.numaAttr.numaNodes = 0b00010001;
+    process.scanAttr.actcLen[0] = 3;
+    process.scanAttr.actcLen[4] = 3;
+    process.separateParam.maxMigrate = 4;
+    process.scanAttr.actCount[0].freqMax = 3;
+    process.scanAttr.actCount[4].freqMax = 5;
+    process.scanAttr.actCount[4].freqNum = 3;
+    process.separateParam.freqWt = 5;
+    process.separateParam.slowThred = 1;
+    process.enableSwap = true;
+
+    ActcData actcDataL1[3];
+    ActcData actcDataL2[3];
+    actcDataL1[0].freq = 0;
+    actcDataL1[1].freq = 2;
+    actcDataL1[2].freq = 3;
+
+    actcDataL2[0].freq = 5;
+    actcDataL2[1].freq = 2;
+    actcDataL2[2].freq = 3;
+    process.scanAttr.actcData[0] = actcDataL1;
+    process.scanAttr.actcData[4] = actcDataL2;
+
+    MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue(4));
+    MOCKER(GetZeroFreqMigrateEnableConfig).stubs().will(returnValue(false));
+    uint64_t ret = CalcMigrateNumByFreq(&process);
+    // zero freq migrate disabled, freqL1=0 no longer triggers migration
+    // without slowThred condition, mid=1: freqL1=5*0=0, freqL2=5, 0+5<5 is false -> high=0
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(SeparateStrategyTest, TestCalcMigrateNumByFreqZeroFreqEnabled)
+{
+    ProcessAttr process = {};
+
+    process.numaAttr.numaNodes = 0b00010001;
+    process.scanAttr.actcLen[0] = 3;
+    process.scanAttr.actcLen[4] = 3;
+    process.separateParam.maxMigrate = 4;
+    process.scanAttr.actCount[0].freqMax = 3;
+    process.scanAttr.actCount[4].freqMax = 5;
+    process.scanAttr.actCount[4].freqNum = 3;
+    process.separateParam.freqWt = 5;
+    process.separateParam.slowThred = 1;
+    process.enableSwap = true;
+
+    ActcData actcDataL1[3];
+    ActcData actcDataL2[3];
+    actcDataL1[0].freq = 0;
+    actcDataL1[1].freq = 2;
+    actcDataL1[2].freq = 3;
+
+    actcDataL2[0].freq = 5;
+    actcDataL2[1].freq = 2;
+    actcDataL2[2].freq = 3;
+    process.scanAttr.actcData[0] = actcDataL1;
+    process.scanAttr.actcData[4] = actcDataL2;
+
+    MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue(4));
+    MOCKER(GetZeroFreqMigrateEnableConfig).stubs().will(returnValue(true));
+    uint64_t ret = CalcMigrateNumByFreq(&process);
+    // zero freq migrate enabled, freqL1=0 && freqL2>0 triggers migration
+    // mid=1: freqL1=5*0=0, freqL2=5, (true && 0==0 && 5>0) is true -> low=1
+    EXPECT_EQ(1, ret);
 }
 
 TEST_F(SeparateStrategyTest, TestCalcMigrateNumByFreqLowSmallerThanHigh)
@@ -369,10 +441,10 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategyall)
 
 TEST_F(SeparateStrategyTest, TestPeriodConfig)
 {
-    int ret = GeneratePeriodConfigFile("./example2.config");
+    int ret = GenerateStrategyConfigFile("./example2.config");
     EXPECT_EQ(0, ret);
 
-    PeriodConfigRead("./example2.config");
+    StrategyConfigRead("./example2.config");
 }
 
 TEST_F(SeparateStrategyTest, TestShouldMigrate)
