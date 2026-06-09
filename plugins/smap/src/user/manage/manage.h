@@ -31,7 +31,7 @@
 #ifndef MAX_GROUP_REMOTE_NUMA
 #define MAX_GROUP_REMOTE_NUMA REMOTE_NUMA_NUM
 #endif
-#define RESERVED_RATIO 0.05
+#define RESERVED_DIVISOR 20
 #define RESERVED_MEMORY 200
 #define MAX_4K_PROCESSES_CNT 300
 #define MAX_2M_PROCESSES_CNT 100
@@ -407,8 +407,6 @@ typedef struct {
     } numaParam[REMOTE_NUMA_NUM];
 } ProcessParam;
 
-uint64_t CalcRemoteBorrowPages(uint64_t size);
-
 void DebugProcessAttr(struct ProcessManager *manager);
 
 int GetNrLocalNuma(void);
@@ -584,10 +582,37 @@ static inline uint64_t KBToHugePage(uint64_t memSize)
     return memSize / (size / KIB);
 }
 
+static inline uint64_t HugePageToKB(uint64_t nr)
+{
+    int size = GetHugePageSize();
+    return nr * (size / KIB);
+}
+
 static inline uint64_t KBToNormalPage(uint64_t memSize)
 {
     int size = GetNormalPageSize();
     return memSize / (size / KIB);
+}
+
+static inline uint64_t NormalPageToKB(uint64_t nr)
+{
+    int size = GetNormalPageSize();
+    return nr * (size / KIB);
+}
+
+static inline uint64_t KBToPage(uint64_t memSize)
+{
+    return IsHugeMode() ? KBToHugePage(memSize) : KBToNormalPage(memSize);
+}
+
+static inline uint64_t PageToKB(uint64_t nr)
+{
+    return IsHugeMode() ? HugePageToKB(nr) : NormalPageToKB(nr);
+}
+
+static inline uint64_t MBToPage(uint64_t memSize)
+{
+    return memSize * MIB / GetPageSize();
 }
 
 static inline int GetCurrentMaxNrPid(void)

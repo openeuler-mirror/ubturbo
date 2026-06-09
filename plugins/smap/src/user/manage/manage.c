@@ -1298,9 +1298,9 @@ static void CalcActcStats(ProcessAttr *attr)
             count->freqMin = MIN(count->freqMin, freq);
         }
 
-        SMAP_LOGGER_INFO("Node%d actcLen %llu, freqMax %u, freqMin %u, freqNum %llu, "
-                         "freqSum %llu, remoteHotNum %llu, whiteNum %llu",
-                         nid, actcLen, count->freqMax, count->freqMin, count->freqNum, count->freqSum,
+        SMAP_LOGGER_INFO("[pid_stats] pid=%d node=%d actcLen=%llu freqMax=%u freqMin=%u freqNum=%llu freqSum=%llu "
+                         "remoteHotNum=%llu whiteNum=%llu",
+                         attr->pid, nid, actcLen, count->freqMax, count->freqMin, count->freqNum, count->freqSum,
                          count->remoteHotNum, count->whiteNum);
 
         /* 打印各频次桶的页面数（仅本地NUMA，跳过页面数为零的） */
@@ -1309,6 +1309,55 @@ static void CalcActcStats(ProcessAttr *attr)
                 if (count->freqBuckets[f] > 0) {
                     SMAP_LOGGER_DEBUG("Node%d freq=%d pages=%u", nid, f, count->freqBuckets[f]);
                 }
+            }
+        }
+    }
+}
+
+/**
+ * CalibrateMigratePages - 根据最新统计的远端页面数量校准迁移量
+ */
+static void CalibrateMigratePages(ProcessAttr *attr)
+{
+    StrategyAttribute *sa = &attr->strategyAttr;
+    WalkPage *wp = &attr->walkPage;
+    int nrLocalNuma = GetNrLocalNuma();
+
+    for (int l2Index = 0; l2Index < REMOTE_NUMA_NUM; l2Index++) {
+        uint64_t remotePages = 0;
+        uint32_t arr[LOCAL_NUMA_NUM] = { 0 };
+        int arrLen = 0;
+        int local;
+        int remote = l2Index + nrLocalNuma;
+
+        for (local = 0; local < LOCAL_NUMA_NUM; local++) {
+            uint32_t nrMig = sa->remoteNrPagesAfterMigrate[local][l2Index];
+            if (nrMig) {
+                remotePages += nrMig;
+                arr[arrLen++] = local;
+                SMAP_LOGGER_INFO("[nr_mig] pid=%d local=%d remote=%d pages=%u", attr->pid, local, remote, nrMig);
+            }
+        }
+
+        if (remotePages == wp->nrPages[remote]) {
+            continue;
+        }
+
+        double ratio;
+        uint32_t nrLeft = wp->nrPages[remote];
+        uint32_t nrChunk;
+
+        for (int i = 0; i < arrLen; i++) {
+            local = arr[i];
+            if (i == arrLen - 1) {
+                sa->remoteNrPagesAfterMigrate[local][l2Index] = nrLeft;
+                SMAP_LOGGER_INFO("[cali_mig] pid=%d local=%d remote=%d pages=%u", attr->pid, local, remote, nrLeft);
+            } else {
+                ratio = (double)sa->remoteNrPagesAfterMigrate[local][l2Index] / remotePages;
+                nrChunk = wp->nrPages[remote] * ratio;
+                sa->remoteNrPagesAfterMigrate[local][l2Index] = nrChunk;
+                nrLeft -= nrChunk;
+                SMAP_LOGGER_INFO("[cali_mig] pid=%d local=%d remote=%d pages=%u", attr->pid, local, remote, nrChunk);
             }
         }
     }
@@ -1424,6 +1473,11 @@ static int FillPidData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
     }
 
     CalcActcStats(attr);
+
+    if (GetRunMode() == WATERLINE_MODE) {
+        CalibrateMigratePages(attr);
+    }
+
     return 0;
 }
 
@@ -1506,42 +1560,42 @@ static int ParseBitmap(size_t bufLen, char *buf, size_t *offset, struct ProcessM
     return 0;
 }
 
-uint64_t CalcRemoteBorrowPages(uint64_t size)
-{
-    uint64_t result = size;
-    result = result * MIB / GetPageSize();
-    return result;
-}
-
 static void NoAccountAlloc(int remoteNid, ProcessAttr *attr)
 {
     int i;
     int nrLocalNuma = GetNrLocalNuma();
     int l1Nid[nrLocalNuma];
     int l1Len = 0;
-    uint32_t tmpUsedTotal = 0;
-    double ratio;
+
     for (i = 0; i < nrLocalNuma; i++) {
         if (InAttrL1(attr, i)) {
             l1Nid[l1Len++] = i;
         }
     }
-    if (l1Len != 0 && attr->walkPage.nrPages[remoteNid] != 0) {
-        ratio = (double)attr->walkPage.nrPages[remoteNid] / l1Len / attr->walkPage.nrPages[remoteNid];
-        for (i = 0; i < l1Len; i++) {
-            if (i == l1Len - 1) {
-                attr->strategyAttr.allocRemoteNrPages[l1Nid[i]][remoteNid - nrLocalNuma] =
-                    attr->walkPage.nrPages[remoteNid] - tmpUsedTotal;
-                break;
-            }
-            uint32_t tmpUsed = attr->walkPage.nrPages[remoteNid] * ratio;
-            tmpUsedTotal += tmpUsed;
-            attr->strategyAttr.allocRemoteNrPages[l1Nid[i]][remoteNid - nrLocalNuma] = tmpUsed;
-            SMAP_LOGGER_DEBUG("NoAccountAlloc pid: %d, allocRemoteNrPages[%d][%d] %u.", attr->pid, l1Nid[i],
-                              remoteNid - nrLocalNuma,
-                              attr->strategyAttr.allocRemoteNrPages[l1Nid[i]][remoteNid - nrLocalNuma]);
+    if (l1Len == 0) {
+        SMAP_LOGGER_WARNING("Aborted alloc account rebuild for pid %d due to missing L1 node", attr->pid);
+        return;
+    }
+
+    StrategyAttribute *sa = &attr->strategyAttr;
+    uint32_t nrLeft = attr->walkPage.nrPages[remoteNid];
+    uint32_t nrChunk = nrLeft / l1Len;
+
+    SMAP_LOGGER_INFO("Rebuilding alloc account for pid %d", attr->pid);
+    for (i = 0; i < l1Len; i++) {
+        int l1Index = l1Nid[i];
+        int l2Index = remoteNid - nrLocalNuma;
+
+        if (i == l1Len - 1) {
+            sa->allocRemoteNrPages[l1Index][l2Index] = nrLeft;
+            SMAP_LOGGER_DEBUG("[alloc_remote*] pid=%d local=%d remote=%d pages=%u", attr->pid, i, remoteNid, nrLeft);
+        } else {
+            sa->allocRemoteNrPages[l1Index][l2Index] = nrChunk;
+            nrLeft -= nrChunk;
+            SMAP_LOGGER_DEBUG("[alloc_remote*] pid=%d local=%d remote=%d pages=%u", attr->pid, i, remoteNid, nrLeft);
         }
     }
+    SMAP_LOGGER_INFO("Rebuild alloc account complete for pid %d", attr->pid);
 }
 
 static void ClearNormalPidAccount(ProcessAttr *attr, int remoteNode, int nrLocalNuma)
@@ -1590,70 +1644,109 @@ static void CheckAccountAndNrPage(ProcessAttr *attr, bool returnFlag[REMOTE_NUMA
 
 static void CalNrPagesPerLocalNuma(ProcessAttr *attr)
 {
-    int nrLocalNuma = GetNrLocalNuma();
-    for (int i = 0; i < nrLocalNuma; i++) {
-        uint32_t tmpPidNrPagesLocalTotal = 0;
+    StrategyAttribute *sa = &attr->strategyAttr;
+
+    for (int i = 0; i < GetNrLocalNuma(); i++) {
+        uint32_t nrLocal = attr->walkPage.nrPages[i];
+        uint32_t nrRemote = 0;
+
         for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-            tmpPidNrPagesLocalTotal += attr->strategyAttr.allocRemoteNrPages[i][j];
+            nrRemote += sa->allocRemoteNrPages[i][j];
         }
-        SMAP_LOGGER_DEBUG("pid: %d, CalNrPagesPerLocalNuma 1 [%d]: %u %u.", attr->pid, i, tmpPidNrPagesLocalTotal,
-                          attr->walkPage.nrPages[i]);
-        attr->strategyAttr.nrPagesPerLocalNuma[i] = tmpPidNrPagesLocalTotal + attr->walkPage.nrPages[i];
-        SMAP_LOGGER_DEBUG("pid: %d, CalNrPagesPerLocalNuma 2 [%d]: %u.", attr->pid, i,
-                          attr->strategyAttr.nrPagesPerLocalNuma[i]);
+        sa->nrPagesPerLocalNuma[i] = nrLocal + nrRemote;
+
+        SMAP_LOGGER_DEBUG("[cal_local_total] pid=%d, local_node=%d total_pages=%u local_pages=%u remote_pages=%u",
+                          attr->pid, i, sa->nrPagesPerLocalNuma[i], nrLocal, nrRemote);
     }
 }
 
-static void CalRemotePerLocalWithAccount(int j, ProcessAttr *attr)
+/**
+ * CalRemoteAllocRatio - 根据历史贡献度计算各本地NUMA迁往某远端NUMA的比例
+ *
+ * @param attr:    进程结构体指针
+ * @param l2Index: L2索引
+ * @param ratio:   比例数组
+ * @param len:     比例数组长度
+ */
+static void CalRemoteAllocRatio(ProcessAttr *attr, int l2Index, double *ratio, int *len)
 {
     int i;
     int nrLocalNuma = GetNrLocalNuma();
-    uint32_t tmpRemoteNrPages = 0;
-    for (i = 0; i < nrLocalNuma; i++) {
-        SMAP_LOGGER_DEBUG("pid: %d, remoteNrPagesAfterMigrate [%d][%d]: %u.", attr->pid, i, j,
-                          attr->strategyAttr.remoteNrPagesAfterMigrate[i][j]);
-        tmpRemoteNrPages += attr->strategyAttr.remoteNrPagesAfterMigrate[i][j];
-    }
-    if (tmpRemoteNrPages == 0) {
-        return;
-    }
-    double tmpPairRatio[LOCAL_NUMA_NUM];
-    int ratioLen = 0;
-    for (i = 0; i < nrLocalNuma; i++) {
-        tmpPairRatio[i] = (double)attr->strategyAttr.remoteNrPagesAfterMigrate[i][j] / tmpRemoteNrPages;
-        if (tmpPairRatio[i] > 0) {
-            ratioLen++;
-        }
+    int l2Nid = l2Index + nrLocalNuma;
+    StrategyAttribute *sa = &attr->strategyAttr;
+    uint32_t acctTotal = 0;
+
+    for (i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+        acctTotal += sa->remoteNrPagesAfterMigrate[i][l2Index];
     }
 
-    uint32_t tmpUsedTotal = 0;
-    // 2、Pid远端使用量：pid本地单一numa占比 * PID对应的远端numa数量
-    for (i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-        if (tmpPairRatio[i] == 0) {
+    if (acctTotal == 0) {
+        *len = 0;
+    } else {
+        for (i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+            ratio[i] = (double)sa->remoteNrPagesAfterMigrate[i][l2Index] / acctTotal;
+            SMAP_LOGGER_DEBUG("[alloc_remote_ratio] pid=%d local=%d remote=%d pages=%u/%u remote_ratio=%.2lf",
+                              attr->pid, i, l2Nid, sa->remoteNrPagesAfterMigrate[i][l2Index], acctTotal, ratio[i]);
+        }
+        *len = i;
+    }
+}
+
+/**
+ * CalRemoteAllocPages - 根据比例计算各本地NUMA的迁移页数
+ *
+ * @param attr:    进程结构体指针
+ * @param l2Index: L2索引
+ * @param ratio:   比例数组
+ * @param len:     比例数组长度
+ */
+static void CalRemoteAllocPages(ProcessAttr *attr, int l2Index, double *ratio, int ratioLen)
+{
+    int l2Nid = l2Index + GetNrLocalNuma();
+    StrategyAttribute *sa = &attr->strategyAttr;
+    uint32_t nrTotal = attr->walkPage.nrPages[l2Nid];
+    uint32_t nrLeft = nrTotal;
+
+    for (int i = 0; i < ratioLen; i++) {
+        if (ratio[i] == 0) {
             continue;
         }
-        SMAP_LOGGER_DEBUG(
-            "CalNrPagesLocalTotalPerPid pid: %d tmp ratio info: i:[%d] j:[%d] nrPage: %u, tmpRatio: %.2lf.", attr->pid,
-            i, j, attr->walkPage.nrPages[j + nrLocalNuma], tmpPairRatio[i]);
-        if (ratioLen == 1) {
-            attr->strategyAttr.allocRemoteNrPages[i][j] = attr->walkPage.nrPages[j + nrLocalNuma] - tmpUsedTotal;
-            SMAP_LOGGER_DEBUG("CalNrPagesLocalTotalPerPid pid: %d [%d][%d]: has remote page num: %u.", attr->pid, i, j,
-                              attr->strategyAttr.allocRemoteNrPages[i][j]);
-            break;
+
+        if (i == ratioLen - 1) {
+            sa->allocRemoteNrPages[i][l2Index] = nrLeft;
+            SMAP_LOGGER_DEBUG("[alloc_remote] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrLeft);
+        } else {
+            uint32_t nrTmp = nrTotal * ratio[i];
+            sa->allocRemoteNrPages[i][l2Index] = nrTmp;
+            nrLeft -= nrTmp;
+            SMAP_LOGGER_DEBUG("[alloc_remote] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrTmp);
         }
-        ratioLen--;
-        uint32_t tmpUsed = attr->walkPage.nrPages[j + nrLocalNuma] * tmpPairRatio[i];
-        tmpUsedTotal += tmpUsed;
-        attr->strategyAttr.allocRemoteNrPages[i][j] = tmpUsed;
-        SMAP_LOGGER_DEBUG("CalNrPagesLocalTotalPerPid pid: %d [%d][%d]: has remote page num: %u, tmpUsed: %u.",
-                          attr->pid, i, j, attr->strategyAttr.allocRemoteNrPages[i][j], tmpUsed);
     }
+}
+
+static void CalRemotePerLocalWithAccount(int l2Index, ProcessAttr *attr)
+{
+    double ratioArr[LOCAL_NUMA_NUM];
+    int ratioLen = 0;
+
+    // 1. 根据 remoteNrPagesAfterMigrate 账本计算分配比例
+    CalRemoteAllocRatio(attr, l2Index, ratioArr, &ratioLen);
+    if (ratioLen == 0) {
+        return;
+    }
+    // 2. 根据分配比例计算分配的页面数量
+    CalRemoteAllocPages(attr, l2Index, ratioArr, ratioLen);
 }
 
 static void CalRemotePerLocal(ProcessAttr *attr)
 {
     int i, j;
-    bool returnFlag[REMOTE_NUMA_NUM] = { true };
+    bool returnFlag[REMOTE_NUMA_NUM];
+
+    for (i = 0; i < REMOTE_NUMA_NUM; i++) {
+        returnFlag[i] = true;
+    }
+
     // 检查账本和当前内存页分布情况，处理有远端内存，但是没有账本的情况
     CheckAccountAndNrPage(attr, returnFlag);
     int nrLocalNuma = GetNrLocalNuma();
@@ -1673,9 +1766,6 @@ static void CalRemotePerLocal(ProcessAttr *attr)
 
 static void CalNrPagesLocalTotalPerPid(ProcessAttr *attr)
 {
-    uint32_t tmpRemoteNrPages;
-    int i, j;
-
     // 计算每个本地numa，对应可迁出到远端每个numa的内存量
     CalRemotePerLocal(attr);
 
@@ -1734,35 +1824,33 @@ static void CalRemoteNumaAllocPerPid(int i, int j, uint32_t tmpNrPagesToUse,
     }
 }
 
-static void CalTmpBorrowPage(uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                             uint32_t tmpPrivateBorrowPageToUse[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                             uint32_t tmpSharedBorrowPageToUse[REMOTE_NUMA_NUM])
+static inline uint64_t CalAvailPages(uint64_t sizeMb)
 {
-    struct RemoteNumaInfo remoteNumaInfo = g_processManager.remoteNumaInfo;
+    uint64_t reservedPages = MIN(MBToPage(sizeMb) / RESERVED_DIVISOR, MBToPage(RESERVED_MEMORY));
+    return MBToPage(sizeMb) - reservedPages;
+}
+
+static void CalAvailBorrowPage(uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
+                               uint32_t availSharedPages[REMOTE_NUMA_NUM])
+{
+    struct RemoteNumaInfo *rmi = &g_processManager.remoteNumaInfo;
+
     for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-        if (remoteNumaInfo.sharedSize[j] > 0) {
-            tmpSharedBorrowPageToUse[j] = CalcRemoteBorrowPages(remoteNumaInfo.sharedSize[j]) -
-                                          MIN(CalcRemoteBorrowPages(remoteNumaInfo.sharedSize[j]) * RESERVED_RATIO,
-                                              CalcRemoteBorrowPages(RESERVED_MEMORY));
-            SMAP_LOGGER_DEBUG("tmpSharedBorrowPageToUse[%d] %llu.", j, tmpSharedBorrowPageToUse[j]);
+        if (rmi->sharedSize[j] > 0) {
+            availSharedPages[j] = CalAvailPages(rmi->sharedSize[j]);
+            SMAP_LOGGER_DEBUG("availSharedPages[%d] %llu", j, availSharedPages[j]);
         }
-        for (int i = 0; i < GetNrLocalNuma(); i++) {
-            if (tmpMaxAllocNrPages[i][j] == 0) {
-                continue;
-            }
-            if (remoteNumaInfo.privateSize[i][j] > 0) {
-                tmpPrivateBorrowPageToUse[i][j] =
-                    CalcRemoteBorrowPages(remoteNumaInfo.privateSize[i][j]) -
-                    MIN(CalcRemoteBorrowPages(remoteNumaInfo.privateSize[i][j]) * RESERVED_RATIO,
-                        CalcRemoteBorrowPages(RESERVED_MEMORY));
-                SMAP_LOGGER_DEBUG("tmpPrivateBorrowPageToUse[%d][%d] %llu.", i, j, tmpPrivateBorrowPageToUse[i][j]);
+        for (int i = 0; i < GetNrLocalNuma() && i < LOCAL_NUMA_NUM; i++) {
+            if (rmi->privateSize[i][j] > 0) {
+                availPrivatePages[i][j] = CalAvailPages(rmi->privateSize[i][j]);
+                SMAP_LOGGER_DEBUG("availPrivatePages[%d][%d] %llu", i, j, availPrivatePages[i][j]);
             }
         }
     }
 }
 
 static void AllocPrivatePage(uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                             uint32_t tmpPrivateBorrowPageToUse[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM])
+                             uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM])
 {
     for (int i = 0; i < GetNrLocalNuma(); i++) {
         for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
@@ -1770,17 +1858,17 @@ static void AllocPrivatePage(uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_
                 continue;
             }
             SMAP_LOGGER_DEBUG("tmpMaxAllocNrPages[%d][%d]=%u.", i, j, tmpMaxAllocNrPages[i][j]);
-            SMAP_LOGGER_DEBUG("tmpPrivateBorrowPageToUse 2 %llu.", tmpPrivateBorrowPageToUse[i][j]);
-            if (tmpPrivateBorrowPageToUse[i][j] == 0) {
+            SMAP_LOGGER_DEBUG("availPrivatePages 2 %llu.", availPrivatePages[i][j]);
+            if (availPrivatePages[i][j] == 0) {
                 continue;
             }
 
             uint32_t tmpNrPagesToUse;
             // If 每个numa最大迁出量 > 专属numa：
-            if (tmpMaxAllocNrPages[i][j] > tmpPrivateBorrowPageToUse[i][j]) {
-                tmpNrPagesToUse = tmpPrivateBorrowPageToUse[i][j];
+            if (tmpMaxAllocNrPages[i][j] > availPrivatePages[i][j]) {
+                tmpNrPagesToUse = availPrivatePages[i][j];
                 CalRemoteNumaAllocPerPid(i, j, tmpNrPagesToUse, tmpMaxAllocNrPages);
-                tmpMaxAllocNrPages[i][j] -= tmpPrivateBorrowPageToUse[i][j];
+                tmpMaxAllocNrPages[i][j] -= availPrivatePages[i][j];
             } else {
                 // If 专属numa  > 每个numa最大迁出量：直接迁（迁出的ratio + remote_numa ID）
                 tmpNrPagesToUse = tmpMaxAllocNrPages[i][j];
@@ -1792,17 +1880,17 @@ static void AllocPrivatePage(uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_
 }
 
 static void AllocBorrowPage(uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                            uint32_t tmpPrivateBorrowPageToUse[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                            uint32_t tmpSharedBorrowPageToUse[REMOTE_NUMA_NUM])
+                            uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
+                            uint32_t availSharedPages[REMOTE_NUMA_NUM])
 {
     int i, j;
     // 优先使用专属的远端内存
-    AllocPrivatePage(tmpMaxAllocNrPages, tmpPrivateBorrowPageToUse);
+    AllocPrivatePage(tmpMaxAllocNrPages, availPrivatePages);
     double tmpRatioPerLocalNuma[LOCAL_NUMA_NUM];
     // 再使用共享远端内存
     for (j = 0; j < REMOTE_NUMA_NUM; j++) {
         uint32_t tmpNrPagesCanMigOut = 0;
-        if (tmpSharedBorrowPageToUse[j] == 0) {
+        if (availSharedPages[j] == 0) {
             continue;
         }
         for (i = 0; i < GetNrLocalNuma(); i++) {
@@ -1815,9 +1903,9 @@ static void AllocBorrowPage(uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_N
         for (i = 0; i < GetNrLocalNuma(); i++) {
             tmpRatioPerLocalNuma[i] = (double)tmpMaxAllocNrPages[i][j] / tmpNrPagesCanMigOut;
             // 将共享远端内存，分给每个本地numa去迁出，按照各本地numa可迁出的比例分配
-            uint32_t canUsePage = tmpRatioPerLocalNuma[i] * tmpSharedBorrowPageToUse[j];
+            uint32_t canUsePage = tmpRatioPerLocalNuma[i] * availSharedPages[j];
             SMAP_LOGGER_INFO("tmpRatioPerLocalNuma[%d] %.2lf, tmpNrPagesCanMigOut: %u, SharedBorrow[%d]: %u.", i,
-                             tmpRatioPerLocalNuma[i], tmpNrPagesCanMigOut, j, tmpSharedBorrowPageToUse[j]);
+                             tmpRatioPerLocalNuma[i], tmpNrPagesCanMigOut, j, availSharedPages[j]);
             if (canUsePage > tmpMaxAllocNrPages[i][j]) {
                 CalRemoteNumaAllocPerPid(i, j, tmpMaxAllocNrPages[i][j], tmpMaxAllocNrPages);
             } else {
@@ -1827,34 +1915,106 @@ static void AllocBorrowPage(uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_N
     }
 }
 
+static void AllocBorrowPagesForMemsize(ProcessAttr *attr, uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
+                                       uint32_t availSharedPages[REMOTE_NUMA_NUM])
+{
+    int l2Nid = attr->migrateParam[0].nid;
+    int l2Index = l2Nid - GetNrLocalNuma();
+    if (l2Index < 0 || l2Index >= REMOTE_NUMA_NUM) {
+        return;
+    }
+
+    StrategyAttribute *sa = &attr->strategyAttr;
+    uint32_t nrTarget = KBToPage(attr->migrateParam[0].memSize);
+
+    for (int i = 0; i < GetNrLocalNuma() && i < LOCAL_NUMA_NUM; i++) {
+        if (!InAttrL1(attr, i)) {
+            sa->memSize[i][l2Index] = 0;
+            SMAP_LOGGER_INFO("[memsize_clear] pid=%d local=%d remote=%d pages=0", attr->pid, i, l2Nid);
+            continue;
+        }
+
+        // 先使用私有借用内存
+        uint32_t nrTotal = sa->nrPagesPerLocalNuma[i];
+        uint32_t nrAvail = MIN(nrTotal, availPrivatePages[i][l2Index]);
+        SMAP_LOGGER_INFO("[memsize_private] pid=%d local=%d remote=%d nrTarget=%u nrTotal=%u nrAvail=%u", attr->pid, i,
+                         l2Nid, nrTarget, nrTotal, nrAvail);
+
+        if (nrTarget >= nrAvail) {
+            nrTarget -= nrAvail;
+            nrTotal -= nrAvail;
+            availPrivatePages[i][l2Index] -= nrAvail;
+            sa->memSize[i][l2Index] = PageToKB(nrAvail);
+            SMAP_LOGGER_INFO("[memsize_private] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrAvail);
+        } else {
+            availPrivatePages[i][l2Index] -= nrTarget;
+            sa->memSize[i][l2Index] = PageToKB(nrTarget);
+            SMAP_LOGGER_INFO("[memsize_private*] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrTarget);
+            break;
+        }
+
+        if (nrTotal == 0) {
+            continue;
+        }
+
+        // 再使用共享借用内存
+        nrAvail = MIN(nrTotal, availSharedPages[l2Index]);
+        SMAP_LOGGER_INFO("[memsize_shared] pid=%d local=%d remote=%d nrTarget=%u nrTotal=%u nrAvail=%u", attr->pid, i,
+                         l2Nid, nrTarget, nrTotal, nrAvail);
+
+        if (nrTarget >= nrAvail) {
+            nrTarget -= nrAvail;
+            availSharedPages[l2Index] -= nrAvail;
+            sa->memSize[i][l2Index] += PageToKB(nrAvail);
+            SMAP_LOGGER_INFO("[memsize_shared] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrAvail);
+        } else {
+            availSharedPages[l2Index] -= nrTarget;
+            sa->memSize[i][l2Index] += PageToKB(nrTarget);
+            SMAP_LOGGER_INFO("[memsize_shared*] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrTarget);
+            break;
+        }
+    }
+}
+
 static void CalRemoteNumaSizeAllocPerNuma(void)
 {
-    ProcessAttr *attr = g_processManager.processes;
+    ProcessAttr *attr;
     struct RemoteNumaInfo remoteNumaInfo = g_processManager.remoteNumaInfo;
     uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
     int i, j;
 
-    // 计算每个本地远端对应按照ratio可迁出的最大量
-    while (attr) {
-        for (i = 0; i < GetNrLocalNuma(); i++) {
-            for (j = 0; j < REMOTE_NUMA_NUM; j++) {
-                tmpMaxAllocNrPages[i][j] +=
-                    attr->strategyAttr.nrPagesPerLocalNuma[i] * attr->strategyAttr.initRemoteMemRatio[i][j] / HUNDRED;
-                SMAP_LOGGER_DEBUG("tmpMaxAllocNrPages[%d][%d]=%u, initRemoteMemRatio=%.2lf.", i, j,
-                                  tmpMaxAllocNrPages[i][j], attr->strategyAttr.initRemoteMemRatio[i][j]);
-                attr->strategyAttr.l2RemoteMemRatio[i][j] = 0;
-            }
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+    // 在远端预留多少内存, 暂不支持混用, 否则预留的内存会比预期多(超过200M)
+    CalAvailBorrowPage(availPrivatePages, availSharedPages);
+
+    // 先满足迁移模式为 MIG_MEMSIZE_MODE 的进程
+    for (attr = g_processManager.processes; attr; attr = attr->next) {
+        if (attr->migrateMode == MIG_MEMSIZE_MODE) {
+            AllocBorrowPagesForMemsize(attr, availPrivatePages, availSharedPages);
         }
-        attr = attr->next;
     }
 
-    uint32_t tmpPrivateBorrowPageToUse[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    uint32_t tmpSharedBorrowPageToUse[REMOTE_NUMA_NUM] = { 0 };
-    // 在远端预留多少内存, 暂不支持混用, 否则预留的内存会比预期多(超过200M)
-    CalTmpBorrowPage(tmpMaxAllocNrPages, tmpPrivateBorrowPageToUse, tmpSharedBorrowPageToUse);
+    // 计算所有进程**想要**从各本地NUMA迁移到各远端NUMA的总页面数量
+    for (attr = g_processManager.processes; attr; attr = attr->next) {
+        if (attr->migrateMode == MIG_MEMSIZE_MODE) {
+            continue;
+        }
+
+        StrategyAttribute *sa = &attr->strategyAttr;
+        for (i = 0; i < GetNrLocalNuma(); i++) {
+            for (j = 0; j < REMOTE_NUMA_NUM; j++) {
+                tmpMaxAllocNrPages[i][j] += sa->nrPagesPerLocalNuma[i] * sa->initRemoteMemRatio[i][j] / HUNDRED;
+                SMAP_LOGGER_DEBUG("tmpMaxAllocNrPages[%d][%d]=%u, initRemoteMemRatio=%.2lf.", i, j,
+                                  tmpMaxAllocNrPages[i][j], sa->initRemoteMemRatio[i][j]);
+
+                sa->l2RemoteMemRatio[i][j] = 0;
+            }
+        }
+    }
 
     // 用远端借用的内存计算每个pid，每个numa可迁出的比例
-    AllocBorrowPage(tmpMaxAllocNrPages, tmpPrivateBorrowPageToUse, tmpSharedBorrowPageToUse);
+    AllocBorrowPage(tmpMaxAllocNrPages, availPrivatePages, availSharedPages);
 }
 
 static void CalcMigrateNrPagesPerPIDMuiltNuma(void)
@@ -1952,24 +2112,31 @@ int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size)
         EnvMutexUnlock(&numaInfo->lock);
         return -EBADF;
     }
-    SMAP_LOGGER_INFO("SetRemoteNumaInfo %d-%d to %llu.", srcNid, column, size);
+    SMAP_LOGGER_INFO("SetRemoteNumaInfo %d-%d to %llu.", srcNid, destNid, size);
     if (srcNid == NUMA_NO_NODE) {
         numaInfo->sharedSize[column] = size;
     } else {
         numaInfo->privateSize[srcNid][column] = size;
     }
     for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
+        int l2Nid = j + g_processManager.nrLocalNuma;
         numaInfo->usedInfo[j].ifUsedFreshed = false;
-        numaInfo->usedInfo[j].size = CalcRemoteBorrowPages(numaInfo->sharedSize[j]);
-        SMAP_LOGGER_DEBUG("Node%d shared size: %llu.", j, numaInfo->usedInfo[j].size);
-        for (int i = 0; i < g_processManager.nrLocalNuma; i++) {
-            numaInfo->usedInfo[j].size += CalcRemoteBorrowPages(numaInfo->privateSize[i][j]);
-            numaInfo->privateUsedInfo[i][j].ifUsedFreshed = false;
-            numaInfo->privateUsedInfo[i][j].size = CalcRemoteBorrowPages(numaInfo->privateSize[i][j]);
-            SMAP_LOGGER_INFO("local %d borrow remote %d private size: %llu.", i, j,
-                             numaInfo->privateUsedInfo[i][j].size);
+        numaInfo->usedInfo[j].size = MBToPage(numaInfo->sharedSize[j]);
+        if (numaInfo->usedInfo[j].size) {
+            SMAP_LOGGER_INFO("Node%d shared pages: %llu.", l2Nid, numaInfo->usedInfo[j].size);
         }
-        SMAP_LOGGER_INFO("Node%d total borrow size: %llu.", j, numaInfo->usedInfo[j].size);
+        for (int i = 0; i < g_processManager.nrLocalNuma; i++) {
+            numaInfo->usedInfo[j].size += MBToPage(numaInfo->privateSize[i][j]);
+            numaInfo->privateUsedInfo[i][j].ifUsedFreshed = false;
+            numaInfo->privateUsedInfo[i][j].size = MBToPage(numaInfo->privateSize[i][j]);
+            if (numaInfo->privateUsedInfo[i][j].size) {
+                SMAP_LOGGER_INFO("local %d borrow remote %d private pages: %llu.", i, l2Nid,
+                                 numaInfo->privateUsedInfo[i][j].size);
+            }
+        }
+        if (numaInfo->usedInfo[j].size) {
+            SMAP_LOGGER_INFO("Node%d total borrow pages: %llu.", l2Nid, numaInfo->usedInfo[j].size);
+        }
     }
     EnvMutexUnlock(&numaInfo->lock);
     return 0;
@@ -1977,36 +2144,34 @@ int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size)
 
 static bool CheckPrivateBorrowUsed(int destNid)
 {
-    int column = destNid - g_processManager.nrLocalNuma;
+    int nrLocalNuma = GetNrLocalNuma();
+    int column = destNid - nrLocalNuma;
     struct RemoteNumaInfo *numaInfo = &g_processManager.remoteNumaInfo;
-    bool flag;
+
     for (int count = 0; count < MAX_FRESH_USED_TIME; count++) {
-        flag = false;
         EnvMutexLock(&numaInfo->lock);
-        for (int i = 0; i < g_processManager.nrLocalNuma; i++) {
-            if (numaInfo->privateUsedInfo[i][column].ifUsedFreshed == false) {
-                SMAP_LOGGER_INFO("Private used info not fresh , local: %d, remote nid: %d, used: %d, freshed: %d.", i,
-                                 destNid, numaInfo->privateUsedInfo[i][column].used,
-                                 numaInfo->privateUsedInfo[i][column].ifUsedFreshed);
-                flag = true;
+        for (int i = 0; i < nrLocalNuma; i++) {
+            struct RemoteNumaUsedInfo *usedInfo = &numaInfo->privateUsedInfo[i][column];
+            SMAP_LOGGER_INFO("[private_borrow] local=%d remote=%d used_pages=%llu total_pages=%llu fresh=%d", i,
+                             destNid, usedInfo->used, usedInfo->size, usedInfo->ifUsedFreshed);
+
+            if (!usedInfo->ifUsedFreshed) {
+                EnvMutexUnlock(&numaInfo->lock);
+                EnvMsleep(WAIT_FRESH_USED_PERIOD);
                 break;
             }
-        }
-        if (flag) {
-            EnvMutexUnlock(&numaInfo->lock);
-            EnvMsleep(WAIT_FRESH_USED_PERIOD);
-            continue;
-        }
-        for (int i = 0; i < g_processManager.nrLocalNuma; i++) {
-            SMAP_LOGGER_INFO("CheckPrivateBorrowUsed, remote nid: %d, column: %d, used: %d, size: %d.", destNid, column,
-                             numaInfo->privateUsedInfo[i][column].used, numaInfo->privateUsedInfo[i][column].size);
-            if (numaInfo->privateUsedInfo[i][column].used > numaInfo->privateUsedInfo[i][column].size) {
+
+            if (usedInfo->used > usedInfo->size) {
                 EnvMutexUnlock(&numaInfo->lock);
                 return false;
             }
+
+            // 走到这里表明所有本地NUMA的远端内存用量都少于总量
+            if (i == nrLocalNuma - 1) {
+                EnvMutexUnlock(&numaInfo->lock);
+                return true;
+            }
         }
-        EnvMutexUnlock(&numaInfo->lock);
-        return true;
     }
     return false;
 }
@@ -2015,18 +2180,19 @@ static bool CheckBorrowUsed(int destNid)
 {
     int column = destNid - g_processManager.nrLocalNuma;
     struct RemoteNumaInfo *numaInfo = &g_processManager.remoteNumaInfo;
+
     for (int count = 0; count < MAX_FRESH_USED_TIME; count++) {
         EnvMutexLock(&numaInfo->lock);
-        if (numaInfo->usedInfo[column].ifUsedFreshed == false) {
+        struct RemoteNumaUsedInfo *usedInfo = &numaInfo->usedInfo[column];
+        SMAP_LOGGER_INFO("[total_borrow] remote=%d used_pages=%llu total_pages=%llu freshed=%d", destNid,
+                         usedInfo->used, usedInfo->size, usedInfo->ifUsedFreshed);
+
+        if (!usedInfo->ifUsedFreshed) {
             EnvMutexUnlock(&numaInfo->lock);
             EnvMsleep(WAIT_FRESH_USED_PERIOD);
-            SMAP_LOGGER_INFO("Remote numa info not fresh , remote nid: %d, used: %d, freshed: %d.", destNid,
-                             numaInfo->usedInfo[column].used, numaInfo->usedInfo[column].ifUsedFreshed);
             continue;
         }
-        SMAP_LOGGER_INFO("CheckBorrowUsed, remote nid: %d, column: %d, used: %d, size: %d.", destNid, column,
-                         numaInfo->usedInfo[column].used, numaInfo->usedInfo[column].size);
-        if (numaInfo->usedInfo[column].used > numaInfo->usedInfo[column].size) {
+        if (usedInfo->used > usedInfo->size) {
             EnvMutexUnlock(&numaInfo->lock);
             return false;
         }

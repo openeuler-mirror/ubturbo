@@ -1053,16 +1053,16 @@ TEST_F(ManageTest, TestClearRemoteMemUsed)
     EXPECT_EQ(0, g_processManager.remoteNumaInfo.usedInfo[1].used);
 }
 
-extern "C" uint64_t CalcRemoteBorrowPages(uint64_t size);
+extern "C" uint64_t MBToPage(uint64_t size);
 TEST_F(ManageTest, TestCalcRemoteBorrowPages)
 {
     uint32_t ret;
     g_processManager.tracking.pageSize = PAGESIZE_4K;
-    ret = CalcRemoteBorrowPages(100);
+    ret = MBToPage(100);
     EXPECT_EQ(25600, ret);
 
     g_processManager.tracking.pageSize = PAGESIZE_2M;
-    ret = CalcRemoteBorrowPages(100);
+    ret = MBToPage(100);
     EXPECT_EQ(50, ret);
 }
 
@@ -1460,6 +1460,7 @@ TEST_F(ManageTest, TestChangePidRemoteByNuma)
     pid2.numaAttr.numaNodes = 0b00110000;
     pid1.next = &pid2;
     g_processManager.processes = &pid1;
+    g_processManager.nrLocalNuma = 4;
 
     EnvMutexInit(&g_processManager.lock);
     MOCKER(GetCurrentMaxNrPid).stubs().will(returnValue(2));
@@ -2018,4 +2019,401 @@ TEST_F(ManageTest, TestMigratePagesToRemote_MultiLocalNuma)
     uint64_t expectedNuma1MemSize = expectedNuma1Pages * (PAGESIZE_4K / KIB);
     EXPECT_EQ(expectedNuma0MemSize, attr.strategyAttr.memSize[0][0]);
     EXPECT_EQ(expectedNuma1MemSize, attr.strategyAttr.memSize[1][0]);
+}
+
+extern "C" uint32_t g_pageSizeNormal;
+
+TEST_F(ManageTest, TestHugePageToKB)
+{
+    g_pageSizeHuge = PAGESIZE_2M;
+    uint64_t ret;
+
+    ret = HugePageToKB(0);
+    EXPECT_EQ((uint64_t)0, ret);
+
+    ret = HugePageToKB(1);
+    EXPECT_EQ((uint64_t)2048, ret);  // 2MB = 2048KB
+
+    ret = HugePageToKB(5);
+    EXPECT_EQ((uint64_t)10240, ret); // 5 * 2048 = 10240KB
+}
+
+TEST_F(ManageTest, TestNormalPageToKB)
+{
+    g_pageSizeNormal = PAGESIZE_4K;
+    uint64_t ret;
+
+    ret = NormalPageToKB(0);
+    EXPECT_EQ((uint64_t)0, ret);
+
+    ret = NormalPageToKB(1);
+    EXPECT_EQ((uint64_t)4, ret);  // 4KB page → 4KB
+
+    ret = NormalPageToKB(256);
+    EXPECT_EQ((uint64_t)1024, ret); // 256 * 4 = 1024KB
+}
+
+TEST_F(ManageTest, TestKBToPageNormal)
+{
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+
+    uint64_t ret = KBToPage(0);
+    EXPECT_EQ((uint64_t)0, ret);
+
+    ret = KBToPage(4);
+    EXPECT_EQ((uint64_t)1, ret);  // 4KB memory → 1 normal page
+
+    ret = KBToPage(1024);
+    EXPECT_EQ((uint64_t)256, ret); // 1024KB / 4KB = 256 pages
+}
+
+TEST_F(ManageTest, TestKBToPageHuge)
+{
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+
+    uint64_t ret = KBToPage(0);
+    EXPECT_EQ((uint64_t)0, ret);
+
+    ret = KBToPage(2048);
+    EXPECT_EQ((uint64_t)1, ret);  // 2048KB → 1 huge page
+
+    ret = KBToPage(4096);
+    EXPECT_EQ((uint64_t)2, ret); // 4096KB / 2048KB = 2 huge pages
+}
+
+TEST_F(ManageTest, TestPageToKBNormal)
+{
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+
+    uint64_t ret = PageToKB(0);
+    EXPECT_EQ((uint64_t)0, ret);
+
+    ret = PageToKB(1);
+    EXPECT_EQ((uint64_t)4, ret);  // 1 normal page = 4KB
+
+    ret = PageToKB(256);
+    EXPECT_EQ((uint64_t)1024, ret); // 256 * 4KB = 1024KB
+}
+
+TEST_F(ManageTest, TestPageToKBHuge)
+{
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+
+    uint64_t ret = PageToKB(0);
+    EXPECT_EQ((uint64_t)0, ret);
+
+    ret = PageToKB(1);
+    EXPECT_EQ((uint64_t)2048, ret);  // 1 huge page = 2048KB
+
+    ret = PageToKB(5);
+    EXPECT_EQ((uint64_t)10240, ret); // 5 * 2048KB = 10240KB
+}
+
+extern "C" void AllocBorrowPagesForMemsize(ProcessAttr *attr,
+                                           uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
+                                           uint32_t availSharedPages[REMOTE_NUMA_NUM]);
+
+TEST_F(ManageTest, TestAllocBorrowPagesForMemsizeInvalidL2IndexLow)
+{
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.migrateParam[0].nid = 1; // l2Index = 1 - 4 = -3 < 0, triggers early return
+
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+
+    // Should return early without crash or modification
+    AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
+    EXPECT_EQ((uint64_t)0, attr.strategyAttr.memSize[0][0]);
+}
+
+TEST_F(ManageTest, TestAllocBorrowPagesForMemsizeInvalidL2IndexHigh)
+{
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.migrateParam[0].nid = 30; // l2Index = 30 - 4 = 26 >= REMOTE_NUMA_NUM(18)
+
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+
+    AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
+    EXPECT_EQ((uint64_t)0, attr.strategyAttr.memSize[0][0]);
+}
+
+TEST_F(ManageTest, TestAllocBorrowPagesForMemsizeNoLocalNuma)
+{
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.migrateParam[0].nid = 4;  // l2Index = 0
+    attr.migrateParam[0].memSize = 400;  // 400KB → 100 pages (4K)
+    attr.numaAttr.numaNodes = 0;  // No local NUMA set
+
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    availPrivatePages[0][0] = 100;
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+
+    AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
+
+    // All local NUMAs skipped, nothing allocated
+    EXPECT_EQ((uint64_t)0, attr.strategyAttr.memSize[0][0]);
+    EXPECT_EQ((uint32_t)100, availPrivatePages[0][0]);
+}
+
+TEST_F(ManageTest, TestAllocBorrowPagesForMemsizePrivateOnly)
+{
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.migrateParam[0].nid = 4;  // remote NUMA 4, l2Index = 0
+    attr.migrateParam[0].memSize = 400;  // 400KB → 100 pages (4K)
+    attr.numaAttr.numaNodes = 0b00000001;  // L1: node 0
+    attr.strategyAttr.nrPagesPerLocalNuma[0] = 200;
+
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    availPrivatePages[0][0] = 150;  // More than memSize needs
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+
+    AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
+
+    // nrLeft=100, nrUsed=MIN(200,150)=150, nrLeft(100) < nrUsed(150)
+    // So: availPrivatePages[0][0] -= 100 → 50, memSize[0][0] = PageToKB(100) = 400
+    EXPECT_EQ((uint32_t)50, availPrivatePages[0][0]);
+    EXPECT_EQ((uint64_t)400, attr.strategyAttr.memSize[0][0]);
+}
+
+TEST_F(ManageTest, TestAllocBorrowPagesForMemsizePrivateAndShared)
+{
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.migrateParam[0].nid = 4;  // l2Index = 0
+    attr.migrateParam[0].memSize = 1000;  // 1000KB → 250 pages (4K)
+    attr.numaAttr.numaNodes = 0b00000001;  // L1: node 0
+    attr.strategyAttr.nrPagesPerLocalNuma[0] = 300;
+
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    availPrivatePages[0][0] = 100;  // Private insufficient
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+    availSharedPages[0] = 200;
+
+    AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
+
+    // Step 1 - Private: nrPages=300, nrUsed=MIN(300,100)=100
+    //   nrLeft(250)>=nrUsed(100): nrLeft=150, availPrivatePages[0][0]=0, memSize=PageToKB(100)=400
+    // Step 2 - Shared: nrPages=200, nrUsed=MIN(200,200)=200
+    //   nrLeft(150)<nrUsed(200): availSharedPages[0]-=150→50, memSize+=PageToKB(150)=1000
+    EXPECT_EQ((uint32_t)0, availPrivatePages[0][0]);
+    EXPECT_EQ((uint32_t)50, availSharedPages[0]);
+    EXPECT_EQ((uint64_t)1000, attr.strategyAttr.memSize[0][0]);
+}
+
+TEST_F(ManageTest, TestAllocBorrowPagesForMemsizeSkipNonLocal)
+{
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.migrateParam[0].nid = 5;  // l2Index = 1
+    attr.migrateParam[0].memSize = 400;  // 100 pages
+    attr.numaAttr.numaNodes = 0b00000010;  // L1: node 1 only (not node 0)
+    attr.strategyAttr.nrPagesPerLocalNuma[0] = 200;
+    attr.strategyAttr.nrPagesPerLocalNuma[1] = 200;
+
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    availPrivatePages[1][1] = 200;
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+
+    AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
+
+    // i=0: InAttrL1(attr,0)=false → memSize[0][1]=0
+    // i=1: InAttrL1(attr,1)=true → nrLeft=100, nrUsed=MIN(200,200)=200
+    //   nrLeft(100)<nrUsed(200): availPrivatePages[1][1]-=100→100, memSize[1][1]=PageToKB(100)=400
+    EXPECT_EQ((uint64_t)0, attr.strategyAttr.memSize[0][1]);
+    EXPECT_EQ((uint64_t)400, attr.strategyAttr.memSize[1][1]);
+    EXPECT_EQ((uint32_t)100, availPrivatePages[1][1]);
+}
+
+TEST_F(ManageTest, TestAllocBorrowPagesForMemsizeHugePage)
+{
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;  // Huge mode
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.migrateParam[0].nid = 4;  // l2Index = 0
+    attr.migrateParam[0].memSize = 2048;  // 2048KB = 1 huge page worth
+    attr.numaAttr.numaNodes = 0b00000001;  // L1: node 0
+    attr.strategyAttr.nrPagesPerLocalNuma[0] = 10;
+
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    availPrivatePages[0][0] = 5;
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+
+    AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
+
+    // KBToPage(2048) in huge mode = 2048 / 2048 = 1 page (floor division)
+    // nrLeft=1, nrPages=10, nrUsed=MIN(10,5)=5
+    // nrLeft(1)<nrUsed(5): availPrivatePages[0][0]-=1→4, memSize[0][0]=PageToKB(1)=2048
+    EXPECT_EQ((uint32_t)4, availPrivatePages[0][0]);
+    EXPECT_EQ((uint64_t)2048, attr.strategyAttr.memSize[0][0]);
+}
+
+extern "C" void CalibrateMigratePages(ProcessAttr *attr);
+
+TEST_F(ManageTest, TestCalibrateMigratePagesNoChange)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 50;
+    attr.walkPage.nrPages[4] = 150;  // remotePages(150) == wp->nrPages[4](150), skip
+
+    CalibrateMigratePages(&attr);
+
+    // No change: values stay as-is
+    EXPECT_EQ((uint32_t)100, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ((uint32_t)50, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+}
+
+TEST_F(ManageTest, TestCalibrateMigratePagesSingleLocal)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    attr.walkPage.nrPages[4] = 50;  // actual pages dropped from 100 to 50
+
+    CalibrateMigratePages(&attr);
+
+    // arrLen=1, last(only) gets nrLeft=50
+    EXPECT_EQ((uint32_t)50, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+}
+
+TEST_F(ManageTest, TestCalibrateMigratePagesMultiLocal)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    // Two local NUMAs contribute to remote NUMA 4 (l2Index=0)
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 100;
+    attr.walkPage.nrPages[4] = 150;  // actual dropped from 200 to 150
+
+    CalibrateMigratePages(&attr);
+
+    // remotePages=200, arr=[0,1], nrLeft=150
+    // i=0: ratio=100/200=0.5, nrChunk=150*0.5=75, nrLeft=75
+    // i=1 (last): gets nrLeft=75
+    EXPECT_EQ((uint32_t)75, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ((uint32_t)75, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+}
+
+TEST_F(ManageTest, TestCalibrateMigratePagesSkipZeroEntries)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    // Local NUMA 0 has 0 entries — excluded from arr[]
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 0;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 100;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[2][0] = 100;
+    attr.walkPage.nrPages[4] = 300;  // actual increased from 200 to 300
+
+    CalibrateMigratePages(&attr);
+
+    // remotePages=200, arr=[1,2], nrLeft=300
+    // i=0 (arr[0]=1): ratio=100/200=0.5, nrChunk=300*0.5=150, nrLeft=150
+    // i=1 (arr[1]=2, last): gets nrLeft=150
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);   // unchanged (was 0)
+    EXPECT_EQ((uint32_t)150, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+    EXPECT_EQ((uint32_t)150, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
+}
+
+TEST_F(ManageTest, TestCalibrateMigratePagesMultiRemote)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    // l2Index=0: remotePages=100, actual=100 → skip
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    attr.walkPage.nrPages[4] = 100;
+    // l2Index=1: remotePages=200, actual=100 → calibrate
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][1] = 200;
+    attr.walkPage.nrPages[5] = 100;  // l2Index=1, remote=5
+
+    CalibrateMigratePages(&attr);
+
+    // l2Index=0: unchanged (remotePages==actual)
+    EXPECT_EQ((uint32_t)100, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    // l2Index=1: arrLen=1, last gets nrLeft=100
+    EXPECT_EQ((uint32_t)100, attr.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
+}
+
+TEST_F(ManageTest, TestCalibrateMigratePagesToZero)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 50;
+    attr.walkPage.nrPages[4] = 0;  // all pages gone from remote NUMA 4
+
+    CalibrateMigratePages(&attr);
+
+    // remotePages=150, arr=[0,1], nrLeft=0
+    // i=0: ratio=100/150≈0.667, nrChunk=0*0.667=0, nrLeft=0
+    // i=1 (last): gets nrLeft=0
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+}
+
+TEST_F(ManageTest, TestCalibrateMigratePagesThreeLocals)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    // Three local NUMAs with different proportions
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 10;   // 10%
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 30;   // 30%
+    attr.strategyAttr.remoteNrPagesAfterMigrate[2][0] = 60;   // 60%
+    attr.walkPage.nrPages[4] = 200;  // actual doubled from 100 to 200
+
+    CalibrateMigratePages(&attr);
+
+    // remotePages=100, arr=[0,1,2], nrLeft=200
+    // i=0 (arr[0]=0): ratio=10/100=0.1, nrChunk=200*0.1=20, nrLeft=180
+    // i=1 (arr[1]=1): ratio=30/100=0.3, nrChunk=200*0.3=60, nrLeft=120
+    // i=2 (arr[2]=2, last): gets nrLeft=120
+    EXPECT_EQ((uint32_t)20, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ((uint32_t)60, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+    EXPECT_EQ((uint32_t)120, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
 }

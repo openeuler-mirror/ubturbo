@@ -401,13 +401,14 @@ TEST_F(MigrationTest, TestScanMigrateWorkTwo)
     EXPECT_EQ(-1, ret);
 }
 
+extern "C" uint32_t g_pageSizeHuge;
 extern "C" int SetMigrateThreadNum(struct MigrateMsg *mMsg, uint64_t migratePages, bool isForcedSingleThread);
 TEST_F(MigrationTest, TestSetMigrateThreadNum)
 {
     int ret;
     struct MigrateMsg mMsg = { 0 };
     uint64_t migratePages = LESS_MIG_OUT_2M_PAGE_THRE + 1;
-    mMsg.mulMig.pageSize = PAGESIZE_2M;
+    mMsg.mulMig.pageSize = g_pageSizeHuge = PAGESIZE_2M;
     ret = SetMigrateThreadNum(&mMsg, migratePages, 0);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(true, mMsg.mulMig.isMulThread);
@@ -522,27 +523,24 @@ TEST_F(MigrationTest, TestNumaSwapMemPool)
 {
     int l2Node = 4;
     ProcessAttr attr = {};
-    attr.strategyAttr.allocRemoteNrPages[0][0] = 100;
-    attr.scanAttr.actcLen[l2Node] = 5;
+    attr.numaAttr.numaNodes = 0x11;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 5;
+    attr.walkPage.nrPages[l2Node] = 5;
     attr.strategyAttr.memSize[0][0] = 4096; // 2 hugepage
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = g_pageSizeHuge;
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(l2Node));
 
-    // migNum > 0 case
+    // promote case
     NumaSwapMemPool(&attr);
-    EXPECT_EQ(5, attr.strategyAttr.nrMigratePages[l2Node][0]);
+    EXPECT_EQ(3, attr.strategyAttr.nrMigratePages[l2Node][0]);
 
-    attr.scanAttr.actcLen[l2Node] = 100;
-    NumaSwapMemPool(&attr);
-    EXPECT_EQ(98, attr.strategyAttr.nrMigratePages[l2Node][0]);
-
-    // migNum < 0 case
-    attr.scanAttr.actcLen[0] = 100;
+    // demote case
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 140;
+    attr.walkPage.nrPages[0] = 200;
+    attr.walkPage.nrPages[l2Node] = 140;
     attr.strategyAttr.memSize[0][0] = 307200; // 150 hugepage
-    NumaSwapMemPool(&attr);
-    EXPECT_EQ(50, attr.strategyAttr.nrMigratePages[0][l2Node]);
-
-    attr.scanAttr.actcLen[0] = 10;
     NumaSwapMemPool(&attr);
     EXPECT_EQ(10, attr.strategyAttr.nrMigratePages[0][l2Node]);
 }
