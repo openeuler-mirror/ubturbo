@@ -298,7 +298,7 @@ int hist_module_init(void)
 	ret = hist_init(SIZE_2M);
 	if (ret) {
 		pr_err("init SMAP histogram device failed, ret: %d\n", ret);
-		return ret;
+		goto err_acpi_mem;
 	}
 
 	ret = hist_tracking_init();
@@ -311,6 +311,7 @@ int hist_module_init(void)
 
 err_tracking_add:
 	hist_deinit();
+err_acpi_mem:
 	reset_acpi_mem();
 	return ret;
 }

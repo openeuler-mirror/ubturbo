@@ -18,22 +18,24 @@
 
 using namespace std;
 
+extern "C" struct ProcessManager g_processManager;
+
 class MigrationTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
         cout << "[Phase SetUp Begin]" << endl;
+        g_processManager.processes = nullptr;
         cout << "[Phase SetUp End]" << endl;
     }
     void TearDown() override
     {
         cout << "[Phase TearDown Begin]" << endl;
         GlobalMockObject::verify();
+        g_processManager.processes = nullptr;
         cout << "[Phase TearDown End]" << endl;
     }
 };
-
-extern "C" struct ProcessManager g_processManager;
 
 TEST_F(MigrationTest, TestAddMigListAddMultiSuccess)
 {

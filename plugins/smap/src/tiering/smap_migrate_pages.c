@@ -191,12 +191,19 @@ static int init_mig(unsigned int nr_threads, unsigned int nr_folios,
 {
 	unsigned int i;
 	unsigned int avg_cnt;
+	size_t alloc_size;
 
-	avg_cnt = nr_folios / nr_threads + 1;
+	avg_cnt = DIV_ROUND_UP(nr_folios, nr_threads);
+	if (avg_cnt > SIZE_MAX / sizeof(struct folio *)) {
+		pr_err("migrate folio array size overflow, avg_cnt: %u\n",
+		       avg_cnt);
+		return -EINVAL;
+	}
+	alloc_size = (size_t)avg_cnt * sizeof(struct folio *);
 	for (i = 0; i < nr_threads; i++) {
 		mig[i].nr_folios = 0;
 		mig[i].failed_num = 0;
-		mig[i].folios = vzalloc(avg_cnt * sizeof(struct folio *));
+		mig[i].folios = vzalloc(alloc_size);
 		if (!mig[i].folios) {
 			clear_mig_folios(i);
 			return -ENOMEM;

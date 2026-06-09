@@ -61,7 +61,7 @@ extern "C" struct smap_hist_dev g_smap_hist_dev;
 extern "C" void hist_tracking_enable(struct device *ldev);
 TEST_F(HistTrackingTest, hist_tracking_enable)
 {
-    struct access_tracking_dev hdev;
+    struct access_tracking_dev hdev = {};
     hdev.access_bit_actc_data = nullptr;
     hdev.is_hist = true;
     hdev.enable_on = false;
@@ -74,7 +74,7 @@ TEST_F(HistTrackingTest, hist_tracking_enable)
 extern "C" void hist_tracking_disable(struct device *ldev);
 TEST_F(HistTrackingTest, hist_tracking_disable)
 {
-    struct access_tracking_dev hdev;
+    struct access_tracking_dev hdev = {};
 
     hdev.enable_on = true;
     hdev.is_hist = true;
@@ -187,12 +187,12 @@ extern "C" int hist_tracking_set_page_size(struct device *ldev, u8 pgsize);
 TEST_F(HistTrackingTest, hist_tracking_set_page_size)
 {
     int ret;
-    struct device dev;
-    ret = hist_tracking_set_page_size(&dev, 1);
+    struct access_tracking_dev hdev = {};
+    ret = hist_tracking_set_page_size(&hdev.ldev, 1);
     EXPECT_EQ(-EINVAL, ret);
 
     MOCKER(drivers_actc_buffer_reinit).stubs().will(returnValue(0));
-    ret = hist_tracking_set_page_size(&dev, 0);
+    ret = hist_tracking_set_page_size(&hdev.ldev, 0);
     EXPECT_EQ(0, ret);
 }
 
@@ -200,7 +200,7 @@ extern "C" int drivers_actc_buffer_init(struct access_tracking_dev *hdev);
 TEST_F(HistTrackingTest, actc_buffer_init)
 {
     int ret;
-    struct access_tracking_dev dev;
+    struct access_tracking_dev dev = {};
     MOCKER(drivers_calc_access_len).stubs().will(returnValue((u64)0));
     ret = drivers_actc_buffer_init(&dev);
     EXPECT_EQ(0, ret);
