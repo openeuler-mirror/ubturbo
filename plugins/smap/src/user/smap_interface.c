@@ -2816,7 +2816,7 @@ static int SmapMigratePidRemoteNumaCheck(struct MigrateEscapeMsg *msg)
 
     for (int i = 0; i < msg->count; i++) {
         if (msg->payload[i].srcNid == msg->payload[i].destNid) {
-            SMAP_LOGGER_ERROR("srcNid must not equal destNid.");
+            SMAP_LOGGER_ERROR("[%d] srcNid == destNid == %d", i, msg->payload[i].srcNid);
             return -EINVAL;
         }
         if (!IsOnlineRemoteNidValid(msg->payload[i].srcNid)) {
@@ -2889,7 +2889,16 @@ static int BuildMigRemoteNumaMsg(struct MigrateEscapeMsg *msg, struct MigPidRemo
         int srcRatio = GetAttrNidInitRatio(msg->payload[i].pid, msg->payload[i].srcNid);
         ioctlMsg->payloads[i].keepRatio = srcRatio - msg->payload[i].ratio;
         ioctlMsg->payloads[i].memSize = msg->payload[i].memSize;
-        ioctlMsg->payloads[i].isRatioMode = GetRunMode() == WATERLINE_MODE ? true : false;
+        if (GetRunMode() == WATERLINE_MODE && msg->payload[i].ratio != 0) {
+            ioctlMsg->payloads[i].isRatioMode = true;
+        } else {
+            ioctlMsg->payloads[i].isRatioMode = false;
+        }
+
+        SMAP_LOGGER_INFO("[escape_msg] pid=%d from=%d to=%d ratio=%d keep_ratio=%d memsize=%llu is_ratio_mode=%d",
+                         msg->payload[i].pid, msg->payload[i].srcNid, msg->payload[i].destNid, msg->payload[i].ratio,
+                         ioctlMsg->payloads[i].keepRatio, ioctlMsg->payloads[i].memSize,
+                         ioctlMsg->payloads[i].isRatioMode);
     }
     return 0;
 }
