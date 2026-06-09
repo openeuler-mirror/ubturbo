@@ -105,6 +105,130 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategyPromoteByLocalDeficit)
     FreeMigList(mlist);
 }
 
+TEST_F(GroupedStrategyTest, TestGroupedStrategySyncRemoteUsedPagesPromotesRuntimeRemotePages)
+{
+    ProcessAttr process = {};
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    ActcData localPages[1] = {};
+    ActcData remotePages[2] = {};
+
+    process.pid = 113;
+    process.groupPolicy.enabled = true;
+    process.groupPolicy.groupCount = 1;
+    process.groupPolicy.groups[0].localCount = 1;
+    process.groupPolicy.groups[0].locals[0].nid = 0;
+    process.groupPolicy.groups[0].locals[0].localReservePages = 3;
+    process.groupPolicy.groups[0].targetCount = 1;
+    process.groupPolicy.groups[0].targets[0].nid = 4;
+    process.groupPolicy.groups[0].targets[0].quotaPages = 10;
+    process.groupPolicy.groups[0].targets[0].usedPages = 0;
+
+    localPages[0].addr = 0x1000;
+    process.scanAttr.actcData[0] = localPages;
+    process.scanAttr.actcLen[0] = 1;
+    remotePages[0].addr = 0x4000;
+    remotePages[0].freq = 4;
+    remotePages[1].addr = 0x5000;
+    remotePages[1].freq = 5;
+    process.scanAttr.actcData[4] = remotePages;
+    process.scanAttr.actcLen[4] = 2;
+
+    MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ((uint64_t)2, process.groupPolicy.groups[0].targets[0].usedPages);
+    EXPECT_EQ(2, mlist[4][0].nr);
+    EXPECT_EQ(0x5000, mlist[4][0].addr[0]);
+    EXPECT_EQ(0x4000, mlist[4][0].addr[1]);
+
+    FreeMigList(mlist);
+}
+
+TEST_F(GroupedStrategyTest, TestGroupedStrategySyncRemoteUsedPagesAllowsOverQuotaPromote)
+{
+    ProcessAttr process = {};
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    ActcData remotePages[3] = {};
+
+    process.pid = 114;
+    process.groupPolicy.enabled = true;
+    process.groupPolicy.groupCount = 1;
+    process.groupPolicy.groups[0].localCount = 1;
+    process.groupPolicy.groups[0].locals[0].nid = 0;
+    process.groupPolicy.groups[0].locals[0].localReservePages = 3;
+    process.groupPolicy.groups[0].targetCount = 1;
+    process.groupPolicy.groups[0].targets[0].nid = 4;
+    process.groupPolicy.groups[0].targets[0].quotaPages = 1;
+
+    remotePages[0].addr = 0x4000;
+    remotePages[0].freq = 4;
+    remotePages[1].addr = 0x5000;
+    remotePages[1].freq = 6;
+    remotePages[2].addr = 0x6000;
+    remotePages[2].freq = 5;
+    process.scanAttr.actcData[4] = remotePages;
+    process.scanAttr.actcLen[4] = 3;
+
+    MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ((uint64_t)3, process.groupPolicy.groups[0].targets[0].usedPages);
+    EXPECT_EQ(3, mlist[4][0].nr);
+    EXPECT_EQ(0x5000, mlist[4][0].addr[0]);
+    EXPECT_EQ(0x6000, mlist[4][0].addr[1]);
+    EXPECT_EQ(0x4000, mlist[4][0].addr[2]);
+
+    FreeMigList(mlist);
+}
+
+TEST_F(GroupedStrategyTest, TestGroupedStrategySyncSharedTargetUsedPagesByQuota)
+{
+    ProcessAttr process = {};
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    ActcData remotePages[4] = {};
+
+    process.pid = 115;
+    process.groupPolicy.enabled = true;
+    process.groupPolicy.groupCount = 2;
+    process.groupPolicy.groups[0].localCount = 1;
+    process.groupPolicy.groups[0].locals[0].nid = 0;
+    process.groupPolicy.groups[0].locals[0].localReservePages = 1;
+    process.groupPolicy.groups[0].targetCount = 1;
+    process.groupPolicy.groups[0].targets[0].nid = 4;
+    process.groupPolicy.groups[0].targets[0].quotaPages = 1;
+    process.groupPolicy.groups[1].localCount = 1;
+    process.groupPolicy.groups[1].locals[0].nid = 1;
+    process.groupPolicy.groups[1].locals[0].localReservePages = 3;
+    process.groupPolicy.groups[1].targetCount = 1;
+    process.groupPolicy.groups[1].targets[0].nid = 4;
+    process.groupPolicy.groups[1].targets[0].quotaPages = 3;
+
+    remotePages[0].addr = 0x4000;
+    remotePages[0].freq = 10;
+    remotePages[1].addr = 0x5000;
+    remotePages[1].freq = 20;
+    remotePages[2].addr = 0x6000;
+    remotePages[2].freq = 30;
+    remotePages[3].addr = 0x7000;
+    remotePages[3].freq = 40;
+    process.scanAttr.actcData[4] = remotePages;
+    process.scanAttr.actcLen[4] = 4;
+
+    MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ((uint64_t)1, process.groupPolicy.groups[0].targets[0].usedPages);
+    EXPECT_EQ((uint64_t)3, process.groupPolicy.groups[1].targets[0].usedPages);
+    EXPECT_EQ(1, mlist[4][0].nr);
+    EXPECT_EQ(3, mlist[4][1].nr);
+    EXPECT_EQ(0x4000, mlist[4][0].addr[0]);
+    EXPECT_EQ(0x7000, mlist[4][1].addr[0]);
+    EXPECT_EQ(0x6000, mlist[4][1].addr[1]);
+    EXPECT_EQ(0x5000, mlist[4][1].addr[2]);
+
+    FreeMigList(mlist);
+}
+
 TEST_F(GroupedStrategyTest, TestGroupedStrategyPromoteTakesPriorityWhenAnyLocalBelowReserve)
 {
     ProcessAttr process = {};
