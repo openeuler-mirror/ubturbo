@@ -2351,14 +2351,23 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
     int l1node;
     if (GetRunMode() == WATERLINE_MODE) {
         l1node = GetAttrL1(attr);
-        if (ratio >= attr->strategyAttr.initRemoteMemRatio[l1node][srcNodeIndex]) {
+        if (attr->migrateMode == MIG_MEMSIZE_MODE) {
             ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
+            attr->migrateParam[0].nid = destNodeIndex + nrLocalNuma;
+        } else {
+            if (ratio >= attr->strategyAttr.initRemoteMemRatio[l1node][srcNodeIndex]) {
+                ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
+            }
         }
         for (int i = 0; i < g_processManager.nrLocalNuma; i++) {
             attr->strategyAttr.initRemoteMemRatio[i][destNodeIndex] += ratio;
             attr->strategyAttr.initRemoteMemRatio[i][srcNodeIndex] -= ratio;
             attr->strategyAttr.memSize[i][destNodeIndex] = attr->strategyAttr.memSize[i][srcNodeIndex];
             attr->strategyAttr.memSize[i][srcNodeIndex] = 0;
+
+            SMAP_LOGGER_INFO("[change_remote] pid=%d local=%d old_remote=%d new_remote=%d old_sz=%llu new_sz=%llu",
+                             attr->pid, i, srcNodeIndex, destNodeIndex, attr->strategyAttr.memSize[i][srcNodeIndex],
+                             attr->strategyAttr.memSize[i][destNodeIndex]);
         }
     } else if (GetRunMode() == MEM_POOL_MODE) {
         uint64_t srcMemSize = 0;
@@ -2386,6 +2395,11 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
     }
 
     AddAttrL2(attr, destNodeIndex + nrLocalNuma);
+
+    if (GetRunMode() == WATERLINE_MODE && attr->migrateMode == MIG_MEMSIZE_MODE) {
+        return;
+    }
+
     attr->remoteNumaCnt = GetL2Count(attr->numaAttr.numaNodes);
     SMAP_LOGGER_INFO("========= remoteNumaCnt %d", attr->remoteNumaCnt);
     int targetIdx = -1;
