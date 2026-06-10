@@ -271,8 +271,8 @@ static int32_t ConfigFreqWt(char *substr, char *value)
         return ret;
     }
     if (tempFreqWt < MIN_FREQ_WT || tempFreqWt > MAX_FREQ_WT) {
-        SMAP_LOGGER_ERROR("Config freq wt(%d) invalid, range(%d-%d), key:%s.", g_tmpStrategyConfig.freqWt, MIN_FREQ_WT,
-                          MAX_FREQ_WT, substr);
+        SMAP_LOGGER_ERROR("Config freq wt(%d) invalid, range(%d-%d), key:%s.", tempFreqWt, MIN_FREQ_WT, MAX_FREQ_WT,
+                          substr);
         return RETURN_ERROR;
     }
     g_tmpStrategyConfig.freqWt = tempFreqWt;
