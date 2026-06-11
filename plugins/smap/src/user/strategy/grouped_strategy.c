@@ -26,6 +26,7 @@
 #define GROUP_SWAP_DEFAULT_FREQ_WT 1
 #define GROUP_SWAP_DEFAULT_SLOW_THRED 2
 #define GROUP_SWAP_SLOW_THRED_FACTOR 2
+#define MAX_GROUP_TARGET_ENTRY (MAX_MIGRATION_GROUP_NUM * MAX_GROUP_REMOTE_NUMA)
 
 typedef struct {
     uint64_t addr;
@@ -50,6 +51,12 @@ typedef struct {
     GroupPageData page;
     int toNid;
 } RebalancePair;
+
+typedef struct {
+    int groupIdx;
+    int targetIdx;
+    uint64_t oldUsedPages;
+} GroupTargetEntry;
 
 static int GroupPageAscFunc(const void *data1, const void *data2)
 {
@@ -225,6 +232,150 @@ static uint64_t CalcRemoteRemaining(const MigrationGroupAttr *group, int targetI
         return 0;
     }
     return target->quotaPages - target->usedPages;
+}
+
+/*
+ * Collect all group target entries that point to the same remote NUMA.
+ * A single entry means the target is private to one group; multiple entries
+ * mean this remote NUMA is shared and must be split by quota.
+ */
+static int CollectTargetEntriesByNid(GroupMigrationPolicy *policy, int nid, GroupTargetEntry entries[], int maxEntries)
+{
+    int count = 0;
+
+    for (int i = 0; i < policy->groupCount; i++) {
+        MigrationGroupAttr *group = &policy->groups[i];
+        for (int j = 0; j < group->targetCount; j++) {
+            if (group->targets[j].nid != nid) {
+                continue;
+            }
+            if (count >= maxEntries) {
+                SMAP_LOGGER_WARNING("grouped target entry count exceeds limit on numa %d.", nid);
+                return count;
+            }
+            entries[count].groupIdx = i;
+            entries[count].targetIdx = j;
+            entries[count].oldUsedPages = group->targets[j].usedPages;
+            count++;
+        }
+    }
+    return count;
+}
+
+/* Calculate the total quota for entries sharing one remote NUMA. */
+static uint64_t CalcTargetQuotaSum(GroupMigrationPolicy *policy, const GroupTargetEntry entries[], int entryCount)
+{
+    uint64_t quotaSum = 0;
+
+    for (int i = 0; i < entryCount; i++) {
+        GroupTargetAttr *target = &policy->groups[entries[i].groupIdx].targets[entries[i].targetIdx];
+        if (UINT64_MAX - quotaSum < target->quotaPages) {
+            return UINT64_MAX;
+        }
+        quotaSum += target->quotaPages;
+    }
+    return quotaSum;
+}
+
+/*
+ * For a non-shared target, ACTC resident pages can be mapped directly to the
+ * only owning group target.
+ */
+static void SyncSingleTargetUsedPages(ProcessAttr *process, GroupTargetEntry *entry, uint64_t residentPages)
+{
+    MigrationGroupAttr *group = &process->groupPolicy.groups[entry->groupIdx];
+    GroupTargetAttr *target = &group->targets[entry->targetIdx];
+
+    target->usedPages = residentPages;
+    if (entry->oldUsedPages != residentPages) {
+        SMAP_LOGGER_INFO("grouped pid %d group %d target %d sync used pages %llu from actc, old %llu.", process->pid,
+                         entry->groupIdx, target->nid, residentPages, entry->oldUsedPages);
+    }
+    if (residentPages > target->quotaPages) {
+        SMAP_LOGGER_WARNING("grouped pid %d group %d target %d resident pages %llu exceed quota %llu.", process->pid,
+                            entry->groupIdx, target->nid, residentPages, target->quotaPages);
+    }
+}
+
+/*
+ * For a shared target, split ACTC resident pages by configured quota. This is
+ * capacity accounting only; it does not imply page-level ownership.
+ */
+static void AssignSharedTargetUsedPages(ProcessAttr *process, const GroupTargetEntry entries[], int entryCount,
+                                        uint64_t residentPages, uint64_t quotaSum)
+{
+    uint64_t assignedPages = 0;
+    GroupMigrationPolicy *policy = &process->groupPolicy;
+
+    for (int i = 0; i < entryCount; i++) {
+        GroupTargetAttr *target = &policy->groups[entries[i].groupIdx].targets[entries[i].targetIdx];
+        /* Use 128-bit multiplication to avoid overflow before division. */
+        target->usedPages = (__uint128_t)residentPages * target->quotaPages / quotaSum;
+        assignedPages += target->usedPages;
+    }
+
+    uint64_t remainingPages = residentPages - assignedPages;
+    /* Distribute truncation remainder in configuration order. */
+    for (int i = 0; i < entryCount && remainingPages > 0; i++) {
+        GroupTargetAttr *target = &policy->groups[entries[i].groupIdx].targets[entries[i].targetIdx];
+        target->usedPages++;
+        remainingPages--;
+    }
+}
+
+/* Validate shared-target quota accounting and publish the split usedPages. */
+static void SyncSharedTargetUsedPages(ProcessAttr *process, const GroupTargetEntry entries[], int entryCount,
+                                      uint64_t residentPages, uint64_t quotaSum)
+{
+    GroupMigrationPolicy *policy = &process->groupPolicy;
+    int nid = policy->groups[entries[0].groupIdx].targets[entries[0].targetIdx].nid;
+
+    if (quotaSum == 0 || quotaSum == UINT64_MAX) {
+        SMAP_LOGGER_WARNING("grouped pid %d target %d invalid quota sum %llu, skip used pages sync.", process->pid, nid,
+                            quotaSum);
+        return;
+    }
+    if (residentPages > quotaSum) {
+        SMAP_LOGGER_WARNING("grouped pid %d shared target %d resident pages %llu exceed quota sum %llu.", process->pid,
+                            nid, residentPages, quotaSum);
+    }
+
+    AssignSharedTargetUsedPages(process, entries, entryCount, residentPages, quotaSum);
+    for (int i = 0; i < entryCount; i++) {
+        GroupTargetAttr *target = &policy->groups[entries[i].groupIdx].targets[entries[i].targetIdx];
+        if (entries[i].oldUsedPages != target->usedPages) {
+            SMAP_LOGGER_INFO("grouped pid %d group %d shared target %d sync used pages %llu from actc, old %llu.",
+                             process->pid, entries[i].groupIdx, nid, target->usedPages, entries[i].oldUsedPages);
+        }
+    }
+}
+
+/*
+ * Refresh grouped target usedPages from the current ACTC scan before planning.
+ * This captures remote pages that were allocated by VM growth instead of SMAP
+ * demote, so promote can migrate them back when local reserves are below
+ * waterline.
+ */
+static void SyncGroupedTargetUsedPages(ProcessAttr *process)
+{
+    GroupMigrationPolicy *policy = &process->groupPolicy;
+
+    for (int nid = 0; nid < MAX_NODES; nid++) {
+        GroupTargetEntry entries[MAX_GROUP_TARGET_ENTRY] = { 0 };
+        int entryCount = CollectTargetEntriesByNid(policy, nid, entries, MAX_GROUP_TARGET_ENTRY);
+        if (entryCount <= 0) {
+            continue;
+        }
+
+        uint64_t residentPages = process->scanAttr.actcLen[nid];
+        if (entryCount == 1) {
+            SyncSingleTargetUsedPages(process, &entries[0], residentPages);
+            continue;
+        }
+
+        uint64_t quotaSum = CalcTargetQuotaSum(policy, entries, entryCount);
+        SyncSharedTargetUsedPages(process, entries, entryCount, residentPages, quotaSum);
+    }
 }
 
 static bool IsSharedTarget(const GroupMigrationPolicy *policy, int groupIdx)
@@ -977,6 +1128,8 @@ int GroupedMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODE
     if (!process || !process->groupPolicy.enabled) {
         return -EINVAL;
     }
+    /* Promote/demote/swap all depend on target usedPages accounting. */
+    SyncGroupedTargetUsedPages(process);
     WarnUngroupedPages(process);
     int ret = RunPromoteStage(process, mlist);
     if (ret) {

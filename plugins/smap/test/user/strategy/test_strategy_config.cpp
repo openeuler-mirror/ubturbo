@@ -264,7 +264,9 @@ extern "C" int32_t ConfigSlowThreshold(char *substr, char *value);
 TEST_F(PeriodConfigTest, ConfigSlowThresholdTest)
 {
     char *substr = "smap.slow.threshold";
-    char *value = "1201";
+    constexpr uint32_t invalidSlowThreshold = MAX_MIGRATE_PERIOD / MIN_SCAN_PERIOD + 1;
+    char value[16] = {};
+    (void)snprintf(value, sizeof(value), "%u", invalidSlowThreshold);
     MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
     int32_t ret = ConfigSlowThreshold(substr, value);
     EXPECT_EQ(-1, ret);
@@ -273,7 +275,7 @@ TEST_F(PeriodConfigTest, ConfigSlowThresholdTest)
     GlobalMockObject::verify();
     ret = ConfigSlowThreshold(substr, value);
     EXPECT_EQ(RETURN_ERROR, ret);
-    EXPECT_EQ(1201, g_tmpStrategyConfig.slowThreshold);
+    EXPECT_EQ(invalidSlowThreshold, g_tmpStrategyConfig.slowThreshold);
 
     GlobalMockObject::verify();
     char *value1 = "40";
