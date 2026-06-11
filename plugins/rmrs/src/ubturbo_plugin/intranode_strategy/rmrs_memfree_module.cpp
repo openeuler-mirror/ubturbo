@@ -49,15 +49,17 @@ RmrsResult RmrsMemFreeModule::ReturnRemoteNuma(std::vector<ReturnVmInfo> &canRet
     RmrsResult res =
         RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdList, pidsList, memSizeList, MIGRATEOUT_TIMEOUT);
     if (res != RMRS_OK) {
+        // 考虑部分成功场景：如果有进程被删除，但是smap迁移成功，且迁移后memSize为0，那么需要移除这些进程的管理
         if (res == RMRS_MIGRATE_FAILED_VM_DELETED) {
             LOG_INFO << "[MemFree][MemFree] Detect Dead Pid During Smap Migrate.";
+            res = RmrsSmapHelper::SmapRemovePidsWithZeroRemoteUsage(remoteNumaIdList, pidsList);
         } else {
             LOG_ERROR << "[MemFree][MemFree] Smap Migrate failed.";
             return res;
         }
+    } else {
+        res = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(remoteNumaIdList, pidsList);
     }
-    // 移除pid进程管理
-    res = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(remoteNumaIdList, pidsList);
     if (res != RMRS_OK) {
         LOG_ERROR << "[MemFree][MemFree] Rm pid mgr failed " << res << ".";
         return res;

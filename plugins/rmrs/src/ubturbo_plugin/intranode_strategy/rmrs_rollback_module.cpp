@@ -210,6 +210,15 @@ bool RmrsRollbackModule::DoMigrateRollback(std::unordered_map<pid_t, uint16_t> v
     RmrsResult res =
         RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdList, pidList, memSizeList, MIGRATEOUT_TIMEOUT);
     if (res != 0) {
+        if (res == RMRS_MIGRATE_FAILED_VM_DELETED) {
+            LOG_INFO << "[MemRollback] Detect Dead Pid During Smap Migrate.";
+            res = RmrsSmapHelper::SmapRemovePidsWithZeroRemoteUsage(remoteNumaIdList, pidList);
+            if (res != RMRS_OK) {
+                LOG_ERROR << "[MemRollback] Rm pid mgr failed " << res << ".";
+                return false;
+            }
+            return false; // 应该返回成功？
+        }
         LOG_ERROR << "[MemRollback] DoMigrateRollback failed " << res << ".";
         return false;
     }

@@ -14,6 +14,7 @@
 #include <fstream>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "rmrs_config.h"
 #include "rmrs_error.h"
@@ -546,6 +547,52 @@ RmrsResult RmrsSmapHelper::SmapQueryProcessConfigHelper(int nid, std::vector<Pro
         processPayloadList.push_back(payloadArr[i]);
     }
     return RMRS_OK;
+}
+
+RmrsResult RmrsSmapHelper::SmapRemovePidsWithZeroRemoteUsage(std::vector<uint16_t> &remoteNumaIdList,
+                                                             std::vector<pid_t> &pidsList)
+{
+    std::vector<uint16_t> removeNumaIdList;
+    std::vector<pid_t> removePidList;
+    std::unordered_set<uint16_t> queriedNumaIds;
+    std::unordered_map<uint16_t, std::unordered_map<pid_t, uint64_t>> numaManagedPidMap;
+
+    for (size_t i = 0; i < pidsList.size(); i++) {
+        uint16_t remoteNumaId = remoteNumaIdList[i];
+        if (queriedNumaIds.find(remoteNumaId) == queriedNumaIds.end()) {
+            queriedNumaIds.insert(remoteNumaId);
+            std::vector<ProcessPayload> processPayloadList;
+            if (SmapQueryProcessConfigHelper(remoteNumaId, processPayloadList) == RMRS_OK) {
+                std::unordered_map<pid_t, uint64_t> managedPidMap;
+                for (const auto &payload : processPayloadList) {
+                    LOG_DEBUG << "[RmrsSmapHelper] SmapRemovePidsWithZeroRemoteUsage numa=" << remoteNumaId
+                              << " pid=" << payload.pid << " memSize=" << payload.memSize << ".";
+                    managedPidMap[payload.pid] = payload.memSize;
+                }
+                numaManagedPidMap[remoteNumaId] = managedPidMap;
+            } else {
+                LOG_ERROR << "[RmrsSmapHelper] SmapRemovePidsWithZeroRemoteUsage query numa=" << remoteNumaId
+                          << " failed, skip all pids on this numa.";
+            }
+        }
+        auto it = numaManagedPidMap.find(remoteNumaId);
+        if (it != numaManagedPidMap.end()) {
+            auto pidIt = it->second.find(pidsList[i]);
+            if (pidIt != it->second.end() && pidIt->second == 0) {
+                LOG_DEBUG << "[RmrsSmapHelper] SmapRemovePidsWithZeroRemoteUsage remove pid=" << pidsList[i]
+                          << " numa=" << remoteNumaId << ".";
+                removeNumaIdList.push_back(remoteNumaId);
+                removePidList.push_back(pidsList[i]);
+            }
+        }
+    }
+
+    if (removePidList.empty()) {
+        UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[RmrsSmapHelper] No pid need to remove.";
+        return RMRS_OK;
+    }
+
+    return SmapRemoveVMPidToRemoteNuma(removeNumaIdList, removePidList);
 }
 
 } // namespace rmrs::smap
