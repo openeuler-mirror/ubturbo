@@ -24,6 +24,7 @@
 #include "manage/access_ioctl.h"
 #include "manage/smap_ioctl.h"
 #include "manage/device.h"
+#include "smap_inner_interface.h"
 #include "strategy.h"
 #include "grouped_strategy.h"
 #include "strategy_config.h"
@@ -293,7 +294,9 @@ static int PerformMigrationPreparation(struct ProcessManager *manager)
     }
     if (ret > 0) {
         SMAP_LOGGER_WARNING("Build pid data failed! nums:%d.", ret);
+        return 0;
     }
+    SmapAutoRemoveRemoteEmptyProcessesWithFreshData();
     return 0;
 }
 

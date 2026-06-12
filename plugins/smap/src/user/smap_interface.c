@@ -1295,6 +1295,8 @@ static bool CheckProcessIdle(int nid)
     return false;
 }
 
+static void MarkAutoRemoveByMigrateBack(struct MigrateBackMsg *msg);
+
 int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
 {
     SMAP_LOGGER_INFO("Receive ubturbo_smap_migrate_back msg.");
@@ -1340,6 +1342,7 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
         ClearMigrateBackBusyForbidden(msg);
     } else {
         CompleteMigrateBackForbidden(msg);
+        MarkAutoRemoveByMigrateBack(msg);
     }
     return ret;
 }
@@ -1626,6 +1629,134 @@ int ubturbo_smap_remove(struct RemoveMsg *msg, int pidType)
     EnvMutexUnlock(&manager->lock);
     SMAP_LOGGER_INFO("smap remove result: %d.", ret);
     return ret;
+}
+
+static bool HasRemotePages(ProcessAttr *attr)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+
+    for (int nid = nrLocalNuma; nid < MAX_NODES; nid++) {
+        if (attr->walkPage.nrPages[nid] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool IsMigrateBackSourceNid(const struct MigrateBackMsg *msg, int nid)
+{
+    if (!msg) {
+        return false;
+    }
+    for (int i = 0; i < msg->count; i++) {
+        if (msg->payload[i].srcNid == nid) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool IsMigrateBackAutoRemoveCandidate(ProcessAttr *attr, const struct MigrateBackMsg *msg)
+{
+    if (!msg) {
+        return false;
+    }
+    for (int nid = GetNrLocalNuma(); nid < MAX_NODES; nid++) {
+        if (InAttrL2(attr, nid) && IsMigrateBackSourceNid(msg, nid)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool IsAutoRemoveCandidate(ProcessAttr *attr)
+{
+    if (!attr || !attr->autoRemoveWhenRemoteEmpty || attr->groupPolicy.enabled || attr->scanType != NORMAL_SCAN) {
+        return false;
+    }
+    return true;
+}
+
+static void MarkAutoRemoveByMigrateBack(struct MigrateBackMsg *msg)
+{
+    struct ProcessManager *manager = GetProcessManager();
+
+    EnvMutexLock(&manager->lock);
+    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
+        if (!attr->groupPolicy.enabled && attr->scanType == NORMAL_SCAN &&
+            IsMigrateBackAutoRemoveCandidate(attr, msg)) {
+            attr->autoRemoveWhenRemoteEmpty = true;
+            SMAP_LOGGER_INFO("Pid %d will be auto removed after migrate back clears remote pages.", attr->pid);
+        }
+    }
+    EnvMutexUnlock(&manager->lock);
+}
+
+static bool IsPidAlreadyCollected(pid_t *pids, int count, pid_t pid)
+{
+    for (int i = 0; i < count; i++) {
+        if (pids[i] == pid) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int CollectRemoteEmptyAutoRemovePids(pid_t *pids, int maxCount)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    int count = 0;
+
+    EnvMutexLock(&manager->lock);
+    for (ProcessAttr *attr = manager->processes; attr && count < maxCount; attr = attr->next) {
+        if (!IsAutoRemoveCandidate(attr) || HasRemotePages(attr)) {
+            continue;
+        }
+        if (IsPidAlreadyCollected(pids, count, attr->pid)) {
+            continue;
+        }
+        pids[count++] = attr->pid;
+    }
+    EnvMutexUnlock(&manager->lock);
+    return count;
+}
+
+static void RemoveAutoRemovePids(pid_t *pids, int count)
+{
+    int pidType = IsHugeMode() ? PAGETYPE_HUGE : PAGETYPE_NORMAL;
+
+    for (int offset = 0; offset < count;) {
+        struct RemoveMsg removeMsg = { 0 };
+        int remain = count - offset;
+        int batch = remain < MAX_NR_REMOVE ? remain : MAX_NR_REMOVE;
+        removeMsg.count = batch;
+        for (int i = 0; i < batch; i++) {
+            removeMsg.payload[i].pid = pids[offset + i];
+            removeMsg.payload[i].count = 0;
+        }
+
+        int ret = ubturbo_smap_remove(&removeMsg, pidType);
+        if (ret) {
+            SMAP_LOGGER_WARNING("Auto remove remote-empty pids failed: %d.", ret);
+        }
+        offset += batch;
+    }
+}
+
+void SmapAutoRemoveRemoteEmptyProcessesWithFreshData(void)
+{
+    int maxCount = GetCurrentMaxNrPid();
+    pid_t *pids = calloc(maxCount, sizeof(pid_t));
+    if (!pids) {
+        SMAP_LOGGER_ERROR("Calloc auto remove pid array failed.");
+        return;
+    }
+
+    int count = CollectRemoteEmptyAutoRemovePids(pids, maxCount);
+    if (count > 0) {
+        RemoveAutoRemovePids(pids, count);
+    }
+    free(pids);
 }
 
 int ubturbo_smap_node_enable(struct EnableNodeMsg *msg)
