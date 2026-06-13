@@ -12,6 +12,9 @@
 #include <linux/fs.h>
 #include <linux/hrtimer.h>
 #include <linux/spinlock.h>
+#include <linux/kthread.h>
+#include <linux/workqueue.h>
+#include <linux/atomic.h>
 #include "ub_hist.h"
 #include "drv_common.h"
 
@@ -61,8 +64,16 @@ union smap_hist_status {
 	u32 status_all;
 };
 
+enum ub_watch_measure_state {
+	MEASURE_NOT_STARTED,
+	MEASURE_IN_PROGRESS,
+	MEASURE_COMPLETED,
+};
+
 struct smap_hist_dev {
 	struct task_struct *kthread;
+	struct workqueue_struct *ub_watch_wq;
+	struct delayed_work ub_watch_dwork;
 	struct segs_info info;
 	struct ub_hist_ba_info *ba_info;
 	u32 freq_register_cnt;
@@ -78,6 +89,15 @@ struct smap_hist_dev {
 	enum hist_4k_scan_mode scan_mode; /* 4K scan mode */
 	int seq_loop_ba_offset
 		[HIST_STS_DEV_CNT]; /* Sequential loop scan offset for each BA */
+	/* ub_watch config-driven measurement */
+	uint32_t ub_watch_duration_ms;
+	uint32_t ub_watch_perf_prd_ms;
+	uint32_t ub_watch_sample_interval_ms;
+	enum ub_watch_measure_state measure_state;
+	uint64_t ub_watch_acc_flux_rd[MAR_CFG_REG_CNT];
+	uint64_t ub_watch_acc_flux_wr[MAR_CFG_REG_CNT];
+	uint32_t ub_watch_avg_flux_rd[MAR_CFG_REG_CNT];
+	uint32_t ub_watch_avg_flux_wr[MAR_CFG_REG_CNT];
 };
 
 struct hist_ops {
@@ -92,5 +112,7 @@ void hist_update_pgsize(u32 pgsize);
 void hist_set_iomem(void);
 void hist_thread_pause(void);
 void hist_thread_resume(void);
+int ub_watch_config(uint32_t duration_ms);
+int ub_watch(struct ub_flux_mb *result);
 
 #endif

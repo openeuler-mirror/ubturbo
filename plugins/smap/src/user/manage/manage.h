@@ -16,9 +16,8 @@
 #include "smap_env.h"
 #include "numa_nodes.h"
 #include "advanced-strategy/scene_info.h"
+#include "smap_ioctl.h"
 
-#define LOCAL_NUMA_NUM 4
-#define REMOTE_NUMA_NUM 18
 #ifndef MAX_NR_GROUPED_MIGOUT
 #define MAX_NR_GROUPED_MIGOUT MAX_NR_MIGOUT
 #endif
@@ -511,6 +510,9 @@ struct ProcessManager {
     struct RemoteNumaInfo remoteNumaInfo; // 借用远端内存数量
     EnvMutex lock;
     EnvMutex threadLock;
+    uint32_t ubBwThreshold; // UB带宽阈值(MB/s)
+    struct UbFluxMbStatistic currentFluxMb; // 当前周期UB带宽数据
+    int currentFluxRet; // 当前周期UB带宽查询结果
 };
 
 struct ProcessMemBitmap {

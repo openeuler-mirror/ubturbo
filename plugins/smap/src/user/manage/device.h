@@ -39,4 +39,9 @@ void DeinitTrackingDev(struct ProcessManager *manager);
 
 bool IsNumaCriticalErr(int nid);
 
+struct UbFluxMbStatistic;
+int GetUbFluxMb(struct UbFluxMbStatistic *result);
+
+int ConfigUbWatch(uint32_t durationMs);
+
 #endif /* __DEVICE_H__ */

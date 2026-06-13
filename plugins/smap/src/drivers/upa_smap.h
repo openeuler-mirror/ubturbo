@@ -250,6 +250,16 @@ union hi_upa_smap_cfg_smap_rpt1 {
 	uint32_t val;
 };
 
+union hi_upa_mar_cfg_perf {
+	struct {
+		uint32_t mar_perf_prd : 28;
+		uint32_t mar_perf_mode : 2;
+		uint32_t mar_perf_en : 1;
+		uint32_t reserved : 1;
+	};
+	uint32_t val;
+};
+
 struct ub_hist_ba_config {
 	uint32_t reg_offset;
 	uint32_t reg_value;

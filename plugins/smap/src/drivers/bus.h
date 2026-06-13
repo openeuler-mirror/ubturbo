@@ -19,6 +19,8 @@ struct tracking_operations {
 	int (*tracking_set_sample_rate)(struct device *ldev, u32 sample_rate);
 	int (*tracking_read)(struct device *ldev, void *buffer, u32 length);
 	void (*tracking_set_reinit_pending)(struct device *ldev);
+	int (*tracking_ub_watch)(struct device *ldev, void *result);
+	int (*tracking_ub_watch_config)(struct device *ldev, u32 duration_ms);
 };
 
 struct tracking_dev {

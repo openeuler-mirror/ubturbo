@@ -71,6 +71,8 @@ bool GetAdaptiveRatioEnableConfig(void);
 
 bool GetFileConfSwitchConfig(void);
 
+uint32_t GetUbBwThresholdConfig(void);
+
 int32_t GenerateStrategyConfigFile(const char *configFile);
 
 bool GetScanPeriodChanged(void);

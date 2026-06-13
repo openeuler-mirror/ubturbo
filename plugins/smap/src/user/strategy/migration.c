@@ -1705,6 +1705,20 @@ int ScanMigrateWork(ThreadCtx *ctx)
     struct ProcessManager *manager = ctx->processManager;
     ProcessAttr *current;
 
+    // ubBwThreshold == 0 表示不开启迁移限制：跳过带宽查询与流量统计
+    if (manager->ubBwThreshold > 0) {
+        // 查询带宽（纯业务带宽：测量窗口在上一周期结束后、本周期开始前）
+        manager->currentFluxRet = GetUbFluxMb(&manager->currentFluxMb);
+        if (manager->currentFluxRet == 0) {
+            for (int i = 0; i < manager->currentFluxMb.len; i++) {
+                uint32_t totalBw = manager->currentFluxMb.flux[i].readMb + manager->currentFluxMb.flux[i].writeMb;
+                SMAP_LOGGER_INFO("UB business flux: numaId: %d, readMb: %uMB/s, writeMb: %uMB/s, total: %uMB/s",
+                                 manager->currentFluxMb.flux[i].numaId, manager->currentFluxMb.flux[i].readMb,
+                                 manager->currentFluxMb.flux[i].writeMb, totalBw);
+            }
+        }
+    }
+
     ret = DisableTracking(manager);
     if (ret) {
         SMAP_LOGGER_ERROR("Disable tracking failed! ret:%d.", ret);
@@ -1712,6 +1726,7 @@ int ScanMigrateWork(ThreadCtx *ctx)
     }
     SMAP_LOGGER_DEBUG("Tracking disabled.");
     StrategyConfigRead(STRATEGY_CONFIG_PATH); // 从配置文件中读取策略配置
+    manager->ubBwThreshold = GetUbBwThresholdConfig();
     if (GetFileConfSwitchConfig()) {
         SetAdaptMem(GetAdaptiveRatioEnableConfig());
     }
@@ -1744,6 +1759,10 @@ int ScanMigrateWork(ThreadCtx *ctx)
     UpdateRemoteNumaCriticalErr();
     ret = PerformMigration(manager);
     SMAP_LOGGER_INFO("Migration result: %d.", ret);
+    // 迁移结束后：仅在开启带宽限制时配置ub_watch开启统计（下周期查询时得到纯业务带宽）
+    if (manager->ubBwThreshold > 0) {
+        ConfigUbWatch(ctx->period);
+    }
 out:
     RefreshRemoteRam(manager);
     // 启动扫描

@@ -638,6 +638,7 @@ extern "C" void smap_hist_init(void);
 extern "C" void ub_hist_exit(void);
 extern "C" int ub_hist_query_ba_info(uint64_t ba_tag, struct ub_hist_ba_info *ba_info);
 extern "C" int query_hist_ba_info(void);
+extern "C" int ub_watch_work_init(struct smap_hist_dev *dev);
 TEST_F(HistOpsTest, hist_init)
 {
     int ret;
@@ -645,6 +646,7 @@ TEST_F(HistOpsTest, hist_init)
     MOCKER(query_hist_ba_info).stubs().will(returnValue(0));
     MOCKER(addr_segs_init).stubs().will(returnValue(0));
     MOCKER(scan_thread_init).stubs().will(returnValue(0));
+    MOCKER(ub_watch_work_init).stubs().will(returnValue(0));
     ret = hist_init(SIZE_2M);
     EXPECT_EQ(0, ret);
 }

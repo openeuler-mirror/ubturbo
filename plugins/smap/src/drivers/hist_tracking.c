@@ -165,10 +165,75 @@ static int hist_tracking_set_page_size(struct device *ldev, u8 pgsize)
 	return ret;
 }
 
+static inline bool is_numa_flux_updated(struct ub_flux_mb_statistic *stc,
+					int numa_id)
+{
+	int i;
+
+	for (i = 0; i < stc->len; i++) {
+		if (stc->flux[i].numa_id == numa_id)
+			return true;
+	}
+	return false;
+}
+
+static int hist_tracking_ub_watch(struct device *ldev, void *result)
+{
+	struct ub_flux_mb flux_mb;
+	struct ub_flux_mb_statistic *stc =
+		(struct ub_flux_mb_statistic *)result;
+	struct ram_segment *seg, *tmp;
+	int idx = 0, ret;
+
+	if (!stc)
+		return -EINVAL;
+
+	ret = ub_watch(&flux_mb);
+	if (ret)
+		return ret;
+
+	stc->len = 0;
+	read_lock(&rem_ram_list_lock);
+	list_for_each_entry_safe(seg, tmp, &remote_ram_list, node) {
+		if (stc->len >= SMAP_MAX_REMOTE_NUMNODES) {
+			pr_err("too many remote NUMA nodes\n");
+			read_unlock(&rem_ram_list_lock);
+			return -EINVAL;
+		}
+
+		if (is_numa_flux_updated(stc, seg->numa_node))
+			continue;
+
+		ret = get_path_idx_by_addr(seg->start, &idx);
+		if (ret) {
+			pr_err("get path index failed for seg %#llx\n",
+			       seg->start);
+			read_unlock(&rem_ram_list_lock);
+			return ret;
+		}
+
+		stc->flux[stc->len].numa_id = seg->numa_node;
+		stc->flux[stc->len].read_mb = flux_mb.read[idx];
+		stc->flux[stc->len].write_mb = flux_mb.write[idx];
+		stc->len++;
+	}
+
+	read_unlock(&rem_ram_list_lock);
+
+	return 0;
+}
+
+static int hist_tracking_ub_watch_config(struct device *ldev, u32 duration_ms)
+{
+	return ub_watch_config(duration_ms);
+}
+
 static struct tracking_operations g_hist_tracking_ops = {
 	.tracking_enable = hist_tracking_enable,
 	.tracking_disable = hist_tracking_disable,
 	.tracking_set_page_size = hist_tracking_set_page_size,
+	.tracking_ub_watch = hist_tracking_ub_watch,
+	.tracking_ub_watch_config = hist_tracking_ub_watch_config,
 };
 
 static int actc_buffer_init(struct access_tracking_dev *hdev)

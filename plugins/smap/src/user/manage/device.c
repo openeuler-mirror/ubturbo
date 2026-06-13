@@ -310,3 +310,49 @@ void DeinitTrackingDev(struct ProcessManager *manager)
         manager->fds.access = DEFAULT_FD;
     }
 }
+
+int GetUbFluxMb(struct UbFluxMbStatistic *result)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    int i;
+
+    if (!result) {
+        SMAP_LOGGER_ERROR("result is null, GetUbFluxMb failed.");
+        return -EINVAL;
+    }
+
+    /* ub_watch only implemented by remote NUMA tracking_nodes */
+    for (i = LOCAL_NUMA_NUM; i < MAX_NODES; i++) {
+        if (manager->fds.nodes[i] >= 0) {
+            if (ioctl(manager->fds.nodes[i], SMAP_IOCTL_UB_WATCH_CMD, result) >= 0) {
+                return 0;
+            }
+        }
+    }
+
+    SMAP_LOGGER_ERROR("ioctl SMAP_IOCTL_UB_WATCH_CMD failed on all remote nodes.");
+    return -ENODEV;
+}
+
+int ConfigUbWatch(uint32_t durationMs)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    struct UbWatchConfig config = { .durationMs = durationMs };
+    int i;
+
+    if (durationMs == 0) {
+        SMAP_LOGGER_ERROR("ConfigUbWatch: durationMs must be greater than 0");
+        return -EINVAL;
+    }
+
+    /* ub_watch only implemented by remote NUMA tracking_nodes */
+    for (i = LOCAL_NUMA_NUM; i < MAX_NODES; i++) {
+        if (manager->fds.nodes[i] >= 0) {
+            if (ioctl(manager->fds.nodes[i], SMAP_IOCTL_UB_WATCH_CONFIG_CMD, &config) >= 0) {
+                return 0;
+            }
+        }
+    }
+    SMAP_LOGGER_ERROR("ioctl SMAP_IOCTL_UB_WATCH_CONFIG_CMD failed on all remote nodes.");
+    return -ENODEV;
+}
