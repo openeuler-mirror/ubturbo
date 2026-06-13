@@ -1153,8 +1153,7 @@ TEST_F(TestRmrsSmapHelper, SmapRemovePidsWithZeroRemoteUsage_AllZeroRemoteUsage)
     std::vector<uint16_t> remoteNumaIdList = {1, 2};
     std::vector<pid_t> pidsList = {123, 456};
 
-    SmapQueryProcessConfigFunc smapQueryFunc = [](int nid, ProcessPayload *payloadArr, int inLen,
-                                                   int *outLen) -> int {
+    SmapQueryProcessConfigFunc smapQueryFunc = [](int nid, ProcessPayload *payloadArr, int inLen, int *outLen) -> int {
         if (nid == 1) {
             payloadArr[0] = {};
             payloadArr[0].pid = 123;

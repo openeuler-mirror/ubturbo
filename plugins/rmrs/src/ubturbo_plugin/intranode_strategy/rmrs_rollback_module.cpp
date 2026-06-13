@@ -217,7 +217,7 @@ bool RmrsRollbackModule::DoMigrateRollback(std::unordered_map<pid_t, uint16_t> v
                 LOG_ERROR << "[MemRollback] Rm pid mgr failed " << res << ".";
                 return false;
             }
-            return false; // 应该返回成功？
+            return true;
         }
         LOG_ERROR << "[MemRollback] DoMigrateRollback failed " << res << ".";
         return false;
