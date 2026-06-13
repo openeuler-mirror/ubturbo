@@ -651,8 +651,7 @@ static int submit_ba_task(uint64_t ba_tag, u64 start_addr,
 	union hi_upa_smap_cfg_smap_cfg00 *smap_cfg00;
 	struct ub_hist_ba_config cfg = { 0 };
 
-	pr_debug("submit_ba_task: ba_tag=%llu, start_addr=%#llx\n", ba_tag,
-		 start_addr);
+	pr_debug("submit_ba_task: ba_tag=%#llx, start_addr=%#llx\n", ba_tag, start_addr);
 
 	base_addr = align_addr_by_sts_size(start_addr, sts_size);
 	shift = get_hist_addr_shift(STS_SIZE_4K);
@@ -701,12 +700,15 @@ static inline void disable_all_ba_tasks(u32 *offset, u32 end)
 }
 
 static inline bool pick_one_seg(u64 ba_tag, struct segs_info *win_info,
-				int *offset)
+				int *offset, bool do_seq_loop)
 {
 	int i;
+	if (do_seq_loop && *offset == win_info->cnt)
+		*offset = -1;
 	for (i = *offset + 1; i < win_info->cnt; i++) {
 		if (ba_tag == win_info->segs[i].ba_tag) {
 			*offset = i;
+			pr_debug("ba_tag: %#llx, offset: %d\n", ba_tag, *offset);
 			return true;
 		}
 	}
@@ -774,15 +776,18 @@ static int smap_hist_read_paral(struct segs_info *win_info,
 		ba_cnt = dev->ba_cnt;
 		while (ba_cnt--) {
 			ba_tag = dev->ba_info[ba_cnt].ba_tag;
-			if (pick_one_seg(ba_tag, win_info, &offset[ba_cnt])) {
+			if (pick_one_seg(ba_tag, win_info, &offset[ba_cnt], do_seq_loop)) {
 				submit_ba_task(
 					ba_tag,
 					win_info->segs[offset[ba_cnt]].start,
 					sts_size);
 			}
 		}
-		if (pick_complete(offset, dev->ba_cnt, win_info->cnt))
+		if (pick_complete(offset, dev->ba_cnt, win_info->cnt)) {
+			if (do_seq_loop)
+				continue;
 			break;
+		}
 
 		wait_ba_task(scan_time);
 		disable_all_ba_tasks(offset, win_info->cnt);
@@ -845,7 +850,7 @@ static u32 get_2m_scan_wins_per_ba(struct segs_info *win_info)
 		cnt = 0;
 		offset = -1;
 		ba_tag = dev->ba_info[ba_cnt].ba_tag;
-		while (pick_one_seg(ba_tag, win_info, &offset)) {
+		while (pick_one_seg(ba_tag, win_info, &offset, false)) {
 			cnt++;
 		}
 		if (cnt)
@@ -1182,6 +1187,7 @@ static int scan_thread_init(struct smap_hist_dev *dev)
 static void scan_thread_deinit(struct smap_hist_dev *dev)
 {
 	if (dev->kthread) {
+		hist_thread_pause();
 		pr_info("scan thread has been deleted\n");
 		kthread_stop(dev->kthread);
 		dev->kthread = NULL;
