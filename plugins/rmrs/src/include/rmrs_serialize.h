@@ -12,6 +12,7 @@
 
 #ifndef RMRS_SERIALIZE_UTIL_H
 #define RMRS_SERIALIZE_UTIL_H
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -147,6 +148,10 @@ public:
     RmrsInStream(const std::string &s) : inStream(s) {}
     RmrsInStream(const uint8_t *s, size_t len)
     {
+        if (s == nullptr || len == 0) {
+            mFlag = false;
+            return;
+        }
         inStream = std::string(reinterpret_cast<const char *>(s), len);
     }
     template <typename T>

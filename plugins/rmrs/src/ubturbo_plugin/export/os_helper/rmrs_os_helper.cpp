@@ -452,7 +452,7 @@ vector<uint16_t> OsHelper::ParseCPUList(const string &line)
         if (dashPos != string::npos) {
             auto start = RmrsStringUtil::SafeStou16(token.substr(0, dashPos));
             auto end = RmrsStringUtil::SafeStou16(token.substr(dashPos + 1));
-            for (auto i = start; i <= end; ++i) {
+            for (uint32_t i = start; i <= static_cast<uint32_t>(end); ++i) {
                 cpus.push_back(i);
             }
         } else {

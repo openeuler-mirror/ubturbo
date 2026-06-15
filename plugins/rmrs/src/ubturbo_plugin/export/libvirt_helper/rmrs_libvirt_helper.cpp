@@ -46,7 +46,13 @@ uint32_t LibvirtHelper::Connect()
     try {
         UBTURBO_LOG_INFO(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtHelper] Start to get libvirt connection.";
-        virConnect = LibvirtModule::VirConnectOpen()("qemu:///system");
+        auto virConnectOpenFunc = LibvirtModule::VirConnectOpen();
+        if (virConnectOpenFunc == nullptr) {
+            UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+                << "[RmrsResourceExport] [LibvirtHelper] Get VirConnectOpen function failed.";
+            return RMRS_ERROR;
+        }
+        virConnect = virConnectOpenFunc("qemu:///system");
         if (virConnect == nullptr) {
             UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
                 << "[RmrsResourceExport] [LibvirtHelper] Libvirt conn "
