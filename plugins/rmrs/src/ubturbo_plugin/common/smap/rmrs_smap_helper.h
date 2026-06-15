@@ -79,6 +79,9 @@ public:
 
     static RmrsResult SmapQueryProcessConfigHelper(int nid, std::vector<ProcessPayload> &processPayloadList);
 
+    static RmrsResult SmapRemovePidsWithZeroRemoteUsage(std::vector<uint16_t> &remoteNumaIdList,
+                                                        std::vector<pid_t> &pidsList);
+
     static const int smapParamErrorCode;    // SMAP参数错误码 Invalid argument -22
     static const int smapDealErrorCode;     // SMAP处理异常错误码 -9
     static const int smapApplyMemErrorCode; // SMAP处理异常错误码 -12

@@ -1056,4 +1056,200 @@ TEST_F(TestRmrsSmapHelper, ShouldHandleNullModuleName)
     RmrsSmapHelper::RackVmLog(static_cast<uint32_t>(RmrsLogLevel::DEBUG), "Test log", nullptr);
 }
 
+/*
+ * 用例描述：
+ * SmapRemovePidsWithZeroRemoteUsage 查询失败场景
+ * 测试步骤：
+ * 1. 构造 GetSmapQueryProcessConfigFunc 返回 nullptr
+ * 预期结果：
+ * 查询失败，跳过所有 pid，返回 RMRS_OK（无需移除）
+ */
+TEST_F(TestRmrsSmapHelper, SmapRemovePidsWithZeroRemoteUsage_QueryFailed)
+{
+    std::vector<uint16_t> remoteNumaIdList = {1};
+    std::vector<pid_t> pidsList = {123};
+
+    SmapQueryProcessConfigFunc smapQueryFunc = nullptr;
+    MOCKER(&SmapModule::GetSmapQueryProcessConfigFunc).stubs().will(returnValue(smapQueryFunc));
+    RmrsResult ret = RmrsSmapHelper::SmapRemovePidsWithZeroRemoteUsage(remoteNumaIdList, pidsList);
+    EXPECT_EQ(ret, RMRS_OK);
+    GlobalMockObject::verify();
+}
+
+/*
+ * 用例描述：
+ * SmapRemovePidsWithZeroRemoteUsage 所有 pid 远端占用不为 0，无需移除
+ * 测试步骤：
+ * 1. 构造查询返回结果，所有 pid 的 memSize > 0
+ * 预期结果：
+ * 无需移除，返回 RMRS_OK
+ */
+TEST_F(TestRmrsSmapHelper, SmapRemovePidsWithZeroRemoteUsage_NoZeroRemoteUsage)
+{
+    std::vector<uint16_t> remoteNumaIdList = {1, 1};
+    std::vector<pid_t> pidsList = {123, 456};
+
+    SmapQueryProcessConfigFunc smapQueryFunc = [](int nid, ProcessPayload *payloadArr, int inLen, int *outLen) -> int {
+        payloadArr[0] = {};
+        payloadArr[0].pid = 123;
+        payloadArr[0].memSize = 1024;
+        payloadArr[1] = {};
+        payloadArr[1].pid = 456;
+        payloadArr[1].memSize = 2048;
+        *outLen = 2;
+        return 0;
+    };
+    MOCKER(&SmapModule::GetSmapQueryProcessConfigFunc).stubs().will(returnValue(smapQueryFunc));
+    RmrsResult ret = RmrsSmapHelper::SmapRemovePidsWithZeroRemoteUsage(remoteNumaIdList, pidsList);
+    EXPECT_EQ(ret, RMRS_OK);
+    GlobalMockObject::verify();
+}
+
+/*
+ * 用例描述：
+ * SmapRemovePidsWithZeroRemoteUsage 部分 pid 远端占用为 0，移除对应 pid
+ * 测试步骤：
+ * 1. 构造查询返回结果，pid=123 的 memSize=0，pid=456 的 memSize=1024
+ * 预期结果：
+ * 只移除 pid=123，返回 RMRS_OK
+ */
+TEST_F(TestRmrsSmapHelper, SmapRemovePidsWithZeroRemoteUsage_SomeZeroRemoteUsage)
+{
+    std::vector<uint16_t> remoteNumaIdList = {1, 1};
+    std::vector<pid_t> pidsList = {123, 456};
+
+    SmapQueryProcessConfigFunc smapQueryFunc = [](int nid, ProcessPayload *payloadArr, int inLen, int *outLen) -> int {
+        payloadArr[0] = {};
+        payloadArr[0].pid = 123;
+        payloadArr[0].memSize = 0;
+        payloadArr[1] = {};
+        payloadArr[1].pid = 456;
+        payloadArr[1].memSize = 1024;
+        *outLen = 2;
+        return 0;
+    };
+    SmapRemoveFunc smapRemoveFunc = [](RemoveMsg *param1, int param2) -> int {
+        EXPECT_EQ(param1->count, 1);
+        EXPECT_EQ(param1->payload[0].pid, 123);
+        return 0;
+    };
+    MOCKER(&SmapModule::GetSmapQueryProcessConfigFunc).stubs().will(returnValue(smapQueryFunc));
+    MOCKER(&SmapModule::GetSmapRemoveFunc).stubs().will(returnValue(smapRemoveFunc));
+    RmrsResult ret = RmrsSmapHelper::SmapRemovePidsWithZeroRemoteUsage(remoteNumaIdList, pidsList);
+    EXPECT_EQ(ret, RMRS_OK);
+    GlobalMockObject::verify();
+}
+
+/*
+ * 用例描述：
+ * SmapRemovePidsWithZeroRemoteUsage 所有 pid 远端占用为 0，全部移除
+ * 测试步骤：
+ * 1. 构造查询返回结果，所有 pid 的 memSize=0
+ * 预期结果：
+ * 移除所有 pid，返回 RMRS_OK
+ */
+TEST_F(TestRmrsSmapHelper, SmapRemovePidsWithZeroRemoteUsage_AllZeroRemoteUsage)
+{
+    std::vector<uint16_t> remoteNumaIdList = {1, 2};
+    std::vector<pid_t> pidsList = {123, 456};
+
+    SmapQueryProcessConfigFunc smapQueryFunc = [](int nid, ProcessPayload *payloadArr, int inLen, int *outLen) -> int {
+        if (nid == 1) {
+            payloadArr[0] = {};
+            payloadArr[0].pid = 123;
+            payloadArr[0].memSize = 0;
+            *outLen = 1;
+        } else if (nid == 2) {
+            payloadArr[0] = {};
+            payloadArr[0].pid = 456;
+            payloadArr[0].memSize = 0;
+            *outLen = 1;
+        }
+        return 0;
+    };
+    SmapRemoveFunc smapRemoveFunc = [](RemoveMsg *param1, int param2) -> int {
+        EXPECT_EQ(param1->count, 2);
+        return 0;
+    };
+    MOCKER(&SmapModule::GetSmapQueryProcessConfigFunc).stubs().will(returnValue(smapQueryFunc));
+    MOCKER(&SmapModule::GetSmapRemoveFunc).stubs().will(returnValue(smapRemoveFunc));
+    RmrsResult ret = RmrsSmapHelper::SmapRemovePidsWithZeroRemoteUsage(remoteNumaIdList, pidsList);
+    EXPECT_EQ(ret, RMRS_OK);
+    GlobalMockObject::verify();
+}
+
+/*
+ * 用例描述：
+ * SmapRemovePidsWithZeroRemoteUsage 移除操作失败
+ * 测试步骤：
+ * 1. 构造查询返回结果，pid 的 memSize=0
+ * 2. SmapRemoveFunc 返回 -22
+ * 预期结果：
+ * 返回 RMRS_ERROR
+ */
+TEST_F(TestRmrsSmapHelper, SmapRemovePidsWithZeroRemoteUsage_RemoveFailed)
+{
+    std::vector<uint16_t> remoteNumaIdList = {1};
+    std::vector<pid_t> pidsList = {123};
+
+    SmapQueryProcessConfigFunc smapQueryFunc = [](int nid, ProcessPayload *payloadArr, int inLen, int *outLen) -> int {
+        payloadArr[0] = {};
+        payloadArr[0].pid = 123;
+        payloadArr[0].memSize = 0;
+        *outLen = 1;
+        return 0;
+    };
+    SmapRemoveFunc smapRemoveFunc = [](RemoveMsg *param1, int param2) -> int {
+        return -22;
+    };
+    MOCKER(&SmapModule::GetSmapQueryProcessConfigFunc).stubs().will(returnValue(smapQueryFunc));
+    MOCKER(&SmapModule::GetSmapRemoveFunc).stubs().will(returnValue(smapRemoveFunc));
+    RmrsResult ret = RmrsSmapHelper::SmapRemovePidsWithZeroRemoteUsage(remoteNumaIdList, pidsList);
+    EXPECT_EQ(ret, RMRS_ERROR);
+    GlobalMockObject::verify();
+}
+
+/*
+ * 用例描述：
+ * SmapRemovePidsWithZeroRemoteUsage 多 numa 混合场景：部分 pid 远端占用为 0
+ * 测试步骤：
+ * 1. numa1 上 pid=123 的 memSize=0，pid=456 的 memSize=1024
+ * 2. numa2 上 pid=789 的 memSize=0
+ * 预期结果：
+ * 移除 pid=123 和 pid=789，返回 RMRS_OK
+ */
+TEST_F(TestRmrsSmapHelper, SmapRemovePidsWithZeroRemoteUsage_MultiNumaMixed)
+{
+    std::vector<uint16_t> remoteNumaIdList = {1, 1, 2};
+    std::vector<pid_t> pidsList = {123, 456, 789};
+
+    // 对 numa=1 的查询
+    SmapQueryProcessConfigFunc smapQueryFunc = [](int nid, ProcessPayload *payloadArr, int inLen, int *outLen) -> int {
+        if (nid == 1) {
+            payloadArr[0] = {};
+            payloadArr[0].pid = 123;
+            payloadArr[0].memSize = 0;
+            payloadArr[1] = {};
+            payloadArr[1].pid = 456;
+            payloadArr[1].memSize = 1024;
+            *outLen = 2;
+        } else if (nid == 2) {
+            payloadArr[0] = {};
+            payloadArr[0].pid = 789;
+            payloadArr[0].memSize = 0;
+            *outLen = 1;
+        }
+        return 0;
+    };
+    SmapRemoveFunc smapRemoveFunc = [](RemoveMsg *param1, int param2) -> int {
+        EXPECT_EQ(param1->count, 2);
+        return 0;
+    };
+    MOCKER(&SmapModule::GetSmapQueryProcessConfigFunc).stubs().will(returnValue(smapQueryFunc));
+    MOCKER(&SmapModule::GetSmapRemoveFunc).stubs().will(returnValue(smapRemoveFunc));
+    RmrsResult ret = RmrsSmapHelper::SmapRemovePidsWithZeroRemoteUsage(remoteNumaIdList, pidsList);
+    EXPECT_EQ(ret, RMRS_OK);
+    GlobalMockObject::verify();
+}
+
 } // namespace rmrs::smap
