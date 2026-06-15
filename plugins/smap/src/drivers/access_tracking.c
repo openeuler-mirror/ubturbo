@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2024. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2023-2025. All rights reserved.
  * Description: smap access_tracking module
  */
 
@@ -21,6 +21,9 @@
 #include <linux/ktime.h>
 #include <linux/spinlock.h>
 #include <linux/smp.h>
+#include <linux/of.h>
+#include <linux/acpi.h>
+#include <linux/platform_device.h>
 
 #include "check.h"
 #include "access_iomem.h"
@@ -32,6 +35,7 @@
 #include "access_pid.h"
 #include "hist_ops.h"
 #include "access_tracking.h"
+#include "access_dt_mem.h"
 
 #define MAX_SCAN_TIME 100000 /* 100s */
 #define MS_TO_US 1000
@@ -53,6 +57,20 @@ MODULE_PARM_DESC(smap_scene, "smap use scene: 0 for HCCS, 1 for UB_QEMU");
 unsigned int enable_hist = DISABLE_HIST;
 module_param(enable_hist, uint, S_IRUGO);
 MODULE_PARM_DESC(enable_hist, "smap hist disable: 0, smap hist enable: 1");
+
+static bool g_manual_init;
+
+static const struct acpi_device_id smap_access_tracking_acpi_ids[] = {
+	{ "HISI0532", 0 },
+	{},
+};
+MODULE_DEVICE_TABLE(acpi, smap_access_tracking_acpi_ids);
+
+static const struct of_device_id smap_access_tracking_of_ids[] = {
+	{ .compatible = "huawei,smap-access-tracking" },
+	{},
+};
+MODULE_DEVICE_TABLE(of, smap_access_tracking_of_ids);
 
 LIST_HEAD(access_dev);
 u8 access_page_size = PAGE_MODE_2M;
@@ -158,7 +176,7 @@ static inline void init_actc_data(struct access_tracking_dev *adev)
 		memset(adev->access_bit_actc_data, 0, len);
 }
 
-static void access_print_acpi_mem(void)
+static void access_print_mem(void)
 {
 #ifdef DEBUG
 	struct acpi_mem_segment *mem;
@@ -196,7 +214,7 @@ static int actc_buffer_reinit(struct access_tracking_dev *adev)
 {
 	u64 page_count;
 
-	access_print_acpi_mem();
+	access_print_mem();
 	page_count = calc_access_len_v2(adev);
 	if (adev->page_count == page_count) {
 		init_actc_data(adev);
@@ -527,17 +545,39 @@ static void release_adev(void)
 	}
 }
 
-static int __init access_tracking_init(void)
+static int access_tracking_do_init(bool use_dt, struct device *dev)
 {
 	int ret = 0;
+	u32 val;
 
 	g_pagesize_huge = PAGE_SIZE_2M;
-	ret = init_acpi_mem();
-	if (ret) {
-		pr_err("unable to init local memory info by ACPI table, ret: %d\n",
-		       ret);
-		return ret;
+
+	/* Initialize memory topology */
+	if (use_dt) {
+		/* Read configuration from DT properties if available */
+		if (dev && dev->of_node) {
+			if (!of_property_read_u32(dev->of_node, "smap-scene",
+					     &val))
+				smap_scene = val;
+			if (!of_property_read_u32(dev->of_node, "enable-hist",
+					     &val))
+				enable_hist = val;
+		}
+		ret = init_dt_mem();
+		if (ret) {
+			pr_err("unable to init local memory info from DT, ret: %d\n",
+			       ret);
+			return ret;
+		}
+	} else {
+		ret = init_acpi_mem();
+		if (ret) {
+			pr_err("unable to init local memory info by ACPI table, ret: %d\n",
+			       ret);
+			return ret;
+		}
 	}
+
 	spin_lock_init(&ham_lock);
 	init_rwsem(&statistic_lock);
 	ret = remote_ram_init();
@@ -569,10 +609,11 @@ static int __init access_tracking_init(void)
 		goto err_tracking_add;
 	}
 
-	access_print_acpi_mem();
+	access_print_mem();
 
-	pr_info("access tracking init successfully\n");
-	return ret;
+	pr_info("access tracking init successfully (%s path)\n",
+		use_dt ? "DT" : "ACPI");
+	return 0;
 
 err_tracking_add:
 	release_adev();
@@ -585,7 +626,7 @@ err_remote_ram:
 	return ret;
 }
 
-static void __exit access_tracking_exit(void)
+static void access_tracking_do_exit(void)
 {
 	access_ioctl_exit();
 	destroy_scan_workqueue();
@@ -598,8 +639,72 @@ static void __exit access_tracking_exit(void)
 	pr_info("access tracking exit successfully\n");
 }
 
+static int access_tracking_probe(struct platform_device *pdev)
+{
+	bool use_dt;
+
+	if (g_manual_init) {
+		pr_info("access tracking already initialized, skip probe\n");
+		return -EBUSY;
+	}
+
+	use_dt = (pdev->dev.of_node != NULL);
+	return access_tracking_do_init(use_dt, &pdev->dev);
+}
+
+static int access_tracking_remove(struct platform_device *pdev)
+{
+	access_tracking_do_exit();
+	return 0;
+}
+
+static struct platform_driver smap_access_tracking_driver = {
+	.probe = access_tracking_probe,
+	.remove = access_tracking_remove,
+	.driver = {
+		.name = "smap_access_tracking",
+		.owner = THIS_MODULE,
+		.acpi_match_table = ACPI_PTR(smap_access_tracking_acpi_ids),
+		.of_match_table = of_match_ptr(smap_access_tracking_of_ids),
+	},
+};
+
+static int __init smap_access_tracking_drv_init(void)
+{
+	int ret;
+
+	ret = platform_driver_register(&smap_access_tracking_driver);
+	if (ret) {
+		pr_err("failed to register platform driver, ret: %d\n", ret);
+		return ret;
+	}
+
+	/* Fallback: on ACPI systems without explicit device description,
+	 * perform direct init since ACPI tables (SRAT) are available.
+	 * This maintains backward compatibility with existing deployments.
+	 */
+	if (!acpi_disabled) {
+		ret = access_tracking_do_init(false, NULL);
+		if (!ret) {
+			g_manual_init = true;
+			return 0;
+		}
+		pr_warn("ACPI init failed (ret: %d), relying on device probe\n",
+			ret);
+	}
+
+	return 0;
+}
+
+static void __exit smap_access_tracking_drv_exit(void)
+{
+	if (g_manual_init)
+		access_tracking_do_exit();
+	platform_driver_unregister(&smap_access_tracking_driver);
+}
+
 MODULE_DESCRIPTION("Access driver");
 MODULE_AUTHOR("Huawei Tech. Co., Ltd.");
 MODULE_LICENSE("GPL v2");
-module_init(access_tracking_init);
-module_exit(access_tracking_exit);
+module_init(smap_access_tracking_drv_init);
+module_exit(smap_access_tracking_drv_exit);
