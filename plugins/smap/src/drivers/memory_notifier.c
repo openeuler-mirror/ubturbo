@@ -28,7 +28,7 @@ static int memory_notifier_cb(struct memory_notify *mnb, unsigned long action)
 	struct page *page;
 	unsigned long start_pfn = mnb->start_pfn;
 
-	pr_info("remote memory %s detected\n",
+	pr_debug("remote memory %s detected\n",
 		(action == MEM_ONLINE ? "online" : "offline"));
 
 	if (smap_scene == UB_QEMU_SCENE)
@@ -58,12 +58,12 @@ static int memory_notifier_cb(struct memory_notify *mnb, unsigned long action)
 		pr_err("unable to update remote memory info, ret: %d\n", ret);
 		return ret;
 	}
-	pr_info("update remote memory info on remote NUMA node: %d successfully\n",
+	pr_debug("update remote memory info on remote NUMA node: %d successfully\n",
 		nid);
 
 	/* set delayed reinit flag instead of immediate reinit */
 	set_reinit_pending_flag(nid);
-	pr_info("set reinit pending flag for NUMA node: %d\n", nid);
+	pr_debug("set reinit pending flag for NUMA node: %d\n", nid);
 
 	return 0;
 }
@@ -97,7 +97,7 @@ static int smap_memory_notifier(struct notifier_block *self,
 		break;
 	}
 
-	pr_info("handle memory notify, ret: %d\n", ret);
+	pr_debug("handle memory notify, ret: %d\n", ret);
 	return NOTIFY_OK;
 }
 
