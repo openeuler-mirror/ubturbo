@@ -593,6 +593,38 @@ static void SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
     }
 }
 
+static bool IsZeroRemoteTargetConfig(ProcessParam *param)
+{
+    if (!param || param->count <= 0) {
+        return false;
+    }
+
+    for (int i = 0; i < param->count; i++) {
+        if (param->numaParam[i].migrateMode == MIG_MEMSIZE_MODE) {
+            if (param->numaParam[i].memSize != 0) {
+                return false;
+            }
+            continue;
+        }
+        if (param->numaParam[i].ratio != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void UpdateAutoRemoveRemoteEmptyFlag(ProcessAttr *attr, ProcessParam *param)
+{
+    if (!attr || attr->groupPolicy.enabled) {
+        return;
+    }
+
+    attr->autoRemoveWhenRemoteEmpty = IsZeroRemoteTargetConfig(param);
+    if (attr->autoRemoveWhenRemoteEmpty) {
+        SMAP_LOGGER_INFO("Pid %d will be auto removed after all remote pages migrate back.", attr->pid);
+    }
+}
+
 static void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeBitmap,
                                     const GroupMigrationPolicy *policy)
 {
@@ -608,6 +640,7 @@ static void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeB
     attr->numaAttr.numaNodes = nodeBitmap;
     attr->groupPolicy = *policy;
     attr->pendingGroupPolicy.valid = false;
+    attr->autoRemoveWhenRemoteEmpty = false;
     if (time(&attr->scanStart) == (time_t)-1) {
         SMAP_LOGGER_ERROR("get time error");
     }
@@ -964,6 +997,7 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
     current = GetProcessAttrLocked(param->pid);
     if (current) {
         SetProcessConfig(current, param);
+        UpdateAutoRemoveRemoteEmptyFlag(current, param);
         SMAP_LOGGER_INFO("Set pid %d scan cycle to %ums.", current->pid, current->scanTime);
         ret = SyncAllProcessConfig();
         if (ret) {

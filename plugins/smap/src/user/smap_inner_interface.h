@@ -40,6 +40,7 @@ struct VmRatioMsg {
 
 int SmapEnableAdaptMem(int flag);
 int SmapQueryVmMemRatio(struct VmRatioMsg *vrMsg);
+void SmapAutoRemoveRemoteEmptyProcessesWithFreshData(void);
 
 #ifdef __cplusplus
 }
