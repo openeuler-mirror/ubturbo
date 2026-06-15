@@ -691,6 +691,8 @@ static void UpdatePeriodFromConfig(ThreadCtx *ctx)
         UpdateAllProcessScanTime(ctx);
         SetScanPeriodChanged(false);
     }
+
+    IoctlUpdateUbDmaAvail(GetMigrateModeConfig());
 }
 
 // 管理线程函数

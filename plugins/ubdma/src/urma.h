@@ -22,10 +22,15 @@ struct urma_sge_info {
 	uint64_t end_va;
 };
 
-struct ub_register_sge {
-	struct ubcore_target_seg *src_seg;
-	struct ubcore_target_seg *dst_seg;
-	struct ubcore_target_seg *i_dst_seg;
+struct urma_trans_segment_info {
+	uint64_t addr;
+	uint32_t len;
+	struct ubcore_target_seg *sge;
+};
+
+struct tmp_urma_segment_info {
+	struct ubcore_target_seg *seg;
+	struct ubcore_target_seg *i_seg;
 };
 
 struct urma_mem_trans {
@@ -46,6 +51,10 @@ void release_urma_mem_trans(void);
 
 int urma_register_segment(uint64_t start_va, uint64_t end_va,
 			  struct urma_sge_info *sge_info);
+
+int urma_register_tmp_segment(struct urma_trans_segment_info *info,
+			      struct tmp_urma_segment_info *tmp_info,
+			      bool need_import_sge);
 
 void unregister_urma_segment(struct urma_sge_info *sge_info);
 

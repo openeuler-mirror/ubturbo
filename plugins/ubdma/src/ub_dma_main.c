@@ -17,6 +17,7 @@
 #include <linux/io.h>
 #include <linux/migrate.h>
 #include <linux/dma-mapping.h>
+#include <linux/numa_remote.h>
 
 #include "ub_dma_log.h"
 #include "ub_dma_iomem.h"
@@ -45,6 +46,7 @@ struct ub_dma_desc {
 	uint64_t src_addr;
 	uint64_t dest_addr;
 	size_t len;
+	struct tmp_urma_segment_info tmp_sge;
 };
 
 struct ub_dma_vchan {
@@ -127,6 +129,73 @@ buid_urma_segment_info(struct ub_dma_desc *txd,
 	dst_info->addr = txd->dest_addr;
 	dst_info->len = txd->len;
 	dst_info->sge = NULL;
+	txd->tmp_sge.i_seg = NULL;
+	txd->tmp_sge.seg = NULL;
+}
+
+static int get_trans_segment(struct ub_dma_desc *txd,
+			     struct urma_trans_segment_info *src_info,
+			     struct urma_trans_segment_info *dst_info)
+{
+	struct page *src_page = virt_to_page(txd->src_addr);
+	struct page *dst_page = virt_to_page(txd->dest_addr);
+	int src_nid;
+	int dst_nid;
+	int ret;
+	bool dst_is_remote;
+	struct urma_trans_segment_info *remote_sge;
+	struct urma_trans_segment_info *local_sge;
+	bool is_i_seg;
+	bool need_import_sge;
+
+	if (!src_page || !dst_page) {
+		ub_dma_log_err("failed to get page for src or dst\n");
+		return -EINVAL;
+	}
+	src_nid = page_to_nid(src_page);
+	dst_nid = page_to_nid(dst_page);
+	if (!numa_is_remote_node(src_nid) && !numa_is_remote_node(dst_nid)) {
+		ub_dma_log_err(
+			"not support local memory to local memory, node %d to node %d\n",
+			src_nid, dst_nid);
+		return -EINVAL;
+	}
+	if (numa_is_remote_node(src_nid) && numa_is_remote_node(dst_nid)) {
+		ret = get_urma_trans_segment(src_info, dst_info);
+		if (ret) {
+			ub_dma_log_err("failed to get urma trans segment\n");
+		}
+		return ret;
+	}
+
+	dst_is_remote = numa_is_remote_node(dst_nid);
+	remote_sge = dst_is_remote ? dst_info : src_info;
+	local_sge = dst_is_remote ? src_info : dst_info;
+	is_i_seg = dst_is_remote ? true : false;
+	need_import_sge = dst_is_remote ? false : true;
+
+	ret = get_single_urma_trans_segment(remote_sge, is_i_seg);
+	if (ret) {
+		ub_dma_log_err("failed to get single urma trans segment\n");
+		return ret;
+	}
+	ret = urma_register_tmp_segment(local_sge, &txd->tmp_sge,
+					need_import_sge);
+	if (ret) {
+		ub_dma_log_err("failed to register temp segment\n");
+	}
+
+	return ret;
+}
+
+static inline void ub_dma_free_tmp_segment(struct ub_dma_desc *txd)
+{
+	if (txd->tmp_sge.i_seg) {
+		ubcore_unimport_seg(txd->tmp_sge.i_seg);
+	}
+	if (txd->tmp_sge.seg) {
+		ubcore_unregister_seg(txd->tmp_sge.seg);
+	}
 }
 
 static void ub_dma_issue_pending(struct dma_chan *chan)
@@ -145,7 +214,7 @@ static void ub_dma_issue_pending(struct dma_chan *chan)
 			desc = vchan_next_desc(&vchan->vc);
 			txd = to_ub_dma_desc(&desc->tx);
 			buid_urma_segment_info(txd, &src_info, &dst_info);
-			ret = get_urma_trans_segment(&src_info, &dst_info);
+			ret = get_trans_segment(txd, &src_info, &dst_info);
 			if (ret) {
 				list_del(&desc->node);
 				desc->tx_result.result = DMA_TRANS_WRITE_FAILED;
@@ -158,7 +227,7 @@ static void ub_dma_issue_pending(struct dma_chan *chan)
 				list_del(&desc->node);
 				ub_dma_log_err("urma send failed\n");
 				desc->tx_result.result = DMA_TRANS_WRITE_FAILED;
-				goto complete_dma_pending;
+				goto err_free_tmp_segment;
 			}
 		}
 	} else {
@@ -167,6 +236,8 @@ static void ub_dma_issue_pending(struct dma_chan *chan)
 	spin_unlock_irqrestore(&vchan->vc.lock, flags);
 	return;
 
+err_free_tmp_segment:
+	ub_dma_free_tmp_segment(txd);
 complete_dma_pending:
 	vchan_cookie_complete(desc);
 	spin_unlock_irqrestore(&vchan->vc.lock, flags);
@@ -317,6 +388,7 @@ void urma_callback_free_desc(struct ubcore_jfc *jfc,
 	int ret;
 	struct ub_virt_dma_desc *desc;
 	struct ub_dma_vchan *vchan;
+	struct ub_dma_desc *txd;
 	int i;
 
 	ret = ubcore_rearm_jfc(jfc, false);
@@ -334,6 +406,16 @@ void urma_callback_free_desc(struct ubcore_jfc *jfc,
 		desc->tx_result = res;
 		vchan->status = (res.result == DMA_TRANS_NOERROR) ? DMA_COMPLETE
 								  : DMA_ERROR;
+		txd = to_ub_dma_desc(&desc->tx);
+		if (txd->tmp_sge.i_seg) {
+			ubcore_unimport_seg(txd->tmp_sge.i_seg);
+			ubcore_unregister_seg(txd->tmp_sge.seg);
+			txd->tmp_sge.i_seg = NULL;
+			txd->tmp_sge.seg = NULL;
+		} else if (txd->tmp_sge.seg) {
+			ubcore_unregister_seg(txd->tmp_sge.seg);
+			txd->tmp_sge.seg = NULL;
+		}
 		vchan_cookie_complete(desc);
 		spin_unlock(&vchan->vc.lock);
 		ub_dma_log_debug(

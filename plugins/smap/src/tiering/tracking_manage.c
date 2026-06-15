@@ -28,6 +28,9 @@
 #include "iomem.h"
 #include "ham_migration.h"
 #include "pid_ioctl.h"
+#ifdef CRITICAL_OFF
+#include "critical.h"
+#endif
 #include "tracking_manage.h"
 
 #define SMAP_WATCH_NAME "smap_migrate_result"

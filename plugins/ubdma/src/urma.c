@@ -14,7 +14,7 @@
 #include "ub_dma_log.h"
 #include "urma.h"
 
-#define MIN_PORT_NUMA 7
+#define MIN_PORT_NUMA 2
 
 #define JFS_CFG_PRIORITY 15
 #define JFS_CFG_MAX_SGE 2
@@ -181,10 +181,32 @@ static int post_client_jfs(struct ubcore_target_seg *src_seg,
 	return ret;
 }
 
+static struct ubcore_target_seg *
+urma_import_segment(uint64_t start_va, uint64_t len,
+		    struct ubcore_target_seg *target_sge)
+{
+	struct ubcore_target_seg_cfg cfg = { 0 };
+	struct ubcore_target_seg *seg;
+
+	cfg.seg.ubva.va = start_va;
+	cfg.seg.ubva.eid = g_urma_jetty->eid_info.eid;
+	cfg.seg.len = len;
+	cfg.seg.token_id = target_sge->token_id->token_id;
+	cfg.seg.attr.bs.cacheable = UBCORE_CACHEABLE;
+	cfg.seg.attr.bs.access = UBCORE_ACCESS_READ | UBCORE_ACCESS_WRITE;
+
+	seg = ubcore_import_seg(g_urma_jetty->dev, &cfg, NULL);
+	if (IS_ERR_OR_NULL(seg)) {
+		ub_dma_log_err("fail to import segment\n");
+		return NULL;
+	}
+
+	return seg;
+}
+
 int urma_register_segment(uint64_t start_va, uint64_t end_va,
 			  struct urma_sge_info *sge_info)
 {
-	struct ubcore_target_seg_cfg cfg = { 0 };
 	struct ubcore_target_seg *sge;
 	struct ubcore_target_seg *i_seg;
 	uint64_t len = end_va - start_va + 1;
@@ -195,16 +217,9 @@ int urma_register_segment(uint64_t start_va, uint64_t end_va,
 		return -ENOMEM;
 	}
 
-	cfg.seg.ubva.va = start_va;
-	cfg.seg.ubva.eid = g_urma_jetty->eid_info.eid;
-	cfg.seg.len = len;
-	cfg.seg.token_id = sge->token_id->token_id;
-	cfg.seg.attr.bs.cacheable = UBCORE_CACHEABLE;
-	cfg.seg.attr.bs.access = UBCORE_ACCESS_READ | UBCORE_ACCESS_WRITE;
-
-	i_seg = ubcore_import_seg(g_urma_jetty->dev, &cfg, NULL);
+	i_seg = urma_import_segment(start_va, len, sge);
 	if (IS_ERR_OR_NULL(i_seg)) {
-		ub_dma_log_err("fail to import dst_seg\n");
+		ub_dma_log_err("urma import segment failed\n");
 		ubcore_unregister_seg(sge);
 		return -ENOMEM;
 	}
@@ -213,6 +228,39 @@ int urma_register_segment(uint64_t start_va, uint64_t end_va,
 	sge_info->i_seg = i_seg;
 	sge_info->start_va = start_va;
 	sge_info->end_va = end_va;
+
+	return 0;
+}
+
+int urma_register_tmp_segment(struct urma_trans_segment_info *info,
+			      struct tmp_urma_segment_info *tmp_info,
+			      bool need_import_sge)
+{
+	struct ubcore_target_seg *sge;
+	struct ubcore_target_seg *i_seg;
+
+	sge = init_segment(info->addr, info->len, g_urma_jetty);
+	if (IS_ERR_OR_NULL(sge)) {
+		ub_dma_log_err(
+			"urma register trans segment failed to init seg\n");
+		return -ENOMEM;
+	}
+
+	if (need_import_sge) {
+		i_seg = urma_import_segment(info->addr, info->len, sge);
+		if (IS_ERR_OR_NULL(i_seg)) {
+			ub_dma_log_err("urma import segment failed\n");
+			ubcore_unregister_seg(sge);
+			return -ENOMEM;
+		}
+		tmp_info->seg = sge;
+		tmp_info->i_seg = i_seg;
+		info->sge = i_seg;
+	} else {
+		tmp_info->seg = sge;
+		tmp_info->i_seg = NULL;
+		info->sge = sge;
+	}
 
 	return 0;
 }
