@@ -733,7 +733,7 @@ TEST_F(HistOpsTest, seq_loop_scan_interrupt_resume)
     EXPECT_EQ(3, dev->seq_loop_ba_offset[1]);
 
     /* Next scan should resume from saved offsets (mocked by setting offset[i] from seq_loop_ba_offset) */
-    /* In smap_hist_read_paral: offset[i] = do_seq_loop ? dev->seq_loop_ba_offset[i] : -1 */
+    /* In smap_hist_read_paral: offset[i] = do_4k_seq_loop ? dev->seq_loop_ba_offset[i] : -1 */
 
     /* Simulate resetting offsets when memory is updated */
     for (i = 0; i < HIST_STS_DEV_CNT; ++i) {
