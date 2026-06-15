@@ -461,3 +461,532 @@ TEST_F(IomemTest, find_range_by_memid_dt)
     EXPECT_EQ(-ENOENT, ret);
     list_del(&mr.node);
 }
+
+// ========== DT supplement: merge_ram_segments ==========
+
+extern "C" void merge_ram_segments(struct list_head *head);
+
+TEST_F(IomemTest, MergeRamSegmentsEmptyList)
+{
+    LIST_HEAD(empty_list);
+    merge_ram_segments(&empty_list);
+    EXPECT_TRUE(list_empty(&empty_list));
+}
+
+TEST_F(IomemTest, MergeRamSegmentsSingleEntry)
+{
+    struct ram_segment *seg = (struct ram_segment *)kmalloc(sizeof(*seg), GFP_KERNEL);
+    ASSERT_NE(nullptr, seg);
+    seg->numa_node = 0;
+    seg->start = 0x1000;
+    seg->end = 0x2000;
+    LIST_HEAD(test_list);
+    list_add_tail(&seg->node, &test_list);
+
+    merge_ram_segments(&test_list);
+
+    EXPECT_EQ(0x1000, seg->start);
+    EXPECT_EQ(0x2000, seg->end);
+
+    list_del(&seg->node);
+    kfree(seg);
+}
+
+TEST_F(IomemTest, MergeRamSegmentsAdjacentSameNid)
+{
+    struct ram_segment *seg1 = (struct ram_segment *)kmalloc(sizeof(*seg1), GFP_KERNEL);
+    struct ram_segment *seg2 = (struct ram_segment *)kmalloc(sizeof(*seg2), GFP_KERNEL);
+    ASSERT_NE(nullptr, seg1);
+    ASSERT_NE(nullptr, seg2);
+
+    seg1->numa_node = 0;
+    seg1->start = 0x1000;
+    seg1->end = 0x1FFF;
+
+    seg2->numa_node = 0;
+    seg2->start = 0x2000;
+    seg2->end = 0x3FFF;
+
+    LIST_HEAD(test_list);
+    list_add_tail(&seg1->node, &test_list);
+    list_add_tail(&seg2->node, &test_list);
+
+    merge_ram_segments(&test_list);
+
+    EXPECT_EQ(0x1000, seg1->start);
+    EXPECT_EQ(0x3FFF, seg1->end);
+
+    kfree(seg1);
+}
+
+TEST_F(IomemTest, MergeRamSegmentsGapBetweenSegments)
+{
+    struct ram_segment *seg1 = (struct ram_segment *)kmalloc(sizeof(*seg1), GFP_KERNEL);
+    struct ram_segment *seg2 = (struct ram_segment *)kmalloc(sizeof(*seg2), GFP_KERNEL);
+    ASSERT_NE(nullptr, seg1);
+    ASSERT_NE(nullptr, seg2);
+
+    seg1->numa_node = 0;
+    seg1->start = 0x1000;
+    seg1->end = 0x1FFF;
+
+    seg2->numa_node = 0;
+    seg2->start = 0x3000;
+    seg2->end = 0x3FFF;
+
+    LIST_HEAD(test_list);
+    list_add_tail(&seg1->node, &test_list);
+    list_add_tail(&seg2->node, &test_list);
+
+    merge_ram_segments(&test_list);
+
+    EXPECT_EQ(0x1000, seg1->start);
+    EXPECT_EQ(0x1FFF, seg1->end);
+    EXPECT_EQ(0x3000, seg2->start);
+    EXPECT_EQ(0x3FFF, seg2->end);
+
+    list_del(&seg1->node);
+    list_del(&seg2->node);
+    kfree(seg1);
+    kfree(seg2);
+}
+
+TEST_F(IomemTest, MergeRamSegmentsDifferentNid)
+{
+    struct ram_segment *seg1 = (struct ram_segment *)kmalloc(sizeof(*seg1), GFP_KERNEL);
+    struct ram_segment *seg2 = (struct ram_segment *)kmalloc(sizeof(*seg2), GFP_KERNEL);
+    ASSERT_NE(nullptr, seg1);
+    ASSERT_NE(nullptr, seg2);
+
+    seg1->numa_node = 0;
+    seg1->start = 0x1000;
+    seg1->end = 0x1FFF;
+
+    seg2->numa_node = 1;
+    seg2->start = 0x2000;
+    seg2->end = 0x3FFF;
+
+    LIST_HEAD(test_list);
+    list_add_tail(&seg1->node, &test_list);
+    list_add_tail(&seg2->node, &test_list);
+
+    merge_ram_segments(&test_list);
+
+    EXPECT_EQ(0, seg1->numa_node);
+    EXPECT_EQ(1, seg2->numa_node);
+
+    list_del(&seg1->node);
+    list_del(&seg2->node);
+    kfree(seg1);
+    kfree(seg2);
+}
+
+TEST_F(IomemTest, MergeRamSegmentsMultipleMerges)
+{
+    struct ram_segment *seg1 = (struct ram_segment *)kmalloc(sizeof(*seg1), GFP_KERNEL);
+    struct ram_segment *seg2 = (struct ram_segment *)kmalloc(sizeof(*seg2), GFP_KERNEL);
+    struct ram_segment *seg3 = (struct ram_segment *)kmalloc(sizeof(*seg3), GFP_KERNEL);
+    ASSERT_NE(nullptr, seg1);
+    ASSERT_NE(nullptr, seg2);
+    ASSERT_NE(nullptr, seg3);
+
+    seg1->numa_node = 0;
+    seg1->start = 0x1000;
+    seg1->end = 0x1FFF;
+
+    seg2->numa_node = 0;
+    seg2->start = 0x2000;
+    seg2->end = 0x2FFF;
+
+    seg3->numa_node = 0;
+    seg3->start = 0x3000;
+    seg3->end = 0x3FFF;
+
+    LIST_HEAD(test_list);
+    list_add_tail(&seg1->node, &test_list);
+    list_add_tail(&seg2->node, &test_list);
+    list_add_tail(&seg3->node, &test_list);
+
+    merge_ram_segments(&test_list);
+
+    EXPECT_EQ(0x1000, seg1->start);
+    EXPECT_EQ(0x3FFF, seg1->end);
+
+    kfree(seg1);
+}
+
+// ========== DT supplement: update_resource ==========
+
+extern "C" int update_resource(struct resource *r, void *arg);
+
+TEST_F(IomemTest, UpdateResourceNullResource)
+{
+    LIST_HEAD(head);
+    int ret = update_resource(nullptr, &head);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(IomemTest, UpdateResourceNullArg)
+{
+    struct resource res = {};
+    int ret = update_resource(&res, nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(IomemTest, UpdateResourceSysramDriverManagedSuccess)
+{
+    struct resource res;
+    res.flags = IORESOURCE_SYSRAM_DRIVER_MANAGED;
+    res.start = 0x100000;
+    res.end = 0x200000;
+    LIST_HEAD(head);
+
+    MOCKER(insert_remote_ram).stubs().will(returnValue(0));
+    int ret = update_resource(&res, &head);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(IomemTest, UpdateResourceSysramInsertFail)
+{
+    struct resource res;
+    res.flags = IORESOURCE_SYSRAM_DRIVER_MANAGED;
+    res.start = 0x100000;
+    res.end = 0x200000;
+    LIST_HEAD(head);
+
+    MOCKER(insert_remote_ram).stubs().will(returnValue(-EINVAL));
+    MOCKER(free_remote_ram).stubs().will(ignoreReturnValue());
+    int ret = update_resource(&res, &head);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(IomemTest, UpdateResourceNonSysram)
+{
+    struct resource res;
+    res.flags = IORESOURCE_MEM;
+    res.start = 0x100000;
+    res.end = 0x200000;
+    LIST_HEAD(head);
+
+    int ret = update_resource(&res, &head);
+    EXPECT_EQ(0, ret);
+}
+
+// ========== DT supplement: init_obmm_dev ==========
+
+extern "C" int init_obmm_dev(void);
+
+TEST_F(IomemTest, InitObmmDevSuccess)
+{
+    free_obmm_dev();
+    ASSERT_TRUE(list_empty(&obmm_dev.list));
+
+    int ret = init_obmm_dev();
+    EXPECT_EQ(0, ret);
+    EXPECT_FALSE(list_empty(&obmm_dev.list));
+
+    free_obmm_dev();
+}
+
+TEST_F(IomemTest, InitObmmDevKzallocFail)
+{
+    free_obmm_dev();
+    ASSERT_TRUE(list_empty(&obmm_dev.list));
+
+    MOCKER(kzalloc).stubs().will(returnValue((void*)nullptr));
+    int ret = init_obmm_dev();
+    EXPECT_EQ(-ENOMEM, ret);
+}
+
+// ========== DT supplement: clean_obmm_dev ==========
+
+extern "C" void clean_obmm_dev(void);
+
+TEST_F(IomemTest, CleanObmmDevEmptyList)
+{
+    free_obmm_dev();
+    ASSERT_TRUE(list_empty(&obmm_dev.list));
+    clean_obmm_dev();
+    EXPECT_TRUE(list_empty(&obmm_dev.list));
+}
+
+TEST_F(IomemTest, CleanObmmDevRemoveStale)
+{
+    free_obmm_dev();
+
+    struct memid_range *mr1 = (struct memid_range *)kzalloc(sizeof(*mr1), GFP_KERNEL);
+    ASSERT_NE(nullptr, mr1);
+    mr1->memid = 0;
+    mr1->seq = 2;
+    list_add(&mr1->node, &obmm_dev.list);
+
+    struct memid_range *mr2 = (struct memid_range *)kzalloc(sizeof(*mr2), GFP_KERNEL);
+    ASSERT_NE(nullptr, mr2);
+    mr2->memid = 5;
+    mr2->seq = 1;
+    list_add_tail(&mr2->node, &obmm_dev.list);
+
+    clean_obmm_dev();
+
+    struct memid_range *remaining = list_first_entry(&obmm_dev.list, struct memid_range, node);
+    EXPECT_EQ(0, remaining->memid);
+    EXPECT_EQ(2, remaining->seq);
+
+    free_obmm_dev();
+}
+
+TEST_F(IomemTest, CleanObmmDevAllSeqMatch)
+{
+    free_obmm_dev();
+
+    struct memid_range *mr1 = (struct memid_range *)kzalloc(sizeof(*mr1), GFP_KERNEL);
+    ASSERT_NE(nullptr, mr1);
+    mr1->memid = 0;
+    mr1->seq = 3;
+    list_add(&mr1->node, &obmm_dev.list);
+
+    struct memid_range *mr2 = (struct memid_range *)kzalloc(sizeof(*mr2), GFP_KERNEL);
+    ASSERT_NE(nullptr, mr2);
+    mr2->memid = 7;
+    mr2->seq = 3;
+    list_add_tail(&mr2->node, &obmm_dev.list);
+
+    clean_obmm_dev();
+
+    EXPECT_FALSE(list_empty(&obmm_dev.list));
+
+    free_obmm_dev();
+}
+
+// ========== DT supplement: inc_obmm_dev_seq ==========
+
+extern "C" void inc_obmm_dev_seq(void);
+
+TEST_F(IomemTest, IncObmmDevSeqEmptyList)
+{
+    free_obmm_dev();
+    ASSERT_TRUE(list_empty(&obmm_dev.list));
+    inc_obmm_dev_seq();
+    EXPECT_TRUE(list_empty(&obmm_dev.list));
+}
+
+TEST_F(IomemTest, IncObmmDevSeqIncrement)
+{
+    free_obmm_dev();
+
+    struct memid_range *mr = (struct memid_range *)kzalloc(sizeof(*mr), GFP_KERNEL);
+    ASSERT_NE(nullptr, mr);
+    mr->memid = 0;
+    mr->seq = 5;
+    list_add(&mr->node, &obmm_dev.list);
+
+    inc_obmm_dev_seq();
+
+    EXPECT_EQ(6, mr->seq);
+
+    free_obmm_dev();
+}
+
+// ========== DT supplement: iterate_obmm_dev_dir ==========
+
+extern "C" int iterate_obmm_dev_dir(void);
+
+TEST_F(IomemTest, IterateObmmDevDirOpenFail)
+{
+    MOCKER(filp_open).stubs().will(returnValue((struct file *)(long)-ENOENT));
+    MOCKER(IS_ERR).stubs().will(returnValue(true));
+    MOCKER(PTR_ERR).stubs().will(returnValue(-ENOENT));
+    int ret = iterate_obmm_dev_dir();
+    EXPECT_EQ(-ENOENT, ret);
+}
+
+TEST_F(IomemTest, IterateObmmDevDirIterateFail)
+{
+    struct file filp;
+    MOCKER(filp_open).stubs().will(returnValue(&filp));
+    MOCKER(IS_ERR).stubs().will(returnValue(false));
+    MOCKER(iterate_dir).stubs().will(returnValue(-ENOTDIR));
+    MOCKER(filp_close).stubs().will(ignoreReturnValue());
+    int ret = iterate_obmm_dev_dir();
+    EXPECT_EQ(-ENOTDIR, ret);
+}
+
+TEST_F(IomemTest, IterateObmmDevDirSuccess)
+{
+    struct file filp;
+    MOCKER(filp_open).stubs().will(returnValue(&filp));
+    MOCKER(IS_ERR).stubs().will(returnValue(false));
+    MOCKER(iterate_dir).stubs().will(returnValue(0));
+    MOCKER(filp_close).stubs().will(ignoreReturnValue());
+    int ret = iterate_obmm_dev_dir();
+    EXPECT_EQ(0, ret);
+}
+
+// ========== DT supplement: iterate_obmm_dev ==========
+
+extern "C" int iterate_obmm_dev(void);
+extern "C" void update_obmm_dev_pa(void);
+
+TEST_F(IomemTest, IterateObmmDevEmptyListInitFail)
+{
+    free_obmm_dev();
+    ASSERT_TRUE(list_empty(&obmm_dev.list));
+
+    MOCKER(kzalloc).stubs().will(returnValue((void*)nullptr));
+    int ret = iterate_obmm_dev();
+    EXPECT_EQ(-ENOMEM, ret);
+}
+
+TEST_F(IomemTest, IterateObmmDevEmptyListInitSuccess)
+{
+    free_obmm_dev();
+    ASSERT_TRUE(list_empty(&obmm_dev.list));
+
+    MOCKER(iterate_obmm_dev_dir).stubs().will(returnValue(0));
+    MOCKER(update_obmm_dev_pa).stubs().will(ignoreReturnValue());
+
+    int ret = iterate_obmm_dev();
+    EXPECT_EQ(0, ret);
+    EXPECT_FALSE(list_empty(&obmm_dev.list));
+
+    free_obmm_dev();
+}
+
+TEST_F(IomemTest, IterateObmmDevDirIterateFail)
+{
+    free_obmm_dev();
+    struct memid_range *mr = (struct memid_range *)kzalloc(sizeof(*mr), GFP_KERNEL);
+    ASSERT_NE(nullptr, mr);
+    mr->memid = 0;
+    mr->seq = 0;
+    list_add(&mr->node, &obmm_dev.list);
+
+    MOCKER(iterate_obmm_dev_dir).stubs().will(returnValue(-ENOENT));
+    int ret = iterate_obmm_dev();
+    EXPECT_EQ(-ENOENT, ret);
+
+    free_obmm_dev();
+}
+
+TEST_F(IomemTest, IterateObmmDevWithExistingList)
+{
+    free_obmm_dev();
+    struct memid_range *mr = (struct memid_range *)kzalloc(sizeof(*mr), GFP_KERNEL);
+    ASSERT_NE(nullptr, mr);
+    mr->memid = 0;
+    mr->seq = 5;
+    list_add(&mr->node, &obmm_dev.list);
+
+    MOCKER(iterate_obmm_dev_dir).stubs().will(returnValue(0));
+    MOCKER(update_obmm_dev_pa).stubs().will(ignoreReturnValue());
+
+    int ret = iterate_obmm_dev();
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(6, mr->seq);
+
+    free_obmm_dev();
+}
+
+// ========== DT supplement: calc_acidx_paddr_iomem (additional) ==========
+
+extern "C" u32 g_pagesize_huge;
+
+TEST_F(IomemTest, CalcAcidxPaddrIomemNidNotFound)
+{
+    u64 paddr;
+
+    struct ram_segment *seg = (struct ram_segment *)kmalloc(sizeof(*seg), GFP_KERNEL);
+    ASSERT_NE(nullptr, seg);
+    seg->numa_node = 0;
+    seg->start = 0x1000;
+    seg->end = 0x1FFF;
+    INIT_LIST_HEAD(&remote_ram_list);
+    list_add_tail(&seg->node, &remote_ram_list);
+
+    MOCKER(is_smap_pg_huge).stubs().will(returnValue(false));
+    int ret = calc_acidx_paddr_iomem(0, 5, &paddr);
+    EXPECT_EQ(-34, ret);
+
+    list_del(&seg->node);
+    kfree(seg);
+}
+
+TEST_F(IomemTest, CalcAcidxPaddrIomemIndexOutOfRange)
+{
+    u64 paddr;
+    g_pagesize_huge = 0x200000;
+
+    struct ram_segment *seg = (struct ram_segment *)kmalloc(sizeof(*seg), GFP_KERNEL);
+    ASSERT_NE(nullptr, seg);
+    seg->numa_node = 1;
+    seg->start = 0x1000;
+    seg->end = 0x1FFF;
+    INIT_LIST_HEAD(&remote_ram_list);
+    list_add_tail(&seg->node, &remote_ram_list);
+
+    MOCKER(is_smap_pg_huge).stubs().will(returnValue(true));
+    int ret = calc_acidx_paddr_iomem(10, 1, &paddr);
+    EXPECT_EQ(-34, ret);
+
+    list_del(&seg->node);
+    kfree(seg);
+}
+
+// ========== DT supplement: find_range_by_memid (additional) ==========
+
+TEST_F(IomemTest, FindRangeByMemidInvalidRange)
+{
+    u64 start, end;
+    free_obmm_dev();
+
+    struct memid_range mr;
+    mr.memid = 1;
+    mr.start = 0xFF;
+    mr.end = 0x0;
+
+    list_add(&mr.node, &obmm_dev.list);
+    int ret = find_range_by_memid(1, &start, &end);
+    EXPECT_EQ(-ENOENT, ret);
+
+    list_del(&mr.node);
+}
+
+TEST_F(IomemTest, FindRangeByMemidStartEqualsEnd)
+{
+    u64 start, end;
+    free_obmm_dev();
+
+    struct memid_range mr;
+    mr.memid = 1;
+    mr.start = 0x1000;
+    mr.end = 0x1000;
+
+    list_add(&mr.node, &obmm_dev.list);
+    int ret = find_range_by_memid(1, &start, &end);
+    EXPECT_EQ(-ENOENT, ret);
+
+    list_del(&mr.node);
+}
+
+// ========== DT supplement: fill_obmmdev (additional) ==========
+
+TEST_F(IomemTest, FillObmmdevMatchingName)
+{
+    struct read_obmm_callback call;
+    call.ret = 1;
+
+    MOCKER(update_obmm_dev).stubs().will(ignoreReturnValue());
+    bool ret = fill_obmmdev(&call.ctx, "obmm_shmdev5", 11, 0, 0, 0);
+    EXPECT_EQ(true, ret);
+    EXPECT_EQ(0, call.ret);
+}
+
+TEST_F(IomemTest, FillObmmdevSscanfFail)
+{
+    struct read_obmm_callback call;
+    call.ret = 1;
+
+    bool ret = fill_obmmdev(&call.ctx, "obmm_shmdevABC", 13, 0, 0, 0);
+    EXPECT_EQ(false, ret);
+    EXPECT_NE(0, call.ret);
+}
