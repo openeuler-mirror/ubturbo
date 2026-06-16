@@ -791,6 +791,7 @@ TEST_F(IomemTest, IncObmmDevSeqIncrement)
 
 extern "C" int iterate_obmm_dev_dir(void);
 extern "C" long PTR_ERR(const void *ptr);
+extern "C" int iterate_dir(struct file *, struct dir_context *);
 
 TEST_F(IomemTest, IterateObmmDevDirOpenFail)
 {
