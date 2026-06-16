@@ -1671,7 +1671,8 @@ static bool IsMigrateBackAutoRemoveCandidate(ProcessAttr *attr, const struct Mig
 
 static bool IsAutoRemoveCandidate(ProcessAttr *attr)
 {
-    if (!attr || !attr->autoRemoveWhenRemoteEmpty || attr->groupPolicy.enabled || attr->scanType != NORMAL_SCAN) {
+    if (!attr || !attr->autoRemoveWhenRemoteEmpty || attr->syncWaitRemoteEmpty || attr->groupPolicy.enabled ||
+        attr->scanType != NORMAL_SCAN) {
         return false;
     }
     return true;
@@ -1723,22 +1724,33 @@ static int CollectRemoteEmptyAutoRemovePids(pid_t *pids, int maxCount)
 
 static void RemoveAutoRemovePids(pid_t *pids, int count)
 {
-    int pidType = IsHugeMode() ? PAGETYPE_HUGE : PAGETYPE_NORMAL;
+    struct ProcessManager *manager = GetProcessManager();
 
     for (int offset = 0; offset < count;) {
         struct RemoveMsg removeMsg = { 0 };
         int remain = count - offset;
         int batch = remain < MAX_NR_REMOVE ? remain : MAX_NR_REMOVE;
-        removeMsg.count = batch;
+
+        EnvMutexLock(&manager->lock);
         for (int i = 0; i < batch; i++) {
-            removeMsg.payload[i].pid = pids[offset + i];
-            removeMsg.payload[i].count = 0;
+            ProcessAttr *attr = GetProcessAttrLocked(pids[offset + i]);
+            if (!IsAutoRemoveCandidate(attr) || HasRemotePages(attr)) {
+                continue;
+            }
+            removeMsg.payload[removeMsg.count].pid = pids[offset + i];
+            removeMsg.payload[removeMsg.count].count = 0;
+            removeMsg.count++;
         }
 
-        int ret = ubturbo_smap_remove(&removeMsg, pidType);
-        if (ret) {
-            SMAP_LOGGER_WARNING("Auto remove remote-empty pids failed: %d.", ret);
+        if (removeMsg.count > 0) {
+            int ret = IoctlRemoveProcess(&removeMsg);
+            if (ret) {
+                SMAP_LOGGER_WARNING("Auto remove remote-empty pids failed: %d.", ret);
+            } else {
+                ClearManagedProcess(removeMsg.count, removeMsg.payload);
+            }
         }
+        EnvMutexUnlock(&manager->lock);
         offset += batch;
     }
 }
@@ -2704,6 +2716,59 @@ static int CheckMigOutSyncMsg(int pidType, uint64_t maxWaitTime)
     return 0;
 }
 
+static bool IsMigrateOutPayloadRemoteTargetZero(const struct MigrateOutPayload *payload)
+{
+    if (!payload || payload->count <= 0) {
+        return false;
+    }
+    if (payload->count > REMOTE_NUMA_NUM) {
+        return false;
+    }
+
+    for (int i = 0; i < payload->count; i++) {
+        if (payload->inner[i].migrateMode == MIG_MEMSIZE_MODE) {
+            if (payload->inner[i].memSize != 0) {
+                return false;
+            }
+            continue;
+        }
+        if (payload->inner[i].ratio != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void SetSyncWaitRemoteEmpty(struct MigrateOutMsg *msg, bool enable)
+{
+    struct ProcessManager *manager = GetProcessManager();
+
+    if (!msg) {
+        return;
+    }
+    if (msg->count <= 0 || msg->count > MAX_NR_MIGOUT) {
+        return;
+    }
+
+    EnvMutexLock(&manager->lock);
+    for (int i = 0; i < msg->count; i++) {
+        if (!IsMigrateOutPayloadRemoteTargetZero(&msg->payload[i])) {
+            continue;
+        }
+
+        ProcessAttr *attr = manager->processes;
+        while (attr && attr->pid != msg->payload[i].pid) {
+            attr = attr->next;
+        }
+        if (!attr || attr->groupPolicy.enabled || attr->scanType != NORMAL_SCAN) {
+            continue;
+        }
+        attr->syncWaitRemoteEmpty = enable;
+        SMAP_LOGGER_INFO("Pid %d sync wait remote empty protection %s.", attr->pid, enable ? "enabled" : "disabled");
+    }
+    EnvMutexUnlock(&manager->lock);
+}
+
 static int CheckMigOutSyncResult(struct MigrateOutMsg *msg, int *invalidPidNum, bool *allPidSuccess,
                                  uint64_t maxWaitTime)
 {
@@ -2748,16 +2813,20 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64
     uint64_t waitTime = 0;
     bool allPidSuccess = true;
     int invalidPidNum;
+    bool syncWaitProtected = false;
 
     ret = CheckMigOutSyncMsg(pidType, maxWaitTime);
     if (ret) {
         return ret;
     }
 
+    SetSyncWaitRemoteEmpty(msg, true);
+    syncWaitProtected = true;
+
     ret = ubturbo_smap_migrate_out(msg, pidType);
     if (ret && ret != -ESRCH) {
         SMAP_LOGGER_ERROR("Smap migrate out failed, ret %d.", ret);
-        return ret;
+        goto out;
     }
     SMAP_LOGGER_INFO("Smap migrate out done.");
 
@@ -2767,24 +2836,33 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64
         SMAP_LOGGER_INFO("ubturbo_smap_migrate_out_sync waitTime %llu.", waitTime);
         ret = CheckMigOutSyncResult(msg, &invalidPidNum, &allPidSuccess, maxWaitTime);
         if (ret) {
-            return ret;
+            goto out;
         }
         if (invalidPidNum == msg->count) {
             SMAP_LOGGER_ERROR("ubturbo_smap_migrate_out_sync all pid is invalid.");
-            return -ESRCH;
+            ret = -ESRCH;
+            goto out;
         }
         if (allPidSuccess && !invalidPidNum) {
             SMAP_LOGGER_INFO("ubturbo_smap_migrate_out_sync all pid success.");
-            return 0;
+            ret = 0;
+            goto out;
         } else if (allPidSuccess && invalidPidNum) {
             SMAP_LOGGER_INFO("ubturbo_smap_migrate_out_sync partial pid success.");
-            return -ESRCH;
+            ret = -ESRCH;
+            goto out;
         }
         allPidSuccess = true;
         EnvMsleep(WAIT_TIME);
     }
     SMAP_LOGGER_ERROR("Migration timed out. pidType %d, ret %d.", pidType, ret);
-    return -EBUSY;
+    ret = -EBUSY;
+
+out:
+    if (syncWaitProtected) {
+        SetSyncWaitRemoteEmpty(msg, false);
+    }
+    return ret;
 }
 
 static bool IsScanTypeValid(pid_t *pidArr, int len)
