@@ -1,4 +1,4 @@
-# 测试指导书
+# SMAP性能测试
 
 ## SMAP内存分级
 
@@ -27,7 +27,7 @@
 - 虚拟机使用的热页总数不超过分配给虚拟机的本地页的80%。
 - 虚机混合部署时，对于近端NUMA节点与远端NUMA节点相同的一组虚拟机，需满足轻载虚机总内存规格大于等于重载虚机总内存规格。
 - 轻载场景包括：Redis典型用例（参见[Redis典型参数](#redis典型参数)）。
-- 重载场景包括：MySQL典型用例、SPECint典型用例（参见[MySQL典型参数](#mysql典型参数)）和[SPECint典型参数](#specint典型参数)）。
+- 重载场景包括：MySQL典型用例、SPECint典型用例（参见[MySQL典型参数](#mysql典型参数)和[SPECint典型参数](#specint典型参数)）。
 - 多虚机场景，虚机总数量不高于4个，且测试性能时一个虚机中只能跑一种典型用例，其他场景性能不保证。
 - 虚机规格核存比为1:2或1:4，典型虚机规格为4U8G（鲲鹏虚拟化场景）或8U32G。如需使用4U8G以外的规格进行测试，请遵循其他约束缩放推荐测试参数，其他规格场景性能不保证。
 - 所有性能数据，至少测试3次，然后按照虚机内存规格计算算术平均值（SUM（虚拟机性能跌落百分比 \* 虚拟机内存规格）/SUM（虚拟机内存规格））。
@@ -61,7 +61,7 @@ smap smap_mig_out [dest_nid] [pid] [ratio] [pidType]
 
 MySQL典型用例测试参数：
 
-- Server侧启动MySQL的配置文件my.conf。
+- Server侧启动MySQL的配置文件my.cnf。
 
     ```shell
     [mysqld_safe]
@@ -105,7 +105,7 @@ MySQL典型用例测试参数：
     innodb_flush_log_at_trx_commit=1 # 每次事务提交时MySQL都会把log buffer的数据写入log file，并且flush(刷到磁盘)中去
     innodb_use_native_aio=1 # 开启异步IO
     innodb_spin_wait_delay=20 # 设置spin_wait_delay 参数，防止进入系统自旋
-    #innodb_sync_spin_loops=25  # 设置spin_loops 循环次数，防止进入系统自旋
+    # innodb_sync_spin_loops=25  # 设置spin_loops 循环次数，防止进入系统自旋
     innodb_spin_wait_pause_multiplier=5 # 设置spin lock循环随机数
     innodb_flush_method=O_DIRECT # 设置innodb数据文件及redo log的打开、刷写模式
     innodb_io_capacity=12000 # 设置innodb后台线程每秒最大iops上限
@@ -141,7 +141,7 @@ MySQL典型用例测试参数：
             local threads=$1
             local time=$2
             echo "use ${threads} threads, run ${time}s"
-            sysbench --db-driver=mysql --mysql-host=${host} --mysql-port=3306 --mysql-user=root --mysql-password=123456 --mysql-db=sbtest \
+            sysbench --db-driver=mysql --mysql-host=${host} --mysql-port=3306 --mysql-user=root --mysql-password={your_mysql_password} --mysql-db=sbtest \
             --table_size=10000000 --tables=64 --time=${time} --threads=${threads} --percentile=95 --report-interval=1 oltp_read_write run > /home/mysql_test_results/${vm_name}/${threads}_run.log
     }
     run_loop()
@@ -283,6 +283,10 @@ HUGETLB_ELFMAP=RW runcpu --config=speccpu-gcc-best.cfg --iteration=1 --copies=4 
     ```shell
     LD_PRELOAD=/usr/lib64/libksal_libc.so taskset -c 0 /home/redis-6.0.5/src/redis-server /home/redis-6.0.5/redis.conf --port 6379
     ```
+    
+    >[!IMPORTANT] 须知
+    >
+    > libksal_libc.so文件需要额外获取。
 
 ## MySQL场景额外约束
 
@@ -301,7 +305,7 @@ spec:
   #  hostNetwork: true
   containers:
   - name: mysql
-    image: docker.io/library/mysql8027new
+    image: docker.io/library/mysql:8.0.27
     imagePullPolicy: IfNotPresent
     ports:
     - containerPort: 3306
@@ -431,11 +435,11 @@ mysqlx=0
 
 ```shell
 # read_only场景
-numactl -C 70-101 -m 1 sysbench --db-driver=mysql --mysql-host=192.168.1.2 --mysql-port=3307 --mysql-user=root --mysql-password=Huawei12#$ --mysql-db=sbtest --table_size=10000000 --tables=64 --time=600  --threads=64 --percentile=95 --report-interval=20 oltp_read_only run
+numactl -C 70-101 -m 1 sysbench --db-driver=mysql --mysql-host=[mysql_host] --mysql-port=3307 --mysql-user=root --mysql-password=[mysql_password] --mysql-db=sbtest --table_size=10000000 --tables=64 --time=600  --threads=64 --percentile=95 --report-interval=20 oltp_read_only run
 # write_only场景
-numactl -C 70-101 -m 1 sysbench --db-driver=mysql --mysql-host=192.168.1.2 --mysql-port=3307 --mysql-user=root --mysql-password=Huawei12#$ --mysql-db=sbtest --table_size=10000000 --tables=64 --time=600  --threads=64 --percentile=95 --report-interval=20 oltp_write_only run
+numactl -C 70-101 -m 1 sysbench --db-driver=mysql --mysql-host=[mysql_host] --mysql-port=3307 --mysql-user=root --mysql-password=[mysql_password] --mysql-db=sbtest --table_size=10000000 --tables=64 --time=600  --threads=64 --percentile=95 --report-interval=20 oltp_write_only run
 # read_write场景
-numactl -C 70-101 -m 1 sysbench --db-driver=mysql --mysql-host=192.168.1.2 --mysql-port=3307 --mysql-user=root --mysql-password=Huawei12#$ --mysql-db=sbtest --table_size=10000000 --tables=64 --time=600  --threads=64 --percentile=95 --report-interval=20 oltp_read_write run
+numactl -C 70-101 -m 1 sysbench --db-driver=mysql --mysql-host=[mysql_host] --mysql-port=3307 --mysql-user=root --mysql-password=[mysql_password] --mysql-db=sbtest --table_size=10000000 --tables=64 --time=600  --threads=64 --percentile=95 --report-interval=20 oltp_read_write run
 ```
 
 ## 规格说明
@@ -465,7 +469,7 @@ numactl -C 70-101 -m 1 sysbench --db-driver=mysql --mysql-host=192.168.1.2 --mys
 初始配置文件内容如下：
 
 ```shell
-smap.scan.period = 1200
+smap.scan.period = 200
 smap.migrate.period = 12000
 smap.remote.freq.percentile = 99
 smap.slow.threshold = 2
@@ -485,18 +489,18 @@ smap.period.file.config.switch = false
 
 |序号|参数|取值|说明|
 |--|--|--|--|
-|1|smap.scan.period|默认值：200单位：ms取值范围：[50,60000]参数配置必须是50的倍数。|扫描周期。|
-|2|smap.migrate.period|默认值：2000单位：ms取值范围：[500,60000]迁移周期不能小于扫描周期。|迁移周期。|
-|3|smap.remote.freq.percentile|百分比。默认值：99取值范围：[1,100]|远端热页最大频次取值百分比。|
-|4|smap.slow.threshold|默认值：2取值范围：[0,40]|冷热页面判定阈值。|
-|5|smap.freq.wt|默认值：0取值范围：[0,65535]|冷热比较时本地页面缩放因子。|
+|1|smap.scan.period|默认值：200<br>单位：ms<br>取值范围：[50,60000]<br>参数配置必须是50的倍数。|扫描周期。|
+|2|smap.migrate.period|默认值：2000<br>单位：ms<br>取值范围：[500,60000]<br>迁移周期不能小于扫描周期。|迁移周期。|
+|3|smap.remote.freq.percentile|百分比。<br>默认值：99<br>取值范围：[1,100]|远端热页最大频次取值百分比。|
+|4|smap.slow.threshold|默认值：2<br>取值范围：[0,40]|冷热页面判定阈值。|
+|5|smap.freq.wt|默认值：0<br>取值范围：[0,65535]|冷热比较时本地页面缩放因子。|
 |6|smap.remote.hot.threshold|默认值：65535<br> 取值范围：[1,65535]|远端热页频次阈值，达到阈值的页一定会交换。|
 |7|smap.group.swap.ratio|默认值：1<br>取值范围：[0,10]|大虚机场景，一次迁移的量的比例最大值。|
 |8|smap.group.swap.min.remote.freq|默认值：0<br>取值范围：[0,65535]|大虚机场景，远端参与冷热交换的页面最小频次|
 |9|smap.group.swap.min.freq.gain|默认值：0<br>取值范围：[0,65535]|大虚机场景，远端频次 > 本地页面频次 + gain，满足条件的页面才能进行交换。|
-|10|smap.zero.freq.migrate.enable|默认值：true<br>取值范围：<br>false<br>true|虚机场景，是否交换本地0页与远端有频次的页面。|
-|11|smap.adaptive.ratio.enable|默认值：true<br>取值范围：<br>false<br>true|虚机场景自适应调整虚机内存比例的开关。|
-|12|smap.period.file.config.switch|默认值：false取值范围：false：系统采用算法配置周期。true：使用配置文件配置的周期。|配置周期开关。|
+|10|smap.zero.freq.migrate.enable|默认值：true<br>取值范围：<br>- false<br>- true|虚机场景，是否交换本地0页与远端有频次的页面。|
+|11|smap.adaptive.ratio.enable|默认值：true<br>取值范围：<br>- false<br>- true|虚机场景自适应调整虚机内存比例的开关。|
+|12|smap.period.file.config.switch|默认值：false<br>取值范围：<br>- false：系统采用算法配置周期。<br>- true：使用配置文件配置的周期。|配置周期开关。|
 
 > [!NOTE] 说明 
 >
