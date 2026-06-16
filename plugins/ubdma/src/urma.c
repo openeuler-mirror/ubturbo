@@ -45,6 +45,17 @@ const struct ubcore_seg_cfg default_seg_cfg = {
 	.flag.bs.pa = false,
 };
 
+const struct ubcore_seg_cfg seg_pin_cfg = {
+	.flag.bs.token_policy = UBCORE_TOKEN_NONE,
+	.flag.bs.cacheable = UBCORE_CACHEABLE,
+	.flag.bs.dsva = false,
+	.flag.bs.access = UBCORE_ACCESS_READ | UBCORE_ACCESS_WRITE,
+	.flag.bs.non_pin = false,
+	.flag.bs.user_iova = false,
+	.flag.bs.token_id_valid = false,
+	.flag.bs.pa = false,
+};
+
 const struct ubcore_jfc_cfg default_jfc_cfg = {
 	.depth = UB_DMA_JETTY_DEPTH,
 	.flag.bs.lock_free = false,
@@ -238,8 +249,12 @@ int urma_register_tmp_segment(struct urma_trans_segment_info *info,
 {
 	struct ubcore_target_seg *sge;
 	struct ubcore_target_seg *i_seg;
+	struct ubcore_seg_cfg cfg = seg_pin_cfg;
+	cfg.va = info->addr;
+	cfg.len = info->len;
+	cfg.eid_index = g_urma_jetty->eid_info.eid_index;
 
-	sge = init_segment(info->addr, info->len, g_urma_jetty);
+	sge = ubcore_register_seg(g_urma_jetty->dev, &cfg, NULL);
 	if (IS_ERR_OR_NULL(sge)) {
 		ub_dma_log_err(
 			"urma register trans segment failed to init seg\n");
@@ -491,6 +506,7 @@ free_cr:
 	kfree(g_urma_jetty->cr);
 free_trans:
 	kfree(g_urma_jetty);
+	g_urma_jetty = NULL;
 err_unregister:
 	ubcore_unregister_client(&urma_ubcore_client);
 	return ret;
