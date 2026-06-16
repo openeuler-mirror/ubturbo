@@ -22,6 +22,9 @@
 #include "iomem.h"
 #include "smap_migrate_wrapper.h"
 #include "common.h"
+#ifdef CRITICAL_OFF
+#include "critical.h"
+#endif
 #include "smap_migrate_pages.h"
 
 #define MAX_MIGRATE_NUMA_RETRY_TIME 10
@@ -335,14 +338,14 @@ unsigned int smap_migrate(struct folio **folios, unsigned int nr_folios,
 	if (MIGRATE_TYPE_BACK == type) {
 		err = isolate_and_migrate_folios(
 			folios, nr_folios, smap_alloc_new_node_page_mig_back,
-			NULL, to_node, MIGRATE_ASYNC, &nr_succeeded);
+			NULL, to_node, remote_migrate_mode, &nr_succeeded);
 		if (err) {
 			pr_err("failed to migrate back, ret: %d\n", err);
 		}
 	} else if (MIGRATE_TYPE_HOTNESS == type) {
 		err = isolate_and_migrate_folios(folios, nr_folios,
 						 smap_alloc_new_node_page, NULL,
-						 to_node, MIGRATE_ASYNC,
+						 to_node, remote_migrate_mode,
 						 &nr_succeeded);
 		if (err) {
 			pr_err("failed to migrate, ret: %d\n", err);

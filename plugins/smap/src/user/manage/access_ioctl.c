@@ -19,6 +19,7 @@
 #include "manage.h"
 #include "device.h"
 #include "access_ioctl.h"
+#include "smap_ioctl.h"
 
 int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
 {
@@ -147,4 +148,18 @@ int AccessRead(size_t len, char *buf)
         return -EIO;
     }
     return 0;
+}
+
+void IoctlUpdateUbDmaAvail(uint32_t value)
+{
+    struct ProcessManager *manager = GetProcessManager();
+
+    uint32_t val = value;
+    int ret = ioctl(manager->fds.migrate, SMAP_SET_UB_DMA_AVAIL, &val);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("ioctl update ub dma avail failed: %d, errno %d", ret, errno);
+        return;
+    }
+
+    SMAP_LOGGER_INFO("ioctl update ub dma avail: %u", val);
 }

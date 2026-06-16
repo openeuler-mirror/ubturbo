@@ -76,5 +76,6 @@ int AccessIoctlRemoveAllPid(void);
 int AccessIoctlWalkPagemap(size_t *len);
 int AccessIoctlCreateProcfs(struct UserInfo *ui);
 int AccessRead(size_t len, char *buf);
+void IoctlUpdateUbDmaAvail(uint32_t value);
 
 #endif /* __ACCESS_IOCTL_H__ */

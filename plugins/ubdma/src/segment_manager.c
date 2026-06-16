@@ -72,6 +72,31 @@ static inline bool is_target_segment(u64 start_va, u64 end_va, u64 addr,
 	return start_va <= addr && end_va >= (addr + len - 1) ? true : false;
 }
 
+int get_single_urma_trans_segment(struct urma_trans_segment_info *info,
+				  bool is_i_seg)
+{
+	struct urma_sge_meta_node *sge;
+	u64 key = info->addr >> HASH_KEY_MASK_BIT;
+
+	read_lock(&g_mgr->sge_meta_lock);
+	hash_for_each_possible(g_mgr->sge_meta_hashtable, sge, node, key) {
+		if (sge->info.start_va <= info->addr &&
+		    sge->info.end_va >= (info->addr + info->len - 1)) {
+			if (is_i_seg) {
+				info->sge = sge->info.i_seg;
+			} else {
+				info->sge = sge->info.sge;
+			}
+			read_unlock(&g_mgr->sge_meta_lock);
+			return 0;
+		}
+	}
+
+	read_unlock(&g_mgr->sge_meta_lock);
+	ub_dma_log_err("failed to get single urma trans segment\n");
+	return -ENOENT;
+}
+
 int get_urma_trans_segment(struct urma_trans_segment_info *src_info,
 			   struct urma_trans_segment_info *dst_info)
 {
@@ -79,7 +104,7 @@ int get_urma_trans_segment(struct urma_trans_segment_info *src_info,
 	u64 src_key = src_info->addr >> HASH_KEY_MASK_BIT;
 	u64 dst_key = dst_info->addr >> HASH_KEY_MASK_BIT;
 
-	write_lock(&g_mgr->sge_meta_lock);
+	read_lock(&g_mgr->sge_meta_lock);
 	hash_for_each_possible(g_mgr->sge_meta_hashtable, sge, node, src_key) {
 		if (sge->info.start_va <= src_info->addr &&
 		    sge->info.end_va >= (src_info->addr + src_info->len - 1)) {
@@ -95,12 +120,12 @@ int get_urma_trans_segment(struct urma_trans_segment_info *src_info,
 		}
 	}
 	if (!src_info->sge || !dst_info->sge) {
-		write_unlock(&g_mgr->sge_meta_lock);
+		read_unlock(&g_mgr->sge_meta_lock);
 		ub_dma_log_err("fali to get urma trans sgemnet.\n");
 		return -EINVAL;
 	}
 
-	write_unlock(&g_mgr->sge_meta_lock);
+	read_unlock(&g_mgr->sge_meta_lock);
 	return 0;
 }
 

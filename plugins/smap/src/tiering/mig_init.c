@@ -21,6 +21,9 @@
 #include "iomem.h"
 #include "ham_migration.h"
 #include "smap_migrate_pages.h"
+#ifdef CRITICAL_OFF
+#include "critical.h"
+#endif
 #include "mig_init.h"
 
 #undef pr_fmt

@@ -20,7 +20,7 @@
 #include "securec.h"
 #include "strategy_config.h"
 
-#define STRATEGY_CONFIG_ENTRY 12
+#define STRATEGY_CONFIG_ENTRY 13
 #define STRATEGY_CONFIG_BUFFSIZE 500
 
 #define RETURN_OK 0
@@ -55,6 +55,10 @@
 #define DEFAULT_GROUP_SWAP_MIN_FREQ_GAIN 0
 #define MIN_GROUP_SWAP_MIN_FREQ_GAIN 0
 
+#define MAX_MIGRATE_MODE 2
+#define DEFAULT_MIGRATE_MODE 1
+#define MIN_MIGRATE_MODE 0
+
 #define SCAN_MULTIPLE 1UL
 
 #define RADIX_10 10UL
@@ -69,6 +73,8 @@ typedef struct {
     uint32_t groupSwapRatio;
     uint32_t groupSwapMinRemoteFreq;
     uint32_t groupSwapMinFreqGain;
+    uint32_t migrateMode;
+    bool migrateModeChanged;
     bool zeroFreqMigrateEnable;
     bool adaptiveRatioEnable;
     bool fileConfSwitch;
@@ -132,6 +138,21 @@ uint32_t GetGroupSwapMinRemoteFreqConfig(void)
 uint32_t GetGroupSwapMinFreqGainConfig(void)
 {
     return g_strategyConfig.groupSwapMinFreqGain;
+}
+
+uint32_t GetMigrateModeConfig(void)
+{
+    return g_strategyConfig.migrateMode;
+}
+
+bool GetMigrateModeChanged(void)
+{
+    return g_strategyConfig.migrateModeChanged;
+}
+
+void SetMigrateModeChanged(bool val)
+{
+    g_strategyConfig.migrateModeChanged = val;
 }
 
 bool GetZeroFreqMigrateEnableConfig(void)
@@ -350,6 +371,24 @@ static int32_t ConfigGroupSwapMinFreqGain(char *substr, char *value)
     return RETURN_OK;
 }
 
+static int32_t ConfigMigrateMode(char *substr, char *value)
+{
+    SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
+    uint32_t migrateMode;
+    int32_t ret = ConfigReadValueToInt(value, &migrateMode);
+    if (ret != RETURN_OK) {
+        SMAP_LOGGER_ERROR("Config migrate mode read failed, key:%s.", substr);
+        return ret;
+    }
+    if (migrateMode < MIN_MIGRATE_MODE || migrateMode > MAX_MIGRATE_MODE) {
+        SMAP_LOGGER_ERROR("Config migrate mode(%u) invalid, range(%d-%d), key:%s.", migrateMode, MIN_MIGRATE_MODE,
+                          MAX_MIGRATE_MODE, substr);
+        return RETURN_ERROR;
+    }
+    g_tmpStrategyConfig.migrateMode = migrateMode;
+    return RETURN_OK;
+}
+
 static int32_t ConfigZeroFreqMigrateEnable(char *substr, char *value)
 {
     SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
@@ -445,6 +484,12 @@ static StrategyConfigReadElem g_strategyConfigRead[] = {
     {
         "smap.group.swap.min.freq.gain",
         ConfigGroupSwapMinFreqGain,
+        1UL,
+        0UL,
+    },
+    {
+        "smap.migrate.mode",
+        ConfigMigrateMode,
         1UL,
         0UL,
     },
@@ -614,6 +659,8 @@ static void InitStrategyConfig(void)
     g_strategyConfig.groupSwapRatio = DEFAULT_GROUP_SWAP_RATIO;
     g_strategyConfig.groupSwapMinRemoteFreq = DEFAULT_GROUP_SWAP_MIN_REMOTE_FREQ;
     g_strategyConfig.groupSwapMinFreqGain = DEFAULT_GROUP_SWAP_MIN_FREQ_GAIN;
+    g_strategyConfig.migrateMode = DEFAULT_MIGRATE_MODE;
+    g_strategyConfig.migrateModeChanged = false;
     g_strategyConfig.zeroFreqMigrateEnable = true;
     g_strategyConfig.adaptiveRatioEnable = true;
     g_strategyConfig.fileConfSwitch = false;
@@ -660,6 +707,7 @@ static int32_t InitStrategyConfigFileBuffer(char strategyDefaultConfig[STRATEGY_
         { "smap.group.swap.ratio = %d\n", DEFAULT_GROUP_SWAP_RATIO },
         { "smap.group.swap.min.remote.freq = %d\n", DEFAULT_GROUP_SWAP_MIN_REMOTE_FREQ },
         { "smap.group.swap.min.freq.gain = %d\n", DEFAULT_GROUP_SWAP_MIN_FREQ_GAIN },
+        { "smap.migrate.mode = %d\n", DEFAULT_MIGRATE_MODE },
     };
     size_t numConfigs = sizeof(configs) / sizeof(configs[0]);
 
@@ -760,14 +808,16 @@ static bool UpdateStrategyConfigChanged(void)
     uint32_t oldScanPeriod, oldMigratePeriod, oldRemoteHotThreshold, scanPeriod, migratePeriod, remoteHotThreshold;
     uint32_t oldRemoteFreqPercentile, oldSlowThreshold, remoteFreqPercentile, slowThreshold;
     uint32_t oldGroupSwapRatio, oldGroupSwapMinRemoteFreq, oldGroupSwapMinFreqGain;
-    uint32_t groupSwapRatio, groupSwapMinRemoteFreq, groupSwapMinFreqGain;
+    uint32_t oldMigrateMode, groupSwapRatio, groupSwapMinRemoteFreq, groupSwapMinFreqGain, migrateMode;
     uint64_t oldFreqWt, freqWt;
     bool oldZeroFreqMigrateEnable, zeroFreqMigrateEnable;
     bool oldAdaptiveRatioEnable, adaptiveRatioEnable;
 
     if (!g_tmpStrategyConfig.fileConfSwitch) {
+        g_strategyConfig.fileConfSwitch = false;
         return false;
     }
+    g_strategyConfig.fileConfSwitch = true;
 
     oldScanPeriod = g_strategyConfig.scanPeriod;
     oldMigratePeriod = g_strategyConfig.migratePeriod;
@@ -778,6 +828,7 @@ static bool UpdateStrategyConfigChanged(void)
     oldGroupSwapRatio = g_strategyConfig.groupSwapRatio;
     oldGroupSwapMinRemoteFreq = g_strategyConfig.groupSwapMinRemoteFreq;
     oldGroupSwapMinFreqGain = g_strategyConfig.groupSwapMinFreqGain;
+    oldMigrateMode = g_strategyConfig.migrateMode;
     oldZeroFreqMigrateEnable = g_strategyConfig.zeroFreqMigrateEnable;
     oldAdaptiveRatioEnable = g_strategyConfig.adaptiveRatioEnable;
 
@@ -790,6 +841,7 @@ static bool UpdateStrategyConfigChanged(void)
     groupSwapRatio = g_tmpStrategyConfig.groupSwapRatio;
     groupSwapMinRemoteFreq = g_tmpStrategyConfig.groupSwapMinRemoteFreq;
     groupSwapMinFreqGain = g_tmpStrategyConfig.groupSwapMinFreqGain;
+    migrateMode = g_tmpStrategyConfig.migrateMode;
     zeroFreqMigrateEnable = g_tmpStrategyConfig.zeroFreqMigrateEnable;
     adaptiveRatioEnable = g_tmpStrategyConfig.adaptiveRatioEnable;
 
@@ -797,7 +849,8 @@ static bool UpdateStrategyConfigChanged(void)
         oldRemoteHotThreshold == remoteHotThreshold && oldRemoteFreqPercentile == remoteFreqPercentile &&
         oldSlowThreshold == slowThreshold && oldFreqWt == freqWt && oldGroupSwapRatio == groupSwapRatio &&
         oldGroupSwapMinRemoteFreq == groupSwapMinRemoteFreq && oldGroupSwapMinFreqGain == groupSwapMinFreqGain &&
-        oldZeroFreqMigrateEnable == zeroFreqMigrateEnable && oldAdaptiveRatioEnable == adaptiveRatioEnable) {
+        oldMigrateMode == migrateMode && oldZeroFreqMigrateEnable == zeroFreqMigrateEnable &&
+        oldAdaptiveRatioEnable == adaptiveRatioEnable) {
         return false;
     }
 
@@ -835,6 +888,11 @@ static bool UpdateStrategyConfigChanged(void)
 
     if (oldGroupSwapMinFreqGain != groupSwapMinFreqGain) {
         SMAP_LOGGER_INFO("Start update group swap min freq gain from config to %u.", groupSwapMinFreqGain);
+    }
+
+    if (oldMigrateMode != migrateMode) {
+        g_tmpStrategyConfig.migrateModeChanged = true;
+        SMAP_LOGGER_INFO("Start update migrate mode from config to %u.", migrateMode);
     }
 
     if (oldZeroFreqMigrateEnable != zeroFreqMigrateEnable) {

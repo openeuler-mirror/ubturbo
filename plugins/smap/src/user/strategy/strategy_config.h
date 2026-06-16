@@ -39,6 +39,12 @@ uint64_t GetFreqWtConfig(void);
 
 uint32_t GetRemoteHotThreshold(void);
 
+uint32_t GetMigrateModeConfig(void);
+
+bool GetMigrateModeChanged(void);
+
+void SetMigrateModeChanged(bool val);
+
 uint32_t GetGroupSwapRatioConfig(void);
 
 uint32_t GetGroupSwapMinRemoteFreqConfig(void);
