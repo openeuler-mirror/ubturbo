@@ -790,6 +790,7 @@ TEST_F(IomemTest, IncObmmDevSeqIncrement)
 // ========== DT supplement: iterate_obmm_dev_dir ==========
 
 extern "C" int iterate_obmm_dev_dir(void);
+extern "C" long PTR_ERR(const void *ptr);
 
 TEST_F(IomemTest, IterateObmmDevDirOpenFail)
 {
@@ -852,7 +853,7 @@ TEST_F(IomemTest, IterateObmmDevEmptyListInitSuccess)
     free_obmm_dev();
 }
 
-TEST_F(IomemTest, IterateObmmDevDirIterateFail)
+TEST_F(IomemTest, IterateObmmDevExistingListIterateFail)
 {
     free_obmm_dev();
     struct memid_range *mr = (struct memid_range *)kzalloc(sizeof(*mr), GFP_KERNEL);
