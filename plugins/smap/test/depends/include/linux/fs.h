@@ -74,6 +74,14 @@ typedef void *fl_owner_t;
 
 #define fput(x)
 
+struct dir_context;
+typedef bool (*filldir_t)(struct dir_context *, const char *, int, loff_t, u64, unsigned);
+
+struct dir_context {
+    filldir_t actor;
+    loff_t pos;
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -83,14 +91,14 @@ extern ssize_t kernel_read(struct file *file, void *buf, size_t count, loff_t *p
 extern ssize_t kernel_write(struct file *file, void *buf, size_t count, loff_t *pos);
 extern ssize_t simple_read_from_buffer(void __user *to, size_t count,
 			loff_t *ppos, const void *from, size_t available);
+extern loff_t default_llseek(struct file *file, loff_t offset, int whence);
+extern int iterate_dir(struct file *, struct dir_context *);
 #ifdef __cplusplus
 }
 #endif
 extern int scnprintf(char *buf, size_t size, const char *fmt, ...);
 extern int kstrtouint(const char *s, unsigned int base, unsigned int *res);
 extern int kstrtoull(const char *s, unsigned int base, unsigned long long *res);
-
-extern loff_t default_llseek(struct file *file, loff_t offset, int whence);
 static inline struct inode *file_inode(const struct file *f)
 {
     return 0;
@@ -99,14 +107,5 @@ static inline loff_t i_size_read(const struct inode *inode)
 {
     return 0;
 }
-
-struct dir_context;
-typedef bool (*filldir_t)(struct dir_context *, const char *, int, loff_t, u64, unsigned);
-
-struct dir_context {
-    filldir_t actor;
-    loff_t pos;
-};
-extern int iterate_dir(struct file *, struct dir_context *);
 
 #endif
