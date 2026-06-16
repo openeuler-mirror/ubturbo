@@ -35,7 +35,6 @@
 #define HEX 16
 
 LIST_HEAD(remote_ram_list);
-static bool remote_ram_changed;
 
 struct obmm_dev_info {
 	struct list_head list;
@@ -480,7 +479,6 @@ int refresh_remote_ram(void)
 	free_remote_ram(&remote_ram_list);
 	copy_remote_ram(&remote_ram_list, &tmp_head);
 	free_remote_ram(&tmp_head);
-	remote_ram_changed = false;
 	ret = iterate_obmm_dev();
 	if (ret) {
 		pr_err("failed to interate obmm_dev, ret: %d\n", ret);

@@ -501,6 +501,8 @@ static long smap_access_ioctl(struct file *file, unsigned int cmd,
 		return ioctl_create_smap_procfs(argp);
 	case SMAP_ACCESS_GET_NR_LOCAL_NUMA:
 		return ioctl_get_nr_local_numa(argp);
+	case SMAP_ACCESS_REFRESH_REMOTE_RAM:
+		return refresh_remote_ram();
 	default:
 		rc = -ENOTTY;
 	}

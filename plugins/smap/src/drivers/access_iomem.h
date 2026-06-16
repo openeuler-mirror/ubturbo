@@ -19,7 +19,6 @@
 extern struct list_head remote_ram_list;
 extern int nr_local_numa;
 extern rwlock_t rem_ram_list_lock;
-extern bool remote_ram_changed;
 extern unsigned int smap_scene;
 struct ram_segment {
 	struct list_head node;

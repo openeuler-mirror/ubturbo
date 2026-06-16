@@ -23,7 +23,6 @@
 extern struct list_head remote_ram_list;
 extern int nr_local_numa;
 extern struct access_pid_struct ap_data;
-extern bool remote_ram_changed;
 
 struct statistics_tracking_info {
 	pid_t pid;

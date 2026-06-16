@@ -92,6 +92,19 @@ int DisableTracking(struct ProcessManager *manager)
     return ret;
 }
 
+int RefreshRemoteRam(struct ProcessManager *manager)
+{
+    if (manager->fds.access < 0) {
+        SMAP_LOGGER_ERROR("access device fd is invalid: %d", manager->fds.access);
+        return -EINVAL;
+    }
+    if (ioctl(manager->fds.access, SMAP_ACCESS_REFRESH_REMOTE_RAM, 0) < 0) {
+        SMAP_LOGGER_ERROR("refresh_remote_ram ioctl failed: %s.", strerror(errno));
+        return -errno;
+    }
+    return 0;
+}
+
 static int ConfigTrackingDev(int *trackingFds, uint32_t pageSize)
 {
     int ret = 0;

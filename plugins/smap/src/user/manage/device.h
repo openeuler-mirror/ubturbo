@@ -31,6 +31,8 @@ int EnableTracking(struct ProcessManager *manager);
 
 int DisableTracking(struct ProcessManager *manager);
 
+int RefreshRemoteRam(struct ProcessManager *manager);
+
 int InitTrackingDev(struct ProcessManager *manager);
 
 void DeinitTrackingDev(struct ProcessManager *manager);

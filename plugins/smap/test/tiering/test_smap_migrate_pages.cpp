@@ -984,6 +984,7 @@ TEST_F(SmapMigratePagesTest, DoMigrateNrFoliosZeroGotoAgainInvalidPfn)
     struct mig_list *mig_list = (struct mig_list *)kmalloc(sizeof(struct mig_list), GFP_KERNEL);
 
     mig_list[0].from = NUMA_NO_NODE + 1;
+    mig_list[0].to = nr_local_numa;
     mig_list[0].nr = nr_total;
     mig_list[0].addr = (u64*)vzalloc(nr_total * sizeof(u64));
     ASSERT_NE(nullptr, mig_list[0].addr);

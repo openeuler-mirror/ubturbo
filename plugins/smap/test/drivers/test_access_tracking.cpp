@@ -51,10 +51,11 @@ TEST_F(AccessTrackingTest, is_access_hugepage)
 
 extern "C" void drivers_init_actc_data(struct access_tracking_dev *adev);
 extern "C" void access_tracking_enable(struct device *ldev);
+extern "C" int actc_buffer_reinit(struct access_tracking_dev *adev);
 TEST_F(AccessTrackingTest, access_tracking_enable)
 {
         struct access_tracking_dev dev;
-        MOCKER(drivers_init_actc_data).stubs().will(ignoreReturnValue());
+        MOCKER(actc_buffer_reinit).stubs().will(ignoreReturnValue());
         (void)access_tracking_enable(&dev.ldev);
 }
 
@@ -119,7 +120,6 @@ TEST_F(AccessTrackingTest, access_print_acpi_mem)
     access_print_acpi_mem();
 }
 
-extern "C" int actc_buffer_reinit(struct access_tracking_dev *adev);
 TEST_F(AccessTrackingTest, actc_buffer_reinit)
 {
     struct access_tracking_dev adev;
@@ -322,7 +322,6 @@ TEST_F(AccessTrackingTest, access_tracking_init_two)
 }
 
 extern "C" void release_remote_ram(void);
-extern "C" void memory_notifier_exit(void);
 extern "C" void __exit access_tracking_exit(void);
 extern "C" void destroy_scan_workqueue(void);
 TEST_F(AccessTrackingTest, access_tracking_exit)
@@ -335,7 +334,6 @@ TEST_F(AccessTrackingTest, access_tracking_exit)
     MOCKER(kfree).stubs();
     MOCKER(release_remote_ram).stubs();
     MOCKER(reset_acpi_mem).stubs();
-    MOCKER(memory_notifier_exit).stubs();
     access_tracking_exit();
     list_del(&adev.list);
 }

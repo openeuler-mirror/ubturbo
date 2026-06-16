@@ -92,6 +92,7 @@ extern struct proc_dir_entry *smap_procfs_root;
 	_IOW(SMAP_ACCESS_MAGIC, 5, struct tracking_info_payload)
 #define SMAP_ACCESS_CREATE_PROCFS _IOW(SMAP_ACCESS_MAGIC, 6, struct user_info)
 #define SMAP_ACCESS_GET_NR_LOCAL_NUMA _IOR(SMAP_ACCESS_MAGIC, 7, int)
+#define SMAP_ACCESS_REFRESH_REMOTE_RAM _IO(SMAP_ACCESS_MAGIC, 8)
 
 void access_ioctl_exit(void);
 int access_ioctl_init(void);

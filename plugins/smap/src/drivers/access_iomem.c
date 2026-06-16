@@ -27,7 +27,6 @@ EXPORT_SYMBOL(remote_ram_list);
 
 DEFINE_RWLOCK(rem_ram_list_lock);
 EXPORT_SYMBOL(rem_ram_list_lock);
-bool remote_ram_changed; /* Protected by rem_ram_list_lock */
 
 static void free_remote_ram(struct list_head *head)
 {
@@ -180,8 +179,6 @@ int refresh_remote_ram(void)
 	free_remote_ram(&remote_ram_list);
 	move_remote_ram(&remote_ram_list, &tmp_head);
 	free_remote_ram(&tmp_head);
-	remote_ram_changed = true;
-	pr_info("remote ram was changed\n");
 	write_unlock(&rem_ram_list_lock);
 	return 0;
 }
