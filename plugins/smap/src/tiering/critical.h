@@ -7,9 +7,12 @@
 #ifndef _CRITICAL_H
 #define _CRITICAL_H
 
-static inline int node_is_critical_err(int nid)
+static inline bool smap_node_is_critical_err(int nid)
 {
-	return 0;
+	return false;
 }
+#undef node_is_critical_err
+
+#define node_is_critical_err(nid) smap_node_is_critical_err(nid)
 
 #endif /* _CRITICAL_H */
