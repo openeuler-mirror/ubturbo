@@ -26,7 +26,6 @@
 #include "access_iomem.h"
 #include "access_ioctl.h"
 #include "access_tracking_wrapper.h"
-#include "memory_notifier.h"
 #include "access_pid.h"
 #include "accessed_bit.h"
 #include "access_pid.h"
@@ -221,18 +220,16 @@ static int actc_buffer_reinit(struct access_tracking_dev *adev)
 static void access_tracking_enable(struct device *ldev)
 {
 	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
+	int ret;
+
 	if (adev->is_hist)
 		return;
 	down_write(&adev->buffer_lock);
-	if (adev->need_reinit_actc) {
-		if (actc_buffer_reinit(adev)) {
-			pr_err("unable to reinit ACTC buffer\n");
-			up_write(&adev->buffer_lock);
-			return;
-		}
-		adev->need_reinit_actc = false;
-	} else {
-		init_actc_data(adev);
+	ret = actc_buffer_reinit(adev);
+	if (ret) {
+		pr_err("unable to reinit ACTC buffer\n");
+		up_write(&adev->buffer_lock);
+		return;
 	}
 	up_write(&adev->buffer_lock);
 	submit_scan_works(adev);
@@ -283,23 +280,11 @@ static int access_tracking_set_page_size(struct device *ldev,
 	return 0;
 }
 
-static void access_tracking_set_reinit_pending(struct device *ldev)
-{
-	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
-	if (adev->is_hist)
-		return;
-	down_write(&adev->buffer_lock);
-	adev->need_reinit_actc = true;
-	up_write(&adev->buffer_lock);
-	pr_debug("set reinit pending flag for node %d\n", adev->node);
-}
-
 static struct tracking_operations access_tracking_ops = {
 	.tracking_enable = access_tracking_enable,
 	.tracking_disable = access_tracking_disable,
 	.tracking_set_page_size = access_tracking_set_page_size,
 	.tracking_mode_set = access_tracking_mode_set,
-	.tracking_set_reinit_pending = access_tracking_set_reinit_pending,
 };
 
 int calc_access_len(struct access_tracking_dev *adev)
@@ -544,7 +529,6 @@ static int __init access_tracking_init(void)
 	if (ret) {
 		goto err_remote_ram;
 	}
-	memory_notifier_init();
 
 	ret = access_ioctl_init();
 	if (ret) {
@@ -578,7 +562,6 @@ err_tracking_add:
 	release_adev();
 	access_ioctl_exit();
 err_ioctl:
-	memory_notifier_exit();
 	release_remote_ram();
 err_remote_ram:
 	reset_acpi_mem();
@@ -594,7 +577,6 @@ static void __exit access_tracking_exit(void)
 	release_adev();
 	release_remote_ram();
 	reset_acpi_mem();
-	memory_notifier_exit();
 	pr_info("access tracking exit successfully\n");
 }
 

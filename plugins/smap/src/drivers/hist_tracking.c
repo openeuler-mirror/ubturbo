@@ -126,18 +126,15 @@ static int actc_buffer_reinit(struct access_tracking_dev *hdev)
 static void hist_tracking_enable(struct device *ldev)
 {
 	struct access_tracking_dev *hdev;
+	int ret;
 
 	hdev = to_access_tracking_dev(ldev);
 	down_write(&hdev->buffer_lock);
-	if (hdev->need_reinit_actc) {
-		if (actc_buffer_reinit(hdev)) {
-			pr_err("unable to reinit ACTC buffer\n");
-			up_write(&hdev->buffer_lock);
-			return;
-		}
-		hdev->need_reinit_actc = false;
-	} else {
-		reset_actc_data(hdev);
+	ret = actc_buffer_reinit(hdev);
+	if (ret) {
+		pr_err("unable to reinit ACTC buffer\n");
+		up_write(&hdev->buffer_lock);
+		return;
 	}
 	up_write(&hdev->buffer_lock);
 	hdev->enable_on = true;
@@ -168,20 +165,10 @@ static int hist_tracking_set_page_size(struct device *ldev, u8 pgsize)
 	return ret;
 }
 
-static void hist_tracking_set_reinit_pending(struct device *ldev)
-{
-	struct access_tracking_dev *hdev = to_access_tracking_dev(ldev);
-	down_write(&hdev->buffer_lock);
-	hdev->need_reinit_actc = true;
-	up_write(&hdev->buffer_lock);
-	pr_debug("set reinit pending flag for node %d\n", hdev->node);
-}
-
 static struct tracking_operations g_hist_tracking_ops = {
 	.tracking_enable = hist_tracking_enable,
 	.tracking_disable = hist_tracking_disable,
 	.tracking_set_page_size = hist_tracking_set_page_size,
-	.tracking_set_reinit_pending = hist_tracking_set_reinit_pending,
 };
 
 static int actc_buffer_init(struct access_tracking_dev *hdev)

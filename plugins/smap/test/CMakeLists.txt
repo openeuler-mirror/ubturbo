@@ -114,8 +114,6 @@ list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_pid.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_tracking.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_tracking_wrapper.c)
 
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/memory_notifier.c)
-
 list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/ub_hist.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/hist_ops.c)
 

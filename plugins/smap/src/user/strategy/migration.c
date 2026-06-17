@@ -747,6 +747,7 @@ int ScanMigrateWork(ThreadCtx *ctx)
         RestoreNewPidScanTime(ctx);
     }
 out:
+    RefreshRemoteRam(manager);
     // 启动扫描
     EnableTracking(manager);
     SMAP_LOGGER_DEBUG("Tracking enabled.");
