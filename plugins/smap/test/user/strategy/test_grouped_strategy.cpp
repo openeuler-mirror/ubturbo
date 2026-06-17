@@ -30,7 +30,16 @@ static void FreeMigList(struct MigList mlist[MAX_NODES][MAX_NODES])
     }
 }
 
-TEST_F(GroupedStrategyTest, TestGroupedStrategyDemoteByLocalLimitAndQuota)
+static void ExpectMigListEmpty(struct MigList mlist[MAX_NODES][MAX_NODES])
+{
+    for (int i = 0; i < MAX_NODES; i++) {
+        for (int j = 0; j < MAX_NODES; j++) {
+            EXPECT_EQ(0, mlist[i][j].nr);
+        }
+    }
+}
+
+TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsDemoteByLocalLimitAndQuota)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
@@ -59,14 +68,12 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategyDemoteByLocalLimitAndQuota)
 
     int ret = GroupedMigrationStrategy(&process, mlist);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(2, mlist[0][4].nr);
-    EXPECT_EQ(0x1000, mlist[0][4].addr[0]);
-    EXPECT_EQ(0x2000, mlist[0][4].addr[1]);
+    ExpectMigListEmpty(mlist);
 
     FreeMigList(mlist);
 }
 
-TEST_F(GroupedStrategyTest, TestGroupedStrategyPromoteByLocalDeficit)
+TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsPromoteByLocalDeficit)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
@@ -98,14 +105,12 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategyPromoteByLocalDeficit)
 
     int ret = GroupedMigrationStrategy(&process, mlist);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(2, mlist[4][0].nr);
-    EXPECT_EQ(0x5000, mlist[4][0].addr[0]);
-    EXPECT_EQ(0x4000, mlist[4][0].addr[1]);
+    ExpectMigListEmpty(mlist);
 
     FreeMigList(mlist);
 }
 
-TEST_F(GroupedStrategyTest, TestGroupedStrategySyncRemoteUsedPagesPromotesRuntimeRemotePages)
+TEST_F(GroupedStrategyTest, TestGroupedStrategySyncRemoteUsedPagesWithoutPromote)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
@@ -137,14 +142,12 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySyncRemoteUsedPagesPromotesRuntim
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ((uint64_t)2, process.groupPolicy.groups[0].targets[0].usedPages);
-    EXPECT_EQ(2, mlist[4][0].nr);
-    EXPECT_EQ(0x5000, mlist[4][0].addr[0]);
-    EXPECT_EQ(0x4000, mlist[4][0].addr[1]);
+    ExpectMigListEmpty(mlist);
 
     FreeMigList(mlist);
 }
 
-TEST_F(GroupedStrategyTest, TestGroupedStrategySyncRemoteUsedPagesAllowsOverQuotaPromote)
+TEST_F(GroupedStrategyTest, TestGroupedStrategySyncRemoteUsedPagesAllowsOverQuotaWithoutPromote)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
@@ -173,15 +176,12 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySyncRemoteUsedPagesAllowsOverQuot
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ((uint64_t)3, process.groupPolicy.groups[0].targets[0].usedPages);
-    EXPECT_EQ(3, mlist[4][0].nr);
-    EXPECT_EQ(0x5000, mlist[4][0].addr[0]);
-    EXPECT_EQ(0x6000, mlist[4][0].addr[1]);
-    EXPECT_EQ(0x4000, mlist[4][0].addr[2]);
+    ExpectMigListEmpty(mlist);
 
     FreeMigList(mlist);
 }
 
-TEST_F(GroupedStrategyTest, TestGroupedStrategySyncSharedTargetUsedPagesByQuota)
+TEST_F(GroupedStrategyTest, TestGroupedStrategySyncSharedTargetUsedPagesByQuotaWithoutPromote)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
@@ -219,17 +219,12 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySyncSharedTargetUsedPagesByQuota)
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ((uint64_t)1, process.groupPolicy.groups[0].targets[0].usedPages);
     EXPECT_EQ((uint64_t)3, process.groupPolicy.groups[1].targets[0].usedPages);
-    EXPECT_EQ(1, mlist[4][0].nr);
-    EXPECT_EQ(3, mlist[4][1].nr);
-    EXPECT_EQ(0x4000, mlist[4][0].addr[0]);
-    EXPECT_EQ(0x7000, mlist[4][1].addr[0]);
-    EXPECT_EQ(0x6000, mlist[4][1].addr[1]);
-    EXPECT_EQ(0x5000, mlist[4][1].addr[2]);
+    ExpectMigListEmpty(mlist);
 
     FreeMigList(mlist);
 }
 
-TEST_F(GroupedStrategyTest, TestGroupedStrategyPromoteTakesPriorityWhenAnyLocalBelowReserve)
+TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsPromoteWhenAnyLocalBelowReserve)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
@@ -264,13 +259,12 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategyPromoteTakesPriorityWhenAnyLocalB
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(2, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[1][4].nr);
+    ExpectMigListEmpty(mlist);
 
     FreeMigList(mlist);
 }
 
-TEST_F(GroupedStrategyTest, TestGroupedStrategyLocalDeficitWithoutRemoteSkipsDemote)
+TEST_F(GroupedStrategyTest, TestGroupedStrategyLocalDeficitSkipsSingleDirectionMigration)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
@@ -303,15 +297,12 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategyLocalDeficitWithoutRemoteSkipsDem
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[1][4].nr);
-    EXPECT_EQ(2, mlist[1][0].nr);
-    EXPECT_EQ(0x2000, mlist[1][0].addr[0]);
-    EXPECT_EQ(0x3000, mlist[1][0].addr[1]);
+    ExpectMigListEmpty(mlist);
 
     FreeMigList(mlist);
 }
 
-TEST_F(GroupedStrategyTest, TestGroupedStrategyDemoteOnlyFromLocalAboveReserve)
+TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsDemoteFromLocalAboveReserve)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
@@ -346,15 +337,12 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategyDemoteOnlyFromLocalAboveReserve)
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[0][4].nr);
-    EXPECT_EQ(2, mlist[1][4].nr);
-    EXPECT_EQ(0x3000, mlist[1][4].addr[0]);
-    EXPECT_EQ(0x4000, mlist[1][4].addr[1]);
+    ExpectMigListEmpty(mlist);
 
     FreeMigList(mlist);
 }
 
-TEST_F(GroupedStrategyTest, TestGroupedStrategyPromotePrefersLargerLocalDeficit)
+TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsPromoteForLargerLocalDeficit)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
@@ -383,13 +371,12 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategyPromotePrefersLargerLocalDeficit)
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[4][0].nr);
-    EXPECT_EQ(2, mlist[4][1].nr);
+    ExpectMigListEmpty(mlist);
 
     FreeMigList(mlist);
 }
 
-TEST_F(GroupedStrategyTest, TestGroupedStrategyPromoteOrdersGroupsByDeficit)
+TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsPromoteGroupDeficitOrdering)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
@@ -426,10 +413,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategyPromoteOrdersGroupsByDeficit)
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(1, mlist[5][1].nr);
-    EXPECT_EQ(0x5000, mlist[5][1].addr[0]);
-    EXPECT_EQ(1, mlist[4][0].nr);
-    EXPECT_EQ(0x4000, mlist[4][0].addr[0]);
+    ExpectMigListEmpty(mlist);
 
     FreeMigList(mlist);
 }
@@ -460,7 +444,7 @@ TEST_F(GroupedStrategyTest, TestUpdateGroupedMigrationResult)
     EXPECT_EQ(0, process.groupPolicy.groups[0].targets[0].usedPages);
 }
 
-TEST_F(GroupedStrategyTest, TestGroupedStrategyLocalRebalanceUsesRemainingDeficitAfterPromote)
+TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsLocalRebalanceAfterPromote)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
@@ -501,10 +485,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategyLocalRebalanceUsesRemainingDefici
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(1, mlist[4][1].nr);
-    EXPECT_EQ(1, mlist[0][1].nr);
-    EXPECT_EQ(0x1000, mlist[0][1].addr[0]);
-    EXPECT_EQ(0, mlist[0][4].nr);
+    ExpectMigListEmpty(mlist);
 
     FreeMigList(mlist);
 }

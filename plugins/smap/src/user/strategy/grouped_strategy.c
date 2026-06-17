@@ -1128,25 +1128,10 @@ int GroupedMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODE
     if (!process || !process->groupPolicy.enabled) {
         return -EINVAL;
     }
-    /* Promote/demote/swap all depend on target usedPages accounting. */
+    /* Swap depends on target usedPages accounting. */
     SyncGroupedTargetUsedPages(process);
     WarnUngroupedPages(process);
-    int ret = RunPromoteStage(process, mlist);
-    if (ret) {
-        SMAP_LOGGER_ERROR("grouped pid %d promote stage failed: %d.", process->pid, ret);
-        return ret;
-    }
-    ret = RunLocalRebalanceStage(process, mlist);
-    if (ret) {
-        SMAP_LOGGER_ERROR("grouped pid %d local rebalance stage failed: %d.", process->pid, ret);
-        return ret;
-    }
-    ret = RunDemoteStage(process, mlist);
-    if (ret) {
-        SMAP_LOGGER_ERROR("grouped pid %d demote stage failed: %d.", process->pid, ret);
-        return ret;
-    }
-    ret = RunSwapStage(process, mlist);
+    int ret = RunSwapStage(process, mlist);
     if (ret) {
         SMAP_LOGGER_ERROR("grouped pid %d swap stage failed: %d.", process->pid, ret);
     }
