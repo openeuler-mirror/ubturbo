@@ -433,7 +433,7 @@ static bool pid_procfs_exists(pid_t pid)
 	struct path p;
 	char path[AP_PROCFS_DIR_LEN] = { 0 };
 	ret = snprintf(path, sizeof(path), "/proc/%s/%d", SMAP_PROC_ROOT, pid);
-	if (ret == 0)
+	if (ret < 0 || ret >= sizeof(path))
 		return false;
 
 	ret = kern_path(path, LOOKUP_DIRECTORY, &p);
@@ -455,7 +455,7 @@ static int create_procfs(struct access_pid *ap)
 		return -EINVAL;
 
 	ret = snprintf(dirname, sizeof(dirname), "%d", pid);
-	if (ret == 0)
+	if (ret < 0 || ret >= sizeof(dirname))
 		return -EINVAL;
 
 	if (pid_procfs_exists(pid)) {
