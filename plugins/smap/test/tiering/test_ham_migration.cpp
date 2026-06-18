@@ -1,6 +1,11 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
+/* Forward declare mmput with C linkage before mm.h includes it,
+   ensuring mmput uses C linkage (matching its C definition in fork.c). */
+struct mm_struct;
+extern "C" void mmput(struct mm_struct *);
+
 #include <linux/fs.h>
 #include <linux/hugetlb.h>
 #include <linux/list.h>
@@ -67,12 +72,39 @@ extern "C" int set_pid_pgtable_cacheable(pid_t pid, unsigned long start, unsigne
 extern "C" int get_ham_pages_freqs(pid_t pid, struct freq_info **freq_info_array,
     uint64_t *freq_info_num);
 extern "C" unsigned long copy_from_user(void *to, const void *from, unsigned long n);
+extern "C" int config_system_huge_page(unsigned long huge_page_number,
+    unsigned int node_id, struct hstate *h);
+extern "C" int compare_page_list(const void *a, const void *b);
+extern "C" int compare_page_freq(const void *a, const void *b);
+extern "C" int fill_task_pages(struct ham_migrate_task *mig_task);
+extern "C" int check_migration_param(struct migration_param param, struct hstate **h);
+extern "C" bool pid_legally(pid_t pid);
+extern "C" int check_rmt_numa_info(struct ram_block_info *rbi);
+extern "C" struct ham_migrate_task *init_migrate_task(struct migration_param *arg,
+    struct hstate *h);
+extern "C" struct file *filp_open(const char *filename, int flags, umode_t mode);
+extern "C" int filp_close(struct file *filp, fl_owner_t id);
+extern "C" struct mm_struct *find_get_mm_by_vpid(pid_t pid);
+extern "C" int walk_page_range(struct mm_struct *mm, unsigned long start,
+    unsigned long end, const struct mm_walk_ops *ops, void *private_data);
+extern "C" struct vm_area_struct *find_vma(struct mm_struct *mm_s, unsigned long vaddr);
+extern "C" struct hstate *hstate_vma(struct vm_area_struct *vma);
+extern "C" unsigned long huge_page_size(struct hstate *h);
+extern "C" void mmap_read_lock(struct mm_struct *mm);
+extern "C" void mmap_read_unlock(struct mm_struct *mm);
+extern "C" void msleep(unsigned int msecs);
 
 class HamMigrationTest : public ::testing::Test {
 protected:
+    void SetUp() override
+    {
+        cout << "[HamMigrationTest SetUp Begin]" << endl;
+    }
     void TearDown() override
     {
+        cout << "[HamMigrationTest TearDown Begin]" << endl;
         GlobalMockObject::verify();
+        cout << "[HamMigrationTest TearDown End]" << endl;
     }
 };
 
@@ -88,6 +120,69 @@ static struct folio *mock_get_null_folio(struct ham_page_map *hpm)
 {
     (void)hpm;
     return nullptr;
+}
+
+static unsigned long mock_copy_from_user_set_param(void *to, const void *from,
+    unsigned long n)
+{
+    if (n == sizeof(struct migration_param)) {
+        struct migration_param *p = (struct migration_param *)to;
+        memset(p, 0, sizeof(struct migration_param));
+        p->pid = 100;
+        p->cnt = 1;
+        p->ram_blocks[0].rmt_numa_id = NUMA_NO_NODE;
+        p->ram_blocks[0].size = PAGE_SIZE_2M;
+        p->ram_blocks[0].hva_start = 0x100000;
+    } else if (n == sizeof(pid_t)) {
+        pid_t *pid_ptr = (pid_t *)to;
+        *pid_ptr = 100;
+    } else if (n == sizeof(maintain_info)) {
+        maintain_info *mi = (maintain_info *)to;
+        memset(mi, 0, sizeof(maintain_info));
+        mi->pid = 100;
+        mi->cacheable = true;
+    }
+    return 0;
+}
+
+static unsigned long mock_copy_from_user_remote_node(void *to, const void *from,
+    unsigned long n)
+{
+    if (n == sizeof(struct migration_param)) {
+        struct migration_param *p = (struct migration_param *)to;
+        memset(p, 0, sizeof(struct migration_param));
+        p->pid = 100;
+        p->cnt = 1;
+        p->ram_blocks[0].rmt_numa_id = 1;
+        p->ram_blocks[0].size = PAGE_SIZE_2M;
+        p->ram_blocks[0].hva_start = 0x100000;
+    }
+    return 0;
+}
+
+static unsigned long mock_copy_from_user_non_cacheable(void *to, const void *from,
+    unsigned long n)
+{
+    if (n == sizeof(maintain_info)) {
+        maintain_info *mi = (maintain_info *)to;
+        memset(mi, 0, sizeof(maintain_info));
+        mi->pid = 100;
+        mi->cacheable = false;
+    }
+    return 0;
+}
+
+static struct ham_migrate_task g_mock_mig_task;
+
+static struct ham_migrate_task *mock_init_migrate_task_success(
+    struct migration_param *arg, struct hstate *h)
+{
+    memset(&g_mock_mig_task, 0, sizeof(struct ham_migrate_task));
+    g_mock_mig_task.pid = arg->pid;
+    g_mock_mig_task.numa_cnt = arg->cnt;
+    g_mock_mig_task.hstate = h;
+    g_mock_mig_task.status = HAM_TASK_OCCUPIED;
+    return &g_mock_mig_task;
 }
 
 TEST_F(HamMigrationTest, InitNumaPageMapRejectsInvalidParams)
@@ -456,4 +551,625 @@ TEST_F(HamMigrationTest, FileOpsAndGlobalCacheAttribute)
     EXPECT_STREQ("0\n", buf);
 
     EXPECT_EQ((ssize_t)3, global_cache_mnt_store(nullptr, nullptr, "bad", 3));
+}
+
+/* ==================== compare_page_list / compare_page_freq tests ==================== */
+
+TEST_F(HamMigrationTest, ComparePageListAndFreq)
+{
+    cout << "  [ComparePageListAndFreq]" << endl;
+    struct ham_page_map hpm_a = {};
+    struct ham_page_map hpm_b = {};
+    struct folio dst_a = {};
+    struct folio dst_b = {};
+
+    hpm_a.dst_folio = &dst_a;
+    hpm_b.dst_folio = &dst_b;
+
+    /* folio_pfn stub returns 0, so both PFN_PHYS values are equal */
+    EXPECT_EQ(0, compare_page_list(&hpm_a, &hpm_b));
+
+    /* compare_page_freq uses freq field directly */
+    hpm_a.freq = 10;
+    hpm_b.freq = 5;
+    struct list_head *ptr_a = &hpm_a.list;
+    struct list_head *ptr_b = &hpm_b.list;
+    EXPECT_EQ(1, compare_page_freq(&ptr_a, &ptr_b));
+
+    hpm_a.freq = 5;
+    hpm_b.freq = 10;
+    EXPECT_EQ(-1, compare_page_freq(&ptr_a, &ptr_b));
+
+    hpm_a.freq = 7;
+    hpm_b.freq = 7;
+    EXPECT_EQ(0, compare_page_freq(&ptr_a, &ptr_b));
+}
+
+/* ==================== fill_task_pages tests ==================== */
+
+TEST_F(HamMigrationTest, FillTaskPagesMmNull)
+{
+    cout << "  [FillTaskPagesMmNull]" << endl;
+    struct ham_migrate_task mig_task = {};
+    mig_task.pid = 100;
+
+    MOCKER(find_get_mm_by_vpid).stubs().will(returnValue((struct mm_struct *)nullptr));
+}
+
+TEST_F(HamMigrationTest, FillTaskPagesWalkError)
+{
+    cout << "  [FillTaskPagesWalkError]" << endl;
+    struct ham_migrate_task mig_task = {};
+    struct mm_struct mm_val = {};
+    struct ram_block_map rmap = {};
+
+    mig_task.pid = 100;
+    mig_task.numa_cnt = 1;
+    mig_task.ram_maps = &rmap;
+    rmap.hva_start = 0x100000;
+    rmap.size = PAGE_SIZE_2M;
+
+    MOCKER(find_get_mm_by_vpid).stubs().will(returnValue(&mm_val));
+    MOCKER(mmap_read_lock).stubs();
+    MOCKER(walk_page_range).stubs().will(returnValue(-EINVAL));
+    MOCKER(mmap_read_unlock).stubs();
+    MOCKER(mmput).stubs();
+
+    EXPECT_EQ(-EINVAL, fill_task_pages(&mig_task));
+}
+
+TEST_F(HamMigrationTest, FillTaskPagesSuccess)
+{
+    cout << "  [FillTaskPagesSuccess]" << endl;
+    struct ham_migrate_task mig_task = {};
+    struct mm_struct mm_val = {};
+    struct ram_block_map rmap = {};
+
+    mig_task.pid = 100;
+    mig_task.numa_cnt = 1;
+    mig_task.ram_maps = &rmap;
+    rmap.hva_start = 0x100000;
+    rmap.size = PAGE_SIZE_2M;
+
+    MOCKER(find_get_mm_by_vpid).stubs().will(returnValue(&mm_val));
+    MOCKER(mmap_read_lock).stubs();
+    MOCKER(walk_page_range).stubs().will(returnValue(0));
+    MOCKER(mmap_read_unlock).stubs();
+    MOCKER(mmput).stubs();
+
+    EXPECT_EQ(0, fill_task_pages(&mig_task));
+}
+
+/* ==================== check_migration_param tests ==================== */
+
+TEST_F(HamMigrationTest, CheckMigrationParamIllegalPid)
+{
+    cout << "  [CheckMigrationParamIllegalPid]" << endl;
+    struct migration_param param = {};
+    struct hstate *h = nullptr;
+
+    param.pid = 100;
+    param.cnt = 1;
+
+    MOCKER(pid_legally).stubs().will(returnValue(false));
+    EXPECT_EQ(-EINVAL, check_migration_param(param, &h));
+}
+
+TEST_F(HamMigrationTest, CheckMigrationParamCntZero)
+{
+    cout << "  [CheckMigrationParamCntZero]" << endl;
+    struct migration_param param = {};
+    struct hstate *h = nullptr;
+
+    param.pid = 100;
+    param.cnt = 0;
+
+    MOCKER(pid_legally).stubs().will(returnValue(true));
+    EXPECT_EQ(-EINVAL, check_migration_param(param, &h));
+}
+
+TEST_F(HamMigrationTest, CheckMigrationParamCntExceedsBatchNum)
+{
+    cout << "  [CheckMigrationParamCntExceedsBatchNum]" << endl;
+    struct migration_param param = {};
+    struct hstate *h = nullptr;
+
+    param.pid = 100;
+    param.cnt = BATCH_NUM + 1;
+
+    MOCKER(pid_legally).stubs().will(returnValue(true));
+    EXPECT_EQ(-EINVAL, check_migration_param(param, &h));
+}
+
+TEST_F(HamMigrationTest, CheckMigrationParamMmNull)
+{
+    cout << "  [CheckMigrationParamMmNull]" << endl;
+    struct migration_param param = {};
+    struct hstate *h = nullptr;
+
+    param.pid = 100;
+    param.cnt = 1;
+
+    MOCKER(pid_legally).stubs().will(returnValue(true));
+    MOCKER(find_get_mm_by_vpid).stubs().will(returnValue((struct mm_struct *)nullptr));
+    EXPECT_EQ(-EINVAL, check_migration_param(param, &h));
+}
+
+/* ==================== ioctl_start_migration tests ==================== */
+
+TEST_F(HamMigrationTest, IoctlStartMigrationParamCheckFails)
+{
+    cout << "  [IoctlStartMigrationParamCheckFails]" << endl;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(check_migration_param).stubs().will(returnValue(-EINVAL));
+
+    EXPECT_EQ(-EINVAL, ioctl_start_migration(0));
+}
+
+TEST_F(HamMigrationTest, IoctlStartMigrationInitTaskNull)
+{
+    cout << "  [IoctlStartMigrationInitTaskNull]" << endl;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(check_migration_param).stubs().will(returnValue(0));
+    MOCKER(init_migrate_task).stubs().will(returnValue((struct ham_migrate_task *)nullptr));
+
+    EXPECT_EQ(-ENOMEM, ioctl_start_migration(0));
+}
+
+TEST_F(HamMigrationTest, IoctlStartMigrationNumaNoNodeSuccess)
+{
+    cout << "  [IoctlStartMigrationNumaNoNodeSuccess]" << endl;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(check_migration_param).stubs().will(returnValue(0));
+    MOCKER(init_migrate_task).stubs().will(invoke(mock_init_migrate_task_success));
+    MOCKER(create_numa_map).stubs().will(returnValue(0));
+    MOCKER(put_migrate_task).stubs();
+
+    EXPECT_EQ(0, ioctl_start_migration(0));
+}
+
+TEST_F(HamMigrationTest, IoctlStartMigrationConfigHugePageFails)
+{
+    cout << "  [IoctlStartMigrationConfigHugePageFails]" << endl;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_remote_node));
+    MOCKER(check_migration_param).stubs().will(returnValue(0));
+    MOCKER(init_migrate_task).stubs().will(invoke(mock_init_migrate_task_success));
+    MOCKER(config_system_huge_page).stubs().will(returnValue(-EFAULT));
+    MOCKER(release_migrate_task).stubs();
+
+    EXPECT_EQ(-EFAULT, ioctl_start_migration(0));
+}
+
+TEST_F(HamMigrationTest, IoctlStartMigrationCreateMapFails)
+{
+    cout << "  [IoctlStartMigrationCreateMapFails]" << endl;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(check_migration_param).stubs().will(returnValue(0));
+    MOCKER(init_migrate_task).stubs().will(invoke(mock_init_migrate_task_success));
+    MOCKER(create_numa_map).stubs().will(returnValue(-ENOMEM));
+    MOCKER(release_migrate_task).stubs();
+
+    EXPECT_EQ(-ENOMEM, ioctl_start_migration(0));
+}
+
+/* ==================== ioctl_migration_pages tests ==================== */
+
+TEST_F(HamMigrationTest, IoctlMigrationPagesTaskNull)
+{
+    cout << "  [IoctlMigrationPagesTaskNull]" << endl;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue((struct ham_migrate_task *)nullptr));
+
+    EXPECT_EQ(-EINVAL, ioctl_migration_pages(0));
+}
+
+TEST_F(HamMigrationTest, IoctlMigrationPagesStatusCheckFails)
+{
+    cout << "  [IoctlMigrationPagesStatusCheckFails]" << endl;
+    struct ham_migrate_task mig_task = {};
+
+    mig_task.pid = 100;
+    mig_task.status = HAM_TASK_OCCUPIED;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue(&mig_task));
+    MOCKER(check_task_status).stubs().will(returnValue(-EINVAL));
+    MOCKER(put_migrate_task).stubs();
+
+    EXPECT_EQ(-EINVAL, ioctl_migration_pages(0));
+}
+
+TEST_F(HamMigrationTest, IoctlMigrationPagesFillPagesFails)
+{
+    cout << "  [IoctlMigrationPagesFillPagesFails]" << endl;
+    struct ham_migrate_task mig_task = {};
+
+    mig_task.pid = 100;
+    mig_task.status = HAM_TASK_INITED;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue(&mig_task));
+    MOCKER(check_task_status).stubs().will(returnValue(0));
+    MOCKER(fill_task_pages).stubs().will(returnValue(-EINVAL));
+    MOCKER(put_migrate_task).stubs();
+
+    EXPECT_EQ(-EINVAL, ioctl_migration_pages(0));
+}
+
+TEST_F(HamMigrationTest, IoctlMigrationPagesNoQualifiedPages)
+{
+    cout << "  [IoctlMigrationPagesNoQualifiedPages]" << endl;
+    struct ham_migrate_task mig_task = {};
+    struct ram_block_map rmap = {};
+
+    mig_task.pid = 100;
+    mig_task.status = HAM_TASK_INITED;
+    mig_task.numa_cnt = 1;
+    mig_task.ram_maps = &rmap;
+    rmap.page_num = 0;
+    rmap.hpms = nullptr;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue(&mig_task));
+    MOCKER(check_task_status).stubs().will(returnValue(0));
+    MOCKER(fill_task_pages).stubs().will(returnValue(0));
+    MOCKER(put_migrate_task).stubs();
+
+    long ret = ioctl_migration_pages(0);
+    EXPECT_EQ(0, ret);
+}
+
+/* ==================== ioctl_stop_migration tests ==================== */
+
+TEST_F(HamMigrationTest, IoctlStopMigrationTaskNull)
+{
+    cout << "  [IoctlStopMigrationTaskNull]" << endl;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue((struct ham_migrate_task *)nullptr));
+
+    EXPECT_EQ(-EINVAL, ioctl_stop_migration(0));
+}
+
+TEST_F(HamMigrationTest, IoctlStopMigrationStatusCheckFails)
+{
+    cout << "  [IoctlStopMigrationStatusCheckFails]" << endl;
+    struct ham_migrate_task mig_task = {};
+
+    mig_task.pid = 100;
+    mig_task.status = HAM_TASK_OCCUPIED;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue(&mig_task));
+    MOCKER(check_task_status).stubs().will(returnValue(-EINVAL));
+    MOCKER(put_migrate_task).stubs();
+
+    EXPECT_EQ(-EINVAL, ioctl_stop_migration(0));
+}
+
+TEST_F(HamMigrationTest, IoctlStopMigrationNoAllowMigr)
+{
+    cout << "  [IoctlStopMigrationNoAllowMigr]" << endl;
+    struct ham_migrate_task mig_task = {};
+
+    mig_task.pid = 100;
+    mig_task.status = HAM_TASK_INITED;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue(&mig_task));
+    MOCKER(check_task_status).stubs().will(returnValue(0));
+    MOCKER(release_migrate_task).stubs();
+
+    EXPECT_EQ(0, ioctl_stop_migration(0));
+}
+
+TEST_F(HamMigrationTest, IoctlStopMigrationSuccess)
+{
+    cout << "  [IoctlStopMigrationSuccess]" << endl;
+    struct ham_migrate_task mig_task = {};
+
+    mig_task.pid = 100;
+    mig_task.status = HAM_TASK_INITED | HAM_TASK_ALLOW_MIGR;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue(&mig_task));
+    MOCKER(check_task_status).stubs().will(returnValue(0));
+    MOCKER(put_migrate_task).stubs();
+
+    EXPECT_EQ(0, ioctl_stop_migration(0));
+}
+
+/* ==================== ioctl_modify_pagetable tests ==================== */
+
+TEST_F(HamMigrationTest, IoctlModifyPagetableTaskNull)
+{
+    cout << "  [IoctlModifyPagetableTaskNull]" << endl;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue((struct ham_migrate_task *)nullptr));
+
+    EXPECT_EQ(-EINVAL, ioctl_modify_pagetable(0));
+}
+
+TEST_F(HamMigrationTest, IoctlModifyPagetableStatusFails)
+{
+    cout << "  [IoctlModifyPagetableStatusFails]" << endl;
+    struct ham_migrate_task mig_task = {};
+
+    mig_task.pid = 100;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue(&mig_task));
+    MOCKER(check_task_status).stubs().will(returnValue(-EINVAL));
+    MOCKER(put_migrate_task).stubs();
+
+    EXPECT_EQ(-EINVAL, ioctl_modify_pagetable(0));
+}
+
+TEST_F(HamMigrationTest, IoctlModifyPagetableCacheableSuccess)
+{
+    cout << "  [IoctlModifyPagetableCacheableSuccess]" << endl;
+    struct ham_migrate_task mig_task = {};
+    struct ram_block_map rmap = {};
+
+    mig_task.pid = 100;
+    mig_task.status = HAM_TASK_INITED;
+    mig_task.numa_cnt = 1;
+    mig_task.ram_maps = &rmap;
+    rmap.hva_start = 0x100000;
+    rmap.size = PAGE_SIZE_2M;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue(&mig_task));
+    MOCKER(check_task_status).stubs().will(returnValue(0));
+    MOCKER(task_pgtable_within_pid_set_cacheable).stubs().will(returnValue(0));
+    MOCKER(kernel_pgtable_within_pid_set_valid).stubs().will(returnValue(0));
+    MOCKER(put_migrate_task).stubs();
+
+    EXPECT_EQ(0, ioctl_modify_pagetable(0));
+}
+
+TEST_F(HamMigrationTest, IoctlModifyPagetableNonCacheableSuccess)
+{
+    cout << "  [IoctlModifyPagetableNonCacheableSuccess]" << endl;
+    struct ham_migrate_task mig_task = {};
+    struct ram_block_map rmap = {};
+
+    mig_task.pid = 100;
+    mig_task.status = HAM_TASK_INITED;
+    mig_task.numa_cnt = 1;
+    mig_task.ram_maps = &rmap;
+    rmap.hva_start = 0x100000;
+    rmap.size = PAGE_SIZE_2M;
+
+    /* kernel_pgtable_within_pa_set_cacheable is inline, calls
+       set_linear_mapping_nc which is also inline and returns 0.
+       task_pgtable_within_pid_set_cacheable must be mocked. */
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_non_cacheable));
+    MOCKER(get_migrate_task).stubs().will(returnValue(&mig_task));
+    MOCKER(check_task_status).stubs().will(returnValue(0));
+    MOCKER(task_pgtable_within_pid_set_cacheable).stubs().will(returnValue(0));
+    MOCKER(put_migrate_task).stubs();
+
+    EXPECT_EQ(0, ioctl_modify_pagetable(0));
+}
+
+/* ==================== ioctl_cache_clear tests ==================== */
+
+TEST_F(HamMigrationTest, IoctlCacheClearTaskNull)
+{
+    cout << "  [IoctlCacheClearTaskNull]" << endl;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue((struct ham_migrate_task *)nullptr));
+
+    EXPECT_EQ(-EINVAL, ioctl_cache_clear(0));
+}
+
+TEST_F(HamMigrationTest, IoctlCacheClearStatusFails)
+{
+    cout << "  [IoctlCacheClearStatusFails]" << endl;
+    struct ham_migrate_task mig_task = {};
+
+    mig_task.pid = 100;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue(&mig_task));
+    MOCKER(check_task_status).stubs().will(returnValue(-EINVAL));
+    MOCKER(put_migrate_task).stubs();
+
+    EXPECT_EQ(-EINVAL, ioctl_cache_clear(0));
+}
+
+TEST_F(HamMigrationTest, IoctlCacheClearSuccess)
+{
+    cout << "  [IoctlCacheClearSuccess]" << endl;
+    struct ham_migrate_task mig_task = {};
+    struct ram_block_map rmap = {};
+
+    mig_task.pid = 100;
+    mig_task.status = HAM_TASK_MIGRATED;
+    mig_task.numa_cnt = 1;
+    mig_task.ram_maps = &rmap;
+    rmap.rmt_numa_start = 0x200000;
+    rmap.size = PAGE_SIZE_2M;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue(&mig_task));
+    MOCKER(check_task_status).stubs().will(returnValue(0));
+    MOCKER(flush_cache_by_pa).stubs().will(returnValue(0));
+    MOCKER(put_migrate_task).stubs();
+
+    EXPECT_EQ(0, ioctl_cache_clear(0));
+}
+
+/* ==================== ioctl_rollback_pages tests ==================== */
+
+TEST_F(HamMigrationTest, IoctlRollbackPagesTaskNull)
+{
+    cout << "  [IoctlRollbackPagesTaskNull]" << endl;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue((struct ham_migrate_task *)nullptr));
+
+    EXPECT_EQ(-EINVAL, ioctl_rollback_pages(0));
+}
+
+TEST_F(HamMigrationTest, IoctlRollbackPagesStatusNotMigrated)
+{
+    cout << "  [IoctlRollbackPagesStatusNotMigrated]" << endl;
+    struct ham_migrate_task mig_task = {};
+
+    mig_task.pid = 100;
+    mig_task.status = HAM_TASK_INITED;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue(&mig_task));
+    MOCKER(check_task_status).stubs().will(returnValue(-EINVAL));
+    MOCKER(release_migrate_task).stubs();
+
+    EXPECT_EQ(-EINVAL, ioctl_rollback_pages(0));
+}
+
+TEST_F(HamMigrationTest, IoctlRollbackPagesFindVpidNull)
+{
+    cout << "  [IoctlRollbackPagesFindVpidNull]" << endl;
+    struct ham_migrate_task mig_task = {};
+
+    mig_task.pid = 100;
+    mig_task.status = HAM_TASK_MIGRATED;
+
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user_set_param));
+    MOCKER(get_migrate_task).stubs().will(returnValue(&mig_task));
+    MOCKER(check_task_status).stubs().will(returnValue(0));
+    MOCKER(find_vpid).stubs().will(returnValue((struct pid *)nullptr));
+    MOCKER(release_migrate_task).stubs();
+
+    EXPECT_EQ(-EFAULT, ioctl_rollback_pages(0));
+}
+
+/* ==================== check_rmt_numa_info tests ==================== */
+
+TEST_F(HamMigrationTest, CheckRmtNumaInfoNoNode)
+{
+    cout << "  [CheckRmtNumaInfoNoNode]" << endl;
+    struct ram_block_info rbi = {};
+
+    rbi.rmt_numa_id = NUMA_NO_NODE;
+    EXPECT_EQ(0, check_rmt_numa_info(&rbi));
+}
+
+TEST_F(HamMigrationTest, CheckRmtNumaInfoInvalidNode)
+{
+    cout << "  [CheckRmtNumaInfoInvalidNode]" << endl;
+    struct ram_block_info rbi = {};
+
+    rbi.rmt_numa_id = -2;
+    EXPECT_EQ(-EINVAL, check_rmt_numa_info(&rbi));
+
+    GlobalMockObject::verify();
+
+    rbi.rmt_numa_id = MAX_NUMNODES;
+    EXPECT_EQ(-EINVAL, check_rmt_numa_info(&rbi));
+}
+
+/* ==================== HamMigrationParamTest ==================== */
+
+class HamMigrationParamTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        cout << "[HamMigrationParamTest SetUp Begin]" << endl;
+    }
+    void TearDown() override
+    {
+        cout << "[HamMigrationParamTest TearDown Begin]" << endl;
+        GlobalMockObject::verify();
+        cout << "[HamMigrationParamTest TearDown End]" << endl;
+    }
+};
+
+TEST_F(HamMigrationParamTest, FillTaskPagesMmNull)
+{
+    struct ham_migrate_task mig_task = {};
+    mig_task.pid = 999;
+    MOCKER(find_get_mm_by_vpid).stubs().will(returnValue((struct mm_struct *)nullptr));
+    int ret = fill_task_pages(&mig_task);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(HamMigrationParamTest, CheckMigrationParamInvalidPid)
+{
+    struct migration_param param = {};
+    struct hstate *h = nullptr;
+    param.pid = -1;
+    param.cnt = 1;
+    MOCKER(pid_legally).stubs().will(returnValue(false));
+    int ret = check_migration_param(param, &h);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(HamMigrationParamTest, CheckMigrationParamCntZero)
+{
+    struct migration_param param = {};
+    struct hstate *h = nullptr;
+    param.pid = 100;
+    param.cnt = 0;
+    MOCKER(pid_legally).stubs().will(returnValue(true));
+    int ret = check_migration_param(param, &h);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(HamMigrationParamTest, ComparePageListLess)
+{
+    struct ham_page_map hpm_a = {};
+    struct ham_page_map hpm_b = {};
+    struct folio folio_a = {};
+    struct folio folio_b = {};
+    hpm_a.dst_folio = &folio_a;
+    hpm_b.dst_folio = &folio_b;
+    /* folio_pfn returns 0 in UT, so both PFN_PHYS values are equal */
+    int ret = compare_page_list(&hpm_a, &hpm_b);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(HamMigrationParamTest, ComparePageFreqLess)
+{
+    struct ham_page_map hpm_a = {};
+    struct ham_page_map hpm_b = {};
+    hpm_a.freq = 100;
+    hpm_b.freq = 200;
+    struct list_head *ptr_a = &hpm_a.list;
+    struct list_head *ptr_b = &hpm_b.list;
+    int ret = compare_page_freq(&ptr_a, &ptr_b);
+    EXPECT_EQ(-1, ret);
+}
+
+TEST_F(HamMigrationParamTest, PidLegallyFalse)
+{
+    MOCKER(pid_legally).stubs().will(returnValue(false));
+    bool ret = pid_legally(-1);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(HamMigrationParamTest, CheckRmtNumaInfoNumaNoNode)
+{
+    struct ram_block_info rbi = {};
+    rbi.rmt_numa_id = NUMA_NO_NODE;
+    int ret = check_rmt_numa_info(&rbi);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(HamMigrationParamTest, CheckRmtNumaInfoOutOfRange)
+{
+    struct ram_block_info rbi = {};
+    rbi.rmt_numa_id = MAX_NUMNODES;
+    int ret = check_rmt_numa_info(&rbi);
+    EXPECT_EQ(-EINVAL, ret);
 }
