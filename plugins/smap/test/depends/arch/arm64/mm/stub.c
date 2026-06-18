@@ -10,5 +10,7 @@ pte_t g_tmp_pte = { 0 };
 
 pte_t ptep_get(pte_t *ptep)
 {
-    return g_tmp_pte;
+    if (!ptep)
+        return g_tmp_pte;
+    return *ptep;
 }
