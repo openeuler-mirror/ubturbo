@@ -44,6 +44,7 @@ extern "C" {
 int page_to_nid(const struct page *page);
 bool pfn_valid(unsigned long pfn);
 struct page *pfn_to_online_page(unsigned long pfn);
+void mmput(struct mm_struct *);
 
 #ifdef __cplusplus
 }
@@ -85,7 +86,6 @@ static inline void mmgrab(struct mm_struct *mm)
 {
 }
 
-extern void mmput(struct mm_struct *);
 
 static inline spinlock_t *pmd_lock(struct mm_struct *mm, pmd_t *pmd)
 {
