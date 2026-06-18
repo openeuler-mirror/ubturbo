@@ -525,6 +525,8 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapAfterStableRounds)
     process.scanAttr.actcData[4] = remotePages;
     process.scanAttr.actcLen[4] = 2;
 
+    MOCKER(GetGroupSwapLocalWatermarkRatioConfig).stubs().will(returnValue((uint32_t)100));
+
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(0, mlist[4][0].nr);
     EXPECT_EQ(0, mlist[0][4].nr);
@@ -535,12 +537,170 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapAfterStableRounds)
     MOCKER(GetGroupSwapMinFreqGainConfig).stubs().will(returnValue((uint32_t)0));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(0, mlist[4][0].nr);
+    EXPECT_EQ(0, mlist[0][4].nr);
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(1, mlist[4][0].nr);
     EXPECT_EQ(0x4000, mlist[4][0].addr[0]);
     EXPECT_EQ(1, mlist[0][4].nr);
     EXPECT_EQ(0x1000, mlist[0][4].addr[0]);
 
     FreeMigList(mlist);
+}
+
+TEST_F(GroupedStrategyTest, TestGroupedStrategySwapUsesLocalWatermarkRatio)
+{
+    ProcessAttr process = {};
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    ActcData localPages[95] = {};
+    ActcData remotePages[1] = {};
+
+    process.pid = 116;
+    process.enableSwap = true;
+    process.separateParam.maxMigrate = 10;
+    process.separateParam.freqWt = 1;
+    process.separateParam.slowThred = 1;
+    process.groupPolicy.enabled = true;
+    process.groupPolicy.groupCount = 1;
+    process.groupPolicy.groups[0].localCount = 1;
+    process.groupPolicy.groups[0].locals[0].nid = 0;
+    process.groupPolicy.groups[0].locals[0].localReservePages = 100;
+    process.groupPolicy.groups[0].targetCount = 1;
+    process.groupPolicy.groups[0].targets[0].nid = 4;
+    process.groupPolicy.groups[0].targets[0].quotaPages = 10;
+    process.groupPolicy.groups[0].targets[0].usedPages = 1;
+
+    for (uint64_t i = 0; i < 95; i++) {
+        localPages[i].addr = 0x1000 + i;
+        localPages[i].freq = 1;
+    }
+    process.scanAttr.actcData[0] = localPages;
+    process.scanAttr.actcLen[0] = 95;
+    remotePages[0].addr = 0x4000;
+    remotePages[0].freq = 10;
+    process.scanAttr.actcData[4] = remotePages;
+    process.scanAttr.actcLen[4] = 1;
+
+    MOCKER(GetGroupSwapLocalWatermarkRatioConfig).stubs().will(returnValue((uint32_t)95));
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(0, mlist[4][0].nr);
+    EXPECT_EQ(0, mlist[0][4].nr);
+
+    MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+    MOCKER(GetGroupSwapRatioConfig).stubs().will(returnValue((uint32_t)5));
+    MOCKER(GetGroupSwapMinRemoteFreqConfig).stubs().will(returnValue((uint32_t)0));
+    MOCKER(GetGroupSwapMinFreqGainConfig).stubs().will(returnValue((uint32_t)0));
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(0, mlist[4][0].nr);
+    EXPECT_EQ(0, mlist[0][4].nr);
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(1, mlist[4][0].nr);
+    EXPECT_EQ(0x4000, mlist[4][0].addr[0]);
+    EXPECT_EQ(1, mlist[0][4].nr);
+    EXPECT_EQ(0x1000, mlist[0][4].addr[0]);
+
+    FreeMigList(mlist);
+}
+
+TEST_F(GroupedStrategyTest, TestGroupedStrategySwapWaitsForStableTotalPages)
+{
+    ProcessAttr process = {};
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    ActcData localPages[2] = {};
+    ActcData remotePages[2] = {};
+
+    process.pid = 118;
+    process.enableSwap = true;
+    process.separateParam.maxMigrate = 10;
+    process.separateParam.freqWt = 1;
+    process.separateParam.slowThred = 1;
+    process.groupPolicy.enabled = true;
+    process.groupPolicy.groupCount = 1;
+    process.groupPolicy.groups[0].localCount = 1;
+    process.groupPolicy.groups[0].locals[0].nid = 0;
+    process.groupPolicy.groups[0].locals[0].localReservePages = 2;
+    process.groupPolicy.groups[0].targetCount = 1;
+    process.groupPolicy.groups[0].targets[0].nid = 4;
+    process.groupPolicy.groups[0].targets[0].quotaPages = 10;
+    process.groupPolicy.groups[0].targets[0].usedPages = 1;
+
+    localPages[0].addr = 0x1000;
+    localPages[0].freq = 1;
+    localPages[1].addr = 0x2000;
+    localPages[1].freq = 2;
+    process.scanAttr.actcData[0] = localPages;
+    process.scanAttr.actcLen[0] = 2;
+    remotePages[0].addr = 0x4000;
+    remotePages[0].freq = 10;
+    remotePages[1].addr = 0x5000;
+    remotePages[1].freq = 8;
+    process.scanAttr.actcData[4] = remotePages;
+    process.scanAttr.actcLen[4] = 1;
+
+    MOCKER(GetGroupSwapLocalWatermarkRatioConfig).stubs().will(returnValue((uint32_t)100));
+    MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+    MOCKER(GetGroupSwapRatioConfig).stubs().will(returnValue((uint32_t)5));
+    MOCKER(GetGroupSwapMinRemoteFreqConfig).stubs().will(returnValue((uint32_t)0));
+    MOCKER(GetGroupSwapMinFreqGainConfig).stubs().will(returnValue((uint32_t)0));
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(0, mlist[4][0].nr);
+    EXPECT_EQ(0, mlist[0][4].nr);
+
+    process.scanAttr.actcLen[4] = 2;
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(0, mlist[4][0].nr);
+    EXPECT_EQ(0, mlist[0][4].nr);
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(0, mlist[4][0].nr);
+    EXPECT_EQ(0, mlist[0][4].nr);
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(1, mlist[4][0].nr);
+    EXPECT_EQ(0x4000, mlist[4][0].addr[0]);
+    EXPECT_EQ(1, mlist[0][4].nr);
+    EXPECT_EQ(0x1000, mlist[0][4].addr[0]);
+
+    FreeMigList(mlist);
+}
+
+TEST_F(GroupedStrategyTest, TestGroupedStrategySwapBelowLocalWatermarkRatio)
+{
+    ProcessAttr process = {};
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    ActcData localPages[94] = {};
+    ActcData remotePages[1] = {};
+
+    process.pid = 117;
+    process.enableSwap = true;
+    process.groupPolicy.enabled = true;
+    process.groupPolicy.groupCount = 1;
+    process.groupPolicy.groups[0].localCount = 1;
+    process.groupPolicy.groups[0].locals[0].nid = 0;
+    process.groupPolicy.groups[0].locals[0].localReservePages = 100;
+    process.groupPolicy.groups[0].targetCount = 1;
+    process.groupPolicy.groups[0].targets[0].nid = 4;
+    process.groupPolicy.groups[0].targets[0].quotaPages = 10;
+    process.groupPolicy.groups[0].targets[0].usedPages = 1;
+
+    process.scanAttr.actcData[0] = localPages;
+    process.scanAttr.actcLen[0] = 94;
+    remotePages[0].addr = 0x4000;
+    remotePages[0].freq = 10;
+    process.scanAttr.actcData[4] = remotePages;
+    process.scanAttr.actcLen[4] = 1;
+
+    MOCKER(GetGroupSwapLocalWatermarkRatioConfig).stubs().will(returnValue((uint32_t)95));
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(0, mlist[4][0].nr);
+    EXPECT_EQ(0, mlist[0][4].nr);
 }
 
 TEST_F(GroupedStrategyTest, TestGroupedStrategySwapDisabled)
@@ -570,6 +730,8 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapDisabled)
     remotePages[0].freq = 10;
     process.scanAttr.actcData[4] = remotePages;
     process.scanAttr.actcLen[4] = 1;
+
+    MOCKER(GetGroupSwapLocalWatermarkRatioConfig).stubs().will(returnValue((uint32_t)100));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
@@ -615,6 +777,8 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapSkipsSharedTarget)
     process.scanAttr.actcData[4] = remotePages;
     process.scanAttr.actcLen[4] = 1;
 
+    MOCKER(GetGroupSwapLocalWatermarkRatioConfig).stubs().will(returnValue((uint32_t)100));
+
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(0, mlist[4][0].nr);
@@ -652,6 +816,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapRequiresHotColdGap)
     process.scanAttr.actcData[4] = remotePages;
     process.scanAttr.actcLen[4] = 1;
 
+    MOCKER(GetGroupSwapLocalWatermarkRatioConfig).stubs().will(returnValue((uint32_t)100));
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
     MOCKER(GetGroupSwapRatioConfig).stubs().will(returnValue((uint32_t)5));
     MOCKER(GetGroupSwapMinRemoteFreqConfig).stubs().will(returnValue((uint32_t)0));

@@ -282,6 +282,9 @@ struct ProcessAttribute {
     WalkPage walkPage;
     AdaptMem adaptMem;
     GroupMigrationPolicy groupPolicy;
+    uint64_t groupSwapLastTotalPages;
+    uint8_t groupSwapStableTotalRounds;
+    bool groupSwapTotalPagesValid;
     PendingGroupMigrationPolicy pendingGroupPolicy;
     StrategyAttribute strategyAttr;
     ScanAttribute scanAttr;

@@ -639,6 +639,9 @@ static void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeB
     attr->initLocalMemRatio = HUNDRED;
     attr->numaAttr.numaNodes = nodeBitmap;
     attr->groupPolicy = *policy;
+    attr->groupSwapLastTotalPages = 0;
+    attr->groupSwapStableTotalRounds = 0;
+    attr->groupSwapTotalPagesValid = false;
     attr->pendingGroupPolicy.valid = false;
     attr->autoRemoveWhenRemoteEmpty = false;
     if (time(&attr->scanStart) == (time_t)-1) {
