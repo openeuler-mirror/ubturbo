@@ -108,7 +108,7 @@ TEST_F(DriversUbHistMidTest, UbHistInitSetHwTypeFail)
 }
 
 extern "C" int ub_hist_ba_init(struct ub_hist_ba_device *ba_dev);
-extern "C" int ub_hist_rd_clr_sts(struct ub_hist_ba_device *ba_dev, uint64_t *ba_tags, int count);
+extern "C" int ub_hist_rd_clr_sts(struct ub_hist_ba_device *ba_dev, u32 *buf, size_t len);
 extern "C" int ub_hist_get_ba_resource(struct platform_device *pdev, struct ub_hist_ba_device *ba_dev);
 TEST_F(DriversUbHistMidTest, UbHistProbeBaInitFail)
 {
@@ -142,4 +142,65 @@ TEST_F(DriversUbHistMidTest, UbHistProbeRdClrStsFail)
 
     int ret = ub_hist_probe(&test_pdev);
     EXPECT_EQ(-EIO, ret);
+}
+
+#undef readl
+#undef writel
+extern "C" u32 readl(const volatile void __iomem *addr);
+extern "C" void writel(u32 value, const volatile void __iomem *addr);
+extern "C" u32 ub_hist_read_reg(struct ub_hist_ba_device *ba_dev, u32 reg_offset);
+extern "C" void ub_hist_write_reg(struct ub_hist_ba_device *ba_dev, u32 reg_offset, u32 value);
+
+extern "C" int ub_hist_offset_init(struct ub_hist_ba_device *ba_dev, u32 reg_offset, u32 init_value);
+TEST_F(DriversUbHistMidTest, UbHistOffsetInitSuccess)
+{
+    struct ub_hist_ba_device ba_dev;
+    ba_dev.base_addr = (void __iomem *)0x1000;
+    MOCKER(ub_hist_read_reg).stubs().will(returnValue(0x100));
+    int ret = ub_hist_offset_init(&ba_dev, 0x10, 0x100);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(DriversUbHistMidTest, UbHistOffsetInitMismatch)
+{
+    struct ub_hist_ba_device ba_dev;
+    ba_dev.base_addr = (void __iomem *)0x1000;
+    MOCKER(ub_hist_read_reg).stubs().will(returnValue(0x200));
+    int ret = ub_hist_offset_init(&ba_dev, 0x10, 0x100);
+    EXPECT_EQ(-EBUSY, ret);
+}
+
+extern "C" int ub_hist_ba_init(struct ub_hist_ba_device *ba_dev);
+TEST_F(DriversUbHistMidTest, UbHistBaInitRamNotReady)
+{
+    struct ub_hist_ba_device ba_dev;
+    ba_dev.base_addr = (void __iomem *)0x1000;
+    MOCKER(ub_hist_read_reg).stubs().will(returnValue(0));
+    int ret = ub_hist_ba_init(&ba_dev);
+    EXPECT_EQ(-EBUSY, ret);
+}
+
+extern "C" int ub_hist_rd_clr_sts(struct ub_hist_ba_device *ba_dev, u32 *buf, size_t len);
+TEST_F(DriversUbHistMidTest, UbHistRdClrStsStsEnabled)
+{
+    struct ub_hist_ba_device ba_dev;
+    ba_dev.base_addr = (void __iomem *)0x1000;
+    u32 buf[4];
+    /* sts_enable is at bit 4 in hi_upa_smap_cfg_smap_cfg00 union;
+       0x10 sets sts_enable=1 to trigger -EBUSY path */
+    MOCKER(ub_hist_read_reg).stubs().will(returnValue(0x10));
+    int ret = ub_hist_rd_clr_sts(&ba_dev, buf, 4);
+    EXPECT_EQ(-EBUSY, ret);
+}
+
+extern "C" int ub_hist_get_ba_resource(struct platform_device *pdev, struct ub_hist_ba_device *ba_dev);
+TEST_F(DriversUbHistMidTest, UbHistGetBaResourcePropertyReadFail)
+{
+    struct platform_device test_pdev;
+    struct ub_hist_ba_device ba_dev;
+    memset(&test_pdev, 0, sizeof(test_pdev));
+    memset(&ba_dev, 0, sizeof(ba_dev));
+    MOCKER(device_property_read_u64).stubs().will(returnValue(-EINVAL));
+    int ret = ub_hist_get_ba_resource(&test_pdev, &ba_dev);
+    EXPECT_EQ(-EINVAL, ret);
 }
