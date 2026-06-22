@@ -1129,6 +1129,11 @@ static int RunSwapStage(ProcessAttr *process, struct MigList mlist[MAX_NODES][MA
     if (!process->enableSwap) {
         return 0;
     }
+    if (process->groupSwapFrozen) {
+        ResetGroupSwapCandidateRounds(&process->groupPolicy);
+        SMAP_LOGGER_WARNING("grouped pid %d swap is frozen due to previous imbalance.", process->pid);
+        return 0;
+    }
     if (!UpdateGroupSwapTotalPagesStable(process)) {
         SMAP_LOGGER_INFO("grouped pid %d swap waits for stable total pages, current %llu round %u.", process->pid,
                          process->groupSwapLastTotalPages, process->groupSwapStableTotalRounds);

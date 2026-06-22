@@ -642,6 +642,7 @@ static void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeB
     attr->groupSwapLastTotalPages = 0;
     attr->groupSwapStableTotalRounds = 0;
     attr->groupSwapTotalPagesValid = false;
+    attr->groupSwapFrozen = false;
     attr->pendingGroupPolicy.valid = false;
     attr->autoRemoveWhenRemoteEmpty = false;
     if (time(&attr->scanStart) == (time_t)-1) {

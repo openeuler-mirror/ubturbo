@@ -739,6 +739,41 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapDisabled)
     EXPECT_EQ(0, mlist[0][4].nr);
 }
 
+TEST_F(GroupedStrategyTest, TestGroupedStrategySwapFrozen)
+{
+    ProcessAttr process = {};
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    ActcData localPages[1] = {};
+    ActcData remotePages[1] = {};
+
+    process.pid = 119;
+    process.enableSwap = true;
+    process.groupSwapFrozen = true;
+    process.groupPolicy.enabled = true;
+    process.groupPolicy.groupCount = 1;
+    process.groupPolicy.groups[0].localCount = 1;
+    process.groupPolicy.groups[0].locals[0].nid = 0;
+    process.groupPolicy.groups[0].targetCount = 1;
+    process.groupPolicy.groups[0].targets[0].nid = 4;
+    process.groupPolicy.groups[0].targets[0].quotaPages = 10;
+    process.groupPolicy.groups[0].targets[0].usedPages = 1;
+    process.groupPolicy.groups[0].locals[0].localReservePages = 1;
+
+    localPages[0].addr = 0x1000;
+    localPages[0].freq = 0;
+    process.scanAttr.actcData[0] = localPages;
+    process.scanAttr.actcLen[0] = 1;
+    remotePages[0].addr = 0x4000;
+    remotePages[0].freq = 10;
+    process.scanAttr.actcData[4] = remotePages;
+    process.scanAttr.actcLen[4] = 1;
+
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
+    EXPECT_EQ(0, mlist[4][0].nr);
+    EXPECT_EQ(0, mlist[0][4].nr);
+}
+
 TEST_F(GroupedStrategyTest, TestGroupedStrategySwapSkipsSharedTarget)
 {
     ProcessAttr process = {};

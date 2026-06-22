@@ -33,6 +33,26 @@
 #include "migration.h"
 
 #define MAX_MIG_ADDR_PRINT_LEN 2
+#define MAX_GROUP_SWAP_COMP_PLANS (MAX_2M_PROCESSES_CNT * MAX_PER_PID_MIG_LIST_COUNT)
+
+typedef struct {
+    pid_t pid;
+    int localNid;
+    int remoteNid;
+    uint64_t localToRemoteSuccess;
+    uint64_t remoteToLocalSuccess;
+    bool hasLocalToRemote;
+    bool hasRemoteToLocal;
+} GroupSwapPairStat;
+
+typedef struct {
+    pid_t pid;
+    int from;
+    int to;
+    uint64_t need;
+    uint64_t built;
+    bool shouldFreeze;
+} GroupSwapCompPlan;
 
 int AddMigList(struct MigrateMsg *mMsg, struct MigList *mList)
 {
@@ -142,6 +162,18 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
     return 0;
 }
 
+static uint64_t GetMigListSuccessPages(const struct MigList *list)
+{
+    if (!list->successToUser || list->failedMigNr >= list->nr) {
+        return 0;
+    }
+    uint64_t success = list->nr - list->failedMigNr;
+    if (list->failedIsolatedNr >= success) {
+        return 0;
+    }
+    return success - list->failedIsolatedNr;
+}
+
 void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager)
 {
     ProcessAttr *current;
@@ -156,7 +188,7 @@ void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager)
 
         fromNid = mMsg->migList[i].from;
         toNid = mMsg->migList[i].to;
-        successMigCount = mMsg->migList[i].nr - mMsg->migList[i].failedMigNr;
+        successMigCount = GetMigListSuccessPages(&mMsg->migList[i]);
 
         if (current->groupPolicy.enabled) {
             UpdateGroupedMigrationResult(current, fromNid, toNid, successMigCount);
@@ -180,6 +212,290 @@ void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager)
                          mMsg->migList[i].from, mMsg->migList[i].to, mMsg->migList[i].nr, mMsg->migList[i].failedMigNr,
                          successMigCount);
     }
+}
+
+static void ResetGroupedSwapRuntimeLocked(ProcessAttr *process, bool freeze)
+{
+    process->groupSwapStableTotalRounds = 0;
+    process->groupSwapTotalPagesValid = false;
+    process->groupSwapFrozen = freeze;
+    for (int i = 0; i < process->groupPolicy.groupCount; i++) {
+        process->groupPolicy.groups[i].swapCandidateRounds = 0;
+    }
+}
+
+static void FreezeGroupedSwapLocked(struct ProcessManager *manager, pid_t pid)
+{
+    ProcessAttr *process = GetProcessAttrLocked(pid);
+    if (!process || !process->groupPolicy.enabled) {
+        return;
+    }
+    ResetGroupedSwapRuntimeLocked(process, true);
+    SMAP_LOGGER_ERROR("grouped pid %d swap frozen due to unbalanced swap migration.", pid);
+}
+
+static int FindGroupSwapPairStat(GroupSwapPairStat stats[], int statCnt, pid_t pid, int localNid, int remoteNid)
+{
+    for (int i = 0; i < statCnt; i++) {
+        if (stats[i].pid == pid && stats[i].localNid == localNid && stats[i].remoteNid == remoteNid) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int AddGroupSwapPairStat(GroupSwapPairStat stats[], int *statCnt, int maxStats, pid_t pid, int localNid,
+                                int remoteNid)
+{
+    int idx = FindGroupSwapPairStat(stats, *statCnt, pid, localNid, remoteNid);
+    if (idx >= 0) {
+        return idx;
+    }
+    if (*statCnt >= maxStats) {
+        return -ENOSPC;
+    }
+    idx = *statCnt;
+    stats[idx].pid = pid;
+    stats[idx].localNid = localNid;
+    stats[idx].remoteNid = remoteNid;
+    (*statCnt)++;
+    return idx;
+}
+
+static void AddGroupSwapCompPlan(GroupSwapCompPlan plans[], int *planCnt, pid_t pid, int from, int to, uint64_t need)
+{
+    if (need == 0 || *planCnt >= MAX_GROUP_SWAP_COMP_PLANS) {
+        return;
+    }
+    plans[*planCnt].pid = pid;
+    plans[*planCnt].from = from;
+    plans[*planCnt].to = to;
+    plans[*planCnt].need = need;
+    (*planCnt)++;
+}
+
+static int BuildGroupedSwapCompPlans(struct MigrateMsg *mMsg, struct ProcessManager *manager, GroupSwapCompPlan plans[],
+                                     int *planCnt)
+{
+    GroupSwapPairStat stats[MAX_GROUP_SWAP_COMP_PLANS] = { 0 };
+    int statCnt = 0;
+    *planCnt = 0;
+
+    for (int i = 0; i < mMsg->cnt; i++) {
+        struct MigList *list = &mMsg->migList[i];
+        ProcessAttr *process = GetProcessAttrLocked(list->pid);
+        if (!process || !process->groupPolicy.enabled) {
+            continue;
+        }
+        bool localToRemote = list->from < manager->nrLocalNuma && list->to >= manager->nrLocalNuma;
+        bool remoteToLocal = list->from >= manager->nrLocalNuma && list->to < manager->nrLocalNuma;
+        if (!localToRemote && !remoteToLocal) {
+            continue;
+        }
+        int localNid = localToRemote ? list->from : list->to;
+        int remoteNid = localToRemote ? list->to : list->from;
+        int idx = AddGroupSwapPairStat(stats, &statCnt, MAX_GROUP_SWAP_COMP_PLANS, list->pid, localNid, remoteNid);
+        if (idx < 0) {
+            SMAP_LOGGER_ERROR("grouped pid %d swap compensation stat exceeds limit.", list->pid);
+            return idx;
+        }
+        uint64_t success = GetMigListSuccessPages(list);
+        if (localToRemote) {
+            stats[idx].localToRemoteSuccess += success;
+            stats[idx].hasLocalToRemote = true;
+        } else {
+            stats[idx].remoteToLocalSuccess += success;
+            stats[idx].hasRemoteToLocal = true;
+        }
+    }
+
+    for (int i = 0; i < statCnt; i++) {
+        GroupSwapPairStat *stat = &stats[i];
+        if (!stat->hasLocalToRemote || !stat->hasRemoteToLocal) {
+            continue;
+        }
+        if (stat->remoteToLocalSuccess > stat->localToRemoteSuccess) {
+            uint64_t need = stat->remoteToLocalSuccess - stat->localToRemoteSuccess;
+            AddGroupSwapCompPlan(plans, planCnt, stat->pid, stat->localNid, stat->remoteNid, need);
+            SMAP_LOGGER_WARNING("grouped pid %d swap imbalance local %d remote %d, compensate %llu pages %d -> %d.",
+                                stat->pid, stat->localNid, stat->remoteNid, need, stat->localNid, stat->remoteNid);
+        } else if (stat->localToRemoteSuccess > stat->remoteToLocalSuccess) {
+            uint64_t need = stat->localToRemoteSuccess - stat->remoteToLocalSuccess;
+            AddGroupSwapCompPlan(plans, planCnt, stat->pid, stat->remoteNid, stat->localNid, need);
+            SMAP_LOGGER_WARNING("grouped pid %d swap imbalance local %d remote %d, compensate %llu pages %d -> %d.",
+                                stat->pid, stat->localNid, stat->remoteNid, need, stat->remoteNid, stat->localNid);
+        }
+    }
+    return 0;
+}
+
+static int AppendCompMigResults(struct MigrateMsg *mMsg, const struct MigrateMsg *compMsg)
+{
+    if (compMsg->cnt == 0) {
+        return 0;
+    }
+    int oldCnt = mMsg->cnt;
+    int newCnt = oldCnt + compMsg->cnt;
+    struct MigList *newList = realloc(mMsg->migList, sizeof(struct MigList) * newCnt);
+    if (!newList) {
+        return -ENOMEM;
+    }
+    mMsg->migList = newList;
+    for (int i = 0; i < compMsg->cnt; i++) {
+        mMsg->migList[oldCnt + i] = compMsg->migList[i];
+        mMsg->migList[oldCnt + i].addr = NULL;
+    }
+    mMsg->cnt = newCnt;
+    return 0;
+}
+
+static uint64_t BuildCompMigListFromScan(ProcessAttr *process, GroupSwapCompPlan *plan, struct MigList *list)
+{
+    uint64_t sourcePages = process->scanAttr.actcLen[plan->from];
+    uint64_t destFreePages = GetNrFreeHugePagesByNode(plan->to);
+    uint64_t nr = MIN(plan->need, sourcePages);
+    nr = MIN(nr, destFreePages);
+    if (nr == 0 || !process->scanAttr.actcData[plan->from]) {
+        plan->shouldFreeze = true;
+        return 0;
+    }
+
+    list->addr = malloc(sizeof(uint64_t) * nr);
+    if (!list->addr) {
+        plan->shouldFreeze = true;
+        return 0;
+    }
+    list->pid = plan->pid;
+    list->from = plan->from;
+    list->to = plan->to;
+    list->nr = nr;
+    for (uint64_t i = 0; i < nr; i++) {
+        list->addr[i] = process->scanAttr.actcData[plan->from][i].addr;
+    }
+    plan->built = nr;
+    if (nr < plan->need) {
+        plan->shouldFreeze = true;
+        SMAP_LOGGER_WARNING("grouped pid %d swap compensation only builds %llu/%llu pages from %d to %d.", plan->pid,
+                            nr, plan->need, plan->from, plan->to);
+    }
+    return nr;
+}
+
+static int BuildGroupedSwapCompMsg(struct ProcessManager *manager, GroupSwapCompPlan plans[], int planCnt,
+                                   struct MigrateMsg *compMsg, int compPlanIdx[])
+{
+    compMsg->migList = calloc(planCnt, sizeof(struct MigList));
+    if (!compMsg->migList) {
+        return -ENOMEM;
+    }
+    compMsg->cnt = 0;
+    compMsg->mulMig.nrThread = 1;
+    compMsg->mulMig.isMulThread = false;
+    compMsg->mulMig.pageSize = manager->tracking.pageSize;
+
+    EnvMutexLock(&manager->lock);
+    for (int i = 0; i < planCnt; i++) {
+        ProcessAttr *process = GetProcessAttrLocked(plans[i].pid);
+        if (!process || !process->groupPolicy.enabled) {
+            plans[i].shouldFreeze = true;
+            continue;
+        }
+        struct MigList *list = &compMsg->migList[compMsg->cnt];
+        uint64_t nr = BuildCompMigListFromScan(process, &plans[i], list);
+        if (nr == 0) {
+            continue;
+        }
+        list->pid = plans[i].pid;
+        list->from = plans[i].from;
+        list->to = plans[i].to;
+        compPlanIdx[compMsg->cnt] = i;
+        compMsg->cnt++;
+    }
+    EnvMutexUnlock(&manager->lock);
+    return 0;
+}
+
+static void FreeCompMigMsg(struct MigrateMsg *compMsg)
+{
+    if (!compMsg || !compMsg->migList) {
+        return;
+    }
+    for (int i = 0; i < compMsg->cnt; i++) {
+        free(compMsg->migList[i].addr);
+        compMsg->migList[i].addr = NULL;
+    }
+    free(compMsg->migList);
+    compMsg->migList = NULL;
+    compMsg->cnt = 0;
+}
+
+static void FreezeFailedCompPlans(struct ProcessManager *manager, GroupSwapCompPlan plans[], int planCnt)
+{
+    EnvMutexLock(&manager->lock);
+    for (int i = 0; i < planCnt; i++) {
+        if (plans[i].shouldFreeze) {
+            FreezeGroupedSwapLocked(manager, plans[i].pid);
+        }
+    }
+    EnvMutexUnlock(&manager->lock);
+}
+
+static int RunGroupedSwapCompensation(struct ProcessManager *manager, struct MigrateMsg *mMsg,
+                                      GroupSwapCompPlan plans[], int planCnt)
+{
+    struct MigrateMsg compMsg = { 0 };
+    int compPlanIdx[MAX_GROUP_SWAP_COMP_PLANS] = { 0 };
+    int ret = BuildAllPidData();
+    if (ret) {
+        SMAP_LOGGER_ERROR("grouped swap compensation refresh pid data failed: %d.", ret);
+        for (int i = 0; i < planCnt; i++) {
+            plans[i].shouldFreeze = true;
+        }
+        FreezeFailedCompPlans(manager, plans, planCnt);
+        return ret;
+    }
+
+    ret = BuildGroupedSwapCompMsg(manager, plans, planCnt, &compMsg, compPlanIdx);
+    if (ret) {
+        for (int i = 0; i < planCnt; i++) {
+            plans[i].shouldFreeze = true;
+        }
+        FreezeFailedCompPlans(manager, plans, planCnt);
+        return ret;
+    }
+    bool hasCompPages = false;
+    for (int i = 0; i < compMsg.cnt; i++) {
+        if (compMsg.migList[i].nr > 0) {
+            hasCompPages = true;
+            break;
+        }
+    }
+    if (hasCompPages) {
+        ret = ioctl(manager->fds.migrate, SMAP_MIG_MIGRATE, &compMsg);
+        if (ret) {
+            SMAP_LOGGER_ERROR("grouped swap compensation migrate failed: %d.", ret);
+        }
+    }
+
+    for (int i = 0; i < compMsg.cnt; i++) {
+        int planIdx = compPlanIdx[i];
+        uint64_t success = GetMigListSuccessPages(&compMsg.migList[i]);
+        if (ret || success < compMsg.migList[i].nr) {
+            plans[planIdx].shouldFreeze = true;
+            SMAP_LOGGER_ERROR("grouped pid %d swap compensation from %d to %d success %llu/%llu.", plans[planIdx].pid,
+                              plans[planIdx].from, plans[planIdx].to, success, compMsg.migList[i].nr);
+        }
+    }
+    int appendRet = AppendCompMigResults(mMsg, &compMsg);
+    if (appendRet) {
+        for (int i = 0; i < planCnt; i++) {
+            plans[i].shouldFreeze = true;
+        }
+        ret = appendRet;
+    }
+    FreezeFailedCompPlans(manager, plans, planCnt);
+    FreeCompMigMsg(&compMsg);
+    return ret;
 }
 
 int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager)
@@ -513,6 +829,28 @@ static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
 
 static void PostMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg)
 {
+    GroupSwapCompPlan plans[MAX_GROUP_SWAP_COMP_PLANS] = { 0 };
+    int planCnt = 0;
+
+    EnvMutexLock(&manager->lock);
+    int ret = BuildGroupedSwapCompPlans(mMsg, manager, plans, &planCnt);
+    EnvMutexUnlock(&manager->lock);
+    if (!ret && planCnt > 0) {
+        ret = RunGroupedSwapCompensation(manager, mMsg, plans, planCnt);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Run grouped swap compensation failed: %d.", ret);
+        }
+    } else if (ret) {
+        EnvMutexLock(&manager->lock);
+        for (int i = 0; i < mMsg->cnt; i++) {
+            ProcessAttr *process = GetProcessAttrLocked(mMsg->migList[i].pid);
+            if (process && process->groupPolicy.enabled) {
+                ResetGroupedSwapRuntimeLocked(process, true);
+            }
+        }
+        EnvMutexUnlock(&manager->lock);
+    }
+
     EnvMutexLock(&manager->lock);
     UpdateMigResult(mMsg, manager);
     free(mMsg->migList);
