@@ -2417,3 +2417,404 @@ TEST_F(ManageTest, TestCalibrateMigratePagesThreeLocals)
     EXPECT_EQ((uint32_t)60, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
     EXPECT_EQ((uint32_t)120, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
 }
+
+extern "C" void SetRunMode(RunMode runMode);
+TEST_F(ManageTest, TestSetRunMode)
+{
+    SetRunMode(WATERLINE_MODE);
+    EXPECT_EQ(WATERLINE_MODE, g_runMode);
+    SetRunMode(MEM_POOL_MODE);
+    EXPECT_EQ(MEM_POOL_MODE, g_runMode);
+}
+
+extern "C" PidType GetPidType(struct ProcessManager *manager);
+TEST_F(ManageTest, TestGetPidType)
+{
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    g_pageSizeNormal = PAGESIZE_4K;
+    PidType ret = GetPidType(&g_processManager);
+    EXPECT_EQ(PROCESS_TYPE, ret);
+
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    g_pageSizeHuge = PAGESIZE_2M;
+    ret = GetPidType(&g_processManager);
+    EXPECT_EQ(VM_TYPE, ret);
+}
+
+extern "C" uint32_t GetNormalPageSize(void);
+TEST_F(ManageTest, TestGetNormalPageSize)
+{
+    g_pageSizeNormal = PAGESIZE_4K;
+    uint32_t ret = GetNormalPageSize();
+    EXPECT_EQ(PAGESIZE_4K, ret);
+}
+
+extern "C" uint32_t GetHugePageSize(void);
+TEST_F(ManageTest, TestGetHugePageSize)
+{
+    g_pageSizeHuge = PAGESIZE_2M;
+    uint32_t ret = GetHugePageSize();
+    EXPECT_EQ(PAGESIZE_2M, ret);
+}
+
+extern "C" uint32_t GetPageSize(void);
+TEST_F(ManageTest, TestGetPageSize)
+{
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    uint32_t ret = GetPageSize();
+    EXPECT_EQ(PAGESIZE_4K, ret);
+}
+
+extern "C" int GetNrLocalNuma(void);
+TEST_F(ManageTest, TestGetNrLocalNuma)
+{
+    g_processManager.nrLocalNuma = 4;
+    int ret = GetNrLocalNuma();
+    EXPECT_EQ(4, ret);
+}
+
+extern "C" bool IsHugeMode(void);
+TEST_F(ManageTest, TestIsHugeModeTrue)
+{
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    g_pageSizeHuge = PAGESIZE_2M;
+    bool ret = IsHugeMode();
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(ManageTest, TestIsHugeModeFalse)
+{
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    bool ret = IsHugeMode();
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" void LinkedListAdd(ProcessAttr **head, ProcessAttr **add);
+TEST_F(ManageTest, TestLinkedListAdd)
+{
+    ProcessAttr *head = nullptr;
+    ProcessAttr *node1 = (ProcessAttr *)malloc(sizeof(ProcessAttr));
+    node1->pid = 1;
+    node1->next = nullptr;
+    LinkedListAdd(&head, &node1);
+    EXPECT_EQ(head, node1);
+
+    ProcessAttr *node2 = (ProcessAttr *)malloc(sizeof(ProcessAttr));
+    node2->pid = 2;
+    node2->next = nullptr;
+    LinkedListAdd(&head, &node2);
+    EXPECT_EQ(head, node2);
+    EXPECT_EQ(node2->next, node1);
+
+    free(node1);
+    free(node2);
+}
+
+extern "C" bool IsMemoryLow(pid_t pid);
+TEST_F(ManageTest, TestIsMemoryLowFalse)
+{
+    EnvMutexInit(&g_processManager.lock);
+    g_processManager.processes = nullptr;
+    bool ret = IsMemoryLow(9999);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(ManageTest, TestIsMemoryLowTrue)
+{
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.isLowMem = true;
+    attr.next = nullptr;
+    EnvMutexInit(&g_processManager.lock);
+    g_processManager.processes = &attr;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    bool ret = IsMemoryLow(1234);
+    EXPECT_EQ(true, ret);
+    g_processManager.processes = nullptr;
+}
+
+extern "C" int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap);
+TEST_F(ManageTest, TestAddProcessNormal)
+{
+    ProcessParam param = {};
+    param.pid = 123;
+    param.scanTime = 50;
+    param.duration = 1;
+    param.count = 1;
+    param.numaParam[0].nid = 4;
+    param.numaParam[0].ratio = 50;
+    g_processManager.processes = nullptr;
+    g_processManager.nr[VM_TYPE] = 0;
+    g_processManager.nrLocalNuma = 4;
+    EnvMutexInit(&g_processManager.lock);
+    MOCKER(CheckPid).stubs().will(returnValue(0));
+    MOCKER(VMPreprocess).stubs().will(returnValue(0));
+    MOCKER(GetPidNrPages).stubs().will(returnValue(0x100));
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(sched_getaffinity).stubs().will(returnValue(0));
+    MOCKER(GetNodeFromCpu).stubs().will(returnValue(4));
+    int ret = AddProcess(&param, VM_TYPE, nullptr);
+    EXPECT_EQ(0, ret);
+    EXPECT_NE(nullptr, g_processManager.processes);
+    free(g_processManager.processes);
+    g_processManager.processes = nullptr;
+}
+
+extern "C" int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
+TEST_F(ManageTest, TestSetLocalNumaByCpu)
+{
+    g_processManager.nrLocalNuma = 4;
+    EnvMutexInit(&g_processManager.lock);
+    CPU_ZERO(&g_fake_cpu_mask);
+    CPU_SET(1, &g_fake_cpu_mask);
+    uint32_t nodeBitmap = 0;
+    MOCKER(sched_getaffinity).stubs().will(invoke(fake_sched_getaffinity));
+    MOCKER(GetNodeFromCpu).stubs().will(returnValue(0));
+    int ret = SetLocalNumaByCpu(1, &nodeBitmap);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" bool IsRemoteNidValid(int nid);
+TEST_F(ManageTest, TestIsRemoteNidValid)
+{
+    g_processManager.nrLocalNuma = 4;
+    bool ret = IsRemoteNidValid(4);
+    EXPECT_EQ(true, ret);
+    ret = IsRemoteNidValid(0);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[MAX_NODES]);
+TEST_F(ManageTest, TestInitGroupedUsedPages)
+{
+    pid_t pid = 1234;
+    GroupMigrationPolicy policy = {};
+    uint64_t numaPages[MAX_NODES] = { 0 };
+    policy.enabled = true;
+    policy.groupCount = 1;
+    policy.groups[0].targetCount = 1;
+    policy.groups[0].targets[0].nid = 4;
+    policy.groups[0].targets[0].quotaPages = 10;  // quotaPages must be set
+    numaPages[4] = 5;  // residentPages <= quotaPages
+    g_processManager.nrLocalNuma = 4;
+    int ret = InitGroupedUsedPages(pid, &policy, numaPages);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ((uint64_t)5, policy.groups[0].targets[0].usedPages);
+}
+
+// === Additional manage.c tests for uncovered getter/setter and auto_remove ===
+
+extern "C" RunMode GetRunMode(void);
+TEST_F(ManageTest, TestGetRunMode)
+{
+    g_runMode = WATERLINE_MODE;
+    RunMode ret = GetRunMode();
+    EXPECT_EQ(WATERLINE_MODE, ret);
+}
+
+extern "C" bool IsHugeMode(void);
+TEST_F(ManageTest, TestGetCurrentMaxNrPid4K)
+{
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    int ret = GetCurrentMaxNrPid();
+    EXPECT_EQ(MAX_4K_PROCESSES_CNT, ret);
+}
+
+TEST_F(ManageTest, TestGetCurrentMaxNrPid2M)
+{
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    int ret = GetCurrentMaxNrPid();
+    EXPECT_EQ(MAX_2M_PROCESSES_CNT, ret);
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+}
+
+extern "C" ProcessAttr *GetProcessAttr(pid_t pid);
+TEST_F(ManageTest, TestGetProcessAttrFound)
+{
+    ProcessAttr p1 = { .pid = 1, .next = nullptr };
+    ProcessAttr p2 = { .pid = 2, .next = nullptr };
+    p1.next = &p2;
+    g_processManager.processes = &p1;
+    ProcessAttr *ret = GetProcessAttr(1);
+    EXPECT_EQ(1, ret->pid);
+
+    ret = GetProcessAttr(2);
+    EXPECT_EQ(2, ret->pid);
+    g_processManager.processes = nullptr;
+}
+
+TEST_F(ManageTest, TestGetProcessAttrNotFound)
+{
+    ProcessAttr p1 = { .pid = 1, .next = nullptr };
+    g_processManager.processes = &p1;
+    ProcessAttr *ret = GetProcessAttr(3);
+    EXPECT_EQ(nullptr, ret);
+    g_processManager.processes = nullptr;
+}
+
+TEST_F(ManageTest, TestGetProcessAttrNullList)
+{
+    g_processManager.processes = nullptr;
+    ProcessAttr *ret = GetProcessAttr(1);
+    EXPECT_EQ(nullptr, ret);
+}
+
+TEST_F(ManageTest, TestIsMemoryLowPathFailed2)
+{
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(-1));
+    bool ret = IsMemoryLow(123);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(ManageTest, TestIsMemoryLowFileOpenFailed2)
+{
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(0));
+    MOCKER(fopen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
+    bool ret = IsMemoryLow(123);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(ManageTest, TestIsMemoryLowNormal2)
+{
+    static FILE fake_file;
+    char buf[] = "100";
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(0));
+    MOCKER(fopen).stubs().will(returnValue(&fake_file));
+    MOCKER(fgets).stubs().will(returnValue(&buf[0])).then(returnValue(static_cast<char *>(nullptr)));
+    MOCKER(fclose).stubs().will(returnValue(0));
+    MOCKER((int (*)(char const *, char const *, void *))sscanf_s).stubs().will(returnValue(1));
+    bool ret = IsMemoryLow(123);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
+TEST_F(ManageTest, TestSetLocalNumaByCpuAffinityFailed)
+{
+    MOCKER(sched_getaffinity).stubs().will(returnValue(-1));
+    uint32_t nodeBitmap = 0;
+    int ret = SetLocalNumaByCpu(1, &nodeBitmap);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" void LinkedListAdd(ProcessAttr **head, ProcessAttr **add);
+extern "C" void FreeProceccesAttr(ProcessAttr *attr);
+TEST_F(ManageTest, TestFreeProceccesAttrNull)
+{
+    FreeProceccesAttr(nullptr);
+    // Should not crash
+}
+
+extern "C" void SetAdaptMem(bool enable);
+extern "C" bool g_adaptLocalMem;
+TEST_F(ManageTest, TestSetAdaptMemEnable)
+{
+    SetAdaptMem(true);
+    EXPECT_EQ(true, g_adaptLocalMem);
+}
+
+TEST_F(ManageTest, TestSetAdaptMemDisable)
+{
+    SetAdaptMem(false);
+    EXPECT_EQ(false, g_adaptLocalMem);
+}
+
+extern "C" int CheckPid(pid_t pid);
+TEST_F(ManageTest, TestCheckPidValid)
+{
+    MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    MOCKER(IsQemuTask).stubs().will(returnValue((int)VM_TYPE));
+    int ret = CheckPid(1);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" bool IsMultiNumaVm(ProcessAttr *process);
+TEST_F(ManageTest, TestIsMultiNumaVmSingleRemote)
+{
+    ProcessAttr attr = {};
+    attr.type = VM_TYPE;
+    attr.remoteNumaCnt = 1;
+    attr.numaAttr.numaNodes = 0b00000001;
+    g_processManager.nrLocalNuma = 4;
+    bool ret = IsMultiNumaVm(&attr);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(ManageTest, TestIsMultiNumaVmMultiRemote)
+{
+    ProcessAttr attr = {};
+    attr.type = VM_TYPE;
+    attr.remoteNumaCnt = 2;
+    bool ret = IsMultiNumaVm(&attr);
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(ManageTest, TestIsMultiNumaVmProcessType)
+{
+    ProcessAttr attr = {};
+    attr.type = PROCESS_TYPE;
+    attr.remoteNumaCnt = 2;
+    bool ret = IsMultiNumaVm(&attr);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" int DestroyProcessManager();
+TEST_F(ManageTest, TestDestroyProcessManagerWithProcesses)
+{
+    ProcessAttr attr = {};
+    attr.pid = 1;
+    attr.next = nullptr;
+    g_processManager.processes = &attr;
+    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
+    MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(0));
+    MOCKER(FreeProceccesAttr).stubs().will(ignoreReturnValue());
+    int ret = DestroyProcessManager();
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" int GetNrLocalNuma(void);
+extern "C" uint32_t GetNormalPageSize(void);
+extern "C" uint32_t GetHugePageSize(void);
+extern "C" uint32_t GetPageSize(void);
+extern "C" int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap);
+TEST_F(ManageTest, TestAddProcessLimitReached)
+{
+    uint32_t savedNr = g_processManager.nr[VM_TYPE];
+    g_processManager.nr[VM_TYPE] = MAX_2M_PROCESSES_CNT;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    ProcessParam param = {};
+    param.pid = 123;
+    param.count = 1;
+    int ret = AddProcess(&param, VM_TYPE, nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+    g_processManager.nr[VM_TYPE] = savedNr;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+}
+
+/* ====== Coverage-boosting tests for manage.c ====== */
+
+extern "C" bool IsZeroRemoteTargetConfig(ProcessParam *param);
+TEST_F(ManageTest, TestIsZeroRemoteTargetConfigNull)
+{
+    bool ret = IsZeroRemoteTargetConfig(nullptr);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(ManageTest, TestIsZeroRemoteTargetConfigZeroCount)
+{
+    ProcessParam param = {.count = 0};
+    bool ret = IsZeroRemoteTargetConfig(&param);
+    EXPECT_EQ(false, ret);
+}
