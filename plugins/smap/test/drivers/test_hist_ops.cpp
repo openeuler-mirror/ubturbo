@@ -949,3 +949,227 @@ TEST_F(HistOpsTest, scan_thread_reset_seq_loop_offset_on_status_change)
         EXPECT_EQ(-1, dev->seq_loop_ba_offset[i]);
     }
 }
+
+extern "C" int filter_4k_scan_hot_wins(struct segs_info *win_info, u32 max_wins_4k_per_ba);
+TEST_F(HistOpsTest, filter_4k_scan_hot_wins_null)
+{
+    int ret = filter_4k_scan_hot_wins(nullptr, 1);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(HistOpsTest, filter_4k_scan_hot_wins_cnt_zero)
+{
+    struct segs_info win_info;
+    memset(&win_info, 0, sizeof(win_info));
+    int ret = filter_4k_scan_hot_wins(&win_info, 1);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(HistOpsTest, filter_4k_scan_hot_wins_max_zero)
+{
+    struct segs_info win_info;
+    memset(&win_info, 0, sizeof(win_info));
+    win_info.cnt = 1;
+    win_info.segs = (struct addr_seg *)malloc(sizeof(struct addr_seg));
+    int ret = filter_4k_scan_hot_wins(&win_info, 0);
+    EXPECT_EQ(-EINVAL, ret);
+    free(win_info.segs);
+}
+
+extern "C" int hist_4k_scan_mode_set(const char *val, const struct kernel_param *kp);
+TEST_F(HistOpsTest, hist_4k_scan_mode_set_invalid_mode)
+{
+    struct kernel_param kp = {};
+    g_smap_hist_dev.scan_mode = HIST_4K_SCAN_MULTI_GRAN;
+    int ret = hist_4k_scan_mode_set("2", &kp);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(HistOpsTest, hist_4k_scan_mode_set_same_mode)
+{
+    struct kernel_param kp = {};
+    g_smap_hist_dev.scan_mode = HIST_4K_SCAN_SEQ_LOOP;
+    int ret = hist_4k_scan_mode_set("1", &kp);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" bool addr_is_cc_mem(u64 addr);
+TEST_F(HistOpsTest, addr_is_cc_mem_in_range)
+{
+    g_smap_hist_dev.ba_cnt = 1;
+    g_smap_hist_dev.ba_info = (struct ub_hist_ba_info *)malloc(sizeof(struct ub_hist_ba_info));
+    g_smap_hist_dev.ba_info[0].ba_tag = 0;
+    g_smap_hist_dev.ba_info[0].cc_range.start = 0x1000;
+    g_smap_hist_dev.ba_info[0].cc_range.end = 0x2000;
+    bool ret = addr_is_cc_mem(0x1500);
+    EXPECT_EQ(true, ret);
+    free(g_smap_hist_dev.ba_info);
+}
+
+TEST_F(HistOpsTest, addr_is_cc_mem_not_in_range)
+{
+    g_smap_hist_dev.ba_cnt = 1;
+    g_smap_hist_dev.ba_info = (struct ub_hist_ba_info *)malloc(sizeof(struct ub_hist_ba_info));
+    g_smap_hist_dev.ba_info[0].ba_tag = 0;
+    g_smap_hist_dev.ba_info[0].cc_range.start = 0x1000;
+    g_smap_hist_dev.ba_info[0].cc_range.end = 0x2000;
+    bool ret = addr_is_cc_mem(0x3000);
+    EXPECT_EQ(false, ret);
+    free(g_smap_hist_dev.ba_info);
+}
+
+extern "C" void hist_deinit(void);
+TEST_F(HistOpsTest, hist_deinit)
+{
+    MOCKER(scan_thread_deinit).stubs();
+    MOCKER(addr_segs_deinit).stubs();
+    MOCKER(kfree).stubs();
+    hist_deinit();
+}
+
+extern "C" int addr_seg_cmp_start(const void *a, const void *b);
+TEST_F(HistOpsTest, addr_seg_cmp_start_less)
+{
+    struct addr_seg s1 = {.start = 100};
+    struct addr_seg s2 = {.start = 200};
+    int ret = addr_seg_cmp_start(&s1, &s2);
+    EXPECT_EQ(-1, ret);
+}
+
+TEST_F(HistOpsTest, addr_seg_cmp_start_equal)
+{
+    struct addr_seg s1 = {.start = 100};
+    struct addr_seg s2 = {.start = 100};
+    int ret = addr_seg_cmp_start(&s1, &s2);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" int addr_seg_cmp_max(const void *a, const void *b);
+TEST_F(HistOpsTest, addr_seg_cmp_max_equal)
+{
+    struct addr_seg w1 = {.max = 100, .ba_tag = 0};
+    struct addr_seg w2 = {.max = 100, .ba_tag = 0};
+    int ret = addr_seg_cmp_max(&w1, &w2);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(HistOpsTest, addr_seg_cmp_max_ba_tag_less)
+{
+    struct addr_seg w1 = {.max = 100, .ba_tag = 1};
+    struct addr_seg w2 = {.max = 100, .ba_tag = 2};
+    int ret = addr_seg_cmp_max(&w1, &w2);
+    EXPECT_EQ(-1, ret);
+}
+
+extern "C" int submit_ba_task(uint64_t ba_tag, u64 start_addr, enum ub_hist_sts_size sts_size);
+TEST_F(HistOpsTest, submit_ba_task_success)
+{
+    MOCKER(ub_hist_get_state).stubs().will(returnValue(0));
+    MOCKER(ub_hist_set_state).stubs().will(returnValue(0));
+    int ret = submit_ba_task(0, 0x1000, STS_SIZE_4K);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(HistOpsTest, submit_ba_task_set_state_fail)
+{
+    MOCKER(ub_hist_get_state).stubs().will(returnValue(0));
+    MOCKER(ub_hist_set_state).stubs().will(returnValue(-1));
+    int ret = submit_ba_task(0, 0x1000, STS_SIZE_4K);
+    EXPECT_EQ(-1, ret);
+}
+
+extern "C" int disable_ba_task(uint64_t ba_tag);
+TEST_F(HistOpsTest, disable_ba_task_success)
+{
+    MOCKER(ub_hist_get_state).stubs().will(returnValue(0));
+    MOCKER(ub_hist_set_state).stubs().will(returnValue(0));
+    int ret = disable_ba_task(0);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" void disable_all_ba_tasks(u32 *offset, u32 end);
+TEST_F(HistOpsTest, disable_all_ba_tasks)
+{
+    g_smap_hist_dev.ba_cnt = 2;
+    g_smap_hist_dev.ba_info = (struct ub_hist_ba_info *)malloc(sizeof(struct ub_hist_ba_info) * 2);
+    g_smap_hist_dev.ba_info[0].ba_tag = 0;
+    g_smap_hist_dev.ba_info[1].ba_tag = 1;
+    u32 offset[2] = {0, 3};
+    u32 end = 5;
+    MOCKER(disable_ba_task).stubs().will(returnValue(0));
+    disable_all_ba_tasks(offset, end);
+    free(g_smap_hist_dev.ba_info);
+    g_smap_hist_dev.ba_info = nullptr;
+}
+
+extern "C" bool pick_complete(u32 *offset, u32 len, u32 end);
+TEST_F(HistOpsTest, pick_complete_true)
+{
+    u32 offset[1] = {5};
+    bool ret = pick_complete(offset, 1, 5);
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(HistOpsTest, pick_complete_false)
+{
+    u32 offset[2] = {0, 5};
+    bool ret = pick_complete(offset, 2, 5);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(HistOpsTest, pick_complete_all_done)
+{
+    u32 offset[3] = {10, 10, 10};
+    bool ret = pick_complete(offset, 3, 10);
+    EXPECT_EQ(true, ret);
+}
+
+extern "C" bool pick_one_seg(u64 ba_tag, struct segs_info *win_info, int *offset, bool do_4k_seq_loop);
+TEST_F(HistOpsTest, pick_one_seg_seq_loop_reset)
+{
+    struct segs_info win_info = {};
+    struct addr_seg segs[2] = {{100, 200, 0, 0}, {300, 400, 0, 1}};
+    win_info.cnt = 2;
+    win_info.segs = segs;
+    int offset_val = 2;
+    bool ret = pick_one_seg(1, &win_info, &offset_val, true);
+    EXPECT_EQ(true, ret);
+    EXPECT_EQ(1, offset_val);
+}
+
+TEST_F(HistOpsTest, pick_one_seg_found)
+{
+    struct segs_info win_info = {};
+    struct addr_seg segs[3] = {{100, 200, 0, 0}, {300, 400, 0, 1}, {500, 600, 0, 1}};
+    win_info.cnt = 3;
+    win_info.segs = segs;
+    int offset_val = -1;
+    bool ret = pick_one_seg(1, &win_info, &offset_val, false);
+    EXPECT_EQ(true, ret);
+    EXPECT_EQ(1, offset_val);
+}
+
+TEST_F(HistOpsTest, pick_one_seg_not_found)
+{
+    struct segs_info win_info = {};
+    struct addr_seg segs[2] = {{100, 200, 0, 0}, {300, 400, 0, 2}};
+    win_info.cnt = 2;
+    win_info.segs = segs;
+    int offset_val = -1;
+    bool ret = pick_one_seg(1, &win_info, &offset_val, false);
+    EXPECT_EQ(false, ret);
+    EXPECT_EQ(2, offset_val);
+}
+
+TEST_F(HistOpsTest, pick_one_seg_seq_loop_no_wrap)
+{
+    struct segs_info win_info = {};
+    struct addr_seg segs[2] = {{100, 200, 0, 0}, {300, 400, 0, 0}};
+    win_info.cnt = 2;
+    win_info.segs = segs;
+    int offset_val = 0;
+    bool ret = pick_one_seg(0, &win_info, &offset_val, false);
+    EXPECT_EQ(true, ret);
+    EXPECT_EQ(1, offset_val);
+}
+
