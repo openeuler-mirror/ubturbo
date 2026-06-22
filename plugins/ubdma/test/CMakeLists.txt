@@ -4,7 +4,8 @@ project(UB_DMA VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 11)
 
-set(UB_DMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../)
+set(UB_DMA_SRC ${CMAKE_CURRENT_LIST_DIR}/dt_src)
+set(TEST_DIR ${CMAKE_CURRENT_LIST_DIR})
 set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage -DACPI_NOT_READY -Wno-all")
 set(CMAKE_C_FLAGS " ${CMAKE_C_FLAGS} -fprofile-arcs -ftest-coverage -DACPI_NOT_READY -Wno-all")
 add_link_options(-lgcov --coverage)
@@ -16,19 +17,19 @@ add_subdirectory(3rdparty)
 
 add_compile_definitions(USE_DT)
 
-# include all source files
-aux_source_directory(${UB_DMA_SRC}/test/drivers TEST_SRC)
+# include all test source files
+aux_source_directory(${TEST_DIR}/drivers TEST_SRC)
 
 # stub c files
-aux_source_directory(${UB_DMA_SRC}/test/depends/drivers/base TEST_SRC)
-aux_source_directory(${UB_DMA_SRC}/test/depends/drivers/mm TEST_SRC)
-aux_source_directory(${UB_DMA_SRC}/test/depends/drivers/dma TEST_SRC)
-aux_source_directory(${UB_DMA_SRC}/test/depends/kernel TEST_SRC)
-aux_source_directory(${UB_DMA_SRC}/test/depends/kernel/time TEST_SRC)
-aux_source_directory(${UB_DMA_SRC}/test/depends/kernel/locking TEST_SRC)
-list(APPEND TEST_SRC ${UB_DMA_SRC}/test/main.cpp)
+aux_source_directory(${TEST_DIR}/depends/drivers/base TEST_SRC)
+aux_source_directory(${TEST_DIR}/depends/drivers/mm TEST_SRC)
+aux_source_directory(${TEST_DIR}/depends/drivers/dma TEST_SRC)
+aux_source_directory(${TEST_DIR}/depends/kernel TEST_SRC)
+aux_source_directory(${TEST_DIR}/depends/kernel/time TEST_SRC)
+aux_source_directory(${TEST_DIR}/depends/kernel/locking TEST_SRC)
+list(APPEND TEST_SRC ${TEST_DIR}/main.cpp)
 
-# ub-dma
+# ub-dma source files (from dt_src copy)
 list(APPEND TEST_SRC ${UB_DMA_SRC}/src/urma.c)
 list(APPEND TEST_SRC ${UB_DMA_SRC}/src/ub_dma_main.c)
 list(APPEND TEST_SRC ${UB_DMA_SRC}/src/ub_virt_dma.c)
@@ -41,11 +42,11 @@ add_executable(ubdma_dt ${TEST_SRC})
 # include headers
 target_include_directories(ubdma_dt PUBLIC
     ${UB_DMA_SRC}/src
-    ${UB_DMA_SRC}/test/3rdparty/umdk
-    ${UB_DMA_SRC}/test/user_depends/include
-    ${UB_DMA_SRC}/test/depends/include
-    ${UB_DMA_SRC}/test/depends/lib
-    ${UB_DMA_SRC}/test/depends/arch/arm64/include
+    ${TEST_DIR}/3rdparty/umdk
+    ${TEST_DIR}/user_depends/include
+    ${TEST_DIR}/depends/include
+    ${TEST_DIR}/depends/lib
+    ${TEST_DIR}/depends/arch/arm64/include
 )
 
 target_compile_definitions(ubdma_dt PUBLIC

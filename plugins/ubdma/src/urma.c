@@ -489,7 +489,7 @@ int init_urma_mem_trans(ubcore_comp_callback_t jfce_handler)
 		goto delete_server_jfr;
 	}
 
-	ub_dma_log_info("udma is %s, eid index is %d",
+	ub_dma_log_info("udma is %s, eid index is %d\n",
 			g_urma_jetty->dev->dev_name,
 			g_urma_jetty->eid_info.eid_index);
 	return 0;

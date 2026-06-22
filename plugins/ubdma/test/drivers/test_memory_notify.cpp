@@ -51,6 +51,12 @@ void mem_nf_unregister_sge(struct work_struct *w __always_unused);
 int pre_offline_notifier_cb(struct memory_notify *mnb, unsigned long action);
 struct page *pfn_to_online_page(unsigned long pfn);
 int ub_dma_memory_notifier(struct notifier_block *self, unsigned long action, void *arg);
+int memory_notifier_init(void);
+void memory_notifier_exit(void);
+struct workqueue_struct *alloc_workqueue(const char *fmt, unsigned int flags, int max_active);
+int register_memory_notifier(struct notifier_block *nb);
+void destroy_workqueue(struct workqueue_struct *wq);
+void unregister_memory_notifier(struct notifier_block *nb);
 }
 
 TEST_F(TestMemoryNotify, mem_nf_register_sge_test)
@@ -111,4 +117,33 @@ TEST_F(TestMemoryNotify, ub_dma_memory_notifier_test)
     MOCKER(pre_offline_notifier_cb).stubs().will(returnValue(1));
     ret = ub_dma_memory_notifier(&self, MEM_GOING_OFFLINE, (void*)&mnb);
     EXPECT_EQ(ret, NOTIFY_OK);
+}
+
+TEST_F(TestMemoryNotify, memory_notifier_init_test)
+{
+    workqueue_struct wq;
+    MOCKER(alloc_workqueue).stubs().will(returnValue(&wq));
+    MOCKER(register_memory_notifier).stubs().will(returnValue(0));
+    int ret = memory_notifier_init();
+    EXPECT_EQ(ret, 0);
+
+    GlobalMockObject::verify();
+    MOCKER(alloc_workqueue).stubs().will(returnValue((workqueue_struct*)nullptr));
+    MOCKER(register_memory_notifier).stubs().will(returnValue(0));
+    ret = memory_notifier_init();
+    EXPECT_EQ(ret, 0);
+
+    GlobalMockObject::verify();
+    MOCKER(alloc_workqueue).stubs().will(returnValue(&wq));
+    MOCKER(register_memory_notifier).stubs().will(returnValue(1));
+    ret = memory_notifier_init();
+    EXPECT_EQ(ret, 1);
+}
+
+TEST_F(TestMemoryNotify, memory_notifier_exit_test)
+{
+    workqueue_struct wq;
+    MOCKER(destroy_workqueue).stubs();
+    MOCKER(unregister_memory_notifier).stubs();
+    memory_notifier_exit();
 }

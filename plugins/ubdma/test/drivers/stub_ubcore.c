@@ -138,7 +138,7 @@ int pfn_valid(unsigned long pfn)
 }
 struct page *pfn_to_online_page(unsigned long pfn)
 {
-    return 1;
+    return (struct page *)1;
 }
 
 void complete(struct completion *x)
@@ -266,6 +266,11 @@ void unregister_memory_notifier(struct notifier_block *nb)
 }
 
 bool cancel_work_sync(struct work_struct *work)
+{
+    return true;
+}
+
+bool numa_is_remote_node(int nid)
 {
     return true;
 }
