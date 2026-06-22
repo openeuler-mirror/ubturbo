@@ -20,7 +20,7 @@
 #include "securec.h"
 #include "strategy_config.h"
 
-#define STRATEGY_CONFIG_ENTRY 13
+#define STRATEGY_CONFIG_ENTRY 14
 #define STRATEGY_CONFIG_BUFFSIZE 500
 
 #define RETURN_OK 0
@@ -55,6 +55,10 @@
 #define DEFAULT_GROUP_SWAP_MIN_FREQ_GAIN 0
 #define MIN_GROUP_SWAP_MIN_FREQ_GAIN 0
 
+#define MAX_GROUP_SWAP_LOCAL_WATERMARK_RATIO 100
+#define DEFAULT_GROUP_SWAP_LOCAL_WATERMARK_RATIO 95
+#define MIN_GROUP_SWAP_LOCAL_WATERMARK_RATIO 0
+
 #define MAX_MIGRATE_MODE 2
 #define DEFAULT_MIGRATE_MODE 1
 #define MIN_MIGRATE_MODE 0
@@ -73,6 +77,7 @@ typedef struct {
     uint32_t groupSwapRatio;
     uint32_t groupSwapMinRemoteFreq;
     uint32_t groupSwapMinFreqGain;
+    uint32_t groupSwapLocalWatermarkRatio;
     uint32_t migrateMode;
     bool migrateModeChanged;
     bool zeroFreqMigrateEnable;
@@ -138,6 +143,11 @@ uint32_t GetGroupSwapMinRemoteFreqConfig(void)
 uint32_t GetGroupSwapMinFreqGainConfig(void)
 {
     return g_strategyConfig.groupSwapMinFreqGain;
+}
+
+uint32_t GetGroupSwapLocalWatermarkRatioConfig(void)
+{
+    return g_strategyConfig.groupSwapLocalWatermarkRatio;
 }
 
 uint32_t GetMigrateModeConfig(void)
@@ -371,6 +381,24 @@ static int32_t ConfigGroupSwapMinFreqGain(char *substr, char *value)
     return RETURN_OK;
 }
 
+static int32_t ConfigGroupSwapLocalWatermarkRatio(char *substr, char *value)
+{
+    SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
+    int32_t ret = ConfigReadValueToInt(value, &g_tmpStrategyConfig.groupSwapLocalWatermarkRatio);
+    if (ret != RETURN_OK) {
+        SMAP_LOGGER_ERROR("Config group swap local watermark ratio read failed, key:%s.", substr);
+        return ret;
+    }
+    if (g_tmpStrategyConfig.groupSwapLocalWatermarkRatio < MIN_GROUP_SWAP_LOCAL_WATERMARK_RATIO ||
+        g_tmpStrategyConfig.groupSwapLocalWatermarkRatio > MAX_GROUP_SWAP_LOCAL_WATERMARK_RATIO) {
+        SMAP_LOGGER_ERROR("Config group swap local watermark ratio(%u) invalid, range(%d-%d), key:%s.",
+                          g_tmpStrategyConfig.groupSwapLocalWatermarkRatio, MIN_GROUP_SWAP_LOCAL_WATERMARK_RATIO,
+                          MAX_GROUP_SWAP_LOCAL_WATERMARK_RATIO, substr);
+        return RETURN_ERROR;
+    }
+    return RETURN_OK;
+}
+
 static int32_t ConfigMigrateMode(char *substr, char *value)
 {
     SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
@@ -484,6 +512,12 @@ static StrategyConfigReadElem g_strategyConfigRead[] = {
     {
         "smap.group.swap.min.freq.gain",
         ConfigGroupSwapMinFreqGain,
+        1UL,
+        0UL,
+    },
+    {
+        "smap.group.swap.local.watermark.ratio",
+        ConfigGroupSwapLocalWatermarkRatio,
         1UL,
         0UL,
     },
@@ -659,6 +693,7 @@ static void InitStrategyConfig(void)
     g_strategyConfig.groupSwapRatio = DEFAULT_GROUP_SWAP_RATIO;
     g_strategyConfig.groupSwapMinRemoteFreq = DEFAULT_GROUP_SWAP_MIN_REMOTE_FREQ;
     g_strategyConfig.groupSwapMinFreqGain = DEFAULT_GROUP_SWAP_MIN_FREQ_GAIN;
+    g_strategyConfig.groupSwapLocalWatermarkRatio = DEFAULT_GROUP_SWAP_LOCAL_WATERMARK_RATIO;
     g_strategyConfig.migrateMode = DEFAULT_MIGRATE_MODE;
     g_strategyConfig.migrateModeChanged = false;
     g_strategyConfig.zeroFreqMigrateEnable = true;
@@ -707,6 +742,7 @@ static int32_t InitStrategyConfigFileBuffer(char strategyDefaultConfig[STRATEGY_
         { "smap.group.swap.ratio = %d\n", DEFAULT_GROUP_SWAP_RATIO },
         { "smap.group.swap.min.remote.freq = %d\n", DEFAULT_GROUP_SWAP_MIN_REMOTE_FREQ },
         { "smap.group.swap.min.freq.gain = %d\n", DEFAULT_GROUP_SWAP_MIN_FREQ_GAIN },
+        { "smap.group.swap.local.watermark.ratio = %d\n", DEFAULT_GROUP_SWAP_LOCAL_WATERMARK_RATIO },
         { "smap.migrate.mode = %d\n", DEFAULT_MIGRATE_MODE },
     };
     size_t numConfigs = sizeof(configs) / sizeof(configs[0]);
@@ -808,6 +844,7 @@ static bool UpdateStrategyConfigChanged(void)
     uint32_t oldScanPeriod, oldMigratePeriod, oldRemoteHotThreshold, scanPeriod, migratePeriod, remoteHotThreshold;
     uint32_t oldRemoteFreqPercentile, oldSlowThreshold, remoteFreqPercentile, slowThreshold;
     uint32_t oldGroupSwapRatio, oldGroupSwapMinRemoteFreq, oldGroupSwapMinFreqGain;
+    uint32_t oldGroupSwapLocalWatermarkRatio, groupSwapLocalWatermarkRatio;
     uint32_t oldMigrateMode, groupSwapRatio, groupSwapMinRemoteFreq, groupSwapMinFreqGain, migrateMode;
     uint64_t oldFreqWt, freqWt;
     bool oldZeroFreqMigrateEnable, zeroFreqMigrateEnable;
@@ -828,6 +865,7 @@ static bool UpdateStrategyConfigChanged(void)
     oldGroupSwapRatio = g_strategyConfig.groupSwapRatio;
     oldGroupSwapMinRemoteFreq = g_strategyConfig.groupSwapMinRemoteFreq;
     oldGroupSwapMinFreqGain = g_strategyConfig.groupSwapMinFreqGain;
+    oldGroupSwapLocalWatermarkRatio = g_strategyConfig.groupSwapLocalWatermarkRatio;
     oldMigrateMode = g_strategyConfig.migrateMode;
     oldZeroFreqMigrateEnable = g_strategyConfig.zeroFreqMigrateEnable;
     oldAdaptiveRatioEnable = g_strategyConfig.adaptiveRatioEnable;
@@ -841,6 +879,7 @@ static bool UpdateStrategyConfigChanged(void)
     groupSwapRatio = g_tmpStrategyConfig.groupSwapRatio;
     groupSwapMinRemoteFreq = g_tmpStrategyConfig.groupSwapMinRemoteFreq;
     groupSwapMinFreqGain = g_tmpStrategyConfig.groupSwapMinFreqGain;
+    groupSwapLocalWatermarkRatio = g_tmpStrategyConfig.groupSwapLocalWatermarkRatio;
     migrateMode = g_tmpStrategyConfig.migrateMode;
     zeroFreqMigrateEnable = g_tmpStrategyConfig.zeroFreqMigrateEnable;
     adaptiveRatioEnable = g_tmpStrategyConfig.adaptiveRatioEnable;
@@ -849,8 +888,8 @@ static bool UpdateStrategyConfigChanged(void)
         oldRemoteHotThreshold == remoteHotThreshold && oldRemoteFreqPercentile == remoteFreqPercentile &&
         oldSlowThreshold == slowThreshold && oldFreqWt == freqWt && oldGroupSwapRatio == groupSwapRatio &&
         oldGroupSwapMinRemoteFreq == groupSwapMinRemoteFreq && oldGroupSwapMinFreqGain == groupSwapMinFreqGain &&
-        oldMigrateMode == migrateMode && oldZeroFreqMigrateEnable == zeroFreqMigrateEnable &&
-        oldAdaptiveRatioEnable == adaptiveRatioEnable) {
+        oldGroupSwapLocalWatermarkRatio == groupSwapLocalWatermarkRatio && oldMigrateMode == migrateMode &&
+        oldZeroFreqMigrateEnable == zeroFreqMigrateEnable && oldAdaptiveRatioEnable == adaptiveRatioEnable) {
         return false;
     }
 
@@ -888,6 +927,11 @@ static bool UpdateStrategyConfigChanged(void)
 
     if (oldGroupSwapMinFreqGain != groupSwapMinFreqGain) {
         SMAP_LOGGER_INFO("Start update group swap min freq gain from config to %u.", groupSwapMinFreqGain);
+    }
+
+    if (oldGroupSwapLocalWatermarkRatio != groupSwapLocalWatermarkRatio) {
+        SMAP_LOGGER_INFO("Start update group swap local watermark ratio from config to %u.",
+                         groupSwapLocalWatermarkRatio);
     }
 
     if (oldMigrateMode != migrateMode) {

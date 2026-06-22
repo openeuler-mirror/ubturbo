@@ -51,6 +51,8 @@ uint32_t GetGroupSwapMinRemoteFreqConfig(void);
 
 uint32_t GetGroupSwapMinFreqGainConfig(void);
 
+uint32_t GetGroupSwapLocalWatermarkRatioConfig(void);
+
 bool GetZeroFreqMigrateEnableConfig(void);
 
 bool GetAdaptiveRatioEnableConfig(void);

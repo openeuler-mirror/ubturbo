@@ -20,6 +20,9 @@
 
 using namespace std;
 
+#define TEST_SMAP_MIG_MAGIC 0xB9
+#define TEST_SMAP_MIG_MIGRATE _IOW(TEST_SMAP_MIG_MAGIC, 0, struct MigrateMsg)
+
 extern "C" struct ProcessManager g_processManager;
 
 class MigrationTest : public ::testing::Test {
@@ -39,12 +42,78 @@ protected:
     }
 };
 
+static void InitSingleGroupedSwapProcess(ProcessAttr *process, pid_t pid, uint64_t usedPages)
+{
+    process->pid = pid;
+    process->state = PROC_MIGRATE;
+    process->groupPolicy.enabled = true;
+    process->groupPolicy.groupCount = 1;
+    process->groupPolicy.groups[0].localCount = 1;
+    process->groupPolicy.groups[0].locals[0].nid = 0;
+    process->groupPolicy.groups[0].targetCount = 1;
+    process->groupPolicy.groups[0].targets[0].nid = 4;
+    process->groupPolicy.groups[0].targets[0].quotaPages = 100;
+    process->groupPolicy.groups[0].targets[0].usedPages = usedPages;
+}
+
+static void InitUnbalancedGroupedSwapResult(struct MigrateMsg *mMsg, pid_t pid)
+{
+    mMsg->cnt = 2;
+    mMsg->migList = (struct MigList *)calloc(2, sizeof(struct MigList));
+    mMsg->migList[0].pid = pid;
+    mMsg->migList[0].from = 0;
+    mMsg->migList[0].to = 4;
+    mMsg->migList[0].nr = 10;
+    mMsg->migList[0].failedMigNr = 2;
+    mMsg->migList[0].successToUser = true;
+
+    mMsg->migList[1].pid = pid;
+    mMsg->migList[1].from = 4;
+    mMsg->migList[1].to = 0;
+    mMsg->migList[1].nr = 10;
+    mMsg->migList[1].failedMigNr = 0;
+    mMsg->migList[1].successToUser = true;
+}
+
+static int MockGroupedSwapCompIoctlSuccess(int fd, unsigned long request, void *arg)
+{
+    (void)fd;
+    struct MigrateMsg *msg = (struct MigrateMsg *)arg;
+    EXPECT_EQ((unsigned long)TEST_SMAP_MIG_MIGRATE, request);
+    EXPECT_NE(nullptr, msg);
+    if (msg == nullptr) {
+        return -EINVAL;
+    }
+    EXPECT_EQ(1, msg->cnt);
+    if (msg->cnt <= 0) {
+        return -EINVAL;
+    }
+    EXPECT_EQ(123, msg->migList[0].pid);
+    EXPECT_EQ(0, msg->migList[0].from);
+    EXPECT_EQ(4, msg->migList[0].to);
+    EXPECT_EQ((uint64_t)2, msg->migList[0].nr);
+    msg->migList[0].successToUser = true;
+    msg->migList[0].failedMigNr = 0;
+    msg->migList[0].failedIsolatedNr = 0;
+    return 0;
+}
+
+static void CheckNoEmptyCompEntryUpdateResult(struct MigrateMsg *mMsg, struct ProcessManager *manager)
+{
+    (void)manager;
+    EXPECT_NE(nullptr, mMsg);
+    if (mMsg == nullptr) {
+        return;
+    }
+    EXPECT_EQ(2, mMsg->cnt);
+}
+
 TEST_F(MigrationTest, TestAddMigListAddMultiSuccess)
 {
     int i;
     int ret;
     struct MigrateMsg mMsg = { .cnt = 0 };
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList));
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
     struct MigList mList = { .nr = 2, .from = 0, .to = 1 };
 
     mList.addr = (uint64_t *)malloc(sizeof(uint64_t) * mList.nr);
@@ -69,7 +138,7 @@ TEST_F(MigrationTest, TestAddMigListAddMultiAndMoreThanFreePagesSuccess)
     int i;
     int ret;
     struct MigrateMsg mMsg = { .cnt = 0 };
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList));
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
     struct MigList mList = { .nr = 2, .from = 0, .to = 1 };
 
     mList.addr = (uint64_t *)malloc(sizeof(uint64_t) * mList.nr);
@@ -94,7 +163,7 @@ TEST_F(MigrationTest, TestAddMigListNoPageToMig)
     int i;
     int ret;
     struct MigrateMsg mMsg = { .cnt = 0 };
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList));
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
     struct MigList mList = { .nr = 0, .from = 0, .to = 1 };
 
     ret = AddMigList(&mMsg, &mList);
@@ -716,7 +785,7 @@ TEST_F(MigrationTest, TestUpdateMigResultLocalToRemote)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 0;
     mMsg.migList[0].to = 4;
@@ -732,6 +801,33 @@ TEST_F(MigrationTest, TestUpdateMigResultLocalToRemote)
     EXPECT_EQ(170, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
 }
 
+TEST_F(MigrationTest, TestUpdateMigResultSubtractsIsolatedFailure)
+{
+    ProcessAttr attr = {};
+    attr.next = NULL;
+    attr.pid = 123;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+
+    struct MigrateMsg mMsg = {};
+    mMsg.cnt = 1;
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
+    mMsg.migList[0].pid = 123;
+    mMsg.migList[0].from = 0;
+    mMsg.migList[0].to = 4;
+    mMsg.migList[0].nr = 100;
+    mMsg.migList[0].failedMigNr = 30;
+    mMsg.migList[0].failedIsolatedNr = 20;
+    mMsg.migList[0].successToUser = true;
+
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 4;
+    manager.processes = &attr;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    UpdateMigResult(&mMsg, &manager);
+    EXPECT_EQ(150, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    free(mMsg.migList);
+}
+
 TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalUnexpectedMigCount)
 {
     ProcessAttr attr = {};
@@ -742,7 +838,7 @@ TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalUnexpectedMigCount)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 4;
     mMsg.migList[0].to = 0;
@@ -768,7 +864,7 @@ TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalExpectedMigCount)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 4;
     mMsg.migList[0].to = 0;
@@ -793,7 +889,7 @@ TEST_F(MigrationTest, TestUpdateMigResultTwo)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 0;
     mMsg.migList[0].to = 5;
@@ -820,7 +916,7 @@ TEST_F(MigrationTest, TestUpdateMigResultThree)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 0;
     mMsg.migList[0].to = 5;
@@ -847,7 +943,7 @@ TEST_F(MigrationTest, TestUpdateMigResultFour)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 0;
     mMsg.migList[0].to = 4;
@@ -878,7 +974,7 @@ TEST_F(MigrationTest, TestUpdateMigResultFive)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 2;
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 2);
+    mMsg.migList = (struct MigList *)calloc(2, sizeof(struct MigList));
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 0;
     mMsg.migList[0].to = 4;
@@ -913,7 +1009,7 @@ TEST_F(MigrationTest, TestUpdateMigResultSix)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 1);
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 4;
     mMsg.migList[0].to = 0;
@@ -944,7 +1040,7 @@ TEST_F(MigrationTest, TestUpdateMigResultSeven)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 2;
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 2);
+    mMsg.migList = (struct MigList *)calloc(2, sizeof(struct MigList));
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 4;
     mMsg.migList[0].to = 0;
@@ -983,7 +1079,7 @@ TEST_F(MigrationTest, TestUpdateMigResultEight)
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 2;
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList) * 2);
+    mMsg.migList = (struct MigList *)calloc(2, sizeof(struct MigList));
     mMsg.migList[0].pid = 123;
     mMsg.migList[0].from = 0;
     mMsg.migList[0].to = 4;
@@ -1110,7 +1206,7 @@ TEST_F(MigrationTest, TestPostMigration)
     current.state = PROC_MIGRATE;
 
     MOCKER(UpdateMigResult).stubs();
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList));
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
     EnvMutexInit(&manager.lock);
     PostMigration(&manager, &mMsg);
     EXPECT_EQ(PROC_IDLE, current.state);
@@ -1128,7 +1224,7 @@ TEST_F(MigrationTest, TestPostMigrationTwo)
     current.state = PROC_IDLE;
 
     MOCKER(UpdateMigResult).stubs();
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList));
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
     EnvMutexInit(&manager.lock);
     PostMigration(&manager, &mMsg);
     EXPECT_EQ(PROC_IDLE, current.state);
@@ -1145,7 +1241,7 @@ TEST_F(MigrationTest, TestPostMigrationAppliesPendingGroupedPolicy)
     current.pid = 1;
     current.state = PROC_MIGRATE;
     current.pendingGroupPolicy.valid = true;
-    mMsg.migList = (struct MigList *)malloc(sizeof(struct MigList));
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
     EnvMutexInit(&manager.lock);
     MOCKER(UpdateMigResult).stubs();
     MOCKER(ApplyPendingGroupedPolicy).expects(once()).will(returnValue(0));
@@ -1153,4 +1249,58 @@ TEST_F(MigrationTest, TestPostMigrationAppliesPendingGroupedPolicy)
     PostMigration(&manager, &mMsg);
     EXPECT_EQ(PROC_IDLE, current.state);
     free(mMsg.migList);
+}
+
+TEST_F(MigrationTest, TestPostMigrationCompensatesGroupedSwapImbalance)
+{
+    struct ProcessManager manager = {};
+    ProcessAttr current = {};
+    struct MigrateMsg mMsg = {};
+    ActcData localPages[2] = {};
+
+    localPages[0].addr = 0x1000;
+    localPages[1].addr = 0x2000;
+    InitSingleGroupedSwapProcess(&current, 123, 5);
+    current.scanAttr.actcLen[0] = 2;
+    current.scanAttr.actcData[0] = localPages;
+    manager.processes = &current;
+    manager.nrLocalNuma = 4;
+    manager.tracking.pageSize = PAGESIZE_2M;
+    g_processManager.processes = &current;
+    InitUnbalancedGroupedSwapResult(&mMsg, current.pid);
+    EnvMutexInit(&manager.lock);
+
+    MOCKER(BuildAllPidData).expects(once()).will(returnValue(0));
+    MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl))
+        .expects(once())
+        .will(invoke(MockGroupedSwapCompIoctlSuccess));
+
+    PostMigration(&manager, &mMsg);
+    EXPECT_EQ((uint64_t)5, current.groupPolicy.groups[0].targets[0].usedPages);
+    EXPECT_FALSE(current.groupSwapFrozen);
+    EXPECT_EQ(PROC_IDLE, current.state);
+}
+
+TEST_F(MigrationTest, TestPostMigrationSkipsEmptyCompEntryAndFreezes)
+{
+    struct ProcessManager manager = {};
+    ProcessAttr current = {};
+    struct MigrateMsg mMsg = {};
+
+    InitSingleGroupedSwapProcess(&current, 123, 5);
+    manager.processes = &current;
+    manager.nrLocalNuma = 4;
+    manager.tracking.pageSize = PAGESIZE_2M;
+    g_processManager.processes = &current;
+    InitUnbalancedGroupedSwapResult(&mMsg, current.pid);
+    EnvMutexInit(&manager.lock);
+
+    MOCKER(BuildAllPidData).expects(once()).will(returnValue(0));
+    MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
+    MOCKER(UpdateMigResult).expects(once()).will(invoke(CheckNoEmptyCompEntryUpdateResult));
+
+    PostMigration(&manager, &mMsg);
+    EXPECT_TRUE(current.groupSwapFrozen);
+    EXPECT_EQ(PROC_IDLE, current.state);
 }

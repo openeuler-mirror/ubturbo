@@ -207,9 +207,12 @@ static uint64_t CalcGroupExcess(ProcessAttr *process, const MigrationGroupAttr *
 
 static bool IsGroupLocalSteady(ProcessAttr *process, const MigrationGroupAttr *group)
 {
+    uint32_t ratio = GetGroupSwapLocalWatermarkRatioConfig();
     for (int i = 0; i < group->localCount; i++) {
         int nid = group->locals[i].nid;
-        if (process->scanAttr.actcLen[nid] != group->locals[i].localReservePages) {
+        uint64_t reserve = group->locals[i].localReservePages;
+        uint64_t threshold = ((__uint128_t)reserve * ratio + GROUP_SWAP_PERCENT_BASE - 1) / GROUP_SWAP_PERCENT_BASE;
+        if (process->scanAttr.actcLen[nid] < threshold) {
             return false;
         }
     }
@@ -223,6 +226,38 @@ static uint64_t CalcRemoteUsed(const MigrationGroupAttr *group)
         used += group->targets[i].usedPages;
     }
     return used;
+}
+
+static uint64_t CalcProcessTotalPages(const ProcessAttr *process)
+{
+    uint64_t total = 0;
+
+    for (int nid = 0; nid < MAX_NODES; nid++) {
+        total += process->scanAttr.actcLen[nid];
+    }
+    return total;
+}
+
+static bool UpdateGroupSwapTotalPagesStable(ProcessAttr *process)
+{
+    uint64_t totalPages = CalcProcessTotalPages(process);
+
+    if (!process->groupSwapTotalPagesValid || process->groupSwapLastTotalPages != totalPages) {
+        process->groupSwapLastTotalPages = totalPages;
+        process->groupSwapStableTotalRounds = 1;
+        process->groupSwapTotalPagesValid = true;
+    } else if (process->groupSwapStableTotalRounds < GROUP_SWAP_READY_ROUNDS) {
+        process->groupSwapStableTotalRounds++;
+    }
+
+    return process->groupSwapStableTotalRounds >= GROUP_SWAP_READY_ROUNDS;
+}
+
+static void ResetGroupSwapCandidateRounds(GroupMigrationPolicy *policy)
+{
+    for (int i = 0; i < policy->groupCount; i++) {
+        policy->groups[i].swapCandidateRounds = 0;
+    }
 }
 
 static uint64_t CalcRemoteRemaining(const MigrationGroupAttr *group, int targetIdx)
@@ -1094,6 +1129,17 @@ static int RunSwapStage(ProcessAttr *process, struct MigList mlist[MAX_NODES][MA
     if (!process->enableSwap) {
         return 0;
     }
+    if (process->groupSwapFrozen) {
+        ResetGroupSwapCandidateRounds(&process->groupPolicy);
+        SMAP_LOGGER_WARNING("grouped pid %d swap is frozen due to previous imbalance.", process->pid);
+        return 0;
+    }
+    if (!UpdateGroupSwapTotalPagesStable(process)) {
+        SMAP_LOGGER_INFO("grouped pid %d swap waits for stable total pages, current %llu round %u.", process->pid,
+                         process->groupSwapLastTotalPages, process->groupSwapStableTotalRounds);
+        ResetGroupSwapCandidateRounds(&process->groupPolicy);
+        return 0;
+    }
     for (int i = 0; i < process->groupPolicy.groupCount; i++) {
         MigrationGroupAttr *group = &process->groupPolicy.groups[i];
         uint64_t localUsed = CalcLocalUsed(process, group);
@@ -1128,25 +1174,10 @@ int GroupedMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODE
     if (!process || !process->groupPolicy.enabled) {
         return -EINVAL;
     }
-    /* Promote/demote/swap all depend on target usedPages accounting. */
+    /* Swap depends on target usedPages accounting. */
     SyncGroupedTargetUsedPages(process);
     WarnUngroupedPages(process);
-    int ret = RunPromoteStage(process, mlist);
-    if (ret) {
-        SMAP_LOGGER_ERROR("grouped pid %d promote stage failed: %d.", process->pid, ret);
-        return ret;
-    }
-    ret = RunLocalRebalanceStage(process, mlist);
-    if (ret) {
-        SMAP_LOGGER_ERROR("grouped pid %d local rebalance stage failed: %d.", process->pid, ret);
-        return ret;
-    }
-    ret = RunDemoteStage(process, mlist);
-    if (ret) {
-        SMAP_LOGGER_ERROR("grouped pid %d demote stage failed: %d.", process->pid, ret);
-        return ret;
-    }
-    ret = RunSwapStage(process, mlist);
+    int ret = RunSwapStage(process, mlist);
     if (ret) {
         SMAP_LOGGER_ERROR("grouped pid %d swap stage failed: %d.", process->pid, ret);
     }

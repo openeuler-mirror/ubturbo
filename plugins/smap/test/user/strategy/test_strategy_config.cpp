@@ -48,6 +48,7 @@ typedef struct {
     uint32_t groupSwapRatio;
     uint32_t groupSwapMinRemoteFreq;
     uint32_t groupSwapMinFreqGain;
+    uint32_t groupSwapLocalWatermarkRatio;
     uint32_t migrateMode;
     bool migrateModeChanged;
     bool zeroFreqMigrateEnable;
@@ -136,6 +137,14 @@ TEST_F(PeriodConfigTest, GetGroupSwapMinFreqGainConfigTest)
     g_strategyConfig.groupSwapMinFreqGain = 3;
     uint32_t ret = GetGroupSwapMinFreqGainConfig();
     EXPECT_EQ(3, ret);
+}
+
+extern "C" uint32_t GetGroupSwapLocalWatermarkRatioConfig(void);
+TEST_F(PeriodConfigTest, GetGroupSwapLocalWatermarkRatioConfigTest)
+{
+    g_strategyConfig.groupSwapLocalWatermarkRatio = 95;
+    uint32_t ret = GetGroupSwapLocalWatermarkRatioConfig();
+    EXPECT_EQ(95, ret);
 }
 
 extern "C" uint32_t GetMigrateModeConfig(void);
@@ -471,6 +480,28 @@ TEST_F(PeriodConfigTest, ConfigGroupSwapMinFreqGainTest)
     EXPECT_EQ(3, g_tmpStrategyConfig.groupSwapMinFreqGain);
 }
 
+extern "C" int32_t ConfigGroupSwapLocalWatermarkRatio(char *substr, char *value);
+TEST_F(PeriodConfigTest, ConfigGroupSwapLocalWatermarkRatioTest)
+{
+    char *substr = "smap.group.swap.local.watermark.ratio";
+    char *value = "101";
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
+    int32_t ret = ConfigGroupSwapLocalWatermarkRatio(substr, value);
+    EXPECT_EQ(-1, ret);
+
+    g_tmpStrategyConfig.groupSwapLocalWatermarkRatio = 101;
+    GlobalMockObject::verify();
+    ret = ConfigGroupSwapLocalWatermarkRatio(substr, value);
+    EXPECT_EQ(RETURN_ERROR, ret);
+    EXPECT_EQ(101, g_tmpStrategyConfig.groupSwapLocalWatermarkRatio);
+
+    GlobalMockObject::verify();
+    char *value1 = "95";
+    ret = ConfigGroupSwapLocalWatermarkRatio(substr, value1);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(95, g_tmpStrategyConfig.groupSwapLocalWatermarkRatio);
+}
+
 TEST_F(PeriodConfigTest, ConfigFileConfSwitchTest)
 {
     char* substr = "test";
@@ -544,7 +575,7 @@ TEST_F(PeriodConfigTest, PeriodConfigReviewTest)
     int32_t ret = StrategyConfigReview();
     EXPECT_EQ(-1, ret);
 
-    uint32_t num = 13;
+    uint32_t num = 14;
     for (int i = 0; i < num; i++) {
         g_strategyConfigRead[i].needCfg = 2UL;
         g_strategyConfigRead[i].realCfg = 2UL;
@@ -587,6 +618,7 @@ TEST_F(PeriodConfigTest, InitPeriodConfigTest)
     EXPECT_EQ(1, g_strategyConfig.groupSwapRatio);
     EXPECT_EQ(0, g_strategyConfig.groupSwapMinRemoteFreq);
     EXPECT_EQ(0, g_strategyConfig.groupSwapMinFreqGain);
+    EXPECT_EQ(95, g_strategyConfig.groupSwapLocalWatermarkRatio);
     EXPECT_EQ(1, g_strategyConfig.migrateMode);
     EXPECT_EQ(false, g_strategyConfig.migrateModeChanged);
     EXPECT_EQ(true, g_strategyConfig.zeroFreqMigrateEnable);
@@ -634,6 +666,7 @@ TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedNoChange)
     g_strategyConfig.groupSwapRatio = 1;
     g_strategyConfig.groupSwapMinRemoteFreq = 5;
     g_strategyConfig.groupSwapMinFreqGain = 3;
+    g_strategyConfig.groupSwapLocalWatermarkRatio = 95;
     g_strategyConfig.migrateMode = 1;
     g_strategyConfig.zeroFreqMigrateEnable = true;
     g_strategyConfig.adaptiveRatioEnable = true;
@@ -646,6 +679,7 @@ TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedNoChange)
     g_tmpStrategyConfig.groupSwapRatio = 1;
     g_tmpStrategyConfig.groupSwapMinRemoteFreq = 5;
     g_tmpStrategyConfig.groupSwapMinFreqGain = 3;
+    g_tmpStrategyConfig.groupSwapLocalWatermarkRatio = 95;
     g_tmpStrategyConfig.migrateMode = 1;
     g_tmpStrategyConfig.zeroFreqMigrateEnable = true;
     g_tmpStrategyConfig.adaptiveRatioEnable = true;
