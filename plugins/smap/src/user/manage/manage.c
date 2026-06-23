@@ -1318,7 +1318,7 @@ static void CalcActcStats(ProcessAttr *attr)
         for (uint64_t i = 0; i < actcLen; i++) {
             actc_t freq = actc[i].freq;
             uint16_t bucketIdx = MIN(freq, FREQ_BUCKETS_SIZE - 1);
-            if (!actc[i].isWhiteListPage) {
+            if (nid >= nrLocalNuma || !actc[i].isWhiteListPage) {
                 count->freqBuckets[bucketIdx]++;
             }
             if (freq != 0) {
