@@ -558,6 +558,7 @@ static void UpdateSwapNum(ProcessAttr *process, uint64_t swapNum[LOCAL_NUMA_BITS
         }
     }
     for (int remoteNid = localNumaNum; remoteNid < localNumaNum + REMOTE_NUMA_NUM; remoteNid++) {
+        int remoteIndex = remoteNid - localNumaNum;
         if (NotInAttrL2(process, remoteNid)) {
             continue;
         }
@@ -565,8 +566,9 @@ static void UpdateSwapNum(ProcessAttr *process, uint64_t swapNum[LOCAL_NUMA_BITS
             if (NotInAttrL1(process, localNid)) {
                 continue;
             }
-            // nrMigratePages being zero means no swap should happen for processes in MIG_MEMSIZE_MODE.
-            if (process->migrateMode == MIG_MEMSIZE_MODE && sa->nrMigratePages[localNid][remoteNid] == 0) {
+            // memSize and nrMigratePages both being zero means no swap should happen for processes in MIG_MEMSIZE_MODE.
+            if (process->migrateMode == MIG_MEMSIZE_MODE && sa->memSize[localNid][remoteIndex] == 0 &&
+                sa->nrMigratePages[localNid][remoteNid] == 0) {
                 continue;
             }
             swapNum[localNid][remoteNid] = CalcSwapNum4K(process, localNid, remoteNid, numaOffset, numaFreePage);
