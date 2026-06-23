@@ -11,4 +11,12 @@ static __always_inline void write_unlock(rwlock_t *rwlock)
 {
     return;
 }
+static __always_inline void read_lock(rwlock_t *rwlock)
+{
+    return;
+}
+static __always_inline void read_unlock(rwlock_t *rwlock)
+{
+    return;
+}
 #endif

@@ -44,13 +44,24 @@ protected:
 extern "C" {
     int insert_remote_ram(u64 pa_start, u64 pa_end, struct list_head *head);
     int pfn_valid(unsigned long pfn);
+    struct page *pfn_to_online_page(unsigned long pfn);
     int page_to_nid(const struct page *page);
     int update_resource(struct resource *r, void *arg);
+    int iomem_urma_sge_init(void);
+    void destory_iomem_workqueue(void);
+    int walk_iomem_res_desc(unsigned long desc, unsigned long flags, u64 start, u64 end, void *arg,
+                            int (*func)(struct resource *, void *));
+    void destroy_workqueue(struct workqueue_struct *wq);
+    void flush_workqueue(struct workqueue_struct *wq);
+    bool cancel_work_sync(struct work_struct *work);
+    extern struct list_head remote_ram_list;
+    int ub_dma_register_segment(u64 pa_start, u64 pa_end);
 }
 
 TEST_F(TestUbDmaIomem, insert_remote_ram_test)
 {
     list_head head;
+    INIT_LIST_HEAD(&head);
     MOCKER(pfn_valid).stubs().will(returnValue(0));
     int ret = insert_remote_ram(0, 1, &head);
     EXPECT_EQ(ret, 0);
@@ -87,4 +98,15 @@ TEST_F(TestUbDmaIomem, update_resource_test)
     MOCKER(insert_remote_ram).stubs().will(returnValue(0));
     ret = update_resource(&rsc, &head);
     EXPECT_EQ(ret, 0);
+}
+
+TEST_F(TestUbDmaIomem, iomem_urma_sge_init_test)
+{
+    int ret = iomem_urma_sge_init();
+    EXPECT_EQ(ret, 0);
+}
+
+TEST_F(TestUbDmaIomem, destory_iomem_workqueue_test)
+{
+    destory_iomem_workqueue();
 }

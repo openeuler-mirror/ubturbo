@@ -72,19 +72,9 @@ struct dma_channel_work {
 
 struct ub_dma_dev {
     struct dma_device slave;
-    struct urma_mem_trans *urma_handler;
     struct ub_dma_vchan *vchans;
     uint32_t vchan_num;
-    spinlock_t lock;
-    struct tasklet_struct task;
-    struct list_head pending;
     struct device_driver driver;
-};
-
-struct urma_trans_segment_info {
-    uint64_t addr;
-    uint32_t len;
-    struct ubcore_target_seg *sge;
 };
 
 #endif
