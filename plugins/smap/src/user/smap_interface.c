@@ -3180,7 +3180,12 @@ static int AssignOldProcessPayload(struct OldProcessPayload *result, ProcessAttr
     result->l2Node[0] = l2Node;
     result->scanTime = attr->scanTime;
     result->migrateMode = attr->migrateMode;
-    result->memSize = attr->strategyAttr.memSize[l1Node][l2Index];
+    for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
+        if (attr->migrateParam[i].nid == l2Node) {
+            result->memSize = attr->migrateParam[i].memSize;
+            break;
+        }
+    }
     // only the first elem of l1Node and l2Node is used, so assign invalid nid to other elems
     for (int i = 1; i < len; i++) {
         result->l1Node[i] = result->l2Node[i] = NUMA_NO_NODE;
