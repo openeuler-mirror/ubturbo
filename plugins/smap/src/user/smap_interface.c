@@ -903,6 +903,11 @@ static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType, uint
             payload[i].pid = NON_EXIST_PID;
             continue;
         }
+        ProcessAttr *current = GetProcessAttrLocked(msg->payload[i].pid);
+        if (current) {
+            payload[i].scanTime = current->scanTime;
+            payload[i].duration = current->duration;
+        }
         // assign values for local numa nodes
         if (nodeBitmap) {
             payload[i].numaNodes = nodeBitmap[i];

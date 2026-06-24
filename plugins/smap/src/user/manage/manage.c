@@ -575,6 +575,29 @@ static void SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, in
     SetAttrL2(attr, remoteNid);
 }
 
+/* Update migration-related config for existing process (ratio/memSize only) */
+static void UpdateProcessMigrateConfig(ProcessAttr *attr, ProcessParam *param)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    int localNumaCnt = GetL1Count(attr->numaAttr.numaNodes);
+    bool isVm = GetPidType(&g_processManager) == VM_TYPE;
+
+    attr->migrateMode = param->numaParam[0].migrateMode;
+    attr->remoteNumaCnt = param->count;
+
+    int localRatio = HUNDRED;
+    for (int i = 0; i < param->count; i++) {
+        localRatio -= param->numaParam[i].ratio;
+    }
+    attr->initLocalMemRatio = localRatio;
+
+    if (isVm && (param->count > 1 || localNumaCnt > 1)) {
+        SetMultiNumaVmConfig(attr, param, nrLocalNuma);
+    } else {
+        SetSingleRemoteNumaConfig(attr, param, nrLocalNuma);
+    }
+}
+
 static void SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
 {
     SetBasicProcessConfig(attr, param);
@@ -1001,9 +1024,10 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
     }
     current = GetProcessAttrLocked(param->pid);
     if (current) {
-        SetProcessConfig(current, param);
+        UpdateProcessMigrateConfig(current, param);
         UpdateAutoRemoveRemoteEmptyFlag(current, param);
-        SMAP_LOGGER_INFO("Set pid %d scan cycle to %ums.", current->pid, current->scanTime);
+        SMAP_LOGGER_INFO("Update pid %d migrate config, migrateMode: %d, remoteNumaCnt: %d.", current->pid,
+                         current->migrateMode, current->remoteNumaCnt);
         ret = SyncAllProcessConfig();
         if (ret) {
             SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", param->pid, ret);
