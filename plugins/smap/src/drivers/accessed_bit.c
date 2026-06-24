@@ -903,11 +903,11 @@ static int fill_vaddrs_info(struct kvm *kvm, struct hva_info *hva_vec, u64 len,
 		for (gpa = memslot->base_gfn << PAGE_SHIFT;
 		     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
 		     gpa += g_pagesize_huge) {
+			if (!memslot_is_mem(memslot))
+				continue;
 			struct vm_area_struct *vma;
 			if (idx >= len) {
-				pr_err("exceeds upper bound: %llu when looking up GPA in memslots\n",
-				       len);
-				return -EFAULT;
+				break;
 			}
 			hva = gfn_to_hva_memslot(memslot, gpa_to_gfn(gpa));
 			vma = get_vma_if_huge_page(kvm, hva);
