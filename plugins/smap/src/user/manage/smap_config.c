@@ -547,7 +547,7 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
     if (nrPayload == 0) {
         *payload = NULL;
         *len = 0;
-        SMAP_LOGGER_ERROR("Number of process payload is 0.");
+        SMAP_LOGGER_INFO("Number of process payload is 0.");
         return 0;
     }
 

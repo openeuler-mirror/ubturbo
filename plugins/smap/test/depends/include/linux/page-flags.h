@@ -31,6 +31,12 @@ static inline int PageTransHuge(struct page *page)
 	return 0;
 }
 
+static inline bool is_page_hwpoison(struct page *page)
+{
+    (void)page;
+    return false;
+}
+
 static inline bool folio_test_hugetlb(struct folio *folio)
 {
     return false;

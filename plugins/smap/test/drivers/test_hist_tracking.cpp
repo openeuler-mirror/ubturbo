@@ -59,6 +59,7 @@ TEST_F(HistTrackingTest, reset_actc_data)
 
 extern "C" struct smap_hist_dev g_smap_hist_dev;
 extern "C" void hist_tracking_enable(struct device *ldev);
+extern "C" int drivers_actc_buffer_reinit(struct access_tracking_dev *hdev);
 TEST_F(HistTrackingTest, hist_tracking_enable)
 {
     struct access_tracking_dev hdev = {};
@@ -66,6 +67,8 @@ TEST_F(HistTrackingTest, hist_tracking_enable)
     hdev.is_hist = true;
     hdev.enable_on = false;
     hdev.page_count = 0;
+    g_smap_hist_dev.thread_enable = false;
+    MOCKER(drivers_actc_buffer_reinit).stubs().will(returnValue(0));
     hist_tracking_enable(&hdev.ldev);
     EXPECT_EQ(true, hdev.enable_on);
     EXPECT_EQ(true, g_smap_hist_dev.thread_enable);
@@ -139,7 +142,6 @@ TEST_F(HistTrackingTest, hist_dev_pgsize_update)
     hist_dev_pgsize_update(PAGE_MODE_2M);
 }
 
-extern "C" int drivers_actc_buffer_reinit(struct access_tracking_dev *hdev);
 TEST_F(HistTrackingTest, actc_buffer_reinit)
 {
     int ret;

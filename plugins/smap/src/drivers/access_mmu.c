@@ -289,6 +289,10 @@ static int add_to_bm(unsigned long vaddr, pagemap_entry_t *pme,
 			goto inc_pm_pos;
 		}
 
+		if (is_page_hwpoison(page)) {
+			pr_err("unsupported page type: hwpoison\n");
+			goto inc_pm_pos;
+		}
 		if (pm->mig_info.mig_cnt < pm->mig_info.folios_len) {
 			pm->mig_info.folios[pm->mig_info.mig_cnt++] =
 				page_folio(page);
