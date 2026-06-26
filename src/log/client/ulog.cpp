@@ -10,8 +10,8 @@
  * See the Mulan PSL v2 for more details.
  */
 #include <cstdarg>
-#include <string>
 #include <sstream>
+#include <string>
 
 #include "securec.h"
 #include "ulog.h"
@@ -31,8 +31,7 @@ void LoggerMessage(LoggerLevel severity, const char *fmt, ...)
     va_list ap;
     int level = static_cast<int>(severity);
     va_start(ap, fmt);
-    int ret = vsnprintf_s(gMessage, TURBO_MAX_MESSAGE_LENGTH,
-        TURBO_MAX_MESSAGE_LENGTH - 1, fmt, ap);
+    int ret = vsnprintf_s(gMessage, TURBO_MAX_MESSAGE_LENGTH, TURBO_MAX_MESSAGE_LENGTH - 1, fmt, ap);
     if (ret < 0) {
         va_end(ap);
         return;
@@ -43,4 +42,4 @@ void LoggerMessage(LoggerLevel severity, const char *fmt, ...)
     }
 }
 
-}
+} // namespace turbo::smap::ulog

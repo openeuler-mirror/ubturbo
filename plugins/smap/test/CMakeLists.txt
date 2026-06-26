@@ -4,6 +4,8 @@ project(SMAP VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 11)
 
+find_package(Threads REQUIRED)
+
 set(SMAP_SRC ${CMAKE_CURRENT_LIST_DIR}/dt_src)
 set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage -DACPI_NOT_READY")
 set(CMAKE_C_FLAGS " ${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage -DACPI_NOT_READY")
@@ -43,6 +45,7 @@ aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/depends/mm TEST_SRC)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/depends/fs TEST_SRC)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/depends/fs/debugfs TEST_SRC)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/depends/fs/sysfs TEST_SRC)
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/depends/fs/proc TEST_SRC)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/depends/init TEST_SRC)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/depends/virt/kvm TEST_SRC)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/depends/arch/arm64/kernel TEST_SRC)
@@ -111,8 +114,6 @@ list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_pid.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_tracking.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_tracking_wrapper.c)
 
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/memory_notifier.c)
-
 list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/ub_hist.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/hist_ops.c)
 
@@ -125,14 +126,16 @@ list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/manage.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/thread.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/device.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/user_log/smap_user_log/smap_user_log.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/user/user_log/smap_log_core.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/access_ioctl.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/oom_migrate.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/virt.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/smap_config.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/period_config.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/strategy_config.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/migration.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/separate_strategy.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/strategy.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/grouped_strategy.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/advanced-strategy/scene.c)
 list(APPEND TEST_SRC ${CMAKE_CURRENT_LIST_DIR}/smap_main.cpp)
 
@@ -140,11 +143,13 @@ add_executable(smap_dt ${TEST_SRC})
 
 TARGET_MOCKCPP(smap_dt)
 TARGET_GTEST(smap_dt)
+target_link_libraries(smap_dt Threads::Threads ${CMAKE_DL_LIBS})
 
 # include headers
 target_include_directories(smap_dt PUBLIC
     ${SMAP_SRC}/src
     ${SMAP_SRC}/src/user
+    ${SMAP_SRC}/src/user/user_log
     ${SMAP_SRC}/src/user/user_log/smap_user_log
     ${SMAP_SRC}/src/tiering
     ${SMAP_SRC}/src/drivers

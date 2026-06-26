@@ -24,12 +24,71 @@
 #include "access_iomem.h"
 #include "access_acpi_mem.h"
 #include "ub_hist.h"
+#include "hist_tracking.h"
 #include "hist_ops.h"
 
 #define HOT_WINDOW_RATIO (10)
 #define SCAN_INTERVAL_RANGE_US 1000
 
 static struct smap_hist_dev g_smap_hist_dev;
+
+/**
+ * hist_4k_scan_mode_set - Callback for setting scan mode parameter
+ * @val: String containing the new scan mode value
+ * @kp: Pointer to kernel_param structure
+ *
+ * When user modifies the parameter via sysfs:
+ * - Update the global device's scan mode
+ * - Reset sequential loop scan offsets (start from index 0 for the new mode)
+ */
+static int hist_4k_scan_mode_set(const char *val, const struct kernel_param *kp)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	unsigned int new_mode;
+	int ret;
+	u32 i;
+
+	/* Parse parameter value */
+	ret = kstrtouint(val, 10, &new_mode);
+	if (ret)
+		return ret;
+
+	/* Validate parameter range */
+	if (new_mode > HIST_4K_SCAN_SEQ_LOOP) {
+		pr_err("invalid scan mode: %u, valid: 0-1\n", new_mode);
+		return -EINVAL;
+	}
+
+	/* If mode unchanged, return directly */
+	if (new_mode == dev->scan_mode)
+		return 0;
+
+	pr_info("hist 4k scan mode changed: %u -> %u\n", dev->scan_mode,
+		new_mode);
+
+	/* Update scan mode */
+	dev->scan_mode = new_mode;
+
+	/* Reset sequential loop scan offsets: start from beginning when switching mode */
+	for (i = 0; i < dev->ba_cnt; ++i) {
+		dev->seq_loop_ba_offset[i] = -1;
+	}
+
+	return 0;
+}
+
+/* Custom parameter operations structure */
+static const struct kernel_param_ops hist_4k_scan_mode_ops = {
+	.set = hist_4k_scan_mode_set,
+	.get = param_get_uint,
+};
+
+/* 4K scan mode kernel parameter: 0=multi-granularity sliding, 1=sequential loop (default) */
+static unsigned int hist_4k_scan_mode_param = HIST_4K_SCAN_SEQ_LOOP;
+module_param_cb(hist_4k_scan_mode_param, &hist_4k_scan_mode_ops,
+		&hist_4k_scan_mode_param, 0644);
+MODULE_PARM_DESC(hist_4k_scan_mode_param,
+		 "4K scan mode: 0=multi-granularity, 1=seq-loop (default)");
 
 static inline u64 align_addr(u64 addr, u32 low_bit_len)
 {
@@ -153,10 +212,11 @@ static inline u64 seg_end(struct addr_seg *seg)
 	return seg->start + seg->size - 1;
 }
 
-static inline bool addr_seg_is_continuous_scan_wins(struct addr_seg *seg1,
-						    struct addr_seg *seg2)
+static inline bool
+addr_seg_is_continuous_scan_wins(struct addr_seg *seg1, struct addr_seg *seg2,
+				 enum ub_hist_sts_size sts_size)
 {
-	u64 scan_win_size = get_hist_scan_win_size(STS_SIZE_2M);
+	u64 scan_win_size = get_hist_scan_win_size(sts_size);
 	if (seg2->start - seg_end(seg1) <= scan_win_size)
 		return true;
 
@@ -192,12 +252,13 @@ static void align_segments(struct addr_seg *segs, int cnt,
 	}
 }
 
-static int merge_segments(struct addr_seg *segs, int cnt)
+static int merge_segments(struct addr_seg *segs, int cnt,
+			  enum ub_hist_sts_size sts_size)
 {
 	int i, merged_cnt = 0;
 	for (i = 1; i < cnt; i++) {
 		bool is_continuous = addr_seg_is_continuous_scan_wins(
-			&segs[merged_cnt], &segs[i]);
+			&segs[merged_cnt], &segs[i], sts_size);
 		if (is_continuous) {
 			segs[merged_cnt].size =
 				max_t(u64, seg_end(&segs[merged_cnt]),
@@ -218,13 +279,13 @@ static inline bool is_intersect(struct addr_seg *seg1, struct addr_seg *seg2,
 		return false;
 	}
 	*inter_start = (seg1->start > seg2->start) ? seg1->start : seg2->start;
-	*inter_end = (seg_end(seg1) < seg_end(seg2)) ? seg_end(seg1) :
-						       seg_end(seg2);
+	*inter_end = (seg_end(seg1) < seg_end(seg2)) ? seg_end(seg1)
+						     : seg_end(seg2);
 
 	return true;
 }
 
-static void calc_4k_scan_hot_wins(struct segs_info *info, u16 *buf,
+static void calc_4k_scan_hot_wins(struct segs_info *info, actc_t *buf,
 				  struct segs_info *win_info)
 {
 	u32 seg_pages = 0, win_cnt = 0;
@@ -235,12 +296,12 @@ static void calc_4k_scan_hot_wins(struct segs_info *info, u16 *buf,
 		u64 ba_tag;
 		calc_ba_tag(start, &ba_tag);
 		while (start < seg_end(&info->segs[i])) {
-			u16 max_val = 0, nr = shift / SIZE_2M;
-			u32 offset = (start - info->segs[i].start) >>
+			u64 max_val = 0, nr = shift / SIZE_2M;
+			u64 offset = (start - info->segs[i].start) >>
 				     HIST_ADDR_SHIFT_2M;
-			u16 *buf_ptr = &buf[seg_pages + offset];
+			actc_t *buf_ptr = &buf[seg_pages + offset];
 			while (nr--) {
-				max_val = max_t(u16, max_val, *buf_ptr++);
+				max_val = max_t(actc_t, max_val, *buf_ptr++);
 			}
 			if (win_cnt >= win_info->cnt) {
 				pr_err("out-of-bounds when calc wins.[nr_wins:%u]\n",
@@ -260,12 +321,13 @@ static void calc_4k_scan_hot_wins(struct segs_info *info, u16 *buf,
 	}
 }
 
-static int cut_into_2m_scan_wins(struct addr_seg *segs, int cnt,
-				 struct addr_seg *aligned_segs, int aligned_cnt)
+static int cut_into_scan_wins(struct addr_seg *segs, int cnt,
+			      struct addr_seg *aligned_segs, int aligned_cnt,
+			      enum ub_hist_sts_size sts_size)
 {
 	int i;
 	u32 nr_wins = 0;
-	u64 shift = get_hist_scan_win_size(STS_SIZE_2M);
+	u64 shift = get_hist_scan_win_size(sts_size);
 	for (i = 0; i < cnt; i++) {
 		u64 start = segs[i].start;
 		u64 size = segs[i].size;
@@ -288,8 +350,17 @@ static int cut_into_2m_scan_wins(struct addr_seg *segs, int cnt,
 	return 0;
 }
 
-static int generate_aligned_2m_scan_wins_info(struct segs_info *win_info,
-					      struct segs_info *info)
+/**
+ * generate_aligned_scan_wins_info - Generate aligned scan windows (generic version)
+ * @win_info: Output window information
+ * @info: Input remote memory address segment information
+ * @sts_size: Scan granularity (STS_SIZE_2M or STS_SIZE_4K)
+ *
+ * Generate all scan windows for specified granularity, without hot window filtering
+ */
+static int generate_aligned_scan_wins_info(struct segs_info *win_info,
+					   struct segs_info *info,
+					   enum ub_hist_sts_size sts_size)
 {
 	int merged_cnt, ret;
 	u32 total_wins;
@@ -303,9 +374,9 @@ static int generate_aligned_2m_scan_wins_info(struct segs_info *win_info,
 		return -ENOMEM;
 
 	memcpy(merged_segs, info->segs, info->cnt * sizeof(struct addr_seg));
-	merged_cnt = merge_segments(merged_segs, info->cnt);
-	align_segments(merged_segs, merged_cnt, STS_SIZE_2M);
-	total_wins = count_nr_windows(merged_segs, merged_cnt, STS_SIZE_2M);
+	merged_cnt = merge_segments(merged_segs, info->cnt, sts_size);
+	align_segments(merged_segs, merged_cnt, sts_size);
+	total_wins = count_nr_windows(merged_segs, merged_cnt, sts_size);
 	if (total_wins == 0) {
 		vfree(merged_segs);
 		return -EINVAL;
@@ -316,8 +387,8 @@ static int generate_aligned_2m_scan_wins_info(struct segs_info *win_info,
 		return -ENOMEM;
 	}
 
-	ret = cut_into_2m_scan_wins(merged_segs, merged_cnt, aligned_segs,
-				    total_wins);
+	ret = cut_into_scan_wins(merged_segs, merged_cnt, aligned_segs,
+				 total_wins, sts_size);
 	if (ret) {
 		vfree(aligned_segs);
 	} else {
@@ -383,7 +454,8 @@ static int filter_4k_scan_hot_wins(struct segs_info *win_info,
 }
 
 static int generate_aligned_4k_scan_wins_info(struct segs_info *win_info,
-					      struct segs_info *info, u16 *buf)
+					      struct segs_info *info,
+					      actc_t *buf)
 {
 	struct addr_seg *wins_4k;
 	struct smap_hist_dev *dev = &g_smap_hist_dev;
@@ -424,15 +496,129 @@ static int generate_aligned_4k_scan_wins_info(struct segs_info *win_info,
 	return 0;
 }
 
+/**
+ * find_hdev_by_node - Find the histogram tracking device for a specific NUMA node
+ * @node: NUMA node ID to search for
+ *
+ * Search through the global access_dev list to find the access_tracking_dev
+ * that matches the given NUMA node and is configured for histogram tracking.
+ *
+ * Return: Pointer to the matching access_tracking_dev, or NULL if not found.
+ */
+static struct access_tracking_dev *find_hdev_by_node(int node)
+{
+	struct access_tracking_dev *hdev;
+	list_for_each_entry(hdev, &access_dev, list) {
+		if (hdev->is_hist && hdev->node == node)
+			return hdev;
+	}
+	return NULL;
+}
+
+/**
+ * do_actc_update - Update frequency counts in hdev buffer
+ */
+static void do_actc_update(struct access_tracking_dev *hdev, u64 seg_offset,
+			   u64 hist_offset, u64 inter_pages, u16 *freq)
+{
+	u64 j;
+
+	down_read(&hdev->buffer_lock);
+	for (j = 0; j < inter_pages; j++) {
+		u32 idx = seg_offset + j;
+		u32 sum =
+			hdev->access_bit_actc_data[idx] + freq[hist_offset + j];
+		hdev->access_bit_actc_data[idx] = (sum < U16_MAX) ? sum
+								  : U16_MAX;
+	}
+	up_read(&hdev->buffer_lock);
+}
+
+/**
+ * find_rseg_by_start - Find ram_segment by start address
+ */
+static struct ram_segment *find_rseg_by_start(u64 start)
+{
+	struct ram_segment *rseg;
+
+	list_for_each_entry(rseg, &remote_ram_list, node) {
+		if (rseg->start == start)
+			return rseg;
+	}
+	return NULL;
+}
+
+/**
+ * update_actc_direct - Directly update access frequency to hdev without intermediate buffer
+ */
+static void update_actc_direct(struct segs_info *rmem_info,
+			       struct addr_seg *seg, u16 *freq, u32 buf_len,
+			       enum ub_hist_sts_size sts_size)
+{
+	u32 shift = (sts_size == STS_SIZE_2M) ? HIST_ADDR_SHIFT_2M
+					      : HIST_ADDR_SHIFT_4K;
+	u64 inter_start, inter_end, inter_pages;
+	u64 seg_offset, hist_offset;
+	struct access_tracking_dev *hdev;
+	struct ram_segment *rseg;
+	struct addr_seg *cur_seg;
+	unsigned int i;
+	u64 preceding_pages[SMAP_MAX_NUMNODES] = { 0 };
+
+	read_lock(&rem_ram_list_lock);
+	for (i = 0; i < rmem_info->cnt; i++) {
+		cur_seg = &rmem_info->segs[i];
+
+		/* Find the ram_segment for NUMA node lookup */
+		rseg = find_rseg_by_start(cur_seg->start);
+		if (!rseg)
+			continue;
+
+		/* Check intersection between scan window and remote memory segment */
+		if (!is_intersect(cur_seg, seg, &inter_start, &inter_end)) {
+			preceding_pages[rseg->numa_node] += cur_seg->size >>
+							    shift;
+			continue;
+		}
+
+		hdev = find_hdev_by_node(rseg->numa_node);
+		if (!hdev || !hdev->access_bit_actc_data) {
+			preceding_pages[rseg->numa_node] += cur_seg->size >>
+							    shift;
+			continue;
+		}
+
+		/* Calculate offsets and page count in intersection region */
+		hist_offset = (inter_start - seg->start) >> shift;
+		seg_offset = ((inter_start - cur_seg->start) >> shift) +
+			     preceding_pages[rseg->numa_node];
+		inter_pages = (inter_end - inter_start + 1) >> shift;
+
+		if (seg_offset + inter_pages > hdev->page_count) {
+			pr_err("exceeded hdev buffer: %llu > %llu\n",
+			       seg_offset + inter_pages, hdev->page_count);
+			preceding_pages[rseg->numa_node] += cur_seg->size >>
+							    shift;
+			continue;
+		}
+
+		/* Update frequency counts directly to hdev buffer */
+		do_actc_update(hdev, seg_offset, hist_offset, inter_pages,
+			       freq);
+		preceding_pages[rseg->numa_node] += cur_seg->size >> shift;
+	}
+	read_unlock(&rem_ram_list_lock);
+}
+
 static void copy_actc_to_buf(struct segs_info *info, struct addr_seg *seg,
-			     u16 *dst_buf, u16 *freq, u32 buf_len,
+			     actc_t *dst_buf, u16 *freq, u32 buf_len,
 			     enum ub_hist_sts_size sts_size)
 {
-	u32 shift = (sts_size == STS_SIZE_2M) ? HIST_ADDR_SHIFT_2M :
-						HIST_ADDR_SHIFT_4K;
+	u32 shift = (sts_size == STS_SIZE_2M) ? HIST_ADDR_SHIFT_2M
+					      : HIST_ADDR_SHIFT_4K;
 	u64 inter_start, inter_end, inter_pages, j;
 	u64 seg_offset, hist_offset, seg_pages = 0;
-	u16 *dst;
+	actc_t *dst;
 	unsigned int i;
 	for (i = 0; i < info->cnt; i++) {
 		if (is_intersect(&info->segs[i], seg, &inter_start,
@@ -456,13 +642,6 @@ static void copy_actc_to_buf(struct segs_info *info, struct addr_seg *seg,
 	}
 }
 
-static void clear_actc_buf(void)
-{
-	struct smap_hist_dev *dev = &g_smap_hist_dev;
-	if (dev->buf)
-		memset(dev->buf, 0, dev->pgcount * sizeof(u16));
-}
-
 static bool addr_is_cc_mem(u64 addr)
 {
 	struct smap_hist_dev *dev = &g_smap_hist_dev;
@@ -482,6 +661,9 @@ static int submit_ba_task(uint64_t ba_tag, u64 start_addr,
 	u32 shift;
 	union hi_upa_smap_cfg_smap_cfg00 *smap_cfg00;
 	struct ub_hist_ba_config cfg = { 0 };
+
+	pr_debug("submit_ba_task: ba_tag=%#llx, start_addr=%#llx\n", ba_tag,
+		 start_addr);
 
 	base_addr = align_addr_by_sts_size(start_addr, sts_size);
 	shift = get_hist_addr_shift(STS_SIZE_4K);
@@ -530,12 +712,16 @@ static inline void disable_all_ba_tasks(u32 *offset, u32 end)
 }
 
 static inline bool pick_one_seg(u64 ba_tag, struct segs_info *win_info,
-				int *offset)
+				int *offset, bool do_4k_seq_loop)
 {
 	int i;
+	if (do_4k_seq_loop && *offset == win_info->cnt)
+		*offset = -1;
 	for (i = *offset + 1; i < win_info->cnt; i++) {
 		if (ba_tag == win_info->segs[i].ba_tag) {
 			*offset = i;
+			pr_debug("ba_tag: %#llx, offset: %d\n", ba_tag,
+				 *offset);
 			return true;
 		}
 	}
@@ -557,8 +743,8 @@ static int get_hist_results(uint64_t ba_tag,
 			    struct ub_hist_ba_result *ba_result)
 {
 	int ret;
-	struct smap_hist_dev *dev = &g_smap_hist_dev;
 	ba_result->ba_tag = ba_tag;
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
 	ret = ub_hist_get_statistic_result(ba_result);
 	if (ret) {
 		pr_err("ub_hist_get_statistic_result error (%d)\n", ret);
@@ -573,12 +759,14 @@ static int get_hist_results(uint64_t ba_tag,
 
 static int smap_hist_read_paral(struct segs_info *win_info,
 				struct segs_info *rmem_info,
-				enum ub_hist_sts_size sts_size, u16 *buf,
-				u32 scan_time, u32 buf_len)
+				enum ub_hist_sts_size sts_size, actc_t *buf,
+				u32 scan_time, u32 buf_len, bool direct_update)
 {
 	int ret = 0, i, ba_cnt;
 	u64 ba_tag;
 	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	bool do_4k_seq_loop = (sts_size == STS_SIZE_4K &&
+			       dev->scan_mode == HIST_4K_SCAN_SEQ_LOOP);
 	struct ub_hist_ba_result *ba_result =
 		kmalloc(sizeof(*ba_result), GFP_KERNEL);
 	int *offset = kzalloc(sizeof(*offset) * dev->ba_cnt, GFP_KERNEL);
@@ -587,23 +775,33 @@ static int smap_hist_read_paral(struct segs_info *win_info,
 		kfree(offset);
 		return -ENOMEM;
 	}
+
+	/*
+	 * Initialize offsets for each BA:
+	 * - Sequential loop mode with 4K scan: use seq_loop_ba_offset recorded offset
+	 * - Other modes: start from -1 (scan from beginning)
+	 */
 	for (i = 0; i < dev->ba_cnt; ++i) {
-		offset[i] = -1;
+		offset[i] = do_4k_seq_loop ? dev->seq_loop_ba_offset[i] : -1;
 	}
 
 	while (1) {
 		ba_cnt = dev->ba_cnt;
 		while (ba_cnt--) {
 			ba_tag = dev->ba_info[ba_cnt].ba_tag;
-			if (pick_one_seg(ba_tag, win_info, &offset[ba_cnt])) {
+			if (pick_one_seg(ba_tag, win_info, &offset[ba_cnt],
+					 do_4k_seq_loop)) {
 				submit_ba_task(
 					ba_tag,
 					win_info->segs[offset[ba_cnt]].start,
 					sts_size);
 			}
 		}
-		if (pick_complete(offset, dev->ba_cnt, win_info->cnt))
+		if (pick_complete(offset, dev->ba_cnt, win_info->cnt)) {
+			if (do_4k_seq_loop)
+				continue;
 			break;
+		}
 
 		wait_ba_task(scan_time);
 		disable_all_ba_tasks(offset, win_info->cnt);
@@ -614,15 +812,43 @@ static int smap_hist_read_paral(struct segs_info *win_info,
 
 			ret = get_hist_results(dev->ba_info[ba_cnt].ba_tag,
 					       ba_result);
-			if (ret) {
+			if (ret && ret != -EAGAIN) {
 				kfree(ba_result);
 				kfree(offset);
 				return ret;
 			}
-			copy_actc_to_buf(rmem_info,
-					 &win_info->segs[offset[ba_cnt]], buf,
-					 ba_result->buffer, buf_len, sts_size);
+			/*
+			 * Scan interrupted (abort_flag): save current BA offset,
+			 * continue from here on next scan
+			 */
+			if (do_4k_seq_loop && ret == -EAGAIN) {
+				dev->seq_loop_ba_offset[ba_cnt] =
+					offset[ba_cnt];
+				pr_debug(
+					"seq_loop scan paused, ba[%d] offset: %d\n",
+					ba_cnt, offset[ba_cnt]);
+			}
+
+			if (direct_update) {
+				update_actc_direct(
+					rmem_info,
+					&win_info->segs[offset[ba_cnt]],
+					ba_result->buffer, buf_len, sts_size);
+			} else {
+				copy_actc_to_buf(
+					rmem_info,
+					&win_info->segs[offset[ba_cnt]], buf,
+					ba_result->buffer, buf_len, sts_size);
+			}
 		}
+		/* Check abort_flag after saving scanned data */
+		if (dev->abort_flag) {
+			pr_debug("hist scan paused\n");
+			kfree(ba_result);
+			kfree(offset);
+			return -EAGAIN;
+		}
+		cond_resched();
 	}
 	kfree(ba_result);
 	kfree(offset);
@@ -639,7 +865,7 @@ static u32 get_2m_scan_wins_per_ba(struct segs_info *win_info)
 		cnt = 0;
 		offset = -1;
 		ba_tag = dev->ba_info[ba_cnt].ba_tag;
-		while (pick_one_seg(ba_tag, win_info, &offset)) {
+		while (pick_one_seg(ba_tag, win_info, &offset, false)) {
 			cnt++;
 		}
 		if (cnt)
@@ -652,68 +878,64 @@ static u32 get_2m_scan_wins_per_ba(struct segs_info *win_info)
 	return max_cnt;
 }
 
-static int generate_aligned_wins_info(struct segs_info *win_info,
-				      struct segs_info *info, u16 *buf,
-				      enum ub_hist_sts_size sts_size)
-{
-	int ret = 0;
-
-	ret = (sts_size == STS_SIZE_2M) ?
-		      generate_aligned_2m_scan_wins_info(win_info, info) :
-		      generate_aligned_4k_scan_wins_info(win_info, info, buf);
-	return ret;
-}
-
 static int do_hist_scan_sliding(struct segs_info *info, bool do_multi_gran,
-				u16 *buf, u32 buf_len,
-				enum ub_hist_sts_size sts_size)
+				actc_t *buf, u32 buf_len,
+				enum ub_hist_sts_size sts_size,
+				bool direct_update)
 {
 	int ret;
 	struct segs_info win_info;
 	u32 scan_time;
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	bool do_4k_seq_loop = (sts_size == STS_SIZE_4K &&
+			       dev->scan_mode == HIST_4K_SCAN_SEQ_LOOP);
+
 	/*
-	 * First of all, we calculate the least number of windows to
-	 * cover all address segments
+	 * Sequential loop scan mode: generate all windows directly, without hot window filtering
+	 * Multi-granularity scan mode: generate windows based on sts_size, may filter hot windows
 	 */
-	ret = generate_aligned_wins_info(&win_info, info, buf, sts_size);
+	if (do_4k_seq_loop || sts_size == STS_SIZE_2M) {
+		ret = generate_aligned_scan_wins_info(&win_info, info,
+						      sts_size);
+	} else {
+		ret = generate_aligned_4k_scan_wins_info(&win_info, info, buf);
+	}
 	if (ret) {
-		pr_err("generate merged segs info failed. ret: %d\n", ret);
+		pr_err("generate aligned segs info failed. ret: %d\n", ret);
 		return ret;
 	}
+
 	/* Secondly, calculate scan period of a single window */
 	if (sts_size == STS_SIZE_2M) {
-		g_smap_hist_dev.scan_wins_num_per_ba =
-			get_2m_scan_wins_per_ba(&win_info);
+		dev->scan_wins_num_per_ba = get_2m_scan_wins_per_ba(&win_info);
 	}
-	scan_time = (do_multi_gran == true) ?
-			    HIST_SCAN_DURATION_PER_WIN :
-			    HIST_THREAD_PERIOD /
-				    g_smap_hist_dev.scan_wins_num_per_ba;
-	pr_debug("scan_wins_num_per_win: %u ms\n", scan_time);
+
+	/*
+	 * Sequential loop scan: fixed 64ms
+	 * Multi-granularity scan: dynamically calculated based on window count
+	 */
+	scan_time = (do_multi_gran || do_4k_seq_loop)
+			    ? HIST_SCAN_DURATION_PER_WIN
+			    : HIST_THREAD_PERIOD / dev->scan_wins_num_per_ba;
+	pr_debug("scan_time_per_win: %u ms\n", scan_time);
 
 	/* Finally, launch scan job for every windows */
-	clear_actc_buf();
 	ret = smap_hist_read_paral(&win_info, info, sts_size, buf, scan_time,
-				   buf_len);
+				   buf_len, direct_update);
 	vfree(win_info.segs);
 	return ret;
 }
 
 static int hist_scan_sliding(struct segs_info *info, u32 scan_time_total,
-			     u16 *buf, u32 buf_len, u32 pgsize)
+			     u32 pgsize)
 {
-	int ret;
-	/*
-	 * For 2M pages, size of a window which consist of 16K pages is as large
-	 * as 32GB, we can finish all windows scan in time and ensure that each
-	 * window has been scanned for a sufficient period of time. But for 4K
-	 * pages, windows to scan is 512 times more than that of 2M pages.
-	 * To deal this problem, we use a strategy named "Multi-Hierarchy scan",
-	 * we do scan of a 32GB sliding window firstly to figure out the hottest
-	 * windows, scan work of a 64MB sliding window will be launched in those
-	 * windows later to get a fine-grained access count of each 4K pages.
-	 */
-	bool do_multi_gran = pgsize == SIZE_4K;
+	int ret = 0;
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	bool do_multi_gran = (pgsize == SIZE_4K &&
+			      dev->scan_mode == HIST_4K_SCAN_MULTI_GRAN);
+	bool do_4k_seq_loop =
+		(pgsize == SIZE_4K && dev->scan_mode == HIST_4K_SCAN_SEQ_LOOP);
+	actc_t *tmpbuffer = NULL;
 
 	if (!addr_seg_is_valid(info)) {
 		pr_err("invalid address segment passed to sliding scan\n");
@@ -723,81 +945,59 @@ static int hist_scan_sliding(struct segs_info *info, u32 scan_time_total,
 		pr_err("invalid scan period passed to sliding scan\n");
 		return -EINVAL;
 	}
-	if (!buf) {
-		pr_err("null buffer passed to sliding scan\n");
-		return -EINVAL;
-	}
-	ret = do_hist_scan_sliding(info, do_multi_gran, buf, buf_len,
-				   STS_SIZE_2M);
-	if (ret) {
-		pr_debug("sliding scan on 2M pages failed, ret: %d\n", ret);
-		return ret;
-	}
-	if (!do_multi_gran) {
-		return 0;
-	}
-	/* Rescan for the secondary hierarchy */
-	ret = do_hist_scan_sliding(info, do_multi_gran, buf, buf_len,
-				   STS_SIZE_4K);
-	if (ret) {
-		pr_debug("sliding scan on 4K pages failed, ret: %d\n", ret);
-		return ret;
-	}
-	return 0;
-}
 
-static void add_to_actc_data(u16 *dst, u16 *src, int len)
-{
-	int i, sum;
-	int j;
-	int group_count;
-	u32 freq = 0;
-	struct smap_hist_dev *dev = &g_smap_hist_dev;
-	if (PAGE_SIZE == PAGE_SIZE_64K && dev->pgsize == SIZE_4K) {
-		group_count = len / PAGE_SIZE_64K_DIV_4K;
-		for (i = 0; i < group_count; i++) {
-			for (j = 0; j < PAGE_SIZE_64K_DIV_4K; j++) {
-				freq += src[(PAGE_SIZE_64K_DIV_4K * i) + j];
-			}
-			sum = dst[i] + freq;
-			dst[i] = (sum < U16_MAX) ? (u16)sum : U16_MAX;
+	if (do_multi_gran) {
+		/* 4K mode: allocate tmpbuffer for 2M scan results */
+		tmpbuffer = vzalloc(dev->pgcount * sizeof(actc_t));
+		if (!tmpbuffer)
+			return -ENOMEM;
+	}
+
+	/* 2M scan */
+	if (do_multi_gran) {
+		/* 4K mode: write to tmpbuffer for hot window calculation */
+		ret = do_hist_scan_sliding(info, do_multi_gran, tmpbuffer,
+					   dev->pgcount, STS_SIZE_2M, false);
+		if (ret) {
+			pr_debug("sliding scan on 2M pages failed, ret: %d\n",
+				 ret);
+			vfree(tmpbuffer);
+			return ret;
+		}
+	} else if (pgsize == SIZE_2M) {
+		/* Pure 2M mode: directly write to hdev */
+		ret = do_hist_scan_sliding(info, do_multi_gran, NULL, 0,
+					   STS_SIZE_2M, true);
+		if (ret)
+			pr_debug("sliding scan on 2M pages failed, ret: %d\n",
+				 ret);
+		return ret;
+	}
+
+	/*
+	 * 4K scan: choose method based on scan_mode
+	 * Multi-granularity sliding: first 2M coarse scan to filter hot regions, then 4K fine scan on hot windows
+	 * Sequential loop sliding: directly scan all 4K windows sequentially, fixed 64ms
+	 */
+	if (do_4k_seq_loop) {
+		ret = do_hist_scan_sliding(info, false, NULL, 0, STS_SIZE_4K,
+					   true);
+		if (ret) {
+			pr_debug("seq loop scan on 4K pages failed, ret: %d\n",
+				 ret);
+			return ret;
 		}
 	} else {
-		for (i = 0; i < len; i++) {
-			sum = dst[i] + src[i];
-			dst[i] = (sum < U16_MAX) ? (u16)sum : U16_MAX;
+		ret = do_hist_scan_sliding(info, true, tmpbuffer, dev->pgcount,
+					   STS_SIZE_4K, true);
+		vfree(tmpbuffer);
+		if (ret) {
+			pr_debug("sliding scan on 4K pages failed, ret: %d\n",
+				 ret);
+			return ret;
 		}
 	}
-}
-
-void fetch_hist_actc_buf(u16 *dst_buf, struct addr_seg *seg)
-{
-	struct smap_hist_dev *dev = &g_smap_hist_dev;
-	struct segs_info *info = &dev->info;
-	u64 inter_start, inter_end, inter_pages;
-	u64 offset, seg_pages = 0;
-	u32 shift = dev->pgsize == SIZE_2M ? HIST_ADDR_SHIFT_2M :
-					     HIST_ADDR_SHIFT_4K;
-	unsigned int i;
-	for (i = 0; i < info->cnt; i++) {
-		if (is_intersect(&info->segs[i], seg, &inter_start,
-				 &inter_end)) {
-			offset = (inter_start - info->segs[i].start) >> shift;
-			inter_pages = (inter_end - inter_start + 1) >> shift;
-			if (seg_pages + offset + inter_pages > dev->pgcount) {
-				pr_warn("exceeds upper bound: %llu, when trying to copy ACTC data of amount: %u to buffer\n",
-					seg_pages + offset + inter_pages,
-					dev->pgcount);
-				return;
-			}
-			if (!dev->status.status_all) {
-				add_to_actc_data(dst_buf,
-						 dev->buf + seg_pages + offset,
-						 inter_pages);
-			}
-		}
-		seg_pages += info->segs[i].size >> shift;
-	}
+	return ret;
 }
 
 void hist_update_pgsize(u32 pgsize)
@@ -828,18 +1028,6 @@ void hist_thread_pause(void)
 	struct smap_hist_dev *dev = &g_smap_hist_dev;
 	dev->thread_enable = false;
 	dev->abort_flag = true;
-}
-
-void hist_set_flush_actc_cb(flush_actc cb)
-{
-	struct smap_hist_dev *dev = &g_smap_hist_dev;
-	dev->flush_actc = cb;
-}
-
-static inline void flush_actc_data(struct smap_hist_dev *dev)
-{
-	if (dev->flush_actc)
-		dev->flush_actc();
 }
 
 static inline unsigned int get_remote_ram_segs_locked(void)
@@ -917,28 +1105,6 @@ static void addr_segs_deinit(struct smap_hist_dev *dev)
 	}
 }
 
-static int hist_buffer_init(struct smap_hist_dev *dev)
-{
-	if (!dev->pgcount) {
-		dev->buf = NULL;
-		return 0;
-	}
-	dev->buf = vzalloc(dev->pgcount * sizeof(u16));
-	if (!dev->buf) {
-		pr_err("unable to allocate memory for ACTC buffer\n");
-		return -ENOMEM;
-	}
-	return 0;
-}
-
-static void hist_buffer_deinit(struct smap_hist_dev *dev)
-{
-	if (dev->buf) {
-		vfree(dev->buf);
-		dev->buf = NULL;
-	}
-}
-
 static int hist_pginfo_reinit(struct smap_hist_dev *dev, u32 pgsize_new)
 {
 	int ret;
@@ -946,14 +1112,6 @@ static int hist_pginfo_reinit(struct smap_hist_dev *dev, u32 pgsize_new)
 	ret = addr_segs_init(dev, pgsize_new);
 	if (ret) {
 		pr_err("unable to reinit address segments, ret: %d\n", ret);
-		return -ENOMEM;
-	}
-	hist_buffer_deinit(dev);
-	ret = hist_buffer_init(dev);
-	if (ret) {
-		addr_segs_deinit(dev);
-		pr_err("unable to reinit histogram ACTC buffer, ret: %d\n",
-		       ret);
 		return -ENOMEM;
 	}
 	return 0;
@@ -990,8 +1148,16 @@ static int scan_thread_run(void *data)
 		}
 		if (dev->status.status_all) {
 			u32 pgsize = dev->status.flag.new_pgsize ?: dev->pgsize;
+			u32 j;
+
 			pr_info("histogram tracking page info has been reinited, status: %#x\n",
 				dev->status.status_all);
+
+			/* Reset sequential loop scan offsets: start from beginning when memory updated or page size changed */
+			for (j = 0; j < HIST_STS_DEV_CNT; ++j) {
+				dev->seq_loop_ba_offset[j] = -1;
+			}
+
 			ret = hist_pginfo_reinit(dev, pgsize);
 			if (ret) {
 				pr_err("failed to reinit histogram tracking page info, ret: %d\n",
@@ -1012,19 +1178,11 @@ static int scan_thread_run(void *data)
 			continue;
 		}
 
-		ret = hist_scan_sliding(&dev->info, dev->period, dev->buf,
-					dev->pgcount, dev->pgsize);
+		ret = hist_scan_sliding(&dev->info, dev->period, dev->pgsize);
 		if (ret) {
 			pr_debug("failed to do scan sliding, ret: %d\n", ret);
 			msleep(THREAD_SLEEP);
 			continue;
-		}
-		if (!dev->status.status_all) {
-			pr_debug("flush ACTC data\n");
-			flush_actc_data(dev);
-		} else {
-			pr_info("skip histogram, status: %#x\n",
-				dev->status.status_all);
 		}
 	}
 	return 0;
@@ -1044,6 +1202,7 @@ static int scan_thread_init(struct smap_hist_dev *dev)
 static void scan_thread_deinit(struct smap_hist_dev *dev)
 {
 	if (dev->kthread) {
+		hist_thread_pause();
 		pr_info("scan thread has been deleted\n");
 		kthread_stop(dev->kthread);
 		dev->kthread = NULL;
@@ -1096,7 +1255,6 @@ void hist_deinit(void)
 {
 	struct smap_hist_dev *dev = &g_smap_hist_dev;
 	scan_thread_deinit(dev);
-	hist_buffer_deinit(dev);
 	addr_segs_deinit(dev);
 	kfree(dev->ba_info);
 	ub_hist_exit();
@@ -1106,15 +1264,16 @@ int hist_init(u32 pgsize)
 {
 	struct smap_hist_dev *dev = &g_smap_hist_dev;
 	int ret;
+	u32 i;
 
 	ret = ub_hist_init();
 	if (ret)
 		return ret;
 	dev->hw_type = ub_hist_get_hw_type();
 	pr_info("Smap hist dev init start, dev->hw_type: %u\n", dev->hw_type);
-	dev->freq_register_cnt = (dev->hw_type == UB_HIST_SMAP_TYPE_N6) ?
-					 BA_STS_VALUE_N6_COUNT :
-					 BA_STS_VALUE_N7_COUNT;
+	dev->freq_register_cnt = (dev->hw_type == UB_HIST_SMAP_TYPE_N6)
+					 ? BA_STS_VALUE_N6_COUNT
+					 : BA_STS_VALUE_N7_COUNT;
 
 	ret = query_hist_ba_info();
 	if (ret)
@@ -1122,23 +1281,25 @@ int hist_init(u32 pgsize)
 
 	dev->period = HIST_THREAD_PERIOD;
 
+	/* Initialize scan mode using kernel parameter, default is sequential loop sliding */
+	dev->scan_mode = hist_4k_scan_mode_param;
+
+	/* Initialize sequential loop scan offset for each BA to -1 (start from beginning) */
+	for (i = 0; i < HIST_STS_DEV_CNT; ++i) {
+		dev->seq_loop_ba_offset[i] = -1;
+	}
+
 	ret = addr_segs_init(dev, pgsize);
 	if (ret)
 		goto free_hist;
 
-	ret = hist_buffer_init(dev);
-	if (ret)
-		goto free_segs;
-
 	ret = scan_thread_init(dev);
 	if (ret)
-		goto free_buf;
+		goto free_segs;
 
 	pr_info("histogram tracking device init successfully\n");
 	return 0;
 
-free_buf:
-	hist_buffer_deinit(dev);
 free_segs:
 	addr_segs_deinit(dev);
 free_hist:

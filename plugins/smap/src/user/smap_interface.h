@@ -25,6 +25,18 @@ extern "C" {
 #define MAX_NR_MIGBACK 50
 #define MAX_NR_MIGNUMA 50
 #define MAX_NR_REMOVE MAX_NR_MIGOUT
+#ifndef MAX_NR_GROUPED_MIGOUT
+#define MAX_NR_GROUPED_MIGOUT MAX_NR_MIGOUT
+#endif
+#ifndef MAX_MIGRATION_GROUP_NUM
+#define MAX_MIGRATION_GROUP_NUM 8
+#endif
+#ifndef MAX_GROUP_LOCAL_NUMA
+#define MAX_GROUP_LOCAL_NUMA 4
+#endif
+#ifndef MAX_GROUP_REMOTE_NUMA
+#define MAX_GROUP_REMOTE_NUMA REMOTE_NUMA_NUM
+#endif
 #define ADAPT_ALLOC_PERIOD 1000
 #define SCAN_MIGRATE_PERIOD LIGHT_STABLE_MIGRATE_CYCLE
 #define USER_DEFAULT_MIGRATE_OUT_RATIO 25
@@ -35,6 +47,7 @@ extern "C" {
 #define MIN_SCAN_TIME 50
 #define DEFAULT_L2_NODE (-1)
 #define KB_PER_2MB 2048
+#define KB_PER_4KB 4
 #define MAX_SCAN_DURATION_SEC 300
 #define NON_EXIST_PID (-1)
 
@@ -81,6 +94,29 @@ struct MigrateOutMsg {
     struct MigrateOutPayload payload[MAX_NR_MIGOUT];
 };
 
+struct MigrationNode {
+    int nid;
+    uint64_t size; // locals: 本地最低保留水线; targets: 远端最大驻留容量, 单位KB
+};
+
+struct MigrationGroup {
+    int localCount;
+    struct MigrationNode locals[MAX_GROUP_LOCAL_NUMA];
+    int targetCount;
+    struct MigrationNode targets[MAX_GROUP_REMOTE_NUMA];
+};
+
+struct GroupedMigrateOutPayload {
+    pid_t pid;
+    int groupCount;
+    struct MigrationGroup groups[MAX_MIGRATION_GROUP_NUM];
+};
+
+struct GroupedMigrateOutMsg {
+    int count;
+    struct GroupedMigrateOutPayload payload[MAX_NR_GROUPED_MIGOUT];
+};
+
 struct MigrateBackPayload {
     int srcNid;
     int destNid;
@@ -95,8 +131,8 @@ struct MigrateBackMsg {
 
 struct RemovePayload {
     pid_t pid;
-    int count;
-    int nid[REMOTE_NUMA_NUM];
+    int count; // count为0时按PID整体删除；大于0时按nid[]局部删除普通PID的远端NUMA
+    int nid[REMOTE_NUMA_NUM]; // count大于0时表示需要删除的远端NUMA集合
 };
 
 struct RemoveMsg {
@@ -145,6 +181,15 @@ typedef void (*Logfunc)(int level, const char *str, const char *moduleName);
  * @return int  0：操作成功；非0：操作失败
  */
 int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType);
+
+/* *
+ * @brief   设置大规格弹性虚机的组级迁移策略
+ *
+ * @param msg      [IN] 迁移组信息，包含PID、本地NUMA集合、远端NUMA集合、远端quota和本地保留水线
+ * @param pidType  [IN] 进程类型，仅支持虚机2M页类型
+ * @return int  0：操作成功；非0：操作失败
+ */
+int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType);
 
 /* *
  * @brief   迁移指定地址段的远端NUMA内存

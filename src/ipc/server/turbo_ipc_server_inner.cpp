@@ -11,17 +11,17 @@
  */
 #include "turbo_ipc_server_inner.h"
 
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <iostream>
-#include <fcntl.h>
 
-#include "turbo_logger.h"
 #include "turbo_ipc_handler.h"
+#include "turbo_logger.h"
 
 namespace turbo::ipc::server {
 
-IpcServerInner& IpcServerInner::Instance()
+IpcServerInner &IpcServerInner::Instance()
 {
     static IpcServerInner instance;
     return instance;
@@ -47,4 +47,4 @@ RetCode IpcServerInner::EndListen()
     return IpcHandler::Instance().EndListen();
 }
 
-}
+} // namespace turbo::ipc::server

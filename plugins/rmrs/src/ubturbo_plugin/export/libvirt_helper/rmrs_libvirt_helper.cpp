@@ -46,7 +46,13 @@ uint32_t LibvirtHelper::Connect()
     try {
         UBTURBO_LOG_INFO(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtHelper] Start to get libvirt connection.";
-        virConnect = LibvirtModule::VirConnectOpen()("qemu:///system");
+        auto virConnectOpenFunc = LibvirtModule::VirConnectOpen();
+        if (virConnectOpenFunc == nullptr) {
+            UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+                << "[RmrsResourceExport] [LibvirtHelper] Get VirConnectOpen function failed.";
+            return RMRS_ERROR;
+        }
+        virConnect = virConnectOpenFunc("qemu:///system");
         if (virConnect == nullptr) {
             UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
                 << "[RmrsResourceExport] [LibvirtHelper] Libvirt conn "
@@ -149,7 +155,7 @@ uint32_t LibvirtHelper::GetVmBasicInfo(ResourceExport *vmInfoHandler)
         }
         (*uuidNameMap)[vmInfo.metaData.uuid] = vmInfo.metaData.name;
         // 获取虚机状态、申请内存、使用内存
-        VirDomainInfo info{};
+        virDomainInfo info{};
         ret = GetVmStatus(domain, vmInfo, info);
         if (ret != RMRS_OK) {
             FreeDomains(domains, numDomains);
@@ -212,7 +218,7 @@ uint32_t LibvirtHelper::GetVmUuid(ResourceExport *vmInfoHandler, void *domain, V
     return RMRS_OK;
 }
 
-uint32_t LibvirtHelper::GetVmStatus(void *domain, VmDomainInfo &vmInfo, VirDomainInfo &info)
+uint32_t LibvirtHelper::GetVmStatus(void *domain, VmDomainInfo &vmInfo, virDomainInfo &info)
 {
     libvirt::VirDomainGetInfoFunc virDomainGetInfo = LibvirtModule::VirDomainGetInfo();
     if (virDomainGetInfo == nullptr) {
@@ -233,7 +239,7 @@ uint32_t LibvirtHelper::GetVmStatus(void *domain, VmDomainInfo &vmInfo, VirDomai
     return RMRS_OK;
 }
 
-uint32_t LibvirtHelper::GetVmVCpuInfo(ResourceExport *vmInfoHandler, VirDomainInfo info, void *domain,
+uint32_t LibvirtHelper::GetVmVCpuInfo(ResourceExport *vmInfoHandler, virDomainInfo info, void *domain,
                                       VmDomainInfo &vmInfo)
 {
     if (vmInfoHandler == nullptr || domain == nullptr) {
@@ -243,7 +249,7 @@ uint32_t LibvirtHelper::GetVmVCpuInfo(ResourceExport *vmInfoHandler, VirDomainIn
     auto cpuSocketMap = ResourceExport::GetCpuSocketMap();
     auto vmNumaCpuInfos = vmInfoHandler->GetVmNumaCpuInfos();
     auto vmNumaCpuIds = vmInfoHandler->GetVmNumaCpuIds();
-    auto *virCpu = static_cast<VirVcpuInfo *>(malloc(sizeof(VirVcpuInfo) * info.nrVirtCpu));
+    auto *virCpu = static_cast<virVcpuInfo *>(malloc(sizeof(virVcpuInfo) * info.nrVirtCpu));
     if (virCpu == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtHelper] malloc virCpu failed. " << strerror(errno) << ".";
@@ -285,7 +291,7 @@ uint32_t LibvirtHelper::GetVmVCpuInfo(ResourceExport *vmInfoHandler, VirDomainIn
     return RMRS_OK;
 }
 
-uint32_t LibvirtHelper::GetVirDomainVCpus(void *domain, VirDomainInfo info, VirVcpuInfo **virCpu, int &cpuNums)
+uint32_t LibvirtHelper::GetVirDomainVCpus(void *domain, virDomainInfo info, virVcpuInfo **virCpu, int &cpuNums)
 {
     size_t cpuMapLen = 128; // 每个cpu长度占用128
     unsigned char *cpuMaps = static_cast<unsigned char *>(malloc(info.nrVirtCpu * cpuMapLen));
@@ -340,7 +346,6 @@ void LibvirtHelper::UpdateVmMemInfoOnNuma(ResourceExport *vmInfoHandler, VmDomai
     (*uuidNumaMap)[vmInfo.metaData.uuid] = tNumaId;
 }
 
-
 void LibvirtHelper::FreeDomains(void **&domains, size_t domainNums)
 {
     if (domains == nullptr) {
@@ -370,14 +375,14 @@ void LibvirtHelper::FreeDomains(void **&domains, size_t domainNums)
     domains = nullptr; // 防止后续的双重释放
 }
 
-
 uint32_t LibvirtHelper::GetDomainList(void **&domains, int &numDomains)
 {
     libvirt::VirConnectListAllDomainsFunc virConnectListAllDomains = LibvirtModule::VirConnectListAllDomains();
     if (virConnectListAllDomains == nullptr) {
         return RMRS_ERROR;
     }
-    numDomains = virConnectListAllDomains(virConnect, &domains, VirConnectListAllDomainsFlags::VM_LIST_DOMAINS_ACTIVE);
+    numDomains =
+        virConnectListAllDomains(virConnect, &domains, virConnectListAllDomainsFlags::VIR_CONNECT_LIST_DOMAINS_ACTIVE);
     if (numDomains < 0) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtHelper] Get vmDomain infos failed by libvirt. " << strerror(errno) << ".";

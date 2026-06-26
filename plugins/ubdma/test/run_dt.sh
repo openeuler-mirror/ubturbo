@@ -3,6 +3,9 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 # Description: ub-dma run dt script
 #******************************************************************
+
+set -euo pipefail
+
 remove_static()
 {
     local dir=$1
@@ -30,17 +33,17 @@ rename_min()
 replace_string() {
     filename="$1"
     search_string="$2"
-    replace_srting="$3"
-    replace_without_exist="$4"
+    replace_string="$3"
+    replace_without_exist="${4:-true}"
 
-    grep "$replace_srting" "$filename"
-    if [ $? -eq 0]; then
+    count=$(grep -c "$replace_string" "$filename" || true)
+    if [ $count -gt 0 ]; then
         if [[ "$replace_without_exist" == "true" ]]; then
             return 0
         fi
     fi
 
-    sed -i "s/\b$search_string\b/$replace_srting/g" "$filename"
+    sed -i "s/\b$search_string\b/$replace_string/g" "$filename"
 }
 
 add_extern()
@@ -76,7 +79,17 @@ add_extern()
 CURRENT_PATH=$(cd "$(dirname "$0")"; pwd)
 echo "${CURRENT_PATH:?}"
 cd "${CURRENT_PATH:?}"
-code_dir=$(cd ${CURRENT_PATH}/../ && pwd)
+
+DT_SRC_DIR=$CURRENT_PATH/dt_src
+if [[ ! -d "$DT_SRC_DIR" ]]
+then
+    mkdir -p $DT_SRC_DIR
+else
+    rm -rf ${DT_SRC_DIR}/*
+fi
+cp -r ${CURRENT_PATH}/../src $DT_SRC_DIR
+
+code_dir=$(cd ${DT_SRC_DIR} && pwd)
 
 remove_static ${code_dir}/src
 remove_inline ${code_dir}/src
@@ -100,39 +113,42 @@ cd $BUILD_DIR || {
     exit 1;
 }
 
-cd $CURRENT_PATH/3rdparty/mockcpp
-rm * -rf
-git checkout .
-dos2unix ../mockcpp_support_arm64.patch
-dos2unix src/UnixCodeModifier.cpp
-git apply ../mockcpp_support_arm64.patch
+mock_patch_path=$CURRENT_PATH/3rdparty/mockcpp/mockcpp_support_arm64.patch
+if [[ ! -e "$mock_patch_path" ]]
+then
+    dos2unix $CURRENT_PATH/3rdparty/mockcpp_support_arm64.patch
+    cp -r $CURRENT_PATH/3rdparty/mockcpp_support_arm64.patch $CURRENT_PATH/3rdparty/mockcpp
+    cd $CURRENT_PATH/3rdparty/mockcpp
+    dos2unix src/UnixCodeModifier.cpp
+    git apply mockcpp_support_arm64.patch
+fi
 cd $CURRENT_PATH/build
- 
+
 N_CPUS=$(grep processor /proc/cpuinfo | wc -l)
 echo "$N_CPUS processors detected."
- 
+
 CMAKE_CMD="cmake -DCMAKE_BUILD_TYPE=Debug $CURRENT_PATH"
 BUILD_CMD="make -j $((N_CPUS-2))"
- 
+
 echo $CMAKE_CMD
 $CMAKE_CMD || {
-    echo "Failed to configure smap_dt build!"
-    exit 1
+    echo "Failed to configure ubdma_dt build!"
+    exit 1;
 }
 echo
-echo "Done configuring smap_dt build"
+echo "Done configuring ubdma_dt build"
 echo
 echo $BUILD_CMD
 $BUILD_CMD || {
-    echo "Failed to build smap_dt"
-    exit 1
+    echo "Failed to build ubdma_dt"
+    exit 1;
 }
 echo
 echo Success
 
-./smap_dt
+./ubdma_dt
 
 mkdir -p build/gcovr_report
 lcov --d ./ --c --output-file test.info --rc lcov_branch_coverage=1
-lcov -e test.info "*/ubturbo/plugins/ubdma/src/*" -output-file coverage.info --rc lcov_branch_coverage=1
+lcov -e test.info "*/dt_src/src/*" -output-file coverage.info --rc lcov_branch_coverage=1
 genhtml -o gcovr_report coverage.info --show-details --legend --rc lcov_branch_coverage=1

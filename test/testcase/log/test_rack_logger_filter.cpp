@@ -6,11 +6,11 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <mockcpp/mockcpp.hpp>
+#include <sys/syslog.h>
 #include <chrono>
+#include <mockcpp/mockcpp.hpp>
 #include <sstream>
 #include <thread>
-#include <sys/syslog.h>
 
 #define private public
 
@@ -292,7 +292,7 @@ TEST_F(TestRackLoggerFilter, HistoryOverflowTest)
 
     const int stateShowLine = 4;
     EXPECT_EQ(std::count(output.begin(), output.end(), '\n'),
-        stateShowLine + maxHistorySize); // 应该只有3行历史记录,状态展示占4行
+              stateShowLine + maxHistorySize); // 应该只有3行历史记录,状态展示占4行
     EXPECT_TRUE(output.find("Line: 2") != std::string::npos);
     EXPECT_TRUE(output.find("Line: 3") != std::string::npos);
     EXPECT_TRUE(output.find("Line: 4") != std::string::npos);
@@ -338,16 +338,13 @@ TEST_F(TestRackLoggerFilter, AlternateDuplicateLogFiltering)
 TEST_F(TestRackLoggerFilter, TestPrintLogInfoFail1)
 {
     struct TimeWrapper {
-        static std::tm* LocalTime(const std::time_t* t)
+        static std::tm *LocalTime(const std::time_t *t)
         {
             return std::localtime(t);
         }
     };
     LogFilterInfo logFilterInfo;
-    MOCKER(TimeWrapper::LocalTime)
-        .stubs()
-        .with(any())
-        .will(returnValue(static_cast<std::tm*>(nullptr)));
+    MOCKER(TimeWrapper::LocalTime).stubs().with(any()).will(returnValue(static_cast<std::tm *>(nullptr)));
     filter.PrintLogInfo(logFilterInfo);
 }
 
@@ -361,9 +358,7 @@ TEST_F(TestRackLoggerFilter, TestPrintLogInfoFail2)
     logFilterInfo.rackLoggerEntry.func = nullptr;
     logFilterInfo.rackLoggerEntry.line = 0;
 
-    MOCKER_CPP(&TurboLoggerEntry::GetFile, const char* (*)())
-        .stubs()
-        .will(returnValue((const char*)nullptr));
+    MOCKER_CPP(&TurboLoggerEntry::GetFile, const char *(*)()).stubs().will(returnValue((const char *)nullptr));
     filter.PrintLogInfo(logFilterInfo);
 }
 
@@ -371,9 +366,9 @@ TEST_F(TestRackLoggerFilter, TestPrintLogInfoSucceed)
 {
     LogFilterInfo logFilterInfo;
     logFilterInfo.timestamp = std::chrono::system_clock::now();
-    MOCKER_CPP(&TurboLoggerEntry::GetFile, const char* (*)())
+    MOCKER_CPP(&TurboLoggerEntry::GetFile, const char *(*)())
         .stubs()
-        .will(returnValue((const char*)"mocked_file.cpp"));
+        .will(returnValue((const char *)"mocked_file.cpp"));
     filter.PrintLogInfo(logFilterInfo);
 }
-} // namespace rack::ut::log
+} // namespace turbo::log

@@ -59,8 +59,10 @@ struct CgroupPageCacheInfo {
 };
 
 struct CgroupInfos {
-    struct CgroupIoInfo ioInfo {};
-    struct CgroupPageCacheInfo pageCacheInfo {};
+    struct CgroupIoInfo ioInfo {
+    };
+    struct CgroupPageCacheInfo pageCacheInfo {
+    };
     std::string ToString() const
     {
         std::ostringstream oss;
@@ -101,7 +103,6 @@ struct MemWatermarkInfo {
 uint32_t GetCgroupsInfo(std::unordered_map<std::string, CgroupInfos> &cgroupInfos);
 uint32_t GetNumaInfo(std::unordered_map<std::string, NodeInfo> &numaInfos);
 uint32_t GetMemWatermarkInfo(MemWatermarkInfo &memWatermark);
-bool IfPsiOpen();
 
 } // namespace turbo::ucache
 

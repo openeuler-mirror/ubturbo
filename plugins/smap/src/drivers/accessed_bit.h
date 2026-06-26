@@ -15,10 +15,14 @@
 
 #define SCAN_PERIOD_UNIT_MS 50
 
+#define MMAPLOCK_BATCH_SIZE (64UL * 1024 * 1024)
+#define SCAN_GROUP_SIZE (64UL * 1024) /* 64KiB分组扫描优化 */
+
+#define SCAN_RESULT_CAPACITY (MMAPLOCK_BATCH_SIZE / PAGE_SIZE)
+
 extern struct list_head remote_ram_list;
 extern int nr_local_numa;
 extern struct access_pid_struct ap_data;
-extern bool remote_ram_changed;
 
 struct statistics_tracking_info {
 	pid_t pid;
@@ -39,7 +43,7 @@ struct ham_tracking_info {
 	struct proc_dir_entry *pde;
 	u64 len[NR_LEVEL];
 	u64 *paddr[NR_LEVEL];
-	u16 *freq[NR_LEVEL];
+	actc_t *freq[NR_LEVEL];
 	struct list_head node;
 };
 
@@ -48,11 +52,17 @@ struct hva_info {
 	int nid;
 };
 
+struct scan_result_entry {
+	phys_addr_t paddr;
+	u8 nid;
+	u8 hot;
+};
+
 struct pte_walk {
 	pid_t pid;
 	scan_type type;
 	int nid;
-	u16 *buf;
+	actc_t *buf;
 	int buf_len;
 	bool flag;
 	struct hva_info *hva_info;
@@ -61,19 +71,25 @@ struct pte_walk {
 	u64 nr_page[NR_LEVEL];
 	u64 statistic_cnt;
 	u64 *statistic_vaddr;
+	struct access_pid *ap;
+	bool group_hot;
+	u64 group_hot_skip_cnt;
+	struct scan_result_entry *scan_results;
+	u64 scan_result_cnt; /* 当前缓冲区计数 */
 };
 
 struct freq_info {
 	u64 hpa;
-	u16 freq;
+	actc_t freq;
 };
 
+int pid_pte_mkold(struct access_pid *ap);
 int smap_create_tracking_info_file(struct ham_tracking_info *info);
 int get_ham_pages_freqs(pid_t pid, struct freq_info **freq_info_array,
 			uint64_t *freq_info_num);
 struct file *get_kvm_file_from_task(struct task_struct *task);
-int scan_accessed_bit_forward_vm(pid_t pid, int page_size, scan_type type);
-int scan_accessed_bit_forward_mm(pid_t pid, int page_size, scan_type type);
+int scan_accessed_bit_forward_vm(struct access_pid *ap, int page_size);
+int scan_accessed_bit_forward_mm(struct access_pid *ap, int page_size);
 int scan_hva_info(pid_t pid_nr, u64 *l1_page_num, u64 *l2_page_num,
 		  u64 **l1_vaddr, u64 **l2_vaddr);
 int scan_hva_info_4k(pid_t pid, u64 *l1_page_num, u64 *l2_page_num,

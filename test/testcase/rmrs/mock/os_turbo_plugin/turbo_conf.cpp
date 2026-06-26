@@ -14,4 +14,4 @@ uint32_t UBTurboGetBool(const std::string &section, const std::string &configKey
 {
     return 0;
 }
-}
+} // namespace turbo::config

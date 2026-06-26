@@ -3,11 +3,11 @@
  */
 #include "rmrs_memfree_module.h"
 
-#include "turbo_logger.h"
-#include "turbo_conf.h"
-#include "rmrs_smap_helper.h"
 #include "rmrs_config.h"
 #include "rmrs_resource_export.h"
+#include "rmrs_smap_helper.h"
+#include "turbo_conf.h"
+#include "turbo_logger.h"
 
 namespace rmrs::migrate {
 using namespace turbo::log;
@@ -18,7 +18,7 @@ using namespace rmrs::smap;
 #define LOG_INFO UBTURBO_LOG_INFO(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
 
 RmrsResult RmrsMemFreeModule::ReturnRemoteNuma(std::vector<ReturnVmInfo> &canReturnVmInfoList,
-    std::vector<uint16_t> &numaIds)
+                                               std::vector<uint16_t> &numaIds)
 {
     std::vector<uint16_t> remoteNumaIdList;
     std::vector<pid_t> pidsList;
@@ -49,15 +49,17 @@ RmrsResult RmrsMemFreeModule::ReturnRemoteNuma(std::vector<ReturnVmInfo> &canRet
     RmrsResult res =
         RmrsSmapHelper::MigrateColdDataToRemoteNumaSync(remoteNumaIdList, pidsList, memSizeList, MIGRATEOUT_TIMEOUT);
     if (res != RMRS_OK) {
+        // 考虑部分成功场景：如果有进程被删除，但是smap迁移成功，且迁移后memSize为0，那么需要移除这些进程的管理
         if (res == RMRS_MIGRATE_FAILED_VM_DELETED) {
             LOG_INFO << "[MemFree][MemFree] Detect Dead Pid During Smap Migrate.";
+            res = RmrsSmapHelper::SmapRemovePidsWithZeroRemoteUsage(remoteNumaIdList, pidsList);
         } else {
             LOG_ERROR << "[MemFree][MemFree] Smap Migrate failed.";
             return res;
         }
+    } else {
+        res = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(remoteNumaIdList, pidsList);
     }
-    // 移除pid进程管理
-    res = RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma(remoteNumaIdList, pidsList);
     if (res != RMRS_OK) {
         LOG_ERROR << "[MemFree][MemFree] Rm pid mgr failed " << res << ".";
         return res;
@@ -185,7 +187,8 @@ void RmrsMemFreeModule::ResolveReturnNumaIds(std::vector<NumaInfo> numaInfos, st
 }
 
 void RmrsMemFreeModule::DistributeNumaInfo(std::vector<NumaInfo> &numaInfos,
-    std::vector<ReturnNumaInfo> &returnNumaInfoSumList, std::map<uint16_t, int> &localNumaMemFreeMap)
+                                           std::vector<ReturnNumaInfo> &returnNumaInfoSumList,
+                                           std::map<uint16_t, int> &localNumaMemFreeMap)
 {
     for (NumaInfo numaInfo : numaInfos) {
         ReturnNumaInfo info;
@@ -203,7 +206,7 @@ void RmrsMemFreeModule::DistributeNumaInfo(std::vector<NumaInfo> &numaInfos,
         }
         returnNumaInfoSumList.push_back(info);
     }
-    return ;
+    return;
 }
 
 void RmrsMemFreeModule::SortRemoteNumaByMemUse(std::vector<ReturnNumaInfo> &returnNumaInfoSumList,
@@ -222,4 +225,4 @@ void RmrsMemFreeModule::SortRemoteNumaByMemUse(std::vector<ReturnNumaInfo> &retu
 #undef LOG_ERROR
 #undef LOG_INFO
 
-}
+} // namespace rmrs::migrate

@@ -34,7 +34,7 @@ using namespace rmrs;
 using namespace turbo::log;
 constexpr uint64_t PAGE_64K_BYTES = 64 * 1024;
 constexpr uint16_t SIXTY_FOUR_KB = 64; // 64k标准页
-constexpr uint16_t FOUR_KB = 4; // 4k标准页
+constexpr uint16_t FOUR_KB = 4;        // 4k标准页
 std::string ResourceExport::hostName{};
 std::string ResourceExport::nodeId{};
 std::unordered_map<uint16_t, uint16_t> ResourceExport::cpuSocketMap{};
@@ -331,7 +331,6 @@ bool ResourceExport::HandleMemInfoFile(const int numaid, const std::filesystem::
     return true;
 }
 
-
 // 获取系统中存在的NUMA本地节点编号
 std::set<uint16_t> ResourceExport::GetLocalNodeIds()
 {
@@ -429,6 +428,7 @@ RmrsResult ResourceExport::CollectPidNumaInfo(const std::vector<pid_t> &pids,
                                               std::vector<mempooling::PidInfo> &pidInfos)
 {
     std::set<uint16_t> localNodeIds = GetLocalNodeIds();
+    bool hasReadNumaMap = false;
     for (auto &pid : pids) {
         UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[ContainerPidNumaInfo] Start to collect pid=" << pid << ".";
@@ -437,6 +437,7 @@ RmrsResult ResourceExport::CollectPidNumaInfo(const std::vector<pid_t> &pids,
         if (rmrs::OsHelper::ReadNumaMap(vPidStr, fileContent) != RMRS_OK || fileContent.empty()) {
             continue;
         }
+        hasReadNumaMap = true;
 
         std::istringstream iss(fileContent);
 
@@ -445,10 +446,15 @@ RmrsResult ResourceExport::CollectPidNumaInfo(const std::vector<pid_t> &pids,
         }
     }
 
-    if (pidInfos.empty()) {
+    if (pidInfos.empty() && !hasReadNumaMap) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[ContainerPidNumaInfo] PidInfos is empty. Collect failed.";
         return RMRS_ERROR;
+    }
+
+    if (pidInfos.empty()) {
+        UBTURBO_LOG_INFO(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[ContainerPidNumaInfo] PidInfos is empty. All pids skipped due to no anon/libvirt.";
     }
 
     return RMRS_OK;
@@ -481,9 +487,9 @@ bool ResourceExport::HandlePidNumaInfoFile(std::istringstream &iss, const pid_t 
             }
 
             for (std::sregex_iterator it(l.begin(), l.end(), nodePattern); it != std::sregex_iterator(); ++it) {
-                    uint16_t nodeIdHandle = static_cast<uint16_t>(std::stoi((*it)[1]));
-                    uint64_t pages = std::stoull((*it)[2]);
-                    nodePages[nodeIdHandle] += pages;
+                uint16_t nodeIdHandle = static_cast<uint16_t>(std::stoi((*it)[1]));
+                uint64_t pages = std::stoull((*it)[2]);
+                nodePages[nodeIdHandle] += pages;
             }
         }
     } catch (const std::exception &e) {
@@ -573,7 +579,7 @@ std::vector<int> ParseCpuList(const std::string &cpuList)
     }
     std::string cpusStr = cpusStream.str();
     UBTURBO_LOG_INFO(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[ContainerPidNumaInfo] ParseCpuList success, CpuList = "
-                                                       << "[" << cpusStr << "]";
+                                                         << "[" << cpusStr << "]";
     return cpus;
 }
 

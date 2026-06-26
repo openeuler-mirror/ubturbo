@@ -17,7 +17,8 @@ namespace turbo::smap::ulog {
 constexpr int TURBO_MAX_MESSAGE_LENGTH = 256;
 constexpr char TURBO_LOG_MODULE_NAME[] = "UBTurboClient";
 
-enum class LoggerLevel : int {
+enum class LoggerLevel : int
+{
     LOGGER_DEBUG_LEVEL = 0,
     LOGGER_INFO_LEVEL,
     LOGGER_WARNING_LEVEL,
@@ -33,6 +34,6 @@ using Logfunc = void (*)(int level, const char *str, const char *moduleName);
 
 void UpstreamSubscribeLogger(Logfunc extlog);
 void LoggerMessage(LoggerLevel severity, const char *fmt, ...);
-}
+} // namespace turbo::smap::ulog
 
 #endif

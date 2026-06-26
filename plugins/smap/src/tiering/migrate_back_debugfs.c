@@ -53,6 +53,7 @@ void create_migrate_back_debugfs(struct migrate_back_task *task)
 	dentry = debugfs_lookup(file_name, dbg_root);
 	if (dentry) {
 		debugfs_remove(dentry);
+		dput(dentry);
 	}
 	debugfs_create_file(file_name, DEBUGFS_RO_MODE, dbg_root, task,
 			    &smap_migrate_back_debugfs_ops);
@@ -70,5 +71,6 @@ void remove_migrate_back_debugfs(struct migrate_back_task *task)
 	dentry = debugfs_lookup(file_name, dbg_root);
 	if (dentry) {
 		debugfs_remove(dentry);
+		dput(dentry);
 	}
 }

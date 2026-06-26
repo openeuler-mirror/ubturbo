@@ -106,6 +106,6 @@ private:
     uint32_t maxFileSize;
     uint32_t maxFileCount;
 };
-}
+} // namespace turbo::log
 
 #endif // RACK_FILE_SINK_H

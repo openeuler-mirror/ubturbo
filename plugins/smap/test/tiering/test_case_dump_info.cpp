@@ -77,24 +77,6 @@ TEST_F(DumpInfoTest, rename_file_dt)
     ret = rename_file(old_name, new_name);
     EXPECT_EQ(ret, 1);
 }
-extern "C" int backup_file_if_needed(char *dir, char *name, loff_t max_sz);
-TEST_F(DumpInfoTest, backup_file_if_needed_dt)
-{
-    char dir[] = "qwe";
-    char name[] = "asd";
-    loff_t max_sz = 0;
-    int ret = backup_file_if_needed(dir, name, max_sz);
-    EXPECT_EQ(ret, 0);
-    MOCKER(check_filesize).stubs().will(returnValue(1)).then(returnValue(0));
-    ret = backup_file_if_needed(dir, name, max_sz);
-    EXPECT_EQ(ret, 1);
-    GlobalMockObject::reset();
-    MOCKER(IS_ERR).stubs().will(returnValue(false));
-    MOCKER(rename_file).stubs().will(returnValue(1));
-    max_sz = -20;
-    ret = backup_file_if_needed(dir, name, max_sz);
-    EXPECT_EQ(ret, 1);
-}
 
 extern "C" void filter_4k_migrate_info(void);
 TEST_F(DumpInfoTest, Filter4kMigrateInfo)

@@ -26,7 +26,8 @@ const uint64_t MB_TO_BYTE = 1024 * 1024;
 const int PAGE_SIZE = 4; // 单位为KB
 const int BOTTLENECK_DETECTION_INTERVAL = 10;
 
-enum class IoBottleneckLevel {
+enum class IoBottleneckLevel
+{
     NOLOBOTTLENECK, // 无瓶颈
     LEVEL1,         // 其它情况，容器为1级IO瓶颈   10%
     LEVEL2,         // pagecache生成速率、IO读带宽均大于10MB/s，容器为2级IO瓶颈   40%

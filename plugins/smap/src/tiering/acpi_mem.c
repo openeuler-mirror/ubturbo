@@ -28,6 +28,15 @@ bool is_paddr_local(u64 pa)
 	return false;
 }
 
+static void update_nr_local_numa(int node)
+{
+	if (node >= nr_local_numa) {
+		nr_local_numa = node + 1;
+		pr_info("local NUMA nodes amount: %u (from node %d)\n",
+			nr_local_numa, node);
+	}
+}
+
 static int acpi_table_build_mem(struct acpi_subtable_header *header)
 {
 	int node;
@@ -59,6 +68,8 @@ static int acpi_table_build_mem(struct acpi_subtable_header *header)
 		return -EINVAL;
 	}
 	mem->node = node;
+	update_nr_local_numa(mem->node);
+
 	/* Add to list and ensure the ascending order of acpi_mem.mem */
 	if (list_empty(&acpi_mem.mem)) {
 		list_add_tail(&mem->segment, &acpi_mem.mem);
@@ -84,6 +95,31 @@ static int acpi_parse_memory_affinity(union acpi_subtable_headers *header,
 
 	memory_affinity = (struct acpi_srat_mem_affinity *)header;
 	return acpi_table_build_mem(&header->common);
+}
+
+static int acpi_parse_gicc_affinity(union acpi_subtable_headers *header,
+				    const unsigned long end)
+{
+	struct acpi_srat_gicc_affinity *gicc =
+		(struct acpi_srat_gicc_affinity *)header;
+	int node;
+
+	if (!(gicc->flags & ACPI_SRAT_GICC_ENABLED))
+		return 0;
+
+	node = pxm_to_node(gicc->proximity_domain);
+	if (node == NUMA_NO_NODE) {
+		pr_warn("GICC affinity: unable to map proximity domain %u to node\n",
+			gicc->proximity_domain);
+		return 0;
+	}
+
+	pr_debug("GICC affinity: CPU %u in node %d\n", gicc->acpi_processor_uid,
+		 node);
+
+	update_nr_local_numa(node);
+
+	return 0;
 }
 
 static void calc_node_distance(void)
@@ -145,39 +181,35 @@ void print_acpi_mem(void)
 	}
 }
 
-int init_acpi_mem(void)
+static void merge_acpi_mem_segments(void)
 {
-	int count;
+	struct acpi_mem_segment *cur, *next, *tmp;
+
+	if (list_empty(&acpi_mem.mem))
+		return;
+
+	cur = list_first_entry(&acpi_mem.mem, struct acpi_mem_segment, segment);
+	while (cur) {
+		next = list_next_entry(cur, segment);
+		if (list_entry_is_head(next, &acpi_mem.mem, segment))
+			break;
+		if (cur->node == next->node && cur->end + 1 == next->start) {
+			cur->end = next->end;
+			list_del(&next->segment);
+			acpi_mem.len--;
+			kfree(next);
+			tmp = cur;
+		} else {
+			tmp = next;
+		}
+		cur = tmp;
+	}
+}
+
+static int setup_acpi_mem_cache(void)
+{
 	int last_node = -1;
-	acpi_status status;
 	struct acpi_mem_segment *mem;
-	struct acpi_table_header *table_header = NULL;
-	unsigned long table_size = sizeof(struct acpi_table_srat);
-	struct acpi_subtable_proc proc = {
-		.id = ACPI_SRAT_TYPE_MEMORY_AFFINITY,
-		.handler = acpi_parse_memory_affinity,
-	};
-
-	if (acpi_disabled) {
-		pr_warn("ACPI disabled\n");
-		return -ENODEV;
-	}
-
-	status = acpi_get_table(ACPI_SIG_SRAT, 0, &table_header);
-	if (ACPI_FAILURE(status) || !table_header) {
-		pr_warn("%4.4s not present\n", ACPI_SIG_SRAT);
-		return -ENODEV;
-	}
-
-	count = acpi_parse_entries_array(ACPI_SIG_SRAT, table_size,
-					 table_header, &proc, 1, 0);
-	if (count < 0) {
-		pr_err("failed to parse ACPI entries, ret: %d\n", count);
-		acpi_put_table(table_header);
-		return -EINVAL;
-	}
-
-	acpi_put_table(table_header);
 
 	list_for_each_entry(mem, &acpi_mem.mem, segment) {
 		if (mem->node >= ARRAY_SIZE(acpi_mem_cached))
@@ -197,12 +229,55 @@ int init_acpi_mem(void)
 		}
 		pr_info("node: %d PXM: %d [%#llx-%#llx]\n", mem->node, mem->pxm,
 			mem->start, mem->end);
-		if (mem->node >= nr_local_numa) {
-			nr_local_numa = mem->node + 1;
-			pr_info("number of local NUMA node: %u\n",
-				nr_local_numa);
-		}
 	}
+	return 0;
+}
+
+int init_acpi_mem(void)
+{
+	int count;
+	acpi_status status;
+	struct acpi_table_header *table_header = NULL;
+	unsigned long table_size = sizeof(struct acpi_table_srat);
+
+	struct acpi_subtable_proc proc[] = {
+		{
+			.id = ACPI_SRAT_TYPE_MEMORY_AFFINITY,
+			.handler = acpi_parse_memory_affinity,
+		},
+		{
+			.id = ACPI_SRAT_TYPE_GICC_AFFINITY,
+			.handler = acpi_parse_gicc_affinity,
+		},
+	};
+
+	if (acpi_disabled) {
+		pr_warn("ACPI disabled\n");
+		return -ENODEV;
+	}
+
+	status = acpi_get_table(ACPI_SIG_SRAT, 0, &table_header);
+	if (ACPI_FAILURE(status) || !table_header) {
+		pr_warn("%4.4s not present\n", ACPI_SIG_SRAT);
+		return -ENODEV;
+	}
+
+	count = acpi_parse_entries_array(ACPI_SIG_SRAT, table_size,
+					 table_header, proc, ARRAY_SIZE(proc),
+					 0);
+	if (count < 0) {
+		pr_err("failed to parse ACPI entries, ret: %d\n", count);
+		acpi_put_table(table_header);
+		return -EINVAL;
+	}
+
+	acpi_put_table(table_header);
+
+	merge_acpi_mem_segments();
+
+	if (setup_acpi_mem_cache())
+		return -ERANGE;
+
 	calc_node_distance();
 
 	return 0;
@@ -216,6 +291,7 @@ void reset_acpi_mem(void)
 		kfree(mem);
 	}
 	acpi_mem.len = 0;
+	nr_local_numa = 0;
 }
 
 int get_node_actc_len(int len, u64 *node_actc_len)
@@ -253,7 +329,8 @@ int calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
 	u64 offset = 0;
 	u64 acidx;
 	int last_nid = -1;
-	int shift = is_smap_pg_huge() ? __builtin_ctz(g_pagesize_huge) : PAGE_SHIFT;
+	int shift = is_smap_pg_huge() ? __builtin_ctz(g_pagesize_huge)
+				      : PAGE_SHIFT;
 
 	list_for_each_entry(mem, &acpi_mem.mem, segment) {
 		if (last_nid != mem->node) {

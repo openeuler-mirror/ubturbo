@@ -115,7 +115,6 @@ replace_string "${code_dir}/src/drivers/access_mmu.c" "calc_paddr_acidx_iomem" "
 replace_string "${code_dir}/src/drivers/access_ioctl.c" "ram_changed" "drivers_ram_changed"
 
 replace_string "${code_dir}/src/drivers/access_iomem.h" "remote_ram_list" "drivers_remote_ram_list"
-replace_string "${code_dir}/src/drivers/access_iomem.h" "remote_ram_changed" "drivers_remote_ram_changed"
 replace_string "${code_dir}/src/drivers/access_iomem.h" "free_remote_ram" "drivers_free_remote_ram"
 replace_string "${code_dir}/src/drivers/access_iomem.h" "copy_remote_ram" "drivers_copy_remote_ram"
 replace_string "${code_dir}/src/drivers/access_iomem.h" "__ram_changed" "drivers__ram_changed"
@@ -128,7 +127,6 @@ replace_string "${code_dir}/src/drivers/access_iomem.h" "calc_paddr_acidx_iomem"
 
 
 replace_string "${code_dir}/src/drivers/access_iomem.c" "remote_ram_list" "drivers_remote_ram_list"
-replace_string "${code_dir}/src/drivers/access_iomem.c" "remote_ram_changed" "drivers_remote_ram_changed"
 replace_string "${code_dir}/src/drivers/access_iomem.c" "free_remote_ram" "drivers_free_remote_ram"
 replace_string "${code_dir}/src/drivers/access_iomem.c" "copy_remote_ram" "drivers_copy_remote_ram"
 replace_string "${code_dir}/src/drivers/access_iomem.c" "__ram_changed" "drivers__ram_changed"
@@ -142,8 +140,8 @@ replace_string "${code_dir}/src/drivers/access_iomem.c" "nr_local_numa" "drivers
 replace_string "${code_dir}/src/drivers/access_iomem.c" "smap_scene" "drivers_smap_scene"
 replace_string "${code_dir}/src/drivers/access_iomem.c" "fixed_remote_ram" "drivers_fixed_remote_ram"
 replace_string "${code_dir}/src/drivers/access_iomem.c" "calc_acidx_paddr_iomem" "drivers_calc_acidx_paddr_iomem"
+replace_string "${code_dir}/src/drivers/access_iomem.c" "merge_ram_segments" "drivers_merge_ram_segments"
 replace_string "${code_dir}/src/drivers/access_iomem.c" "update_resource" "drivers_update_resource"
-replace_string "${code_dir}/src/drivers/memory_notifier.c" "smap_scene" "drivers_smap_scene"
 
 replace_string "${code_dir}/src/drivers/access_acpi_mem.c" "mem_info acpi_mem" "mem_info drivers_acpi_mem"
 replace_string "${code_dir}/src/drivers/access_acpi_mem.c" "acpi_mem.mem" "drivers_acpi_mem.mem"
@@ -155,6 +153,9 @@ replace_string "${code_dir}/src/drivers/access_acpi_mem.c" "reset_acpi_mem" "dri
 replace_string "${code_dir}/src/drivers/access_acpi_mem.c" "get_node_actc_len" "drivers_get_node_actc_len"
 replace_string "${code_dir}/src/drivers/access_acpi_mem.c" "is_paddr_local" "drivers_is_paddr_local"
 replace_string "${code_dir}/src/drivers/access_acpi_mem.c" "acpi_table_build_mem" "drivers_acpi_table_build_mem"
+replace_string "${code_dir}/src/drivers/access_acpi_mem.c" "update_nr_local_numa" "drivers_update_nr_local_numa"
+replace_string "${code_dir}/src/drivers/access_acpi_mem.c" "acpi_parse_gicc_affinity" "drivers_acpi_parse_gicc_affinity"
+replace_string "${code_dir}/src/drivers/access_acpi_mem.c" "merge_acpi_mem_segments" "drivers_merge_acpi_mem_segments"
 
 replace_string "${code_dir}/src/drivers/access_acpi_mem.h" "nr_local_numa" "drivers_nr_local_numa"
 replace_string "${code_dir}/src/drivers/access_acpi_mem.h" "is_paddr_local" "drivers_is_paddr_local"

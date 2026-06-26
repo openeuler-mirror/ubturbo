@@ -11,9 +11,9 @@
  */
 #include <cerrno>
 
-#include "turbo_ipc_client.h"
-#include "smap_interface.h"
 #include "smap_handler_msg.h"
+#include "smap_interface.h"
+#include "turbo_ipc_client.h"
 #include "ulog.h"
 
 using namespace turbo::smap::codec;
@@ -43,6 +43,35 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
     ret = handler.DecodeResponse(recv);
     if (ret == IPC_ERROR) {
         IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_migrate_out Decode response error %d.\n", ret);
+    }
+    delete[] send.data;
+    delete[] recv.data;
+    return ret;
+}
+
+int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType)
+{
+    TurboByteBuffer send;
+    TurboByteBuffer recv;
+    SmapMigrateOutGroupedCodec handler;
+    if (!msg) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] Migrate out grouped msg is null.\n");
+        return -EINVAL;
+    }
+    int ret = handler.EncodeRequest(send, msg, pidType);
+    if (ret) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_migrate_out_grouped Encode request error %d.\n", ret);
+        return IPC_ERROR;
+    }
+    uint32_t ipcRet = UBTurboFunctionCaller("ubturbo_smap_migrate_out_grouped", send, recv);
+    if (ipcRet != IPC_OK) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] Call ubturbo_smap_migrate_out_grouped error %u.\n", ipcRet);
+        delete[] send.data;
+        return ipcRet;
+    }
+    ret = handler.DecodeResponse(recv);
+    if (ret == IPC_ERROR) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_migrate_out_grouped Decode response error %d.\n", ret);
     }
     delete[] send.data;
     delete[] recv.data;

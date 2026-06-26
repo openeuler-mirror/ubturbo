@@ -27,7 +27,7 @@ constexpr uint32_t TurboCommonError(uint32_t n)
 /* ********************************************* */
 /* common错误码定义，全局唯一，记录系统的标准错误返回 */
 /* ********************************************* */
-#define TURBO_OK TurboCommonError(0)                         /* 正确 */
-#define TURBO_ERROR TurboCommonError(1)                      /* 错误 */
+#define TURBO_OK TurboCommonError(0)    /* 正确 */
+#define TURBO_ERROR TurboCommonError(1) /* 错误 */
 
 #endif //  TURBO_ERROR_H

@@ -63,7 +63,7 @@ RackResult RackLoggerManager::Init(const LoggerOptions &options, RackLoggerWrite
     threadRunning.store(true);
     try {
         logBuffer = std::make_unique<LogBuffer>(options.bufferMaxItem);
-    }catch (const std::bad_alloc&) {
+    } catch (const std::bad_alloc &) {
         std::cerr << "Failed to make unique ptr.";
         return RACK_ERROR;
     }
@@ -188,4 +188,4 @@ TurboLogLevel RackLoggerManager::StringToLogLevel(const std::string &level)
     }
     return TurboLogLevel::INFO;
 }
-}
+} // namespace turbo::log

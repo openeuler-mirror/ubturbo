@@ -1,9 +1,9 @@
 /*
  * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  */
- 
+
 #include "bottleneck_detector.h"
- 
+
 #include <dirent.h>
 #include <cstdint>
 #include <filesystem>
@@ -11,12 +11,12 @@
 #include <iostream>
 #include <regex>
 
-#include "rmrs_file_util.h"
 #include "rmrs_config.h"
 #include "rmrs_error.h"
-#include "turbo_logger.h"
+#include "rmrs_file_util.h"
 #include "rmrs_string_util.h"
- 
+#include "turbo_logger.h"
+
 namespace ucache {
 namespace bottleneck_detector {
 using namespace turbo::log;
@@ -65,15 +65,15 @@ void BottleneckDetector::Deinit()
         UBTURBO_LOG_WARN(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[UCache] BottleneckDetector not initialized.";
         return;
     }
- 
+
     stopScanning_ = true;
     if (detectionThread_.joinable()) {
         detectionThread_.join();
     }
- 
+
     initialized_ = false;
 }
- 
+
 void BottleneckDetector::BottleneckDetectionLoop()
 {
     uint32_t ret = RMRS_OK;
@@ -111,15 +111,15 @@ bool ReadContainerInactiveFile(const std::string &statPath, const std::string &i
                 break;
             }
             float temp = value * ratio;
-                if (temp > static_cast<float>(UINT64_MAX) - totalInactiveFile) {
-                    UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-                        << "[UCache] inactive_file value too large, overflow risk, container=" << id << ".";
-                    return false;
-                }
-                totalInactiveFile += static_cast<uint64_t>(temp);
-                foundInactiveFile = true;
-                UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-                    << "[UCache] Found inactivefileKB=" << (value / KB_TO_BYTE) << ", for container=" << id << ".";
+            if (temp > static_cast<float>(UINT64_MAX) - totalInactiveFile) {
+                UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+                    << "[UCache] inactive_file value too large, overflow risk, container=" << id << ".";
+                return false;
+            }
+            totalInactiveFile += static_cast<uint64_t>(temp);
+            foundInactiveFile = true;
+            UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+                << "[UCache] Found inactivefileKB=" << (value / KB_TO_BYTE) << ", for container=" << id << ".";
             break;
         }
     }
@@ -160,7 +160,7 @@ uint32_t BottleneckDetector::GetTotalInactiveFilePages(const std::set<std::strin
 {
     const std::string basePath = "/sys/fs/cgroup/memory/kubepods.slice/kubepods-besteffort.slice/";
     uint64_t totalInactiveFile = 0;
- 
+
     for (const auto &id : containerIds) {
         auto it = std::find_if(containerInfoList_.begin(), containerInfoList_.end(),
                                [&id](const ContainerInfo &c) { return c.id == id; });
@@ -180,7 +180,7 @@ uint32_t BottleneckDetector::GetTotalInactiveFilePages(const std::set<std::strin
         UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[UCache] Get ratio=" << ratio << "IoBottleneckLevel=" << static_cast<int>(container.leneckLevel) << ".";
         std::string statPath = basePath + "cri-containerd-" + container.id + ".scope/memory.stat";
- 
+
         if (!ReadContainerInactiveFile(statPath, id, totalInactiveFile, ratio)) {
             return RMRS_ERROR;
         }
@@ -190,7 +190,7 @@ uint32_t BottleneckDetector::GetTotalInactiveFilePages(const std::set<std::strin
         << "[UCache] Found total inactivefileKB=" << totalInactiveFileKB << ".";
     return RMRS_OK;
 }
- 
+
 uint32_t BottleneckDetector::GetUCacheUsagePercentage(const rmrs::MigrationInfoParam &info,
                                                       uint32_t &ucacheUsagePercentage)
 {
@@ -205,7 +205,7 @@ uint32_t BottleneckDetector::GetUCacheUsagePercentage(const rmrs::MigrationInfoP
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[UCache] Failed to GetContainerIdFromPids.";
         return ret;
     }
- 
+
     // 查询容器列表的pagecache总大小
     uint64_t totalInactiveFileKB = 0;
     ret = GetTotalInactiveFilePages(containerIds, totalInactiveFileKB);
@@ -213,7 +213,7 @@ uint32_t BottleneckDetector::GetUCacheUsagePercentage(const rmrs::MigrationInfoP
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[UCache] Failed to GetTotalInactiveFilePages.";
         return ret;
     }
- 
+
     // 对比借用内存大小，确定迁移比例
     ucacheUsagePercentage =
         static_cast<uint32_t>(static_cast<double>(totalInactiveFileKB) / info.borrowMemKB * PERSENTAGE_NUM);
@@ -228,7 +228,7 @@ uint32_t BottleneckDetector::GetUCacheUsagePercentage(const rmrs::MigrationInfoP
         << "[UCache] Set ucacheUsagePercentage=" << ucacheUsagePercentage << ".";
     return RMRS_OK;
 }
- 
+
 uint32_t BottleneckDetector::RunBottleneckDetection()
 {
     uint32_t ret = UpdateContainerList();
@@ -240,13 +240,13 @@ uint32_t BottleneckDetector::RunBottleneckDetection()
     IdentifyBottlenecks();
     return RMRS_OK;
 }
- 
+
 void UpdateConatainer(ContainerInfo &cur, const ContainerInfo &prev, std::vector<ContainerInfo> &updatedList)
 {
     // 计算 iowaitRatio pageCacheInMB ioReadBandwidthMB
     double sumRatio = 0.0;
     int count = 0;
- 
+
     for (int cpu : cur.boundCpus) {
         auto prevIt = prev.cpuStats.find(cpu);
         auto curIt = cur.cpuStats.find(cpu);
@@ -255,10 +255,10 @@ void UpdateConatainer(ContainerInfo &cur, const ContainerInfo &prev, std::vector
             uint64_t prevTotal = prevIt->second.second;
             uint64_t curIowait = curIt->second.first;
             uint64_t curTotal = curIt->second.second;
- 
+
             uint64_t deltaTotal = curTotal > prevTotal ? (curTotal - prevTotal) : 0;
             uint64_t deltaIowait = curIowait > prevIowait ? (curIowait - prevIowait) : 0;
- 
+
             if (deltaTotal > 0) {
                 double ratio = static_cast<double>(deltaIowait) / deltaTotal;
                 sumRatio += ratio;
@@ -279,7 +279,7 @@ void UpdateConatainer(ContainerInfo &cur, const ContainerInfo &prev, std::vector
     }
     updatedList.push_back(cur);
 }
- 
+
 void DealContainerWithSameId(ContainerInfo &cur, const ContainerInfo &prev, std::vector<ContainerInfo> &updatedList)
 {
     if (IsSameContainer(cur, prev)) {
@@ -291,7 +291,7 @@ void DealContainerWithSameId(ContainerInfo &cur, const ContainerInfo &prev, std:
             << "[UCache] New container found, containerId=" << cur.id << ".";
     }
 }
- 
+
 void BottleneckDetector::DoUpdateContainerList(std::vector<ContainerInfo> &curContainerInfoList,
                                                std::vector<ContainerInfo> &updatedList)
 {
@@ -312,7 +312,7 @@ void BottleneckDetector::DoUpdateContainerList(std::vector<ContainerInfo> &curCo
         }
     }
 }
- 
+
 uint32_t BottleneckDetector::UpdateContainerList()
 {
     std::vector<ContainerInfo> curContainerInfoList{};
@@ -325,10 +325,10 @@ uint32_t BottleneckDetector::UpdateContainerList()
         UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[UCache] Successfully get curContainerInfo for " << curContainerInfoList.size() << " containers.";
     }
- 
+
     std::vector<ContainerInfo> updatedList{};
     DoUpdateContainerList(curContainerInfoList, updatedList);
- 
+
     // 删除 cur 中不存在的容器（通过 id 检查）
     std::unordered_set<std::string> curIds;
     for (const auto &c : curContainerInfoList) {
@@ -340,11 +340,11 @@ uint32_t BottleneckDetector::UpdateContainerList()
             finalList.push_back(c);
         }
     }
- 
+
     containerInfoList_ = std::move(finalList);
     return RMRS_OK;
 }
- 
+
 void BottleneckDetector::IdentifyBottlenecks()
 {
     for (auto &container : containerInfoList_) {
@@ -407,7 +407,7 @@ uint32_t GetContainerIdFromPids(const std::vector<pid_t> &pids, std::set<std::st
     }
     return RMRS_OK;
 }
- 
+
 bool IsSameContainer(const ContainerInfo &a, const ContainerInfo &b)
 {
     if (a.id != b.id) {
@@ -420,7 +420,7 @@ bool IsSameContainer(const ContainerInfo &a, const ContainerInfo &b)
     std::vector<int> bCpus = b.boundCpus;
     std::sort(aCpus.begin(), aCpus.end());
     std::sort(bCpus.begin(), bCpus.end());
- 
+
     return aCpus == bCpus;
 }
 
@@ -471,7 +471,7 @@ bool IsContainerActive(const std::string &containerId)
     }
     return true;
 }
- 
+
 bool ParseCpuSetSegment(const std::string &segment, ContainerInfo &container)
 {
     try {
@@ -496,7 +496,7 @@ bool ParseCpuSetSegment(const std::string &segment, ContainerInfo &container)
     }
     return true;
 }
- 
+
 uint32_t ExtractContainerCpuset(ContainerInfo &container)
 {
     if (!container.isActive) {
@@ -527,7 +527,7 @@ uint32_t ExtractContainerCpuset(ContainerInfo &container)
     }
     return RMRS_OK;
 }
- 
+
 bool ParseContainerCpuStatLine(const std::string &line, std::map<int, std::pair<uint64_t, uint64_t>> &systemCpuStats)
 {
     std::istringstream iss(line);

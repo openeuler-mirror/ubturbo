@@ -207,7 +207,7 @@ TEST_F(TestRmrsResourceExport, BuildPidInfoFromNodePagesSucceed)
     // 验证基础字段
     EXPECT_EQ(pidInfo.pid, testPid);
 
-    for (auto &numaInfo: pidInfo.metaNumaInfos) {
+    for (auto &numaInfo : pidInfo.metaNumaInfos) {
         if (localNodeIds.count(numaInfo.numaId)) {
             EXPECT_EQ(numaInfo.socketId, numaInfo.numaId % sizeResult);
         }

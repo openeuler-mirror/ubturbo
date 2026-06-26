@@ -16,9 +16,11 @@
 #include "access_iomem.h"
 #include "access_tracking.h"
 #include "access_mmu.h"
+#include "access_acpi_mem.h"
 
 #define PM_PRESENT BIT_ULL(63)
 extern "C" bool is_access_hugepage(void);
+extern "C" int drivers_nr_local_numa;
 
 using namespace std;
 
@@ -36,14 +38,18 @@ inline bool operator==(const pagemap_entry_t& a, const pagemap_entry_t& b)
 
 class AccessMMUTest : public ::testing::Test {
 protected:
+    int saved_nr_local_numa;
     void SetUp() override
     {
         cout << "[Phase SetUp Begin]" << endl;
+        saved_nr_local_numa = drivers_nr_local_numa;
+        drivers_nr_local_numa = 4;
         cout << "[Phase SetUp End]" << endl;
     }
     void TearDown() override
     {
         cout << "[Phase TearDown Begin]" << endl;
+        drivers_nr_local_numa = saved_nr_local_numa;
         GlobalMockObject::verify();
         cout << "[Phase TearDown End]" << endl;
     }
@@ -103,12 +109,18 @@ TEST_F(AccessMMUTest, set_non_anon_bm)
 {
     int ret = 0;
     struct page page;
+    struct access_pid ap = {0};
+    ap.bm_len[0] = 1;
+    ap.white_list_bm[0] = (unsigned long *)malloc(sizeof(unsigned long));
+
     MOCKER(pfn_valid).stubs().will(returnValue(true));
     MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(PageHuge).stubs().will(returnValue(1));
     MOCKER(PageAnon).stubs().will(returnValue(true));
-    ret = set_non_anon_bm(nullptr, 0, 0, 0);
+    ret = set_non_anon_bm(&ap, 0, 0, 0);
     EXPECT_EQ(0, ret);
+
+    free(ap.white_list_bm[0]);
 }
 
 extern "C" int add_to_bm_page(u64 paddr, struct access_pid *ap);
@@ -193,7 +205,7 @@ TEST_F(AccessMMUTest, CalcVaddrAcidx)
     info.segs[0].end = info.segs[0].start + TWO_MEGA_SIZE;
     info.segs[0].hugepages = 1;
 
-    info.segs[1].start = 0xffffffff;
+    info.segs[1].start = 0x100000000ULL;
     info.segs[1].end = info.segs[1].start + 2 * TWO_MEGA_SIZE;
     info.segs[1].hugepages = 2;
 
@@ -205,22 +217,6 @@ TEST_F(AccessMMUTest, CalcVaddrAcidx)
     vaddr = info.segs[1].start + 2 * TWO_MEGA_SIZE;
     ret = calc_vaddr_acidx(vaddr, &info, &acidx);
     EXPECT_EQ(-ERANGE, ret);
-}
-
-extern "C" void add_to_bm_normal(u64 paddr, struct access_pid *ap);
-TEST_F(AccessMMUTest, AddToBMNormal)
-{
-    MOCKER(add_to_bm_page).stubs().will(ignoreReturnValue());
-
-    struct access_pid ap = {
-        .numa_nodes = 0x11,
-    };
-    ap.bm_len[0] = 2;
-    ap.paddr_bm[0] = (unsigned long *)malloc(sizeof(unsigned long) * 2);
-
-    add_to_bm_normal((u64)0x00005000, &ap);
-
-    free(ap.paddr_bm[0]);
 }
 
 extern "C" bool is_paddr_belong_remote_node(u64 pa, int nid);
@@ -318,13 +314,6 @@ TEST_F(AccessMMUTest, AddToBMTwo)
     MOCKER(add_to_bm_page).stubs();
     int ret = add_to_bm(0, &pe, &pm);
     EXPECT_EQ(1, ret);
-
-    GlobalMockObject::verify();
-    MOCKER(is_access_hugepage).stubs().will(returnValue(false));
-    MOCKER(add_to_bm_normal).stubs();
-    pm.pos = 0;
-    ret = add_to_bm(0, &pe, &pm);
-    EXPECT_EQ(0, ret);
 }
 
 extern "C" pagemap_entry_t pte_to_pagemap_entry(struct pagemapread *pm,

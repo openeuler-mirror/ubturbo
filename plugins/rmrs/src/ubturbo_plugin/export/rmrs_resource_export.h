@@ -19,10 +19,10 @@
 #include <unordered_set>
 #include <vector>
 #include "map"
-#include "turbo_resource_query.h"
 #include "rmrs_error.h"
 #include "rmrs_numa_info.h"
 #include "rmrs_vm_info.h"
+#include "turbo_resource_query.h"
 namespace rmrs::exports {
 
 using namespace rmrs;

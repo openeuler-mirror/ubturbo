@@ -16,7 +16,7 @@
 #define BA_STS_VALUE_N7_COUNT 32768
 #define BA_STS_VALUE_N6_COUNT 8192
 #define BA_STS_TOTAL_LEHGTH(ba_sts_value_count) \
-	((ba_sts_value_count) * BA_STS_VALUE_SIZE)
+	(ba_sts_value_count) * BA_STS_VALUE_SIZE
 #define BA_STS_WORD_COUNT(ba_sts_value_count) \
 	(BA_STS_TOTAL_LEHGTH(ba_sts_value_count) / sizeof(u32))
 
@@ -32,15 +32,6 @@
 
 #define SIZE_32M (32 * MB)
 #define SHIFT_32M 25
-
-#define SIZE_16G (16 * GB)
-#define SHIFT_16G 34
-
-#define SIZE_128M (128 * MB)
-#define SHIFT_128M 27
-
-#define SIZE_64G (64 * GB)
-#define SHIFT_64G 36
 
 enum ub_hist_sts_size {
 	STS_SIZE_4K = 0,

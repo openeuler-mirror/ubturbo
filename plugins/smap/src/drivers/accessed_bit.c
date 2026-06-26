@@ -42,7 +42,6 @@
 #define MAX_NR_KVM 100
 #undef pr_fmt
 #define pr_fmt(fmt) "access-bit: " fmt
-#define MMAPLOCK_BATCH_SIZE (64UL * 1024 * 1024)
 
 LIST_HEAD(ham_pid_list);
 LIST_HEAD(statistic_pid_list);
@@ -138,10 +137,10 @@ static int get_pid_from_tracking_file(const struct file *file)
 static inline void clear_tracking_info(struct ham_tracking_info *info)
 {
 	memset(info->paddr[L1], 0, sizeof(u64) * info->len[L1]);
-	memset(info->freq[L1], 0, sizeof(u16) * info->len[L1]);
+	memset(info->freq[L1], 0, sizeof(actc_t) * info->len[L1]);
 	if (info->paddr[L2]) {
 		memset(info->paddr[L2], 0, sizeof(u64) * info->len[L2]);
-		memset(info->freq[L2], 0, sizeof(u16) * info->len[L2]);
+		memset(info->freq[L2], 0, sizeof(actc_t) * info->len[L2]);
 	}
 }
 
@@ -352,31 +351,62 @@ pte_t *huge_pte_offset(struct mm_struct *mm, unsigned long addr,
 	return NULL;
 }
 
-static void actc_data_add(phys_addr_t paddr, u32 page_size)
+static inline int get_numa_id_by_paddr(phys_addr_t paddr)
 {
-	struct access_tracking_dev *adev;
-	int ret = 0, node_id;
-	u64 pa_index;
-	if (calc_paddr_acidx_acpi(paddr, &node_id, &pa_index, page_size)) {
-		ret = calc_paddr_acidx_iomem(paddr, &node_id, &pa_index,
-					     page_size);
-	}
-	if (unlikely(ret)) {
-		return;
-	}
+	unsigned long pfn = PHYS_PFN(paddr);
+	struct page *page;
 
-	adev = get_access_tracking_dev(node_id);
-	if (unlikely(!adev)) {
+	if (!pfn_valid(pfn))
+		return NUMA_NO_NODE;
+
+	page = pfn_to_online_page(pfn);
+	if (!page)
+		return NUMA_NO_NODE;
+
+	return page_to_nid(page);
+}
+
+static void actc_data_update(int nid, u64 pa_index)
+{
+	struct access_tracking_dev *adev = get_access_tracking_dev(nid);
+
+	if (unlikely(!adev || pa_index >= adev->page_count))
 		return;
-	}
-	if (unlikely(pa_index >= adev->page_count)) {
-		return;
-	}
 	if (!adev->is_hist)
 		adev->access_bit_actc_data[pa_index]++;
 }
 
-static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va)
+static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
+{
+	struct access_tracking_dev *adev;
+	int ret, nid;
+	u64 pa_index;
+
+	nid = get_numa_id_by_paddr(paddr);
+	if (unlikely(nid == NUMA_NO_NODE))
+		return;
+
+	if (nid < nr_local_numa) {
+		ret = calc_paddr_acidx_acpi_known_nid(paddr, nid, &pa_index,
+						      page_size);
+	} else {
+		ret = calc_paddr_acidx_iomem_known_nid(paddr, nid, &pa_index,
+						       page_size);
+	}
+
+	if (unlikely(ret))
+		return;
+
+	adev = get_access_tracking_dev(nid);
+	if (unlikely(!adev || pa_index >= adev->page_count))
+		return;
+
+	if (!adev->is_hist)
+		adev->access_bit_actc_data[pa_index]++;
+}
+
+static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
+			      struct access_pid *ap, bool is_young)
 {
 	struct hstate *h;
 	unsigned long hmask;
@@ -406,7 +436,11 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va)
 	}
 
 	paddr = PFN_PHYS(pte_pfn(pte));
-	actc_data_add(paddr, g_pagesize_huge);
+	if (is_young)
+		actc_data_add_fast(paddr, g_pagesize_huge);
+
+	if (access_pid_cur_last_scanning(ap))
+		add_to_bm_huge(host_va, paddr, ap);
 
 	return 0;
 }
@@ -415,20 +449,28 @@ static void ham_actc_data_add(int pid, phys_addr_t paddr, u32 page_size)
 {
 	struct access_tracking_dev *adev;
 	struct ham_tracking_info *tmp;
-	int ret = 0, node_id;
+	int ret, node_id;
 	u64 pa_index;
-	if (calc_paddr_acidx_acpi(paddr, &node_id, &pa_index, page_size)) {
-		ret = calc_paddr_acidx_iomem(paddr, &node_id, &pa_index,
-					     page_size);
-	}
-	if (unlikely(ret)) {
+
+	node_id = get_numa_id_by_paddr(paddr);
+	if (unlikely(node_id == NUMA_NO_NODE))
 		return;
+
+	if (node_id < nr_local_numa) {
+		ret = calc_paddr_acidx_acpi_known_nid(paddr, node_id, &pa_index,
+						      page_size);
+	} else {
+		ret = calc_paddr_acidx_iomem_known_nid(paddr, node_id,
+						       &pa_index, page_size);
 	}
 
-	adev = get_access_tracking_dev(node_id);
-	if (unlikely(!adev || pa_index >= adev->page_count)) {
+	if (unlikely(ret))
 		return;
-	}
+
+	adev = get_access_tracking_dev(node_id);
+	if (unlikely(!adev || pa_index >= adev->page_count))
+		return;
+
 	spin_lock(&ham_lock);
 	list_for_each_entry(tmp, &ham_pid_list, node) {
 		if (tmp->pid == pid && tmp->l1_node == node_id) {
@@ -495,7 +537,8 @@ static struct vm_area_struct *get_vma_if_huge_page(struct kvm *kvm,
 	return vma;
 }
 
-static int hva_to_hpa(struct kvm *kvm, u64 host_va, scan_type type, pid_t pid)
+static int hva_to_hpa(struct kvm *kvm, u64 host_va, struct access_pid *ap,
+		      bool is_young)
 {
 	int ret = 0;
 	struct vm_area_struct *vma;
@@ -508,10 +551,10 @@ static int hva_to_hpa(struct kvm *kvm, u64 host_va, scan_type type, pid_t pid)
 	}
 
 	if (is_vm_hugetlb_page(vma)) {
-		if (type == HAM_SCAN) {
-			hva_to_hpa_ham(kvm, host_va, pid);
+		if (ap->type == HAM_SCAN) {
+			hva_to_hpa_ham(kvm, host_va, ap->pid);
 		} else {
-			ret = hva_to_hpa_hugetlb(kvm, host_va);
+			ret = hva_to_hpa_hugetlb(kvm, host_va, ap, is_young);
 		}
 	}
 	return ret;
@@ -538,8 +581,6 @@ static void clear_statistic_tracking_info(pid_t pid)
 
 static void update_statistic_scan_freq_mm(u64 *vaddr, u64 page_cnt, int pid)
 {
-	int i;
-	int j;
 	u32 wins_index;
 	u64 vaddr_idx, l1_idx, l2_idx;
 	struct statistics_tracking_info *tmp;
@@ -548,13 +589,17 @@ static void update_statistic_scan_freq_mm(u64 *vaddr, u64 page_cnt, int pid)
 		if (tmp->pid == pid) {
 			l1_idx = 0;
 			vaddr_idx = 0;
-			while (vaddr_idx < page_cnt && l1_idx < tmp->page_num[L1]) {
-				if (vaddr[vaddr_idx] == tmp->vaddr[L1][l1_idx]) {
+			while (vaddr_idx < page_cnt &&
+			       l1_idx < tmp->page_num[L1]) {
+				if (vaddr[vaddr_idx] ==
+				    tmp->vaddr[L1][l1_idx]) {
 					wins_index = tmp->scan_num;
-					tmp->sliding_windows[wins_index][l1_idx] = TRUE_REF;
+					tmp->sliding_windows[wins_index]
+							    [l1_idx] = TRUE_REF;
 					l1_idx++;
 					vaddr_idx++;
-				} else if (vaddr[vaddr_idx] < tmp->vaddr[L1][l1_idx]) {
+				} else if (vaddr[vaddr_idx] <
+					   tmp->vaddr[L1][l1_idx]) {
 					vaddr_idx++;
 				} else {
 					l1_idx++;
@@ -563,13 +608,19 @@ static void update_statistic_scan_freq_mm(u64 *vaddr, u64 page_cnt, int pid)
 
 			l2_idx = 0;
 			vaddr_idx = 0;
-			while (vaddr_idx < page_cnt && l2_idx < tmp->page_num[L2]) {
-				if (vaddr[vaddr_idx] == tmp->vaddr[L2][l2_idx]) {
+			while (vaddr_idx < page_cnt &&
+			       l2_idx < tmp->page_num[L2]) {
+				if (vaddr[vaddr_idx] ==
+				    tmp->vaddr[L2][l2_idx]) {
 					wins_index = tmp->scan_num;
-					tmp->sliding_windows[wins_index][l2_idx + tmp->page_num[L1]] = TRUE_REF;
+					tmp->sliding_windows[wins_index]
+							    [l2_idx +
+							     tmp->page_num[L1]] =
+						TRUE_REF;
 					l2_idx++;
 					vaddr_idx++;
-				} else if (vaddr[vaddr_idx] < tmp->vaddr[L2][l2_idx]) {
+				} else if (vaddr[vaddr_idx] <
+					   tmp->vaddr[L2][l2_idx]) {
 					vaddr_idx++;
 				} else {
 					l2_idx++;
@@ -605,15 +656,69 @@ static bool memslot_is_mem(struct kvm_memory_slot *memslot)
 	return true;
 }
 
-static int scan_kvm_memslots(struct kvm *kvm, pid_t pid, int page_size,
-			     scan_type type)
+static int collect_statistic_vaddr(struct kvm *kvm,
+				   struct kvm_memory_slot *memslot,
+				   struct access_pid *ap, int page_size,
+				   u64 *vaddr, u64 nr_pages, u64 *cur_index)
+{
+	gpa_t gpa;
+	unsigned long hva;
+	bool is_young;
+
+	for (gpa = memslot->base_gfn << PAGE_SHIFT;
+	     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
+	     gpa += (gpa_t)page_size) {
+		is_young =
+			smap_kvm_pgtable_stage2_mkold(kvm->arch.mmu.pgt, gpa);
+		if (!is_young && !access_pid_cur_last_scanning(ap))
+			continue;
+		hva = gfn_to_hva_memslot(memslot, gpa_to_gfn(gpa));
+		if (!get_vma_if_huge_page(kvm, hva))
+			continue;
+		if (is_young) {
+			vaddr[(*cur_index)++] = hva;
+			if (*cur_index >= nr_pages)
+				return 0;
+		}
+	}
+	return 0;
+}
+
+static int process_memslot_pages(struct kvm *kvm,
+				 struct kvm_memory_slot *memslot,
+				 struct access_pid *ap, int page_size)
+{
+	gpa_t gpa;
+	unsigned long hva;
+	bool is_young;
+	int ret;
+
+	for (gpa = memslot->base_gfn << PAGE_SHIFT;
+	     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
+	     gpa += (gpa_t)page_size) {
+		is_young =
+			smap_kvm_pgtable_stage2_mkold(kvm->arch.mmu.pgt, gpa);
+		if (!is_young && !access_pid_cur_last_scanning(ap))
+			continue;
+		hva = gfn_to_hva_memslot(memslot, gpa_to_gfn(gpa));
+		if (!get_vma_if_huge_page(kvm, hva))
+			continue;
+		ret = hva_to_hpa(kvm, hva, ap, is_young);
+		if (ret)
+			continue;
+	}
+	return 0;
+}
+
+static int scan_kvm_memslots(struct kvm *kvm, struct access_pid *ap,
+			     int page_size)
 {
 	struct kvm_memslots *slots;
 	struct kvm_memory_slot *memslot;
-	gpa_t gpa;
 	int bkt;
 	u64 nr_pages, cur_index;
 	u64 *vaddr;
+
 	if (!kvm || !kvm->arch.mmu.pgt) {
 		pr_err("invalid kvm passed to scan kvm memslots\n");
 		return -EINVAL;
@@ -623,7 +728,7 @@ static int scan_kvm_memslots(struct kvm *kvm, pid_t pid, int page_size,
 	if (!slots)
 		return -EINVAL;
 
-	if (type == STATISTIC_SCAN) {
+	if (ap->type == STATISTIC_SCAN) {
 		nr_pages = 0;
 		kvm_for_each_memslot(memslot, bkt, slots) {
 			if (!memslot_is_mem(memslot))
@@ -635,38 +740,24 @@ static int scan_kvm_memslots(struct kvm *kvm, pid_t pid, int page_size,
 		if (!vaddr)
 			return -ENOMEM;
 		cur_index = 0;
-	}
-
-	kvm_for_each_memslot(memslot, bkt, slots) {
-		unsigned long hva;
-		int ret;
-		if (!memslot_is_mem(memslot))
-			continue;
-		for (gpa = memslot->base_gfn << PAGE_SHIFT;
-		     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
-		     gpa += (gpa_t)page_size) {
-			if (!smap_kvm_pgtable_stage2_mkold(kvm->arch.mmu.pgt, gpa))
+		kvm_for_each_memslot(memslot, bkt, slots) {
+			if (!memslot_is_mem(memslot))
 				continue;
-			hva = gfn_to_hva_memslot(memslot, gpa_to_gfn(gpa));
-			if (!get_vma_if_huge_page(kvm, hva))
-				continue;
-			if (type == STATISTIC_SCAN) {
-				vaddr[cur_index++] = hva;
-				if (cur_index >= nr_pages)
-					break;
-			} else {
-				ret = hva_to_hpa(kvm, hva, type, pid);
-				if (ret)
-					continue;
-			}
+			collect_statistic_vaddr(kvm, memslot, ap, page_size,
+						vaddr, nr_pages, &cur_index);
 		}
-	}
-	kvm_flush_remote_tlbs(kvm);
-	if (type == STATISTIC_SCAN) {
-		clear_statistic_tracking_info(pid);
-		update_statistic_scan_freq_mm(vaddr, cur_index, pid);
-		update_statistic_scan_num(pid);
+		kvm_flush_remote_tlbs(kvm);
+		clear_statistic_tracking_info(ap->pid);
+		update_statistic_scan_freq_mm(vaddr, cur_index, ap->pid);
+		update_statistic_scan_num(ap->pid);
 		kfree(vaddr);
+	} else {
+		kvm_for_each_memslot(memslot, bkt, slots) {
+			if (!memslot_is_mem(memslot))
+				continue;
+			process_memslot_pages(kvm, memslot, ap, page_size);
+		}
+		kvm_flush_remote_tlbs(kvm);
 	}
 	return 0;
 }
@@ -779,6 +870,7 @@ static int get_vma_numa_node(struct kvm *kvm, struct vm_area_struct *vma,
 
 	pte = smap_huge_ptep_get(ptep);
 	if (!pte_present(pte)) {
+		pr_err("PTE is not presented\n");
 		return 0;
 	}
 
@@ -811,11 +903,11 @@ static int fill_vaddrs_info(struct kvm *kvm, struct hva_info *hva_vec, u64 len,
 		for (gpa = memslot->base_gfn << PAGE_SHIFT;
 		     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
 		     gpa += g_pagesize_huge) {
+			if (!memslot_is_mem(memslot))
+				continue;
 			struct vm_area_struct *vma;
 			if (idx >= len) {
-				pr_err("exceeds upper bound: %llu when looking up GPA in memslots\n",
-				       len);
-				return -EFAULT;
+				break;
 			}
 			hva = gfn_to_hva_memslot(memslot, gpa_to_gfn(gpa));
 			vma = get_vma_if_huge_page(kvm, hva);
@@ -1149,17 +1241,21 @@ static void release_resources(struct file *filp, struct task_struct *task,
 		put_pid(pid);
 }
 
-static int scan_forward_2M(pid_t pid, int page_size, scan_type type)
+static int scan_forward_2M(struct access_pid *ap, int page_size)
 {
 	int srcu_idx;
 	struct file *filp;
 	struct kvm *kvm;
 	struct pid *pid_s;
 	struct task_struct *task;
-	if (type == NO_SCAN) {
+	if (ap->type == NO_SCAN) {
 		return 0;
 	}
-	pid_s = find_get_pid(pid);
+	pid_s = find_get_pid(ap->pid);
+	if (!pid_s) {
+		pr_err("failed to find pid: %d\n", ap->pid);
+		return -EINVAL;
+	}
 	task = get_pid_task(pid_s, PIDTYPE_PID);
 	if (!task) {
 		put_pid(pid_s);
@@ -1177,8 +1273,8 @@ static int scan_forward_2M(pid_t pid, int page_size, scan_type type)
 		return -EINVAL;
 	}
 	srcu_idx = pre_scan_kvm_memslots(kvm);
-	if (scan_kvm_memslots(kvm, pid, page_size, type))
-		pr_err("failed to scan kvm mem slots for pid: %d\n", pid);
+	if (scan_kvm_memslots(kvm, ap, page_size))
+		pr_err("failed to scan kvm mem slots for pid: %d\n", ap->pid);
 
 	post_scan_kvm_memslots(kvm, srcu_idx);
 	release_resources(filp, task, pid_s);
@@ -1200,27 +1296,94 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 {
 	struct pte_walk *pte_walk = walk->private;
 	pte_t ptent = ptep_get(pte);
+	phys_addr_t paddr = (phys_addr_t)__pte_to_phys(ptent);
+	unsigned long pfn = PHYS_PFN(paddr);
+	struct page *page = NULL;
+	bool is_young = pte_young(ptent);
+	bool is_local = false;
+	u8 nid;
 
-	if (is_swap_pte(ptent)) {
+	if (paddr == 0 || is_swap_pte(ptent) || !pte_present(ptent))
 		return 0;
+
+	if (pte_walk->scan_result_cnt >= SCAN_RESULT_CAPACITY)
+		return 0;
+
+	/* 锁内：获取 page 用于 inc_smap_acc_cnt */
+	if (!pfn_valid(pfn))
+		return 0;
+	page = pfn_to_online_page(pfn);
+	if (!page)
+		return 0;
+	nid = page_to_nid(page);
+	is_local = nid < nr_local_numa;
+	if (!is_local && enable_hist && pte_walk->type == NORMAL_SCAN) {
+		is_young = false;
+		goto save_res;
 	}
-	if (pte_present(ptent) && pte_young(ptent)) {
-		phys_addr_t paddr = (phys_addr_t)__pte_to_phys(ptent);
-		if (paddr == 0) {
-			return 0;
+
+	/* 64KiB分组优化：NORMAL_SCAN类型，首页young则跳过后续页 */
+	if (pte_walk->type == NORMAL_SCAN) {
+		bool is_first = (addr & (SCAN_GROUP_SIZE - 1)) == 0;
+		if (is_first)
+			pte_walk->group_hot = is_young;
+		else if (pte_walk->group_hot) {
+			pte_walk->group_hot_skip_cnt++;
+			goto save_res;
 		}
-		if (pte_walk->type == STATISTIC_SCAN)
-			pte_walk->statistic_vaddr[pte_walk->statistic_cnt++] = addr;
-		actc_data_add(paddr, PAGE_SIZE);
-		pte_walk->flag = true;
-		__ptep_test_and_clear_young(NULL, 0, pte);
 	}
+
+	if (is_young) {
+		if (pte_walk->type == STATISTIC_SCAN)
+			pte_walk->statistic_vaddr[pte_walk->statistic_cnt++] =
+				addr;
+		if (!is_file_or_shared_page(page))
+			__ptep_test_and_clear_young(NULL, 0, pte);
+		pte_walk->flag = true;
+	}
+
+save_res:
+	pte_walk->scan_results[pte_walk->scan_result_cnt].paddr = paddr;
+	pte_walk->scan_results[pte_walk->scan_result_cnt].nid = nid;
+	pte_walk->scan_results[pte_walk->scan_result_cnt].hot = is_young;
+	pte_walk->scan_result_cnt++;
+
 	return 0;
 }
 
 static const struct mm_walk_ops pte_range_ops = {
 	.pte_entry = check_pte_young,
 };
+
+static void process_scan_results(struct pte_walk *pte_walk)
+{
+	u64 i, pa_idx;
+	int ret;
+	bool is_last_scan;
+
+	if (!pte_walk || !pte_walk->ap)
+		return;
+
+	is_last_scan = access_pid_cur_last_scanning(pte_walk->ap);
+
+	for (i = 0; i < pte_walk->scan_result_cnt; i++) {
+		struct scan_result_entry *entry = &pte_walk->scan_results[i];
+		if (entry->nid < nr_local_numa)
+			ret = calc_paddr_acidx_acpi_known_nid(
+				entry->paddr, entry->nid, &pa_idx, PAGE_SIZE);
+		else
+			ret = calc_paddr_acidx_iomem_known_nid(
+				entry->paddr, entry->nid, &pa_idx, PAGE_SIZE);
+		if (ret)
+			continue;
+		if (entry->hot)
+			actc_data_update(entry->nid, pa_idx);
+		if (is_last_scan)
+			add_to_bm_page_fast(entry->paddr, entry->nid, pa_idx,
+					    pte_walk->ap);
+		cond_resched();
+	}
+}
 
 static int small_vma_walk(struct mm_struct *mm, unsigned long start_vaddr,
 			  unsigned long end_vaddr, struct pte_walk *pte_walk,
@@ -1233,15 +1396,13 @@ static int small_vma_walk(struct mm_struct *mm, unsigned long start_vaddr,
 		pr_err("unable to get mmap read lock, ret: %d\n", ret);
 		return ret;
 	}
+	pte_walk->scan_result_cnt = 0;
 
 	ret = walk_page_range(mm, start_vaddr, end_vaddr, ops, pte_walk);
-	if (ret) {
-		pr_err("failed to walk page range, ret: %d\n", ret);
-		mmap_read_unlock(mm);
-		return ret;
-	}
 	mmap_read_unlock(mm);
-	return 0;
+	cond_resched();
+	process_scan_results(pte_walk);
+	return ret;
 }
 
 static int huge_vma_walk(struct mm_struct *mm, struct smap_vma_struct *vma,
@@ -1307,8 +1468,8 @@ static int take_vma_snapshot(struct mm_struct *mm,
 }
 
 static int setup_statistic_scan(struct pte_walk *pte_walk, int pid,
-								struct smap_vma_struct * vma_array,
-								int vma_count)
+				struct smap_vma_struct *vma_array,
+				int vma_count)
 {
 	int ret;
 	u64 total_page_nr;
@@ -1323,17 +1484,20 @@ static int setup_statistic_scan(struct pte_walk *pte_walk, int pid,
 	}
 	pte_walk->statistic_vaddr = vzalloc(total_page_nr * sizeof(u64));
 	if (!pte_walk->statistic_vaddr) {
-		pr_err("failed to malloc statistic vaddr array, ret: %d\n", pid);
+		pr_err("failed to malloc statistic vaddr array, ret: %d\n",
+		       pid);
 		return -ENOMEM;
 	}
 	return 0;
 }
 
 static void update_and_cleanup_statistic(int pid, struct pte_walk *pte_walk,
-										 struct mm_struct *mm, struct smap_vma_struct *vma_array)
+					 struct mm_struct *mm,
+					 struct smap_vma_struct *vma_array)
 {
 	clear_statistic_tracking_info(pid);
-	update_statistic_scan_freq_mm(pte_walk->statistic_vaddr, pte_walk->statistic_cnt, pid);
+	update_statistic_scan_freq_mm(pte_walk->statistic_vaddr,
+				      pte_walk->statistic_cnt, pid);
 	update_statistic_scan_num(pid);
 
 	if (pte_walk->flag) {
@@ -1347,77 +1511,158 @@ static void update_and_cleanup_statistic(int pid, struct pte_walk *pte_walk,
 	}
 }
 
-static int scan_forward_4k_mm(int pid, int page_size, scan_type type)
+static int walk_all_vmas(struct mm_struct *mm,
+			 struct smap_vma_struct *vma_array, int vma_count,
+			 struct pte_walk *pte_walk, int pid)
 {
-	int ret;
-	int i = 0;
-	int vma_count = 0;
-	struct mm_struct *mm;
-	struct smap_vma_struct *vma_array = NULL;
-	struct pte_walk pte_walk = { .flag = false };
-	pte_walk.pid = pid;
-	pte_walk.type = type;
-
-	mm = get_mm_by_pid(pid);
-	if (IS_ERR(mm) || !mm || !mmget_not_zero(mm)) {
-		pr_err("bad mm of pid: %d\n", pid);
-		return -EINVAL;
-	}
-	ret = take_vma_snapshot(mm, &vma_array, &vma_count);
-	if (ret) {
-		pr_err("failed to take VMA snapshot, ret: %d\n", ret);
-		mmput(mm);
-		return -EINVAL;
-	}
-
-	ret = setup_statistic_scan(&pte_walk, pid, vma_array, vma_count);
-	if (ret) {
-		pr_err("failed to setup statistic scan, ret: %d\n", ret);
-		mmput(mm);
-		return -EINVAL;
-	}
+	int i, ret;
 
 	for (i = 0; i < vma_count; i++) {
 		if (vma_array[i].end_vaddr - vma_array[i].start_vaddr <
 		    MMAPLOCK_BATCH_SIZE) {
 			ret = small_vma_walk(mm, vma_array[i].start_vaddr,
-					     vma_array[i].end_vaddr, &pte_walk,
+					     vma_array[i].end_vaddr, pte_walk,
 					     &pte_range_ops);
-			if (ret) {
-				pr_err("failed to walk VMA, pid: %d, ret: %d\n",
-				       pid, ret);
-				break;
-			}
 		} else {
-			ret = huge_vma_walk(mm, &vma_array[i], &pte_walk,
+			ret = huge_vma_walk(mm, &vma_array[i], pte_walk,
 					    &pte_range_ops);
-			if (ret) {
-				pr_err("failed to walk VMA, pid: %d, ret: %d\n",
-				       pid, ret);
-				break;
-			}
+		}
+		if (ret) {
+			pr_err("failed to walk VMA, pid: %d, ret: %d\n", pid,
+			       ret);
+			return ret;
 		}
 	}
+	return 0;
+}
 
-	update_and_cleanup_statistic(pid, &pte_walk, mm, vma_array);
+static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
+{
+	int ret;
+	int vma_count = 0;
+	struct mm_struct *mm;
+	struct smap_vma_struct *vma_array = NULL;
+	struct pte_walk pte_walk = { .flag = false,
+				     .ap = ap,
+				     .group_hot_skip_cnt = 0,
+				     .scan_results = NULL,
+				     .scan_result_cnt = 0 };
+	pte_walk.pid = ap->pid;
+	pte_walk.type = ap->type;
+
+	mm = get_mm_by_pid(ap->pid);
+	if (IS_ERR(mm) || !mm || !mmget_not_zero(mm)) {
+		pr_err("bad mm of pid: %d\n", ap->pid);
+		return -EINVAL;
+	}
+
+	pte_walk.scan_results = vzalloc(SCAN_RESULT_CAPACITY *
+					sizeof(struct scan_result_entry));
+	if (!pte_walk.scan_results) {
+		pr_err("failed to allocate scan results buffer\n");
+		mmput(mm);
+		return -ENOMEM;
+	}
+
+	ret = take_vma_snapshot(mm, &vma_array, &vma_count);
+	if (ret) {
+		pr_err("failed to take VMA snapshot, ret: %d\n", ret);
+		vfree(pte_walk.scan_results);
+		mmput(mm);
+		return -EINVAL;
+	}
+
+	ret = setup_statistic_scan(&pte_walk, ap->pid, vma_array, vma_count);
+	if (ret) {
+		pr_err("failed to setup statistic scan, ret: %d\n", ret);
+		vfree(pte_walk.scan_results);
+		mmput(mm);
+		return -EINVAL;
+	}
+
+	ret = walk_all_vmas(mm, vma_array, vma_count, &pte_walk, ap->pid);
+	vfree(pte_walk.scan_results);
+
+	update_and_cleanup_statistic(ap->pid, &pte_walk, mm, vma_array);
 	mmput(mm);
+
+	if (pte_walk.type == NORMAL_SCAN)
+		pr_debug("pid %d: group_hot skipped %llu pages\n", ap->pid,
+			 pte_walk.group_hot_skip_cnt);
+
+	return ret;
+}
+
+static int pte_pure_clear(pte_t *pte, unsigned long addr, unsigned long next,
+			  struct mm_walk *walk)
+{
+	struct pte_walk *pte_walk = walk->private;
+
+	if (is_swap_pte(*pte)) {
+		return 0;
+	}
+
+	if (pte_young(*pte)) {
+		pte_walk->flag = true;
+		__ptep_test_and_clear_young(NULL, 0, pte);
+	}
 
 	return 0;
 }
 
-int scan_accessed_bit_forward_vm(pid_t pid, int page_size, scan_type type)
+int pid_pte_mkold(struct access_pid *ap)
+{
+	int ret;
+	struct mm_struct *mm;
+	struct pte_walk pte_walk = {
+		.flag = false,
+	};
+
+	struct mm_walk_ops pte_tmp_ops = {
+		.pte_entry = pte_pure_clear,
+	};
+
+	mm = get_mm_by_pid(ap->pid);
+	if (IS_ERR(mm) || !mm || !mmget_not_zero(mm)) {
+		pr_err("bad mm of pid: %d\n", ap->pid);
+		return -EINVAL;
+	}
+
+	ret = mmap_read_lock_killable(mm);
+	if (ret) {
+		pr_err("unable to get mmap read lock, ret: %d\n", ret);
+		mmput(mm);
+		return ret;
+	}
+	ret = walk_page_range(mm, 0UL, ~0UL, &pte_tmp_ops, &pte_walk);
+	if (ret) {
+		pr_err("failed to walk page range, ret: %d\n", ret);
+		mmap_read_unlock(mm);
+		mmput(mm);
+		return ret;
+	}
+	mmap_read_unlock(mm);
+	if (pte_walk.flag) {
+		smap_flush_tlb_mm(mm);
+	}
+	mmput(mm);
+	pr_info("PTEs of pid %d are cleaned\n", ap->pid);
+	return 0;
+}
+
+int scan_accessed_bit_forward_vm(struct access_pid *ap, int page_size)
 {
 	if (page_size == g_pagesize_huge) {
-		return scan_forward_2M(pid, page_size, type);
+		return scan_forward_2M(ap, page_size);
 	} else {
 		return -EINVAL;
 	}
 }
 
-int scan_accessed_bit_forward_mm(pid_t pid, int page_size, scan_type type)
+int scan_accessed_bit_forward_mm(struct access_pid *ap, int page_size)
 {
 	if (page_size == PAGE_SIZE) {
-		return scan_forward_4k_mm(pid, page_size, type);
+		return scan_forward_4k_mm(ap, page_size);
 	}
 	return -EINVAL;
 }

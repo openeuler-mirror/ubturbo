@@ -8,15 +8,15 @@
  * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
  * See the Mulan PSL v2 for more details.
- */#ifndef RMRS_JSON_HELPER_H
+ */
+#ifndef RMRS_JSON_HELPER_H
 #define RMRS_JSON_HELPER_H
 
-#include <string>
 #include <map>
 #include <set>
+#include <string>
 
 namespace rmrs::serialization {
-
 class RmrsJsonHelper {
     static std::string ToJson()
     {
@@ -27,7 +27,6 @@ class RmrsJsonHelper {
         return true;
     }
 };
-
 
 struct BorrowIdInfo {
     pid_t pid;

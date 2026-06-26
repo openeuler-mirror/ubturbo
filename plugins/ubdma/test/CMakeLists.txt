@@ -1,12 +1,13 @@
 cmake_minimum_required(VERSION 3.13)
 
-project(SMAP VERSION 0.1.0 LANGUAGES C CXX)
+project(UB_DMA VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 11)
 
-set(SMAP_SRC ${CMAKE_CURRENT_LIST_DIR}/../)
+set(UB_DMA_SRC ${CMAKE_CURRENT_LIST_DIR}/dt_src)
+set(TEST_DIR ${CMAKE_CURRENT_LIST_DIR})
 set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage -DACPI_NOT_READY -Wno-all")
-set(CMAKE_C_FLAGS " ${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage -DACPI_NOT_READY -Wno-all")
+set(CMAKE_C_FLAGS " ${CMAKE_C_FLAGS} -fprofile-arcs -ftest-coverage -DACPI_NOT_READY -Wno-all")
 add_link_options(-lgcov --coverage)
 set(CMAKE_EXE_LINKER_FLAGS " -lgcov --coverage ")
 set(CMAKE_SHARED_LINKER_FLAGS " -lgcov --coverage ")
@@ -16,39 +17,39 @@ add_subdirectory(3rdparty)
 
 add_compile_definitions(USE_DT)
 
-# include all source files
-aux_source_directory(${SMAP_SRC}/test/drivers TEST_SRC)
+# include all test source files
+aux_source_directory(${TEST_DIR}/drivers TEST_SRC)
 
 # stub c files
-aux_source_directory(${SMAP_SRC}/test/depends/drivers/base TEST_SRC)
-aux_source_directory(${SMAP_SRC}/test/depends/drivers/mm TEST_SRC)
-aux_source_directory(${SMAP_SRC}/test/depends/drivers/dma TEST_SRC)
-aux_source_directory(${SMAP_SRC}/test/depends/kernel TEST_SRC)
-aux_source_directory(${SMAP_SRC}/test/depends/kernel/time TEST_SRC)
-aux_source_directory(${SMAP_SRC}/test/depends/kernel/locking TEST_SRC)
-list(APPEND TEST_SRC ${SMAP_SRC}/test/main.cpp)
+aux_source_directory(${TEST_DIR}/depends/drivers/base TEST_SRC)
+aux_source_directory(${TEST_DIR}/depends/drivers/mm TEST_SRC)
+aux_source_directory(${TEST_DIR}/depends/drivers/dma TEST_SRC)
+aux_source_directory(${TEST_DIR}/depends/kernel TEST_SRC)
+aux_source_directory(${TEST_DIR}/depends/kernel/time TEST_SRC)
+aux_source_directory(${TEST_DIR}/depends/kernel/locking TEST_SRC)
+list(APPEND TEST_SRC ${TEST_DIR}/main.cpp)
 
-# ub-dma
-list(APPEND TEST_SRC ${SMAP_SRC}/src/urma.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/ub_dma_main.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/ub_virt_dma.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/segment_manager.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/ub_dma_iomem.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/memory_notify.c)
+# ub-dma source files (from dt_src copy)
+list(APPEND TEST_SRC ${UB_DMA_SRC}/src/urma.c)
+list(APPEND TEST_SRC ${UB_DMA_SRC}/src/ub_dma_main.c)
+list(APPEND TEST_SRC ${UB_DMA_SRC}/src/ub_virt_dma.c)
+list(APPEND TEST_SRC ${UB_DMA_SRC}/src/segment_manager.c)
+list(APPEND TEST_SRC ${UB_DMA_SRC}/src/ub_dma_iomem.c)
+list(APPEND TEST_SRC ${UB_DMA_SRC}/src/memory_notifier.c)
 
-add_executable(smap_dt ${TEST_SRC})
+add_executable(ubdma_dt ${TEST_SRC})
 
 # include headers
-target_include_directories(smap_dt PUBLIC
-    ${SMAP_SRC}/src
-    ${SMAP_SRC}/test/3rdparty/umdk
-    ${SMAP_SRC}/test/user_depends/include
-    ${SMAP_SRC}/test/depends/include
-    ${SMAP_SRC}/test/depends/lib
-    ${SMAP_SRC}/test/depends/arch/arm64/include
+target_include_directories(ubdma_dt PUBLIC
+    ${UB_DMA_SRC}/src
+    ${TEST_DIR}/3rdparty/umdk
+    ${TEST_DIR}/user_depends/include
+    ${TEST_DIR}/depends/include
+    ${TEST_DIR}/depends/lib
+    ${TEST_DIR}/depends/arch/arm64/include
 )
 
-target_compile_definitions(smap_dt PUBLIC
+target_compile_definitions(ubdma_dt PUBLIC
     SKIP_STATIC
     ENV_USER
     CONFIG_NUMA
@@ -70,11 +71,11 @@ target_compile_definitions(smap_dt PUBLIC
 )
 
 # print compile and link flags
-get_target_property(COMPILE_FLAGS smap_dt COMPILE_OPTIONS)
-get_target_property(LINK_FLAGS smap_dt LINK_OPTIONS)
+get_target_property(COMPILE_FLAGS ubdma_dt COMPILE_OPTIONS)
+get_target_property(LINK_FLAGS ubdma_dt LINK_OPTIONS)
 message(STATUS "Compiler id: ${CMAKE_CXX_COMPILER_ID}")
 message(STATUS "Compile flags: ${COMPILE_FLAGS}")
 message(STATUS "Link flags: ${LINK_FLAGS}")
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
-TARGET_MOCKCPP(smap_dt)
-TARGET_GTEST(smap_dt)
+TARGET_MOCKCPP(ubdma_dt)
+TARGET_GTEST(ubdma_dt)

@@ -9,8 +9,8 @@
 #include "mockcpp/mockcpp.hpp"
 #include "securec.h"
 
-#include "rack_logger.cpp"
 #include "rack_logger_manager.h"
+#include "rack_logger.cpp"
 
 namespace rack::ut::log {
 class TestRackLogger : public testing::Test {
@@ -19,5 +19,5 @@ public:
     virtual void SetUp(void);
     virtual void TearDown(void);
 };
-}
+} // namespace rack::ut::log
 #endif // RACK_MANAGER_TEST_RACK_LOGGER_ENTRY_H

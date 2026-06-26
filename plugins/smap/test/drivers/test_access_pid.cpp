@@ -182,6 +182,7 @@ TEST_F(DriversAccessPidTest, InitVmMappingInfoTwo)
     EXPECT_EQ(0, ret);
 }
 
+extern "C" int create_procfs(struct access_pid *ap);
 TEST_F(DriversAccessPidTest, InitAccessPid)
 {
     int ret;
@@ -195,6 +196,7 @@ TEST_F(DriversAccessPidTest, InitAccessPid)
     struct access_add_pid_payload payload = { 0 };
     MOCKER(kmalloc).stubs().will(returnValue((void *)&ap));
     MOCKER(init_vm_mapping_info).stubs().will(returnValue(0));
+    MOCKER(create_procfs).stubs().will(returnValue(0));
     ret = init_access_pid(&payload, &tmp);
     EXPECT_EQ(0, ret);
 }
@@ -395,7 +397,7 @@ TEST_F(DriversAccessPidTest, InitAccessStatisticPidTest)
 extern "C" int init_access_statistic_pid(struct access_add_pid_payload *payload, int page_size);
 TEST_F(DriversAccessPidTest, AccessAddStatisticPid)
 {
-    struct access_add_pid_payload payload;
+    struct access_add_pid_payload payload = {};
     payload.type = STATISTIC_SCAN;
     MOCKER(init_access_statistic_pid).stubs().will(returnValue(0));
     int ret = access_add_statistic_pid(1, &payload, PAGE_SIZE_2M);
@@ -633,17 +635,17 @@ TEST_F(DriversAccessPidTest, AccessRemoveAllPid)
     EXPECT_EQ(1, ret);
 }
 
-extern "C" void free_ap_white_list_bm(struct access_pid *ap);
+extern "C" void free_ap_bm_white_list(struct access_pid *ap);
 TEST_F(DriversAccessPidTest, FreeApWhiteListBm)
 {
     struct access_pid ap;
     MOCKER(vfree).stubs();
     ap.bm_len[0] = 1;
-    free_ap_white_list_bm(&ap);
+    free_ap_bm_white_list(&ap);
     EXPECT_EQ(0, ap.bm_len[0]);
 }
 
-extern "C" int init_ap_bm(int node_len, u64 *node_page_count, struct access_pid *ap);
+extern "C" int init_ap_bm_white_list(int node_len, u64 *node_page_count, struct access_pid *ap);
 TEST_F(DriversAccessPidTest, InitApBm)
 {
     int ret;
@@ -651,14 +653,14 @@ TEST_F(DriversAccessPidTest, InitApBm)
 
     ap.numa_nodes = 0x10;
     u64 node_page_count[SMAP_MAX_NUMNODES] = { 0 };
-    ret = init_ap_bm(2, node_page_count, &ap);
+    ret = init_ap_bm_white_list(2, node_page_count, &ap);
     EXPECT_EQ(0, ret);
 
     GlobalMockObject::verify();
     node_page_count[0] = 1;
     MOCKER(vzalloc).stubs().will(returnValue((void *)nullptr));
     MOCKER(vfree).stubs();
-    ret = init_ap_bm(2, node_page_count, &ap);
+    ret = init_ap_bm_white_list(2, node_page_count, &ap);
     EXPECT_EQ(-ENOMEM, ret);
 }
 
@@ -714,7 +716,7 @@ TEST_F(DriversAccessPidTest, AccessWalkPagemap)
     adev.page_count = 1;
     list_add(&adev.list, &access_dev);
     MOCKER(clean_last_ap_data).stubs();
-    MOCKER(init_ap_bm).stubs().will(returnValue(0));
+    MOCKER(init_ap_bm_white_list).stubs().will(returnValue(0));
     MOCKER(walk_pid_pagemap).stubs().will(ignoreReturnValue());
     ret = access_walk_pagemap(ap);
     EXPECT_EQ(0, ret);
@@ -734,7 +736,7 @@ TEST_F(DriversAccessPidTest, AccessWalkPagemapFail)
     adev.page_count = 1;
     list_add(&adev.list, &access_dev);
     MOCKER(clean_last_ap_data).stubs();
-    MOCKER(init_ap_bm).stubs().will(returnValue(0)).then(returnValue(-ENOMEM));
+    MOCKER(init_ap_bm_white_list).stubs().will(returnValue(0)).then(returnValue(-ENOMEM));
     MOCKER(walk_pid_pagemap).stubs().will(ignoreReturnValue());
 
     ret = access_walk_pagemap(ap);
@@ -745,15 +747,110 @@ TEST_F(DriversAccessPidTest, AccessWalkPagemapFail)
     list_del(&adev.list);
 }
 
-TEST_F(DriversAccessPidTest, ReadPidFreqFailed)
+extern "C" int access_walk_pagemap_prepare(struct access_pid *ap);
+TEST_F(DriversAccessPidTest, AccessWalkPagemapPrepareFail)
 {
-    int ret = read_pid_freq(0, nullptr, nullptr);
-    EXPECT_EQ(-EINVAL, ret);
+    int ret;
+    struct access_pid tmp;
+    struct access_pid *ap;
+    struct access_tracking_dev adev;
+    ap = &tmp;
+    tmp.type = NORMAL_SCAN;
+    tmp.info.mapping = nullptr;
+    adev.node = 0;
+    adev.page_count = 1;
+    list_add(&adev.list, &access_dev);
+    MOCKER(clean_last_ap_data).stubs();
+    MOCKER(init_ap_bm_white_list).stubs().will(returnValue(0));
+    MOCKER(init_vm_mapping).stubs().will(returnValue(-ENOMEM));
+    MOCKER(free_ap_bm_white_list).stubs();
+    ret = access_walk_pagemap_prepare(ap);
+    EXPECT_EQ(-ENOMEM, ret);
+    list_del(&adev.list);
+}
 
-    actc_t *freq[SMAP_MAX_NUMNODES] = { 0 };
-    size_t data_len;
-    ret = read_pid_freq(0, &data_len, freq);
-    EXPECT_EQ(-EINVAL, ret);
+extern "C" int init_access_pid(struct access_add_pid_payload *payload, struct access_pid **elem);
+extern "C" int access_walk_pagemap_prepare(struct access_pid *ap);
+TEST_F(DriversAccessPidTest, InitAccessPidWalkPagemapPrepareFail)
+{
+    int ret;
+    struct access_pid ap;
+    struct access_pid *tmp;
+    struct access_add_pid_payload payload = { 0 };
+    ap.info.mapping = (u32 *)vmalloc(sizeof(u32) * 2);
+    ASSERT_NE(nullptr, ap.info.mapping);
+    MOCKER(kmalloc).stubs().will(returnValue((void *)&ap));
+    MOCKER(init_vm_mapping_info).stubs().will(returnValue(0));
+    MOCKER(access_walk_pagemap_prepare).stubs().will(returnValue(-ENOMEM));
+    MOCKER(vfree).stubs();
+    MOCKER(kfree).stubs();
+    ret = init_access_pid(&payload, &tmp);
+    EXPECT_EQ(-ENOMEM, ret);
+}
+
+extern "C" int init_access_ham_pid(struct access_add_pid_payload *payload);
+extern "C" int smap_create_tracking_info_file(struct ham_tracking_info *info);
+TEST_F(DriversAccessPidTest, InitAccessHamPidCreateFileFail)
+{
+    struct access_add_pid_payload payload;
+    struct ham_tracking_info info;
+    struct access_tracking_dev adev;
+
+    nr_local_numa = 4;
+    payload.pid = 12345;
+    payload.numa_nodes = 0x11;
+    info.pid = payload.pid;
+    info.l1_node = 0;
+    info.l2_node = -1;
+    info.len[L1] = 10;
+    info.len[L2] = 0;
+    info.paddr[L1] = nullptr;
+    info.freq[L1] = nullptr;
+
+    adev.node = 0;
+    adev.page_count = 10;
+    list_add(&adev.list, &access_dev);
+
+    MOCKER(kzalloc).stubs().will(returnValue((void *)&info));
+    MOCKER(init_ham_pid_len).stubs().will(returnValue(0));
+    MOCKER(smap_create_tracking_info_file).stubs().will(returnValue(-ENXIO));
+    MOCKER(destroy_access_ham_pid).stubs();
+    MOCKER(vfree).stubs();
+    MOCKER(kfree).stubs();
+
+    int ret = init_access_ham_pid(&payload);
+    EXPECT_EQ(-ENXIO, ret);
+    list_del(&adev.list);
+}
+
+extern "C" int init_access_statistic_pid_2m(struct access_add_pid_payload *payload);
+extern "C" int scan_hva_info(pid_t pid_nr, u64 *l1_page_num, u64 *l2_page_num,
+                             u64 **l1_vaddr, u64 **l2_vaddr);
+TEST_F(DriversAccessPidTest, InitAccessStatisticPid2mWindowFail)
+{
+    struct access_add_pid_payload payload;
+    struct statistics_tracking_info *tmp;
+    struct statistics_tracking_info *pos;
+
+    nr_local_numa = 4;
+    payload.pid = 17987;
+    payload.numa_nodes = 0x01;
+    payload.duration = 10;
+    payload.scan_time = 100;
+
+    MOCKER(scan_hva_info).stubs().will(returnValue(0));
+    MOCKER(init_statistic_window).stubs().will(returnValue(-ENOMEM));
+    MOCKER(vfree).stubs();
+    MOCKER(kfree).stubs();
+
+    int ret = init_access_statistic_pid_2m(&payload);
+    EXPECT_EQ(-ENOMEM, ret);
+
+    // Clean up any remaining entries
+    list_for_each_entry_safe(pos, tmp, &statistic_pid_list, node) {
+        list_del(&pos->node);
+        kfree(pos);
+    }
 }
 
 struct absolute_pos {
@@ -1015,4 +1112,481 @@ TEST_F(DriversAccessPidTest, ConvertPosToPaddrSortedOK)
     EXPECT_EQ(0, ret);
     EXPECT_EQ(pa1, addr[0]);
     EXPECT_EQ(pa2, addr[1]);
+}
+
+// ============================================================
+// New UT tests for coverage improvement
+// ============================================================
+
+extern "C" int init_access_statistic_pid_4k(struct access_add_pid_payload *payload);
+extern "C" int scan_hva_info_4k(pid_t pid_nr, u64 *l1_page_num, u64 *l2_page_num,
+                                 u64 **l1_vaddr, u64 **l2_vaddr);
+
+TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kNullPayload)
+{
+    int ret = init_access_statistic_pid_4k(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kInvalidL1Node)
+{
+    struct access_add_pid_payload payload;
+    nr_local_numa = 0;
+    payload.pid = 1234;
+    payload.numa_nodes = 0x00;
+    int ret = init_access_statistic_pid_4k(&payload);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kScanFail)
+{
+    struct access_add_pid_payload payload;
+    struct statistics_tracking_info *pos, *tmp;
+    nr_local_numa = 4;
+    payload.pid = 17988;
+    payload.numa_nodes = 0x01;
+    MOCKER(scan_hva_info_4k).stubs().will(returnValue(-EINVAL));
+    int ret = init_access_statistic_pid_4k(&payload);
+    EXPECT_EQ(-EINVAL, ret);
+    list_for_each_entry_safe(pos, tmp, &statistic_pid_list, node) {
+        list_del(&pos->node);
+    }
+}
+
+TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kWindowFail)
+{
+    struct access_add_pid_payload payload;
+    struct statistics_tracking_info *pos, *tmp;
+    nr_local_numa = 4;
+    payload.pid = 17989;
+    payload.numa_nodes = 0x01;
+    payload.duration = 10;
+    payload.scan_time = 100;
+    MOCKER(scan_hva_info_4k).stubs().will(returnValue(0));
+    MOCKER(init_statistic_window).stubs().will(returnValue(-ENOMEM));
+    MOCKER(vfree).stubs();
+    MOCKER(kfree).stubs();
+    int ret = init_access_statistic_pid_4k(&payload);
+    EXPECT_EQ(-ENOMEM, ret);
+    list_for_each_entry_safe(pos, tmp, &statistic_pid_list, node) {
+        list_del(&pos->node);
+    }
+}
+
+TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kSuccess)
+{
+    struct access_add_pid_payload payload;
+    struct statistics_tracking_info *tmp, *pos;
+    bool findFlag = false;
+    nr_local_numa = 4;
+    payload.pid = 17990;
+    payload.numa_nodes = 0x01;
+    payload.duration = 10;
+    payload.scan_time = 100;
+    MOCKER(scan_hva_info_4k).stubs().will(returnValue(0));
+    MOCKER(init_statistic_window).stubs().will(returnValue(0));
+    int ret = init_access_statistic_pid_4k(&payload);
+    EXPECT_EQ(0, ret);
+    list_for_each_entry(tmp, &statistic_pid_list, node) {
+        if (tmp->pid == 17990) { findFlag = true; break; }
+    }
+    EXPECT_EQ(true, findFlag);
+    list_for_each_entry_safe(pos, tmp, &statistic_pid_list, node) {
+        list_del(&pos->node);
+        MOCKER(vfree).stubs();
+        kfree(pos);
+    }
+}
+
+extern "C" int init_access_statistic_pid(struct access_add_pid_payload *payload, int page_size);
+TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kDispatch)
+{
+    struct access_add_pid_payload payload = {};
+    payload.pid = 1234;
+    payload.numa_nodes = 0x01;
+    MOCKER(init_access_statistic_pid_4k).stubs().will(returnValue(0));
+    int ret = init_access_statistic_pid(&payload, PAGE_SIZE_4K);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(DriversAccessPidTest, InitAccessStatisticPidInvalidPageSize)
+{
+    struct access_add_pid_payload payload = {};
+    int ret = init_access_statistic_pid(&payload, PAGE_SIZE_64K);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" struct access_pid *find_access_pid(pid_t pid);
+TEST_F(DriversAccessPidTest, FindAccessPidExists)
+{
+    struct access_pid ap;
+    INIT_LIST_HEAD(&ap_data.list);
+    ap.pid = 1234;
+    list_add(&ap.node, &ap_data.list);
+    struct access_pid *found = find_access_pid(1234);
+    EXPECT_EQ(&ap, found);
+    list_del(&ap.node);
+}
+
+TEST_F(DriversAccessPidTest, FindAccessPidNotExists)
+{
+    INIT_LIST_HEAD(&ap_data.list);
+    struct access_pid *found = find_access_pid(9999);
+    EXPECT_EQ(nullptr, found);
+}
+
+extern "C" void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
+                                          struct actc_data *actc, u32 *actc_len,
+                                          u32 mapping_offset);
+TEST_F(DriversAccessPidTest, FillActcDataByBitmapPageNumZero)
+{
+    struct access_pid ap;
+    struct actc_data actc[2];
+    u32 actc_len = 0;
+    ap.page_num[0] = 0;
+    ap.paddr_bm[0] = (unsigned long *)1;
+    fill_actc_data_by_bitmap(&ap, 0, actc, &actc_len, 0);
+    EXPECT_EQ(0u, actc_len);
+}
+
+TEST_F(DriversAccessPidTest, FillActcDataByBitmapPaddrBmNull)
+{
+    struct access_pid ap;
+    struct actc_data actc[2];
+    u32 actc_len = 0;
+    ap.page_num[0] = 10;
+    ap.paddr_bm[0] = NULL;
+    fill_actc_data_by_bitmap(&ap, 0, actc, &actc_len, 0);
+    EXPECT_EQ(0u, actc_len);
+}
+
+TEST_F(DriversAccessPidTest, FillActcDataByBitmapWithDev)
+{
+    struct access_pid ap;
+    struct actc_data actc[8];
+    u32 actc_len = 0;
+    struct access_tracking_dev adev;
+    unsigned long bitmap = 0xFF;
+    ap.page_num[0] = 10;
+    ap.paddr_bm[0] = &bitmap;
+    ap.bm_len[0] = 1;
+    ap.info.vm_size = 0;
+    ap.info.mapping = nullptr;
+    ap.white_list_bm[0] = nullptr;
+    adev.node = 0;
+    adev.page_count = 64;
+    adev.access_bit_actc_data = (actc_t *)malloc(sizeof(actc_t) * 64);
+    for (int i = 0; i < 64; i++) adev.access_bit_actc_data[i] = (actc_t)i;
+    init_rwsem(&adev.buffer_lock);
+    list_add(&adev.list, &access_dev);
+    fill_actc_data_by_bitmap(&ap, 0, actc, &actc_len, 0);
+    EXPECT_GT(actc_len, 0u);
+    list_del(&adev.list);
+    free(adev.access_bit_actc_data);
+}
+
+extern "C" ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
+                                  loff_t *ppos);
+extern "C" void *kvmalloc(size_t size, gfp_t flags);
+TEST_F(DriversAccessPidTest, MemFreqReadStateNotFreq)
+{
+    struct file filp;
+    struct access_pid ap;
+    char buf[64];
+    loff_t ppos = 0;
+    filp.private_data = &ap;
+    ap_data.state_flag = 0;
+    ssize_t ret = mem_freq_read(&filp, buf, sizeof(buf), &ppos);
+    EXPECT_EQ(-EAGAIN, ret);
+}
+
+TEST_F(DriversAccessPidTest, MemFreqReadKvmallocFail)
+{
+    struct file filp;
+    struct access_pid ap = {};
+    char buf[64];
+    loff_t ppos = 0;
+    filp.private_data = &ap;
+    ap.page_num[0] = 10;
+    ap_data.state_flag = AP_STATE_FREQ;
+    MOCKER(kvmalloc).stubs().will(returnValue((void *)nullptr));
+    ssize_t ret = mem_freq_read(&filp, buf, sizeof(buf), &ppos);
+    EXPECT_EQ(-ENOMEM, ret);
+}
+
+TEST_F(DriversAccessPidTest, MemFreqReadSuccess)
+{
+    struct file filp;
+    struct access_pid ap;
+    char buf[128];
+    loff_t ppos = 0;
+    struct access_tracking_dev adev;
+    unsigned long bitmap_val = 0b11;
+    ap.page_num[0] = 2;
+    ap.page_num[1] = 0;
+    ap.paddr_bm[0] = &bitmap_val;
+    ap.bm_len[0] = 1;
+    ap.info.vm_size = 0;
+    ap.info.mapping = nullptr;
+    ap.white_list_bm[0] = nullptr;
+    filp.private_data = &ap;
+    ap_data.state_flag = AP_STATE_FREQ;
+    adev.node = 0;
+    adev.page_count = 64;
+    adev.access_bit_actc_data = (actc_t *)malloc(sizeof(actc_t) * 64);
+    init_rwsem(&adev.buffer_lock);
+    list_add(&adev.list, &access_dev);
+    size_t expected_len = 2 * sizeof(struct actc_data);
+    MOCKER(kvmalloc).stubs().will(returnValue((void *)malloc(1024)));
+    MOCKER(kvfree).stubs();
+    MOCKER(copy_to_user).stubs().will(returnValue((unsigned long)0));
+    ssize_t ret = mem_freq_read(&filp, buf, expected_len, &ppos);
+    EXPECT_EQ((ssize_t)expected_len, ret);
+    list_del(&adev.list);
+    free(adev.access_bit_actc_data);
+}
+
+extern "C" int create_procfs(struct access_pid *ap);
+extern "C" int create_procfs_freq(struct access_pid *ap);
+extern "C" bool pid_procfs_exists(pid_t pid);
+extern "C" int kern_path(const char *name, unsigned int flags, struct path *path);
+TEST_F(DriversAccessPidTest, CreateProcfsRootNull)
+{
+    struct access_pid ap;
+    ap.pid = 1234;
+    smap_procfs_root = nullptr;
+    int ret = create_procfs(&ap);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(DriversAccessPidTest, CreateProcfsFreqFail)
+{
+    struct access_pid ap;
+    ap.pid = 1235;
+    smap_procfs_root = (struct proc_dir_entry *)1;
+    ap.proc_root = nullptr;
+    MOCKER(pid_procfs_exists).stubs().will(returnValue(false));
+    MOCKER(proc_set_user).stubs();
+    MOCKER(create_procfs_freq).stubs().will(returnValue(-ENOMEM));
+    MOCKER(proc_remove).stubs();
+    int ret = create_procfs(&ap);
+    EXPECT_EQ(-ENOMEM, ret);
+    EXPECT_EQ(nullptr, ap.proc_root);
+}
+
+TEST_F(DriversAccessPidTest, CreateProcfsSuccess)
+{
+    struct access_pid ap;
+    ap.pid = 1236;
+    smap_procfs_root = (struct proc_dir_entry *)1;
+    ap.proc_root = nullptr;
+    ap.proc_freq = nullptr;
+    MOCKER(pid_procfs_exists).stubs().will(returnValue(false));
+    MOCKER(proc_set_user).stubs();
+    MOCKER(create_procfs_freq).stubs().will(returnValue(0));
+    int ret = create_procfs(&ap);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(DriversAccessPidTest, CreateProcfsFreqSuccess)
+{
+    struct access_pid ap;
+    struct proc_dir_entry freq_pde;
+    ap.pid = 1237;
+    ap.proc_root = (struct proc_dir_entry *)1;
+    ap.proc_freq = nullptr;
+    MOCKER(proc_create_data).stubs().will(returnValue(&freq_pde));
+    MOCKER(proc_set_user).stubs();
+    int ret = create_procfs_freq(&ap);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(&freq_pde, ap.proc_freq);
+}
+
+TEST_F(DriversAccessPidTest, PidProcfsExistsKernPathSuccess)
+{
+    MOCKER(kern_path).stubs().will(returnValue(0));
+    bool ret = pid_procfs_exists(1234);
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(DriversAccessPidTest, PidProcfsExistsKernPathFail)
+{
+    MOCKER(kern_path).stubs().will(returnValue(-ENOENT));
+    bool ret = pid_procfs_exists(1234);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(DriversAccessPidTest, DestroyAccessPidNull)
+{
+    destroy_access_pid(nullptr);
+}
+
+TEST_F(DriversAccessPidTest, DestroyAccessHamPidNull)
+{
+    destroy_access_ham_pid(nullptr);
+}
+
+extern "C" void free_ap_bm(struct access_pid *ap);
+TEST_F(DriversAccessPidTest, FreeApBmNull)
+{
+    free_ap_bm(nullptr);
+}
+
+TEST_F(DriversAccessPidTest, FreeApBmWhiteListNull)
+{
+    free_ap_bm_white_list(nullptr);
+}
+
+TEST_F(DriversAccessPidTest, AccessWalkPagemapNull)
+{
+    int ret = access_walk_pagemap(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(DriversAccessPidTest, AccessWalkPagemapPrepareNull)
+{
+    int ret = access_walk_pagemap_prepare(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int find_first_local_numa(u32 *nodes);
+TEST_F(DriversAccessPidTest, FindFirstLocalNumaNull)
+{
+    int ret = find_first_local_numa(nullptr);
+    EXPECT_EQ(NUMA_NO_NODE, ret);
+}
+
+TEST_F(DriversAccessPidTest, FindFirstRemoteNumaNull)
+{
+    int ret = find_first_remote_numa(nullptr);
+    EXPECT_EQ(NUMA_NO_NODE, ret);
+}
+
+TEST_F(DriversAccessPidTest, InitAccessHamPidNullPayload)
+{
+    int ret = init_access_ham_pid(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int mem_freq_open(struct inode *inode, struct file *file);
+extern "C" int mem_freq_release(struct inode *inode, struct file *file);
+TEST_F(DriversAccessPidTest, MemFreqOpen)
+{
+    struct inode inode;
+    struct file filp;
+    int data = 42;
+    inode.i_private = &data;
+    int ret = mem_freq_open(&inode, &filp);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(&data, filp.private_data);
+}
+
+TEST_F(DriversAccessPidTest, MemFreqRelease)
+{
+    struct inode inode;
+    struct file filp;
+    int ret = mem_freq_release(&inode, &filp);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" size_t calc_process_page_number(struct access_pid *ap);
+TEST_F(DriversAccessPidTest, CalcProcessPageNumber)
+{
+    struct access_pid ap;
+    ap.page_num[0] = 10;
+    ap.page_num[1] = 20;
+    for (int i = 2; i < SMAP_MAX_NUMNODES; i++) ap.page_num[i] = 0;
+    size_t ret = calc_process_page_number(&ap);
+    EXPECT_EQ((size_t)30, ret);
+}
+
+extern "C" int init_statistic_window(u8 ***sliding_windows, u32 duration, u32 scan_time,
+                                     u64 total_page_num, u64 *windows_num);
+TEST_F(DriversAccessPidTest, InitStatisticWindowWinsArrayFail)
+{
+    u8 **sliding_windows = nullptr;
+    u64 windows_num = 0;
+    MOCKER(vzalloc).stubs().will(returnValue((void *)nullptr));
+    int ret = init_statistic_window(&sliding_windows, 10, 100, 50, &windows_num);
+    EXPECT_EQ(-ENOMEM, ret);
+}
+
+TEST_F(DriversAccessPidTest, InitStatisticWindowSuccess)
+{
+    u8 **sliding_windows = nullptr;
+    u64 windows_num = 0;
+    int ret = init_statistic_window(&sliding_windows, 1, 100, 50, &windows_num);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(10u, windows_num);
+    EXPECT_NE(nullptr, sliding_windows);
+    for (u64 i = 0; i < windows_num; i++) vfree(sliding_windows[i]);
+    vfree(sliding_windows);
+}
+
+TEST_F(DriversAccessPidTest, AccessWalkPagemapNotNormalScan)
+{
+    struct access_pid ap;
+    ap.type = HAM_SCAN;
+    int ret = access_walk_pagemap(&ap);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(DriversAccessPidTest, AccessAddStatisticPidDurationExceed)
+{
+    struct access_add_pid_payload payload = {};
+    payload.type = STATISTIC_SCAN;
+    payload.pid = 1234;
+    payload.duration = MAX_SCAN_DURATION_SEC + 1;
+    int ret = access_add_statistic_pid(1, &payload, PAGE_SIZE_2M);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(DriversAccessPidTest, InitAccessHamPidInvalidL1Node)
+{
+    struct access_add_pid_payload payload;
+    nr_local_numa = 0;
+    payload.pid = 1234;
+    payload.numa_nodes = 0x00;
+    int ret = init_access_ham_pid(&payload);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(DriversAccessPidTest, InitAccessHamPidKzallocFail)
+{
+    struct access_add_pid_payload payload;
+    struct ham_tracking_info *tmp, *pos;
+    nr_local_numa = 4;
+    payload.pid = 12345;
+    payload.numa_nodes = 0x11;
+    INIT_LIST_HEAD(&ham_pid_list);
+    MOCKER(find_first_local_numa).stubs().will(returnValue(0));
+    MOCKER(find_first_remote_numa).stubs().will(returnValue(4));
+    MOCKER(kzalloc).stubs().will(returnValue((void *)nullptr));
+    int ret = init_access_ham_pid(&payload);
+    EXPECT_EQ(-ENOMEM, ret);
+    list_for_each_entry_safe(pos, tmp, &ham_pid_list, node) {
+        list_del(&pos->node);
+    }
+}
+
+extern "C" int check_parameters_and_state(u64 len, u64 *addr);
+TEST_F(DriversAccessPidTest, CheckParametersAndStateInvalidLen)
+{
+    u64 addr = 1;
+    int ret = check_parameters_and_state(0, &addr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(DriversAccessPidTest, CheckParametersAndStateNullAddr)
+{
+    int ret = check_parameters_and_state(1, nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(DriversAccessPidTest, CheckParametersAndStateStateNotMig)
+{
+    u64 addr = 1;
+    ap_data.state_flag = 0;
+    int ret = check_parameters_and_state(1, &addr);
+    EXPECT_EQ(-EAGAIN, ret);
 }

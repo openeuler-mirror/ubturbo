@@ -13,6 +13,7 @@
 #include <linux/hrtimer.h>
 #include <linux/spinlock.h>
 #include "ub_hist.h"
+#include "drv_common.h"
 
 #define HIST_ADDR_SHIFT_4K (12)
 #define HIST_ADDR_SHIFT_2M (21)
@@ -33,6 +34,12 @@
 #define PAGE_SIZE_64K_DIV_4K 16
 
 #define THREAD_SLEEP (50)
+
+/* 4K scan mode enumeration */
+enum hist_4k_scan_mode {
+	HIST_4K_SCAN_MULTI_GRAN = 0, /* Multi-granularity sliding */
+	HIST_4K_SCAN_SEQ_LOOP = 1, /* Sequential loop sliding */
+};
 
 struct addr_seg {
 	u64 start;
@@ -55,8 +62,6 @@ union smap_hist_status {
 	u32 status_all;
 };
 
-typedef void (*flush_actc)(void);
-
 struct smap_hist_dev {
 	struct task_struct *kthread;
 	struct segs_info info;
@@ -65,29 +70,28 @@ struct smap_hist_dev {
 	u32 scan_wins_num_per_ba;
 	u32 ba_cnt;
 	u32 period;
-	u16 *buf;
 	u32 pgcount;
 	u32 pgsize;
 	u8 thread_enable;
 	u8 abort_flag;
-	flush_actc flush_actc;
 	union smap_hist_status status;
 	ub_hist_smap_type hw_type;
+	enum hist_4k_scan_mode scan_mode; /* 4K scan mode */
+	int seq_loop_ba_offset
+		[HIST_STS_DEV_CNT]; /* Sequential loop scan offset for each BA */
 };
 
 struct hist_ops {
-	void (*read)(u16 *dst_buf, struct addr_seg *seg);
+	void (*read)(actc_t *dst_buf, struct addr_seg *seg);
 	void (*update_pgsize)(u32 pgsize);
 };
 
 struct smap_hist_dev *get_hist_dev(void);
 int hist_init(u32 pgsize);
 void hist_deinit(void);
-void fetch_hist_actc_buf(u16 *dst_buf, struct addr_seg *seg);
 void hist_update_pgsize(u32 pgsize);
 void hist_set_iomem(void);
 void hist_thread_pause(void);
 void hist_thread_resume(void);
-void hist_set_flush_actc_cb(flush_actc cb);
 
 #endif

@@ -17,7 +17,8 @@ static enum acpi_sub_type acpi_get_subtable_type(char *id)
 	return SUBTABLE_COMMON;
 }
 
-static unsigned long acpi_get_subtable_header_length(struct acpi_subtable_entry *entry)
+static unsigned long
+acpi_get_subtable_header_length(struct acpi_subtable_entry *entry)
 {
 	switch (entry->type) {
 	case SUBTABLE_COMMON:

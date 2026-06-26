@@ -6,7 +6,7 @@ ccflags-y += -fstack-protector-strong
 
 obj-m := $(MODULE_NAME).o
 
-$(MODULE_NAME)-objs := urma.o ub_dma_main.o ub_virt_dma.o segment_manager.o memory_notify.o ub_dma_iomem.o
+$(MODULE_NAME)-objs := urma.o ub_dma_main.o ub_virt_dma.o segment_manager.o memory_notifier.o ub_dma_iomem.o
 
 .PHONY: modules
 default: modules

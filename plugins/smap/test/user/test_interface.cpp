@@ -1,0 +1,4840 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
+ * Description: smap5.0 user smap interface ut code
+ */
+#include <sys/ioctl.h>
+#include <cstdlib>
+#include <malloc.h>
+#include <string.h>
+#include "gtest/gtest.h"
+#include "mockcpp/mokc.h"
+
+#include "smap_interface.h"
+#include "manage/manage.h"
+#include "manage/access_ioctl.h"
+#include "manage/thread.h"
+#include "manage/device.h"
+#include "manage/smap_config.h"
+#include "strategy/migration.h"
+#include "securec.h"
+#include "smap_user_log.h"
+#include "smap_env.h"
+
+using namespace std;
+
+extern "C" EnvAtomic g_status;
+extern "C" struct ProcessManager g_processManager;
+
+class InterfaceTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        cout << "[Phase SetUp Begin]" << endl;
+        g_processManager.processes = nullptr;
+        cout << "[Phase SetUp End]" << endl;
+    }
+    void TearDown() override
+    {
+        cout << "[Phase TearDown Begin]" << endl;
+        GlobalMockObject::verify();
+        g_processManager.processes = nullptr;
+        cout << "[Phase TearDown End]" << endl;
+    }
+
+    bool EnvMutexIsRelease(EnvMutex *mutex);
+};
+
+bool InterfaceTest::EnvMutexIsRelease(EnvMutex *mutex)
+{
+    if (pthread_mutex_trylock(&mutex->lock)) {
+        return false;
+    }
+    pthread_mutex_unlock(&mutex->lock);
+    return true;
+}
+
+extern "C" bool IsRatioValid(int ratio);
+TEST_F(InterfaceTest, TestIsRatioValidOne)
+{
+    int ratio = 25;
+    bool ret = IsRatioValid(ratio);
+    EXPECT_EQ(true, ret);
+}
+
+extern "C" bool IsMigOutCountValid(pid_t *pidArr, int len, int pidType);
+extern "C" ProcessAttr *GetProcessAttrLocked(pid_t pid);
+TEST_F(InterfaceTest, TestIsMigOutCountValid)
+{
+    int maxNum = MAX_4K_PROCESSES_CNT;
+    ProcessManager manager;
+    EnvMutexInit(&manager.lock);
+    int len = 1;
+    pid_t *pidArr = (pid_t *)malloc(sizeof(pid_t) * len);
+    ProcessAttr *attr = nullptr;
+    MOCKER(LoadMangerNrProcessNum).stubs().will(returnValue(maxNum));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(attr));
+    bool ret = IsMigOutCountValid(pidArr, len, 0);
+    EXPECT_EQ(false, ret);
+
+    GlobalMockObject::verify();
+    maxNum = MAX_2M_PROCESSES_CNT - 1;
+    MOCKER(LoadMangerNrVmNum).stubs().will(returnValue(0));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(attr));
+    ret = IsMigOutCountValid(pidArr, len, 1);
+    EXPECT_EQ(true, ret);
+    free(pidArr);
+}
+
+extern "C" bool IsCountValid(int count, int max);
+TEST_F(InterfaceTest, TestIsCountValid)
+{
+    int count = 0;
+    bool ret = IsCountValid(count, 0);
+    EXPECT_EQ(false, ret);
+
+    count = MAX_NR_MIGOUT + 1;
+    ret = IsCountValid(count, MAX_NR_MIGOUT);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsCountValidTwo)
+{
+    int ret;
+    int count = MAX_NR_MIGOUT;
+
+    ret = IsCountValid(count, MAX_NR_MIGOUT);
+    EXPECT_EQ(true, ret);
+}
+
+extern "C" int CheckPidtype(uint32_t pageType);
+extern "C" int snprintf_s(char *strDest, unsigned long destMax, unsigned long count, char const *format, ...);
+TEST_F(InterfaceTest, TestCheckPidtypeOne)
+{
+    int ret;
+    uint32_t pageType;
+
+    pageType = PAGESIZE_4K;
+    ret = CheckPidtype(pageType);
+    EXPECT_EQ(-EINVAL, ret);
+
+    pageType = PAGETYPE_NORMAL;
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(-1));
+    ret = CheckPidtype(pageType);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int open(const char *pathname, int flags);
+TEST_F(InterfaceTest, TestCheckPidtypeTwo)
+{
+    int ret;
+    uint32_t pageType;
+
+    pageType = PAGETYPE_NORMAL;
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
+    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(-1));
+    ret = CheckPidtype(pageType);
+    EXPECT_EQ(-ENODEV, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckPidtypeThree)
+{
+    int ret;
+    uint32_t pageType;
+
+    pageType = PAGETYPE_NORMAL;
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
+
+    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(0));
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
+    ret = CheckPidtype(pageType);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckPidtypeFour)
+{
+    int ret;
+    uint32_t pageType;
+
+    pageType = PAGETYPE_NORMAL;
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
+
+    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(0));
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-1));
+    ret = CheckPidtype(pageType);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" bool IsPidTypeValid(int pidType);
+TEST_F(InterfaceTest, TestIsPidTypeValid)
+{
+    bool ret;
+    int pidType = PAGETYPE_NORMAL;
+    struct ProcessManager manager;
+
+    manager.tracking.pageSize = PAGESIZE_4K;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetNormalPageSize).stubs().will(returnValue((unsigned int)PAGESIZE_4K));
+    ret = IsPidTypeValid(pidType);
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidTypeInValidOne)
+{
+    bool ret;
+    int pidType = PAGETYPE_NORMAL;
+    struct ProcessManager manager;
+
+    manager.tracking.pageSize = PAGETYPE_HUGE;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    ret = IsPidTypeValid(pidType);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidTypeInValidTwo)
+{
+    bool ret;
+    int pidType = PAGETYPE_NORMAL;
+
+    MOCKER(GetProcessManager).stubs().will(returnValue((struct ProcessManager *)nullptr));
+    ret = IsPidTypeValid(pidType);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" bool IsLocalNidValid(int nid);
+TEST_F(InterfaceTest, TestIsLocalNidValid)
+{
+    bool ret;
+    struct ProcessManager manager;
+
+    manager.nrLocalNuma = 4;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    ret = IsLocalNidValid(0);
+    EXPECT_EQ(true, ret);
+
+    ret = IsLocalNidValid(4);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" void EnvMutexLock(EnvMutex *mutex);
+extern "C" void EnvMutexUnlock(EnvMutex *mutex);
+extern "C" int ScanMigrateWork(ThreadCtx *ctx);
+extern "C" int InitAllThreads(struct ProcessManager *manager);
+extern "C" int InitThread(struct ProcessManager *manager, uint32_t period, WorkFunc workFunc);
+TEST_F(InterfaceTest, TestIsRatioValidTwo)
+{
+    int ratio = 101;
+    bool ret = IsRatioValid(ratio);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsRatioValidThree)
+{
+    int ratio = -1;
+    int ret = IsRatioValid(ratio);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" int InitVirAPI(void);
+TEST_F(InterfaceTest, TestInitVirAPI)
+{
+    int ret;
+    MOCKER(OpenVirHandler).stubs().will(returnValue(-1));
+    MOCKER(CloseVirHandler).stubs().will(returnValue(0));
+    ret = InitVirAPI();
+    EXPECT_EQ(-9, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(OpenVirHandler).stubs().will(returnValue(0));
+    ret = InitVirAPI();
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestInitAllThreads)
+{
+    int ret;
+    struct ProcessManager pm;
+
+    EnvMutexInit(&pm.threadLock);
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(InitThread).stubs().will(returnValue(-EPERM));
+    MOCKER(DestroyAllThread).expects(once()).will(returnValue(0));
+    ret = InitAllThreads(&pm);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+extern "C" bool GetFileConfSwitchConfig(void);
+extern "C" uint32_t GetMigratePeriodConfig(void);
+TEST_F(InterfaceTest, TestInitAllThreadsHugeMode)
+{
+    int ret;
+    struct ProcessManager pm;
+
+    EnvMutexInit(&pm.threadLock);
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
+    MOCKER(InitThread).stubs().will(returnValue(0));
+    ret = InitAllThreads(&pm);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestInitAllThreadsProcessMode)
+{
+    int ret;
+    struct ProcessManager pm;
+
+    EnvMutexInit(&pm.threadLock);
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
+    MOCKER(InitThread).stubs().will(returnValue(0));
+    ret = InitAllThreads(&pm);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" bool IsNidInNumastat(int nid);
+extern "C" bool IsRemoteNidValid(int nid);
+extern "C" bool IsOnlineRemoteNidValid(int nid);
+TEST_F(InterfaceTest, IsRemoteNidValid)
+{
+    int nid = -1;
+    struct ProcessManager pm = { .nrLocalNuma = 2 };
+    MOCKER(GetProcessManager).stubs().will(returnValue(&pm));
+    bool ret = IsRemoteNidValid(nid);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, IsRemoteNidValidOne)
+{
+    int nid = 3;
+    struct ProcessManager pm = {
+        .nrLocalNuma = 2,
+    };
+    MOCKER(GetProcessManager).stubs().will(returnValue(&pm));
+    bool ret = IsRemoteNidValid(nid);
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(InterfaceTest, IsRemoteNidValidTwo)
+{
+    int nid = 4;
+    struct ProcessManager pm = {
+        .nrLocalNuma = 2,
+    };
+    MOCKER(GetProcessManager).stubs().will(returnValue(&pm));
+    int ret = IsRemoteNidValid(nid);
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(InterfaceTest, IsRemoteNidValidThree)
+{
+    int nid = 11;
+    MOCKER(GetProcessManager).stubs().will(returnValue(static_cast<ProcessManager *>(nullptr)));
+    int ret = IsRemoteNidValid(nid);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, IsNidInNumastat)
+{
+    bool ret;
+    int nid = 0;
+    MOCKER(popen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
+    ret = IsNidInNumastat(nid);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, IsNidInNumastatOne)
+{
+    bool ret;
+    int nid = -1;
+    ret = IsNidInNumastat(nid);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, IsNidInNumastatTrue)
+{
+    bool ret;
+    FILE fp;
+    const char *stubNodeStr = "Node 0";
+    const char *stubCmdline = "Node 0          Node 1           Total";
+    char *nodeStr = (char *)calloc(1, strlen(stubNodeStr) + 1);
+    char *cmdline = (char *)calloc(1, strlen(stubCmdline) + 1);
+
+    memcpy(nodeStr, stubNodeStr, strlen(stubNodeStr));
+    memcpy(cmdline, stubCmdline, strlen(stubCmdline));
+
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .with(outBoundP(static_cast<char *>(nodeStr), sizeof(nodeStr)))
+        .will(returnValue(0));
+    MOCKER(fgets).stubs().with(outBoundP(static_cast<char *>(cmdline), sizeof(cmdline))).will(returnValue(cmdline));
+
+    ret = IsNidInNumastat(0);
+    EXPECT_EQ(true, ret);
+    free(nodeStr);
+    free(cmdline);
+}
+
+extern "C" bool IsMigParaValid(struct MigrateOutPayload *payload);
+extern "C" bool IsPidRemoteNidValid(int *nidArray, int nidCnt, pid_t pid, uint32_t *nodeBitmap, int pidType);
+extern "C" bool IsDestNidVaild(int nid, pid_t pid);
+TEST_F(InterfaceTest, IsMigParaValid)
+{
+    struct MigrateOutPayload payload = {
+        .pid = 123,
+        .count = 1,
+    };
+    payload.inner[0].memSize = 10240;
+    payload.inner[0].ratio = 25;
+    payload.inner[0].migrateMode = MIG_MEMSIZE_MODE;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsPidRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
+
+    bool ret = IsMigParaValid(&payload);
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(InterfaceTest, IsMigParaValidGreaterThanMigrateMode)
+{
+    struct MigrateOutPayload payload = {
+        .pid = 123,
+        .count = 1,
+    };
+    payload.inner[0].memSize = 10240;
+    payload.inner[0].ratio = 25;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsPidRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    payload.inner[0].migrateMode = static_cast<MigrateMode>(2);
+    MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
+
+    bool ret = IsMigParaValid(&payload);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, IsMigParaValidPassNullPtr)
+{
+    bool ret;
+    struct MigrateOutPayload *payload = nullptr;
+
+    ret = IsMigParaValid(payload);
+    EXPECT_EQ(false, ret);
+    free(payload);
+}
+
+TEST_F(InterfaceTest, IsMigParaValidLessThanMigrateMode)
+{
+    bool ret;
+    struct MigrateOutPayload payload = {
+        .pid = 123,
+        .count = 1,
+    };
+    payload.inner[0].memSize = 10240;
+    payload.inner[0].ratio = 25;
+    payload.inner[0].migrateMode = static_cast<MigrateMode>(-1);
+
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsPidRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    ret = IsMigParaValid(&payload);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, IsMigParaValidWaterlineModeAndMigMemsizeMode)
+{
+    bool ret;
+    struct MigrateOutPayload payload = {
+        .pid = 123,
+        .count = 1,
+    };
+    payload.inner[0].memSize = 10240;
+    payload.inner[0].ratio = 25;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsPidRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    MOCKER(GetRunMode).stubs().will(returnValue(0));
+    payload.inner[0].migrateMode = MIG_MEMSIZE_MODE;
+
+    ret = IsMigParaValid(&payload);
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(InterfaceTest, IsMigParaValidMemPoolModeAndMigRatioMode)
+{
+    bool ret;
+    struct MigrateOutPayload payload = {
+        .pid = 123,
+        .count = 1,
+    };
+    payload.inner[0].memSize = 10240;
+    payload.inner[0].ratio = 25;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsPidRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    MOCKER(GetRunMode).stubs().will(returnValue(1));
+    payload.inner[0].migrateMode = MIG_RATIO_MODE;
+
+    ret = IsMigParaValid(&payload);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, IsMigParaValidMigRatioModeWithInvalidRatio)
+{
+    bool ret;
+    struct MigrateOutPayload payload = {
+        .pid = 123,
+        .count = 1,
+    };
+    payload.inner[0].memSize = 10240;
+    payload.inner[0].ratio = 25;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsPidRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    MOCKER(GetRunMode).stubs().will(returnValue(1));
+    MOCKER(IsRatioValid).stubs().will(returnValue(false));
+    payload.inner[0].migrateMode = MIG_RATIO_MODE;
+    ret = IsMigParaValid(&payload);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, IsMigParaValidInvalidMemSize)
+{
+    bool ret;
+    struct MigrateOutPayload payload = {
+        .pid = 123,
+        .count = 1,
+    };
+    payload.inner[0].memSize = 10240;
+    payload.inner[0].ratio = 25;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsPidRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    MOCKER(GetRunMode).stubs().will(returnValue(1));
+    MOCKER(IsRatioValid).stubs().will(returnValue(true));
+    payload.inner[0].migrateMode = MIG_MEMSIZE_MODE;
+    payload.inner[0].memSize = 2049;
+    ret = IsMigParaValid(&payload);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsDestNidVaild)
+{
+    ProcessAttr attr = {};
+    attr.pid = 1;
+    attr.numaAttr.numaNodes = 0b00010001;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttr *)nullptr));
+    bool ret = IsDestNidVaild(1, 1);
+    EXPECT_EQ(true, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    ret = IsDestNidVaild(1, 4);
+    EXPECT_EQ(false, ret);
+
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ret = IsDestNidVaild(4, 4);
+    EXPECT_EQ(true, ret);
+}
+
+extern uint32_t g_pageSizeNormal;
+extern uint32_t g_pageSizeHuge;
+extern "C" int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType, int *pidCount);
+TEST_F(InterfaceTest, TestCheckMigrateOutMsgInvalidPidTypeAndMsgCount)
+{
+    struct MigrateOutMsg msg;
+    int pidType = PAGETYPE_NORMAL;
+    int pidCount = 0;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    g_pageSizeHuge = PAGESIZE_2M;
+    // null input case
+    int ret = CheckMigrateOutMsg(nullptr, pidType, &pidCount);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // invalid pidType case
+    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // invalid count case
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    msg.count = MAX_NR_MIGOUT + 1;
+    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(-EINVAL, ret);
+    msg.count = 0;
+    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckMigrateOutMsgMigOutCount)
+{
+    struct MigrateOutMsg msg = { .count = 1 };
+    msg.payload[0].pid = 1234;
+    msg.payload[0].count = 1;
+    int pidType = PAGETYPE_HUGE;
+    int pidCount = 0;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+
+    // number of managed and non-managed PID beyond limit
+    g_processManager.processes = nullptr;
+    g_processManager.nr[VM_TYPE] = MAX_2M_PROCESSES_CNT;
+    int ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // PID has been managed, so not beyond limit
+    ProcessAttr processes = { .pid = msg.payload[0].pid, .next = nullptr };
+    g_processManager.processes = &processes;
+    MOCKER(IsMigParaValid).stubs().will(returnValue(true));
+    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckMigrateOutMsgInvalidDestNid)
+{
+    struct MigrateOutMsg msg = { .count = 1 };
+    int pidType = PAGETYPE_HUGE;
+    int pidCount = 0;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    g_processManager.processes = nullptr;
+    g_processManager.nr[VM_TYPE] = 1;
+    g_processManager.nrLocalNuma = 4;
+
+    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+
+    msg.payload[0].count = 1;
+    msg.payload[0].pid = 1234;
+    msg.payload[0].inner[0].destNid = 0;
+    int ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // nid not match numaNodes bitmap
+    ProcessAttr processes = { .pid = msg.payload[0].pid, .next = nullptr };
+    processes.numaAttr.numaNodes = 0x20;
+    g_processManager.processes = &processes;
+    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckMigrateOutMsgInvalidMigrateMode)
+{
+    struct MigrateOutMsg msg = { .count = 1 };
+    msg.payload[0].pid = 1234;
+    msg.payload[0].count = 1;
+    msg.payload[0].inner[0].destNid = 4;
+    int pidType = PAGETYPE_HUGE;
+    int pidCount = 0;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    g_processManager.nr[VM_TYPE] = 1;
+    g_processManager.nrLocalNuma = 4;
+    ProcessAttr processes = { .pid = msg.payload[0].pid, .next = nullptr };
+    processes.numaAttr.numaNodes = 0x10;
+    g_processManager.processes = &processes;
+
+    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+    MOCKER(IsPidRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(true));
+
+    msg.payload[0].inner[0].migrateMode = (MigrateMode)-1;
+    int ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(-EINVAL, ret);
+
+    msg.payload[0].inner[0].migrateMode = (MigrateMode)(MIG_MEMSIZE_MODE + 1);
+    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckMigrateOutMsgCheckMigrateMode)
+{
+    struct MigrateOutMsg msg = { .count = 1 };
+    int pidType = PAGETYPE_HUGE;
+    int pidCount = 0;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    g_processManager.nr[VM_TYPE] = 1;
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.processes = nullptr;
+
+    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+    MOCKER(IsPidRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(true));
+    MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
+
+    msg.payload[0].count = 1;
+    msg.payload[0].inner[0].destNid = 4;
+    msg.payload[0].inner[0].migrateMode = MIG_RATIO_MODE;
+    int ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(-EINVAL, ret);
+
+    msg.payload[0].inner[0].migrateMode = MIG_MEMSIZE_MODE;
+    msg.payload[0].inner[0].memSize = 2049;
+    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(-EINVAL, ret);
+
+    msg.payload[0].inner[0].memSize = 2048;
+    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(0, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+    MOCKER(IsPidRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(true));
+    MOCKER(GetRunMode).stubs().will(returnValue(WATERLINE_MODE));
+
+    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(0, ret);
+
+    msg.payload[0].inner[0].migrateMode = MIG_RATIO_MODE;
+    msg.payload[0].inner[0].ratio = 101;
+    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(-EINVAL, ret);
+
+    msg.payload[0].inner[0].ratio = 75;
+    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" int IoctlHandler(const void *msg, int pidType, const unsigned long *ioctlCommands);
+extern "C" int AddProcessNumaBitMap(struct MigrateOutMsg *msg, uint32_t *nodeBitmap, int pidType);
+extern "C" int AddProcessesToGlobalManager(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap,
+                                           bool *hasInvalidPid);
+extern "C" int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType);
+TEST_F(InterfaceTest, TestSmapMigrateOut)
+{
+    int ret;
+    struct MigrateOutMsg msg;
+    msg.payload[0].pid = 1234;
+    msg.payload[0].count = 1;
+    msg.count = 1;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
+    MOCKER(AddProcessesToGlobalManager).stubs().will(returnValue(0));
+    MOCKER(ProcessAddTrackingManage).stubs().will(returnValue(0));
+    MOCKER(IsMigParaValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    ret = ubturbo_smap_migrate_out(&msg, 0);
+    EXPECT_EQ(0, ret);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateOutTwo)
+{
+    int ret;
+
+    struct MigrateOutMsg msg;
+    EnvAtomicSet(&g_status, 0);
+    ret = ubturbo_smap_migrate_out(&msg, 0);
+    EXPECT_EQ(-EPERM, ret);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateOutThree)
+{
+    int ret;
+    struct MigrateOutMsg msgc;
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckMigrateOutMsg).stubs().will(returnValue(-EINVAL));
+    ret = ubturbo_smap_migrate_out(&msgc, 0);
+    EXPECT_EQ(-EINVAL, ret);
+    EnvAtomicSet(&g_status, 0);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateOutFour)
+{
+    int ret;
+    struct MigrateOutMsg msgc;
+    msgc.count = 1;
+    msgc.payload[0].pid = 1234;
+    msgc.payload[0].count = 1;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-EBADF));
+    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    MOCKER(IsMigParaValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(AddProcessNumaBitMap).stubs().will(returnValue(0));
+    ret = ubturbo_smap_migrate_out(&msgc, PAGETYPE_HUGE + 1);
+    EXPECT_EQ(-EBADF, ret);
+    EnvAtomicSet(&g_status, 0);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateOutFive)
+{
+    int ret;
+    struct MigrateOutMsg msgc;
+    msgc.count = 1;
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
+    MOCKER(IsMigParaValid).stubs().will(returnValue(true));
+    MOCKER(AddProcessesToGlobalManager).stubs().will(returnValue(-EINVAL));
+    ret = ubturbo_smap_migrate_out(&msgc, PAGETYPE_HUGE + 1);
+    EXPECT_EQ(-EINVAL, ret);
+    EnvAtomicSet(&g_status, 0);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+}
+
+extern "C" int BuildGroupPolicy(const struct GroupedMigrateOutPayload *payload, const uint64_t numaPages[MAX_NODES],
+                                GroupMigrationPolicy *policy);
+TEST_F(InterfaceTest, TestBuildGroupPolicyInitSharedTargetUsedPages)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    GroupMigrationPolicy policy = {};
+    uint64_t numaPages[MAX_NODES] = { 0 };
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    payload.pid = 1234;
+    payload.groupCount = 2;
+    payload.groups[0].localCount = 1;
+    payload.groups[0].locals[0].nid = 0;
+    payload.groups[0].locals[0].size = 2048;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 4;
+    payload.groups[0].targets[0].size = 4096;
+    payload.groups[1].localCount = 1;
+    payload.groups[1].locals[0].nid = 1;
+    payload.groups[1].locals[0].size = 2048;
+    payload.groups[1].targetCount = 1;
+    payload.groups[1].targets[0].nid = 4;
+    payload.groups[1].targets[0].size = 8192;
+    numaPages[4] = 3;
+
+    int ret = BuildGroupPolicy(&payload, numaPages, &policy);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ((uint64_t)1, policy.groups[0].targets[0].usedPages);
+    EXPECT_EQ((uint64_t)2, policy.groups[1].targets[0].usedPages);
+}
+
+TEST_F(InterfaceTest, TestBuildGroupPolicyRejectUnmanagedRemotePages)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    GroupMigrationPolicy policy = {};
+    uint64_t numaPages[MAX_NODES] = { 0 };
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    payload.pid = 1234;
+    payload.groupCount = 1;
+    payload.groups[0].localCount = 1;
+    payload.groups[0].locals[0].nid = 0;
+    payload.groups[0].locals[0].size = 2048;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 4;
+    payload.groups[0].targets[0].size = 4096;
+    numaPages[5] = 1;
+
+    int ret = BuildGroupPolicy(&payload, numaPages, &policy);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestBuildGroupPolicyRejectRemotePagesExceedQuota)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    GroupMigrationPolicy policy = {};
+    uint64_t numaPages[MAX_NODES] = { 0 };
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    payload.pid = 1234;
+    payload.groupCount = 1;
+    payload.groups[0].localCount = 1;
+    payload.groups[0].locals[0].nid = 0;
+    payload.groups[0].locals[0].size = 2048;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 4;
+    payload.groups[0].targets[0].size = 2048;
+    numaPages[4] = 2;
+
+    int ret = BuildGroupPolicy(&payload, numaPages, &policy);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int CheckGroupedTarget(const struct MigrationGroup *group, int payloadIdx, int groupIdx);
+extern "C" bool IsRemoteNidValid(int nid);
+TEST_F(InterfaceTest, TestCheckGroupedTargetRejectForbiddenTarget)
+{
+    struct MigrationGroup group = {};
+
+    group.targetCount = 1;
+    group.targets[0].nid = 4;
+    group.targets[0].size = 2048;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    EnvAtomicSet(&g_forbiddenNodes[4], 1);
+
+    int ret = CheckGroupedTarget(&group, 0, 0);
+    EXPECT_EQ(-EAGAIN, ret);
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+TEST_F(InterfaceTest, TestCheckGroupedTargetInvalidCases)
+{
+    struct MigrationGroup group = {};
+
+    group.targetCount = 0;
+    int ret = CheckGroupedTarget(&group, 0, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    group.targetCount = 1;
+    group.targets[0].nid = 3;
+    group.targets[0].size = 2048;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(false));
+    ret = CheckGroupedTarget(&group, 0, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    group.targets[0].nid = 4;
+    group.targets[0].size = 1024;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+    ret = CheckGroupedTarget(&group, 0, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    group.targetCount = 2;
+    group.targets[0].nid = 4;
+    group.targets[0].size = 2048;
+    group.targets[1].nid = 4;
+    group.targets[1].size = 4096;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+    ret = CheckGroupedTarget(&group, 0, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int payloadIdx);
+static void FillGroupedPayload(struct GroupedMigrateOutPayload *payload, pid_t pid, int localNid, int targetNid);
+TEST_F(InterfaceTest, TestCheckGroupedPayloadAcceptsHigherLocalNid)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    int oldNrLocalNuma = g_processManager.nrLocalNuma;
+
+    g_processManager.nrLocalNuma = 6;
+    payload.pid = 1234;
+    payload.groupCount = 1;
+    payload.groups[0].localCount = 1;
+    payload.groups[0].locals[0].nid = 5;
+    payload.groups[0].locals[0].size = 2048;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 6;
+    payload.groups[0].targets[0].size = 2048;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+
+    int ret = CheckGroupedPayload(&payload, 0);
+    EXPECT_EQ(0, ret);
+    g_processManager.nrLocalNuma = oldNrLocalNuma;
+}
+
+TEST_F(InterfaceTest, TestCheckGroupedPayloadInvalidLocalCases)
+{
+    struct GroupedMigrateOutPayload payload = {};
+
+    payload.pid = 1234;
+    payload.groupCount = 0;
+    int ret = CheckGroupedPayload(&payload, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    FillGroupedPayload(&payload, 1234, 0, 4);
+    payload.groups[0].localCount = 0;
+    ret = CheckGroupedPayload(&payload, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    FillGroupedPayload(&payload, 1234, 0, 4);
+    payload.groups[0].locals[0].size = 0;
+    ret = CheckGroupedPayload(&payload, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    FillGroupedPayload(&payload, 1234, 0, 4);
+    payload.groupCount = 2;
+    payload.groups[1] = payload.groups[0];
+    payload.groups[1].targets[0].nid = 5;
+    g_processManager.nrLocalNuma = 4;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+    ret = CheckGroupedPayload(&payload, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckGroupedPayloadAllowsMigratePendingUpdate)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    ProcessAttr current = {};
+
+    FillGroupedPayload(&payload, 1234, 0, 4);
+    current.pid = 1234;
+    current.state = PROC_MIGRATE;
+    current.groupPolicy.enabled = true;
+    current.next = nullptr;
+    g_processManager.processes = &current;
+    g_processManager.nrLocalNuma = 4;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+
+    int ret = CheckGroupedPayload(&payload, 0);
+    EXPECT_EQ(0, ret);
+
+    GlobalMockObject::verify();
+    current.state = PROC_MOVE;
+    ret = CheckGroupedPayload(&payload, 0);
+    EXPECT_EQ(-EAGAIN, ret);
+    g_processManager.processes = nullptr;
+}
+
+extern "C" int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pidType);
+extern "C" int BuildGroupedPolicies(struct GroupedMigrateOutMsg *msg,
+                                    GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT]);
+extern "C" int ProcessAddGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap);
+extern "C" int AddGroupedProcessesToGlobalManager(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                                  GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT],
+                                                  bool keepTracking[MAX_NR_GROUPED_MIGOUT]);
+extern "C" int AddGroupedProcessesToGlobalManagerFiltered(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                                          GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT],
+                                                          bool keepTracking[MAX_NR_GROUPED_MIGOUT],
+                                                          const bool *pendingUpdate);
+
+static void FillGroupedPayload(struct GroupedMigrateOutPayload *payload, pid_t pid, int localNid, int targetNid)
+{
+    payload->pid = pid;
+    payload->groupCount = 1;
+    payload->groups[0].localCount = 1;
+    payload->groups[0].locals[0].nid = localNid;
+    payload->groups[0].locals[0].size = 2048;
+    payload->groups[0].targetCount = 1;
+    payload->groups[0].targets[0].nid = targetNid;
+    payload->groups[0].targets[0].size = 4096;
+}
+
+TEST_F(InterfaceTest, TestCheckGroupedMigrateOutMsgValidAndDuplicatePid)
+{
+    struct GroupedMigrateOutMsg msg = {};
+
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.nr[VM_TYPE] = 0;
+    g_processManager.processes = nullptr;
+    msg.count = 2;
+    FillGroupedPayload(&msg.payload[0], 1234, 0, 4);
+    FillGroupedPayload(&msg.payload[1], 5678, 1, 5);
+
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+    int ret = CheckGroupedMigrateOutMsg(&msg, VM_TYPE);
+    EXPECT_EQ(0, ret);
+
+    GlobalMockObject::verify();
+    msg.payload[1].pid = msg.payload[0].pid;
+    ret = CheckGroupedMigrateOutMsg(&msg, VM_TYPE);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckGroupedMigrateOutMsgRejectsInvalidInputs)
+{
+    struct GroupedMigrateOutMsg msg = {};
+
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    int ret = CheckGroupedMigrateOutMsg(nullptr, VM_TYPE);
+    EXPECT_EQ(-EINVAL, ret);
+
+    msg.count = 1;
+    FillGroupedPayload(&msg.payload[0], 1234, 0, 4);
+    ret = CheckGroupedMigrateOutMsg(&msg, PROCESS_TYPE);
+    EXPECT_EQ(-EINVAL, ret);
+
+    msg.count = 0;
+    ret = CheckGroupedMigrateOutMsg(&msg, VM_TYPE);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestBuildGroupedPoliciesForInvalidPidSkipsNumaMaps)
+{
+    struct GroupedMigrateOutMsg msg = {};
+    GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT] = {};
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    msg.count = 1;
+    FillGroupedPayload(&msg.payload[0], 1234, 0, 4);
+    MOCKER(PidIsValid).expects(once()).will(returnValue(false));
+
+    int ret = BuildGroupedPolicies(&msg, policies);
+    EXPECT_EQ(0, ret);
+    EXPECT_TRUE(policies[0].enabled);
+    EXPECT_EQ(1, policies[0].groupCount);
+    EXPECT_EQ(0, policies[0].groups[0].locals[0].nid);
+    EXPECT_EQ((uint64_t)1, policies[0].groups[0].locals[0].localReservePages);
+    EXPECT_EQ(4, policies[0].groups[0].targets[0].nid);
+    EXPECT_EQ((uint64_t)2, policies[0].groups[0].targets[0].quotaPages);
+}
+
+static int CheckGroupedAccessAddPidPayload(int len, struct AccessAddPidPayload *payload)
+{
+    EXPECT_EQ(2, len);
+    EXPECT_EQ(1234, payload[0].pid);
+    EXPECT_EQ(NORMAL_SCAN, payload[0].type);
+    EXPECT_EQ(SCAN_TIME_2M, payload[0].scanTime);
+    EXPECT_EQ((uint32_t)0x11, payload[0].numaNodes);
+    EXPECT_EQ(NON_EXIST_PID, payload[1].pid);
+    EXPECT_EQ((uint32_t)0x22, payload[1].numaNodes);
+    return 0;
+}
+
+TEST_F(InterfaceTest, TestProcessAddGroupedTrackingManageBuildsPayload)
+{
+    struct GroupedMigrateOutMsg msg = {};
+    uint32_t nodeBitmap[MAX_NR_GROUPED_MIGOUT] = { 0x11, 0x22 };
+
+    msg.count = 2;
+    msg.payload[0].pid = 1234;
+    msg.payload[1].pid = 5678;
+    MOCKER(PidIsValid).stubs().will(returnValue(true)).then(returnValue(false));
+    MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckGroupedAccessAddPidPayload));
+
+    int ret = ProcessAddGroupedTrackingManage(&msg, nodeBitmap);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestGroupedMigrateOutRollsBackTrackingWhenManageFailed)
+{
+    struct GroupedMigrateOutMsg msg = {};
+
+    msg.count = 1;
+    msg.payload[0].pid = 1234;
+    g_processManager.processes = nullptr;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckGroupedMigrateOutMsg).stubs().will(returnValue(0));
+    MOCKER(BuildGroupedPolicies).stubs().will(returnValue(0));
+    MOCKER(ProcessAddGroupedTrackingManage).stubs().will(returnValue(0));
+    MOCKER(AddGroupedProcessesToGlobalManager).stubs().will(returnValue(-ENOMEM));
+    MOCKER(AccessIoctlRemovePid).expects(once()).will(returnValue(0));
+
+    int ret = ubturbo_smap_migrate_out_grouped(&msg, VM_TYPE);
+    EXPECT_EQ(-ENOMEM, ret);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+    EnvAtomicSet(&g_status, 0);
+}
+
+TEST_F(InterfaceTest, TestGroupedManageFailureKeepsExistingPidTracking)
+{
+    struct GroupedMigrateOutMsg msg = {};
+    uint32_t nodeBitmap[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT] = {};
+    bool keepTracking[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    ProcessAttr existing = {};
+
+    msg.count = 2;
+    msg.payload[0].pid = 1234;
+    msg.payload[1].pid = 5678;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&existing)).then(returnValue((ProcessAttr *)nullptr));
+    MOCKER(ProcessAddGroupedManage).stubs().will(returnValue(0)).then(returnValue(-ENOMEM));
+
+    int ret = AddGroupedProcessesToGlobalManager(&msg, nodeBitmap, policies, keepTracking);
+    EXPECT_EQ(-ENOMEM, ret);
+    EXPECT_TRUE(keepTracking[0]);
+    EXPECT_FALSE(keepTracking[1]);
+}
+
+TEST_F(InterfaceTest, TestGroupedManageFailureKeepsPendingPidTracking)
+{
+    struct GroupedMigrateOutMsg msg = {};
+    uint32_t nodeBitmap[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT] = {};
+    bool keepTracking[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    bool pendingUpdate[MAX_NR_GROUPED_MIGOUT] = { true, false };
+
+    msg.count = 2;
+    msg.payload[0].pid = 1234;
+    msg.payload[1].pid = 5678;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttr *)nullptr));
+    MOCKER(ProcessAddGroupedManage).stubs().will(returnValue(-ENOMEM));
+
+    int ret = AddGroupedProcessesToGlobalManagerFiltered(&msg, nodeBitmap, policies, keepTracking, pendingUpdate);
+    EXPECT_EQ(-ENOMEM, ret);
+    EXPECT_TRUE(keepTracking[0]);
+    EXPECT_FALSE(keepTracking[1]);
+}
+
+extern "C" void RollbackGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, const bool *keepTracking);
+static int CheckGroupedRollbackRemovePayload(int len, struct AccessRemovePidPayload *payload)
+{
+    EXPECT_EQ(1, len);
+    EXPECT_EQ(5678, payload[0].pid);
+    return 0;
+}
+
+TEST_F(InterfaceTest, TestGroupedTrackingRollbackSkipsKeptPid)
+{
+    struct GroupedMigrateOutMsg msg = {};
+    bool keepTracking[MAX_NR_GROUPED_MIGOUT] = { 0 };
+
+    msg.count = 2;
+    msg.payload[0].pid = 1234;
+    msg.payload[1].pid = 5678;
+    keepTracking[0] = true;
+    keepTracking[1] = false;
+    MOCKER(AccessIoctlRemovePid).expects(once()).will(invoke(CheckGroupedRollbackRemovePayload));
+
+    RollbackGroupedTrackingManage(&msg, keepTracking);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateBackWithSmapIsNotRunning)
+{
+    int ret;
+    EnvAtomicSet(&g_status, 0);
+    ret = ubturbo_smap_migrate_back(nullptr);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateBackWithoutMessage)
+{
+    int ret;
+    EnvAtomicSet(&g_status, 1);
+    ret = ubturbo_smap_migrate_back(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int CheckMigrateBackMsg(struct MigrateBackMsg *msg);
+TEST_F(InterfaceTest, TestSmapMigrateBackWithMessageCheckFailed)
+{
+    int ret;
+    struct MigrateBackMsg msg = {};
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(-EINVAL));
+    ret = ubturbo_smap_migrate_back(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+extern "C" bool CheckProcessIdle(int nid);
+extern "C" bool IsAllL2NodePidInState(ProcessState state, int l2Node);
+extern "C" int CheckMigrateBackReadyMsg(struct MigrateBackMsg *msg);
+TEST_F(InterfaceTest, TestCheckProcessIdle)
+{
+    MOCKER(IsAllL2NodePidInState).stubs().will(returnValue(true));
+    bool ret = CheckProcessIdle(1234);
+    EXPECT_EQ(true, ret);
+}
+
+extern "C" int CheckMigrateBackMsg(struct MigrateBackMsg *msg);
+TEST_F(InterfaceTest, TestCheckMigrateBackMsg)
+{
+    MigrateBackMsg msg = {};
+    msg.count = -1;
+    int ret = CheckMigrateBackMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateBackWithProcessIdleCheckFailed)
+{
+    int ret;
+    struct MigrateBackMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].srcNid = 4;
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
+    MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(0));
+    MOCKER(CheckProcessIdle).stubs().will(returnValue(false));
+    ret = ubturbo_smap_migrate_back(&msg);
+    EXPECT_EQ(-EAGAIN, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_USER, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateBackSuccess)
+{
+    int ret;
+    struct MigrateBackMsg msgc = { .taskID = 1, .count = 1, .payload = { { 4, 5, 1 } } };
+
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+    MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(0));
+    MOCKER(CheckProcessIdle).stubs().will(returnValue(true));
+    MOCKER(IoctlHandler).stubs().will(returnValue(0));
+    ret = ubturbo_smap_migrate_back(&msgc);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_MIGBACK_DONE, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+    EnvAtomicSet(&g_status, 0);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateBackReadyFailedClearBusyOnly)
+{
+    struct MigrateBackMsg msg = { .taskID = 1, .count = 1, .payload = { { 4, 5, 1 } } };
+
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
+    MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(-EAGAIN));
+
+    int ret = ubturbo_smap_migrate_back(&msg);
+    EXPECT_EQ(-EAGAIN, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_USER, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateBackIoctlFailedClearBusyOnly)
+{
+    struct MigrateBackMsg msg = { .taskID = 1, .count = 1, .payload = { { 4, 5, 1 } } };
+
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
+    MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(0));
+    MOCKER(CheckProcessIdle).stubs().will(returnValue(true));
+    MOCKER(IoctlHandler).stubs().will(returnValue(-EBADF));
+
+    int ret = ubturbo_smap_migrate_back(&msg);
+    EXPECT_EQ(-EBADF, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_USER, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateBackRejectBusyNode)
+{
+    struct MigrateBackMsg msg = { .taskID = 1, .count = 1, .payload = { { 4, 5, 1 } } };
+
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_MIGBACK_BUSY);
+    MOCKER(CheckMigrateBackMsg).stubs().will(returnValue(0));
+    MOCKER(CheckMigrateBackReadyMsg).stubs().will(returnValue(0));
+
+    int ret = ubturbo_smap_migrate_back(&msg);
+    EXPECT_EQ(-EAGAIN, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_MIGBACK_BUSY, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+extern "C" int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType);
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgWithIsCountValidFailed)
+{
+    int ret;
+    struct RemoveMsg msg;
+    int pidType = VM_TYPE;
+    MOCKER(IsCountValid).stubs().will(returnValue(false));
+    ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgWithIsPidTypeValidFailed)
+{
+    int ret;
+    struct RemoveMsg msg;
+    int pidType = VM_TYPE;
+    MOCKER(IsCountValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(false));
+    ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgIgnoresNidFields)
+{
+    struct RemoveMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 0;
+    msg.payload[0].nid[0] = -1;
+    int pidType = VM_TYPE;
+
+    MOCKER(IsCountValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+
+    int ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgAcceptsPartialRemoteRemove)
+{
+    struct RemoveMsg msg = {};
+    struct ProcessManager manager = {};
+    manager.nrLocalNuma = 4;
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 2;
+    msg.payload[0].nid[0] = 4;
+    msg.payload[0].nid[1] = 5;
+    int pidType = VM_TYPE;
+
+    MOCKER(IsCountValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+
+    int ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgRejectsInvalidPartialRemoteNid)
+{
+    struct RemoveMsg msg = {};
+    struct ProcessManager manager = {};
+    manager.nrLocalNuma = 4;
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 1;
+    msg.payload[0].nid[0] = 3;
+    int pidType = VM_TYPE;
+
+    MOCKER(IsCountValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+
+    int ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgRejectsDuplicatePartialRemoteNid)
+{
+    struct RemoveMsg msg = {};
+    struct ProcessManager manager = {};
+    manager.nrLocalNuma = 4;
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 2;
+    msg.payload[0].nid[0] = 4;
+    msg.payload[0].nid[1] = 4;
+    int pidType = VM_TYPE;
+
+    MOCKER(IsCountValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+
+    int ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgRejectsDuplicatePid)
+{
+    struct RemoveMsg msg = {};
+    msg.count = 2;
+    msg.payload[0].pid = 1024;
+    msg.payload[1].pid = 1024;
+    int pidType = VM_TYPE;
+
+    MOCKER(IsCountValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+
+    int ret = CheckSmapRemoveMsg(&msg, pidType);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int CheckSmapRemoveGroupedPidLocked(struct RemoveMsg *msg);
+TEST_F(InterfaceTest, TestCheckSmapRemoveGroupedPidLockedRejectsPartialRemove)
+{
+    struct RemoveMsg msg = {};
+    ProcessAttr attr = {};
+    ProcessAttr *oldProcesses = g_processManager.processes;
+
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    msg.payload[0].count = 1;
+    msg.payload[0].nid[0] = 4;
+    attr.pid = 1024;
+    attr.groupPolicy.enabled = true;
+    g_processManager.processes = &attr;
+
+    int ret = CheckSmapRemoveGroupedPidLocked(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    g_processManager.processes = oldProcesses;
+}
+
+TEST_F(InterfaceTest, TestSmapRemoveWithSmapIsNotRunning)
+{
+    EnvAtomicSet(&g_status, 0);
+    int ret = ubturbo_smap_remove(nullptr, 0);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapRemoveWithoutMessage)
+{
+    EnvAtomicSet(&g_status, 1);
+    int ret = ubturbo_smap_remove(nullptr, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType);
+TEST_F(InterfaceTest, TestSmapRemoveWithoutMessageCheckFailed)
+{
+    struct RemoveMsg msg = {};
+    MOCKER(CheckSmapRemoveMsg).stubs().will(returnValue(-EINVAL));
+    EnvAtomicSet(&g_status, 1);
+    int ret = ubturbo_smap_remove(&msg, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int AccessIoctlRemovePid(int len, struct AccessRemovePidPayload *payload);
+TEST_F(InterfaceTest, TestSmapRemoveWithoutAccessIoctlRemoveFailed)
+{
+    struct RemoveMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+    MOCKER(CheckSmapRemoveMsg).stubs().will(returnValue(0));
+    MOCKER(AccessIoctlRemovePid).stubs().will(returnValue(-ENOMEM));
+    EnvAtomicSet(&g_status, 1);
+    int ret = ubturbo_smap_remove(&msg, 0);
+    EXPECT_EQ(-ENOMEM, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapRemove)
+{
+    int ret;
+    struct RemoveMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].pid = 1024;
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckSmapRemoveMsg).stubs().will(returnValue(0));
+    MOCKER(AccessIoctlRemovePid).stubs().will(returnValue(0));
+    MOCKER(RemoveManagedProcess).stubs().will(ignoreReturnValue());
+    ret = ubturbo_smap_remove(&msg, 0);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapEnableNodeWithoutSmapIsRunning)
+{
+    int ret;
+    struct EnableNodeMsg msg;
+    EnvAtomicSet(&g_status, 0);
+    ret = ubturbo_smap_node_enable(&msg);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapEnableNodeWithoutMessage)
+{
+    int ret;
+    struct EnableNodeMsg msg;
+    EnvAtomicSet(&g_status, 1);
+    ret = ubturbo_smap_node_enable(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapEnableNodeWithInvalidNid)
+{
+    int ret;
+    struct EnableNodeMsg msg = {};
+    msg.nid = MAX_NODES;
+    EnvAtomicSet(&g_status, 1);
+    ret = ubturbo_smap_node_enable(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapEnableNodeWithEnable)
+{
+    int ret;
+    struct EnableNodeMsg msg = {};
+    msg.nid = 4;
+    msg.enable = ENABLE_NUMA_MIG;
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER | NODE_FORBIDDEN_MIGBACK_DONE);
+    ret = ubturbo_smap_node_enable(&msg);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(g_forbiddenNodes[4].counter, 0);
+}
+
+TEST_F(InterfaceTest, TestSmapEnableNodeWithDisable)
+{
+    int ret;
+    struct EnableNodeMsg msg = {};
+    msg.nid = 4;
+    msg.enable = DISABLE_NUMA_MIG;
+    EnvAtomicSet(&g_status, 1);
+    ret = ubturbo_smap_node_enable(&msg);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(g_forbiddenNodes[4].counter, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+TEST_F(InterfaceTest, TestSmapEnableNodeRejectMigrateBackBusy)
+{
+    int ret;
+    struct EnableNodeMsg msg = {};
+    msg.nid = 4;
+    msg.enable = ENABLE_NUMA_MIG;
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER | NODE_FORBIDDEN_MIGBACK_DONE | NODE_FORBIDDEN_MIGBACK_BUSY);
+    ret = ubturbo_smap_node_enable(&msg);
+    EXPECT_EQ(-EAGAIN, ret);
+    EXPECT_EQ(NODE_FORBIDDEN_USER | NODE_FORBIDDEN_MIGBACK_DONE | NODE_FORBIDDEN_MIGBACK_BUSY,
+              EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+TEST_F(InterfaceTest, TestSmapEnableNodeWithInvalidEnable)
+{
+    int ret;
+    struct EnableNodeMsg msg = {};
+    msg.nid = 4;
+    msg.enable = 2;
+    EnvAtomicSet(&g_status, 1);
+    ret = ubturbo_smap_node_enable(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+void FakeLog(int level, const char *str, const char *moduleName)
+{
+    return;
+}
+
+extern "C" int InitLog(Logfunc extlog);
+TEST_F(InterfaceTest, TestInitLog)
+{
+    int ret;
+    Logfunc extlog = FakeLog;
+
+    ret = InitLog(extlog);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" void RecoverRemoveInvalidProcess(void);
+TEST_F(InterfaceTest, TestRecoverRemoveInvalidProcess)
+{
+    int ret;
+    struct ProcessManager manager = { .nr = { 0, 2 } };
+    ProcessAttr *attr;
+    ProcessAttr *attr1;
+    ProcessAttr *attr2;
+
+    attr1 = (ProcessAttr *)calloc(1, sizeof(*attr1));
+    attr2 = (ProcessAttr *)calloc(1, sizeof(*attr2));
+
+    ASSERT_NE(nullptr, attr1);
+    ASSERT_NE(nullptr, attr2);
+
+    attr1->type = VM_TYPE;
+    attr1->pid = 1025;
+    attr2->type = VM_TYPE;
+    attr2->pid = 1026;
+    EnvMutexInit(&manager.lock);
+    LinkedListAdd(&manager.processes, &attr1);
+    LinkedListAdd(&manager.processes, &attr2);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
+    MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
+    MOCKER(PidIsValid).stubs().with(eq(attr1->pid)).will(returnValue(false));
+    MOCKER(PidIsValid).stubs().with(eq(attr2->pid)).will(returnValue(true));
+    RecoverRemoveInvalidProcess();
+    EXPECT_EQ(1, manager.nr[VM_TYPE]);
+    EXPECT_EQ(attr2->pid, manager.processes->pid);
+
+    attr = manager.processes;
+    while (attr) {
+        LinkedListRemove(&attr, &manager.processes);
+        attr = manager.processes;
+    }
+}
+
+extern "C" void RecoverAllMMapType(void);
+TEST_F(InterfaceTest, TestRecoverAllMMapType)
+{
+    ProcessManager manager = {};
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.next = nullptr;
+    manager.processes = &attr;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(VMPreprocess).stubs().will(returnValue(-1));
+
+    RecoverAllMMapType();
+}
+
+extern "C" int Recover(void);
+extern "C" void RecoverRemoveInvalidProcess(void);
+extern "C" int SyncProcessToKernel(void);
+TEST_F(InterfaceTest, TestRecover)
+{
+    int ret;
+
+    MOCKER(RecoverFromConfig).stubs().will(returnValue(-EPERM));
+    ret = Recover();
+    EXPECT_EQ(-EPERM, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(RecoverFromConfig).stubs().will(returnValue(0));
+    MOCKER(RecoverRemoveInvalidProcess).stubs().will(ignoreReturnValue());
+    MOCKER(SyncProcessToKernel).stubs().will(returnValue(-ENOENT));
+    ret = Recover();
+    EXPECT_EQ(-ENOENT, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapInitWithSmapIsNotRunning)
+{
+    EnvAtomicSet(&g_status, RUNNING);
+    int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapInitWithInitLogFailed)
+{
+    EnvAtomicSet(&g_status, 0);
+    MOCKER(InitLog).stubs().will(returnValue(-EINVAL));
+    int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int CheckPidtype(uint32_t pageType);
+TEST_F(InterfaceTest, TestSmapInitWithCheckPidTypeFailed)
+{
+    EnvAtomicSet(&g_status, 0);
+    MOCKER(InitLog).stubs().will(returnValue(0));
+    MOCKER(CheckPidtype).stubs().will(returnValue(-EINVAL));
+    int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapInitWithProcessManagerInitFailed)
+{
+    EnvAtomicSet(&g_status, 0);
+    MOCKER(InitLog).stubs().will(returnValue(0));
+    MOCKER(CheckPidtype).stubs().will(returnValue(0));
+    MOCKER(ProcessManagerInit).stubs().will(returnValue(-EINVAL));
+    int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapInitWithInitTrackingDevFailed)
+{
+    EnvAtomicSet(&g_status, 0);
+    MOCKER(InitLog).stubs().will(returnValue(0));
+    MOCKER(CheckPidtype).stubs().will(returnValue(0));
+    MOCKER(ProcessManagerInit).stubs().will(returnValue(0));
+    MOCKER(DestroyProcessManager).stubs().will(ignoreReturnValue());
+    MOCKER(InitTrackingDev).stubs().will(returnValue(-EINVAL));
+    MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
+    int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int CreateProcfs(void);
+TEST_F(InterfaceTest, TestSmapInitWithAccessIoctlRemoveAllPidFailed)
+{
+    EnvAtomicSet(&g_status, 0);
+    MOCKER(InitLog).stubs().will(returnValue(0));
+    MOCKER(CheckPidtype).stubs().will(returnValue(0));
+    MOCKER(ProcessManagerInit).stubs().will(returnValue(0));
+    MOCKER(DestroyProcessManager).stubs().will(ignoreReturnValue());
+    MOCKER(InitTrackingDev).stubs().will(returnValue(0));
+    MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(-EINVAL));
+    MOCKER(CreateProcfs).stubs().will(returnValue(0));
+    MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
+    int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapInitWithInitVirAPIFailed)
+{
+    EnvAtomicSet(&g_status, 0);
+    MOCKER(InitLog).stubs().will(returnValue(0));
+    MOCKER(CheckPidtype).stubs().will(returnValue(0));
+    MOCKER(ProcessManagerInit).stubs().will(returnValue(0));
+    MOCKER(DestroyProcessManager).stubs().will(ignoreReturnValue());
+    MOCKER(InitTrackingDev).stubs().will(returnValue(0));
+    MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(0));
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+    MOCKER(InitVirAPI).stubs().will(returnValue(-EINVAL));
+    MOCKER(CreateProcfs).stubs().will(returnValue(0));
+    MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
+    int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapInitWithRecoverFailed)
+{
+    EnvAtomicSet(&g_status, 0);
+    MOCKER(InitLog).stubs().will(returnValue(0));
+    MOCKER(CheckPidtype).stubs().will(returnValue(0));
+    MOCKER(ProcessManagerInit).stubs().will(returnValue(0));
+    MOCKER(DestroyProcessManager).stubs().will(ignoreReturnValue());
+    MOCKER(InitTrackingDev).stubs().will(returnValue(0));
+    MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(0));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(Recover).stubs().will(returnValue(-EINVAL));
+    MOCKER(CreateProcfs).stubs().will(returnValue(0));
+    MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
+    int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
+    EXPECT_EQ(-EBADF, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapInitWithInitAllThreadsFailed)
+{
+    EnvAtomicSet(&g_status, 0);
+    MOCKER(InitLog).stubs().will(returnValue(0));
+    MOCKER(CheckPidtype).stubs().will(returnValue(0));
+    MOCKER(ProcessManagerInit).stubs().will(returnValue(0));
+    MOCKER(DestroyProcessManager).stubs().will(ignoreReturnValue());
+    MOCKER(InitTrackingDev).stubs().will(returnValue(0));
+    MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(0));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(Recover).stubs().will(returnValue(0));
+    MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
+    MOCKER(InitAllThreads).stubs().will(returnValue(-EINVAL));
+    MOCKER(CreateProcfs).stubs().will(returnValue(0));
+    int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapInit)
+{
+    int ret;
+
+    struct ProcessManager manager;
+    EnvAtomicSet(&g_status, 0);
+    MOCKER(InitLog).stubs().will(returnValue(0));
+    MOCKER(CheckPidtype).stubs().will(returnValue(0));
+    MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(0));
+    MOCKER(ProcessManagerInit).stubs().will(returnValue(0));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(InitTrackingDev).stubs().will(returnValue(0));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(Recover).stubs().will(returnValue(0));
+    MOCKER(InitAllThreads).stubs().will(returnValue(0));
+    MOCKER(CreateProcfs).stubs().will(returnValue(0));
+    ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, EnvAtomicRead(&g_status));
+}
+
+extern "C" int EnvAtomicCmpAndSwap(int oldValue, int newValue, EnvAtomic *a);
+TEST_F(InterfaceTest, TestSmapStop)
+{
+    int ret;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(DestroyAllThread).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(RemoveAllManagedProcess).stubs().will(ignoreReturnValue());
+    MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
+    MOCKER(DestroyProcessManager).stubs().will(ignoreReturnValue());
+    ret = ubturbo_smap_stop();
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapStopOne)
+{
+    int ret;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(DestroyAllThread).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+    MOCKER(RemoveAllManagedProcess).stubs().will(ignoreReturnValue());
+    MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
+    MOCKER(DestroyProcessManager).stubs().will(ignoreReturnValue());
+    ret = ubturbo_smap_stop();
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestIoctlHandlerOne)
+{
+    int ret;
+    const void *msg;
+    int pidType = 0;
+    const unsigned long *ioctlCommands;
+
+    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(-1));
+    ret = IoctlHandler(msg, pidType, ioctlCommands);
+    EXPECT_EQ(-EBADF, ret);
+}
+
+TEST_F(InterfaceTest, TestIoctlHandlerTwo)
+{
+    int ret;
+    const void *msg;
+    int pidType = 0;
+    const unsigned long *ioctlCommands;
+    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(0));
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
+    MOCKER(close).stubs().will(ignoreReturnValue());
+    ret = IoctlHandler(msg, pidType, ioctlCommands);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestIoctlHandlerThree)
+{
+    int ret;
+    const void *msg;
+    int pidType = 0;
+    const unsigned long *ioctlCommands;
+    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(0));
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-1));
+    MOCKER(close).stubs().will(ignoreReturnValue());
+    ret = IoctlHandler(msg, pidType, ioctlCommands);
+    EXPECT_EQ(-EBADF, ret);
+}
+
+extern "C" void ubturbo_smap_urgent_migrate_out(uint64_t size);
+TEST_F(InterfaceTest, TestSmapUrgentMigrateOut)
+{
+    int ret;
+    uint64_t size = 1;
+
+    EnvAtomicSet(&g_status, 0);
+    ubturbo_smap_urgent_migrate_out(size);
+    ret = EnvAtomicRead(&g_status);
+    EXPECT_EQ(0, ret);
+    EnvAtomicSet(&g_status, 1);
+}
+
+TEST_F(InterfaceTest, TestNullptrError)
+{
+    int ret;
+    EnvAtomicSet(&g_status, 1);
+
+    ret = ubturbo_smap_migrate_out(nullptr, PAGETYPE_NORMAL);
+    EXPECT_EQ(-EINVAL, ret);
+
+    ret = ubturbo_smap_migrate_back(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+
+    ret = ubturbo_smap_remove(nullptr, PAGETYPE_NORMAL);
+    EXPECT_EQ(-EINVAL, ret);
+
+    ret = ubturbo_smap_node_enable(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+
+    ret = ubturbo_smap_remote_numa_info_set(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int SyncProcessToKernel(void);
+TEST_F(InterfaceTest, TestSyncProcessToKernel)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.numaAttr.numaNodes = 0b00010001;
+    attr.scanTime = 1000;
+    attr.scanType = NORMAL_SCAN;
+    attr.next = nullptr;
+    g_processManager.processes = &attr;
+
+    MOCKER(GetCurrentMaxNrPid).stubs().will(returnValue(1));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&g_processManager));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
+
+    int ret = SyncProcessToKernel();
+    EXPECT_EQ(ret, 0);
+}
+
+TEST_F(InterfaceTest, TestSetSmapRemoteNumaInfo)
+{
+    int ret;
+    uint32_t size = 1 * TIB / MIB;
+    struct SetRemoteNumaInfoMsg msg;
+    struct ProcessManager manager;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsLocalNidValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    msg.size = size;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(SetRemoteNumaInfo).stubs().will(returnValue(0));
+    ret = ubturbo_smap_remote_numa_info_set(&msg);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestSetSmapRemoteNumaInfoTwo)
+{
+    int ret;
+    uint32_t size = 1 * TIB / MIB;
+    struct SetRemoteNumaInfoMsg msg;
+    EnvAtomicSet(&g_status, 1);
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
+    MOCKER(IsLocalNidValid).stubs().will(returnValue(false));
+    ret = ubturbo_smap_remote_numa_info_set(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSetSmapRemoteNumaInfoThree)
+{
+    int ret;
+    uint32_t size = 1 * TIB / MIB;
+    struct SetRemoteNumaInfoMsg msg;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(false));
+    ret = ubturbo_smap_remote_numa_info_set(&msg);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSetSmapRemoteNumaInfoFour)
+{
+    int ret;
+    uint32_t size = 1 * TIB / MIB;
+    struct SetRemoteNumaInfoMsg msg;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
+    MOCKER(IsLocalNidValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(false));
+    ret = ubturbo_smap_remote_numa_info_set(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSetSmapRemoteNumaInfoFive)
+{
+    int ret;
+    uint32_t size = 1 * TIB / MIB;
+    struct SetRemoteNumaInfoMsg msg;
+    msg.size = size;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
+    MOCKER(IsLocalNidValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(SetRemoteNumaInfo).stubs().will(returnValue(-1));
+    ret = ubturbo_smap_remote_numa_info_set(&msg);
+    EXPECT_EQ(-1, ret);
+}
+
+TEST_F(InterfaceTest, TestSetSmapRemoteNumaInfoMsgSizeInvalid)
+{
+    int ret;
+    uint32_t size = 1 * TIB / MIB + 1;
+    struct SetRemoteNumaInfoMsg msg;
+    msg.size = size;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsLocalNidValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+
+    ret = ubturbo_smap_remote_numa_info_set(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    ret = ubturbo_smap_remote_numa_info_set(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut,
+                                        int dataSource);
+extern "C" int QueryVMFreqFromKernel(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut);
+extern "C" int QueryVMFreqFromUser(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut);
+extern "C" int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource);
+TEST_F(InterfaceTest, TestSmapQueryVmFreqAbnormalOne)
+{
+    int ret;
+    uint32_t lengthOut;
+    struct ProcessManager manager;
+    EnvAtomicSet(&g_status, 0);
+    ret = ubturbo_smap_freq_query(0, nullptr, 0, &lengthOut, 0);
+    EXPECT_EQ(-EPERM, ret);
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckQueryVMFreqMsgValid).stubs().will(returnValue(-EINVAL));
+    ret = ubturbo_smap_freq_query(0, nullptr, 0, &lengthOut, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapQueryVmFreqAbnormalTwo)
+{
+    int ret;
+    uint32_t lengthOut;
+    uint16_t data[3] = { 0 };
+    struct ProcessManager manager;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckQueryVMFreqMsgValid).stubs().will(returnValue(0));
+    MOCKER(QueryVMFreqFromUser).stubs().will(returnValue(-EINVAL));
+    ret = ubturbo_smap_freq_query(0, data, 0, &lengthOut, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    MOCKER(QueryVMFreqFromKernel).stubs().will(returnValue(-EINVAL));
+    ret = ubturbo_smap_freq_query(0, data, 0, &lengthOut, 1);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestQueryVMFreqFromKernel)
+{
+    uint16_t data;
+    uint16_t lengthOut;
+
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-1));
+    int ret = QueryVMFreqFromKernel(0, nullptr, 0, nullptr);
+    EXPECT_EQ(-EBADF, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
+    ret = QueryVMFreqFromKernel(1, &data, 1, &lengthOut);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, lengthOut);
+}
+
+TEST_F(InterfaceTest, TestQueryVMFreqFromUser)
+{
+    int ret;
+    int pid = 1;
+    uint16_t lengthOut;
+    uint16_t data[5] = { 0 };
+    size_t dataLen = sizeof(data) / sizeof(uint16_t);
+    struct ProcessManager manager;
+    ProcessAttr attr = { .pid = 1, .next = nullptr };
+    ActcData actcData1[2] = { 0 };
+    ActcData actcData2[4] = { 0 };
+    int len1 = sizeof(actcData1) / sizeof(ActcData);
+    int len2 = sizeof(actcData2) / sizeof(ActcData);
+    EnvAtomicSet(&g_status, 1);
+    attr.scanAttr.actcData[0] = actcData1;
+    attr.scanAttr.actcData[1] = actcData2;
+    attr.scanAttr.actcLen[0] = len1;
+    attr.scanAttr.actcLen[1] = len2;
+    manager.processes = &attr;
+    manager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&manager.lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestQueryVMFreqFromUserActcLenZero)
+{
+    int ret;
+    int pid = 1;
+    uint16_t lengthOut;
+    uint16_t data[5] = { 0 };
+    size_t dataLen = sizeof(data) / sizeof(uint16_t);
+    struct ProcessManager manager;
+    ProcessAttr attr = { .pid = 1, .next = nullptr };
+    ActcData *actcData1 = nullptr;
+    ActcData *actcData2 = nullptr;
+    int len1 = 0;
+    int len2 = 0;
+    EnvAtomicSet(&g_status, 1);
+    attr.scanAttr.actcData[0] = actcData1;
+    attr.scanAttr.actcData[1] = actcData2;
+    attr.scanAttr.actcLen[0] = len1;
+    attr.scanAttr.actcLen[1] = len2;
+    manager.processes = &attr;
+    manager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&manager.lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestQueryVMFreqFromUserNormalOne)
+{
+    int pid = 1;
+    uint16_t lengthOut;
+    uint16_t data[5] = { 0 };
+    size_t dataLen = sizeof(data) / sizeof(uint16_t);
+    struct ProcessManager manager;
+    ProcessAttr attr = { .pid = 1, .next = nullptr };
+    EnvAtomicSet(&g_status, 1);
+    ActcData actcData1[3] = { { .addr = 0, .freq = 0 }, { .addr = 0, .freq = 1 }, { .addr = 0, .freq = 2 } };
+    ActcData actcData2[2] = { { .addr = 0, .freq = 3 }, { .addr = 0, .freq = 4 } };
+    int len1 = sizeof(actcData1) / sizeof(ActcData);
+    int len2 = sizeof(actcData2) / sizeof(ActcData);
+    attr.scanAttr.actcData[0] = actcData1;
+    attr.scanAttr.actcData[1] = actcData2;
+    attr.scanAttr.actcLen[0] = len1;
+    attr.scanAttr.actcLen[1] = len2;
+    manager.processes = &attr;
+    manager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&manager.lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    int ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
+    for (int i = 0; i < dataLen; i++) {
+        EXPECT_EQ(i, data[i]);
+    }
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestQueryVMFreqFromUserNormalTwo)
+{
+    int pid = 1;
+    uint16_t lengthOut;
+    uint16_t data[5] = { 0 };
+    size_t dataLen = sizeof(data) / sizeof(uint16_t);
+    struct ProcessManager manager;
+    ProcessAttr attr = { .pid = 1, .next = nullptr };
+    ActcData actcData1[5] = { { .addr = 0, .freq = 0 },
+                              { .addr = 0, .freq = 1 },
+                              { .addr = 0, .freq = 2 },
+                              { .addr = 0, .freq = 3 },
+                              { .addr = 0, .freq = 4 } };
+    int len1 = sizeof(actcData1) / sizeof(ActcData);
+    EnvAtomicSet(&g_status, 1);
+    attr.scanAttr.actcData[0] = actcData1;
+    attr.scanAttr.actcData[1] = nullptr;
+    attr.scanAttr.actcLen[0] = len1;
+    attr.scanAttr.actcLen[1] = 0;
+    manager.processes = &attr;
+    manager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&manager.lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    int ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
+    for (int i = 0; i < dataLen; i++) {
+        EXPECT_EQ(i, data[i]);
+    }
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestQueryVMFreqFromUserNormalThree)
+{
+    int ret;
+    int pid = 1;
+    uint16_t lengthOut;
+    uint16_t data[5] = { 0 };
+    size_t dataLen = sizeof(data) / sizeof(uint16_t);
+    struct ProcessManager manager;
+    ProcessAttr attr = { .pid = 1, .next = nullptr };
+    ActcData actcData1[2] = { { .addr = 0, .freq = 0 }, { .addr = 0, .freq = 1 } };
+    ActcData actcData2[2] = { { .addr = 0, .freq = 2 }, { .addr = 0, .freq = 3 } };
+    int len1 = sizeof(actcData1) / sizeof(ActcData);
+    int len2 = sizeof(actcData2) / sizeof(ActcData);
+    EnvAtomicSet(&g_status, 1);
+    attr.scanAttr.actcData[0] = actcData1;
+    attr.scanAttr.actcData[1] = actcData2;
+    attr.scanAttr.actcLen[0] = len1;
+    attr.scanAttr.actcLen[1] = len2;
+    manager.processes = &attr;
+    manager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&manager.lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
+    EXPECT_EQ(4, lengthOut);
+    for (int i = 0; i < lengthOut; i++) {
+        EXPECT_EQ(i, data[i]);
+    }
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, DataNull)
+{
+    int pid = 123;
+    uint16_t *data = nullptr;
+    uint16_t lengthIn = 5;
+    uint16_t *lengthOut = nullptr;
+    int dataSource = STATISTIC_DATA_SOURCE;
+    struct ProcessManager manager;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    int result = CheckQueryVMFreqMsgValid(pid, data, lengthIn, lengthOut, dataSource);
+    EXPECT_EQ(-EINVAL, result);
+}
+
+TEST_F(InterfaceTest, LengthInZero)
+{
+    int pid = 123;
+    uint16_t data[10] = { 0 };
+    uint16_t lengthIn = 0;
+    uint16_t lengthOut = 0;
+    int dataSource = STATISTIC_DATA_SOURCE;
+    struct ProcessManager manager;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    int result = CheckQueryVMFreqMsgValid(pid, data, lengthIn, &lengthOut, dataSource);
+    EXPECT_EQ(-EINVAL, result);
+}
+
+TEST_F(InterfaceTest, DataSourceInvalid)
+{
+    int pid = 123;
+    uint16_t data[10] = { 0 };
+    uint16_t lengthIn = 5;
+    uint16_t lengthOut = 0;
+    int dataSource = MAX_SOURCE;
+    struct ProcessManager manager;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    int result = CheckQueryVMFreqMsgValid(pid, data, lengthIn, &lengthOut, dataSource);
+    EXPECT_EQ(-EINVAL, result);
+}
+
+TEST_F(InterfaceTest, PidNotManaged)
+{
+    int pid = 123;
+    uint16_t data[10] = { 0 };
+    uint16_t lengthIn = 5;
+    uint16_t lengthOut = 0;
+    int dataSource = STATISTIC_DATA_SOURCE;
+    struct ProcessManager manager;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    // 模拟GetProcessAttr返回NULL
+    MOCKER(GetProcessAttr).stubs().will(returnValue((ProcessAttribute *)nullptr));
+
+    int result = CheckQueryVMFreqMsgValid(pid, data, lengthIn, &lengthOut, dataSource);
+    EXPECT_EQ(-EINVAL, result);
+}
+
+TEST_F(InterfaceTest, DataSourceMismatch)
+{
+    int pid = 123;
+    uint16_t data[10] = { 0 };
+    uint16_t lengthIn = 5;
+    uint16_t lengthOut = 0;
+    int dataSource = STATISTIC_DATA_SOURCE;
+    struct ProcessManager manager;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    ProcessAttr attr;
+    attr.scanType = NORMAL_SCAN;
+
+    // 模拟GetProcessAttr返回attr
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+
+    int result = CheckQueryVMFreqMsgValid(pid, data, lengthIn, &lengthOut, dataSource);
+    EXPECT_EQ(-EINVAL, result);
+}
+
+TEST_F(InterfaceTest, TimeCheckFailed)
+{
+    int pid = 123;
+    uint16_t data[10] = { 0 };
+    uint16_t lengthIn = 5;
+    uint16_t lengthOut = 0;
+    int dataSource = STATISTIC_DATA_SOURCE;
+    struct ProcessManager manager;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    ProcessAttr attr;
+    attr.scanType = STATISTIC_SCAN;
+    attr.scanStart = time(nullptr) - 10; // 设置scanStart为10秒前
+    attr.duration = 15; // 持续时间为15秒
+
+    // 模拟GetProcessAttr返回attr
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+
+    int result = CheckQueryVMFreqMsgValid(pid, data, lengthIn, &lengthOut, dataSource);
+    EXPECT_EQ(-EAGAIN, result);
+}
+
+TEST_F(InterfaceTest, TimeCheckSuccess)
+{
+    int pid = 123;
+    uint16_t data[10] = { 0 };
+    uint16_t lengthIn = 5;
+    uint16_t lengthOut = 0;
+    int dataSource = STATISTIC_DATA_SOURCE;
+    struct ProcessManager manager;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    ProcessAttr attr;
+    attr.scanType = STATISTIC_SCAN;
+    attr.scanStart = time(nullptr) - 10; // 设置scanStart为10秒前
+    attr.duration = 5; // 持续时间为15秒
+
+    // 模拟GetProcessAttr返回attr
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+
+    int result = CheckQueryVMFreqMsgValid(pid, data, lengthIn, &lengthOut, dataSource);
+    EXPECT_EQ(0, result);
+}
+
+extern "C" bool IsPidArrValid(pid_t *pidArr, int len, bool ignoreUnmanaged);
+TEST_F(InterfaceTest, TestSmapEnableProcessMigrateNotRun)
+{
+    pid_t pidArr[] = { 1 };
+    EnvAtomicSet(&g_status, 0);
+    int ret = ubturbo_smap_process_migrate_enable(pidArr, 1, DISABLE_PROCESS_MIGRATE, 0);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapEnableProcessMigrateInvalidPidType)
+{
+    pid_t pidArr[] = { 1 };
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsPidArrValid).stubs().will(returnValue(false));
+    int ret = ubturbo_smap_process_migrate_enable(pidArr, 1, DISABLE_PROCESS_MIGRATE, 0);
+    EXPECT_EQ(-EINVAL, ret);
+    GlobalMockObject::verify();
+}
+
+TEST_F(InterfaceTest, TestSmapEnableProcessMigrateInvalidEnable)
+{
+    pid_t pidArr[] = { 1 };
+    EnvAtomicSet(&g_status, 1);
+    int ret = ubturbo_smap_process_migrate_enable(pidArr, 1, -1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    ret = ubturbo_smap_process_migrate_enable(pidArr, 1, 2, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapEnableProcessMigrateIsPidArrValid)
+{
+    pid_t pidArr[] = { 1 };
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsPidArrValid).stubs().will(returnValue(false));
+    int ret = ubturbo_smap_process_migrate_enable(pidArr, 0, DISABLE_PROCESS_MIGRATE, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" bool PidIsValid(pid_t pid);
+TEST_F(InterfaceTest, TestSmapEnableProcessMigrateNormal)
+{
+    pid_t pidArr[] = { 1 };
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsPidArrValid).stubs().will(returnValue(true));
+    MOCKER(EnableProcessMigrate).stubs().will(returnValue(-ENOENT));
+    int ret = ubturbo_smap_process_migrate_enable(pidArr, 1, DISABLE_PROCESS_MIGRATE, 0);
+    EXPECT_EQ(-ENOENT, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrValid)
+{
+    pid_t pidArr[] = { 1 };
+    bool ret = IsPidArrValid(pidArr, 0, true);
+    EXPECT_EQ(false, ret);
+
+    ret = IsPidArrValid(nullptr, 0, true);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrValidNormal)
+{
+    pid_t pidArr[] = { 1 };
+    ProcessAttr pid1;
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&pid1));
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    bool ret = IsPidArrValid(pidArr, 1, true);
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrValidOne)
+{
+    pid_t pidArr[] = { 1 };
+    bool ret = IsPidArrValid(nullptr, 1, true);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrValidTwo)
+{
+    pid_t pidArr[] = { 1 };
+    ProcessAttr pid1;
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&pid1));
+    MOCKER(PidIsValid).stubs().will(returnValue(false));
+    bool ret = IsPidArrValid(pidArr, 1, true);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrValidThree)
+{
+    pid_t pidArr[] = { 1, 1 };
+    ProcessAttr pid1;
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&pid1));
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    bool ret = IsPidArrValid(pidArr, 2, true);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" int CheckMigrateNumaMsg(struct MigrateNumaMsg *msg);
+TEST_F(InterfaceTest, CheckMigrateNumaMsgFail)
+{
+    // msg is nullptr
+    struct MigrateNumaMsg msg;
+    int ret = CheckMigrateNumaMsg(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // src = dst
+    msg.srcNid = 5;
+    msg.destNid = 5;
+    ret = CheckMigrateNumaMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // src is invalid 1
+    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+    msg.srcNid = 1;
+    g_processManager.nrLocalNuma = 4;
+    ret = CheckMigrateNumaMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // src is invalid 2
+    msg.srcNid = g_processManager.nrLocalNuma + REMOTE_NUMA_BITS;
+    ret = CheckMigrateNumaMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // dst is invalid 1
+    msg.srcNid = 5;
+    msg.destNid = 1;
+    ret = CheckMigrateNumaMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // dst is invalid 2
+    msg.destNid = g_processManager.nrLocalNuma + REMOTE_NUMA_BITS;
+    ret = CheckMigrateNumaMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // count is invalid 1
+    msg.destNid = 6;
+    msg.count = 0;
+    ret = CheckMigrateNumaMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // count is invalid 2
+    msg.count = 1 + MAX_NR_MIGNUMA;
+    ret = CheckMigrateNumaMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // src move not allowed
+    msg.count = 1;
+    MOCKER(IsRemoteNumaMoveAllowed).stubs().will(returnValue(0)).then(returnValue(1)).then(returnValue(0));
+    ret = CheckMigrateNumaMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // dst move not allowed
+    ret = CheckMigrateNumaMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, CheckMigrateNumaMsgSuccess)
+{
+    struct MigrateNumaMsg msg;
+    msg.srcNid = 5;
+    msg.destNid = 6;
+    msg.count = 1;
+    g_processManager.nrLocalNuma = 4;
+    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNumaMoveAllowed).stubs().will(returnValue(1));
+    int ret = CheckMigrateNumaMsg(&msg);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaNotRun)
+{
+    struct MigrateNumaMsg msg;
+    EnvAtomicSet(&g_status, 0);
+    int ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaInvalidMsg)
+{
+    struct MigrateNumaMsg msg;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckMigrateNumaMsg).stubs().will(returnValue(-EINVAL));
+    int ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaFailMigrateRemoteNuma)
+{
+    struct MigrateNumaMsg msg;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckMigrateNumaMsg).stubs().will(returnValue(0));
+    MOCKER(MigrateRemoteNuma).stubs().will(returnValue(-ENOENT));
+    int ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(-ENOENT, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaSuccess)
+{
+    struct MigrateNumaMsg msg;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckMigrateNumaMsg).stubs().will(returnValue(0));
+    MOCKER(MigrateRemoteNuma).stubs().will(returnValue(0));
+    MOCKER(ChangePidRemoteByNuma).stubs().will(returnValue(-ENOMEM)).then(returnValue(0));
+    int ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(-ENOMEM, ret);
+
+    ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaNotAllowedTwo)
+{
+    int srcNid = 4;
+    int destNid = 100;
+    struct MigrateNumaMsg msg = { .srcNid = srcNid, .destNid = destNid, .count = 100 };
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNumaMoveAllowed).stubs().with(eq(srcNid)).will(returnValue(0));
+    MOCKER(IsRemoteNumaMoveAllowed).stubs().with(eq(destNid)).will(returnValue(1));
+    int ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    msg.srcNid = destNid;
+    msg.destNid = srcNid;
+    ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaNotAllowedThree)
+{
+    int srcNid = 100;
+    int destNid = 99;
+    struct MigrateNumaMsg msg = { .srcNid = srcNid, .destNid = destNid, .count = 100 };
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNumaMoveAllowed).stubs().with(eq(srcNid)).will(returnValue(0));
+    MOCKER(IsRemoteNumaMoveAllowed).stubs().with(eq(destNid)).will(returnValue(1));
+    int ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    msg.srcNid = destNid;
+    msg.destNid = srcNid;
+    ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaNormal)
+{
+    struct MigrateNumaMsg msg = { .srcNid = 4, .destNid = 5, .count = 1 };
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNumaMoveAllowed).stubs().will(returnValue(1));
+    MOCKER(CheckMigrateNumaMsg).stubs().will(returnValue(0));
+    MOCKER(MigrateRemoteNuma).stubs().will(returnValue(-ENOENT));
+    MOCKER(ChangePidRemoteByNuma).expects(never());
+    int ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(-ENOENT, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNumaMoveAllowed).stubs().will(returnValue(1));
+    MOCKER(CheckMigrateNumaMsg).stubs().will(returnValue(0));
+    MOCKER(MigrateRemoteNuma).stubs().will(returnValue(0));
+    MOCKER(ChangePidRemoteByNuma).expects(once()).will(returnValue(0));
+    ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaNormalTwo)
+{
+    struct MigrateNumaMsg msg = { .srcNid = 4, .destNid = 100, .count = 10 };
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckMigrateNumaMsg).stubs().will(returnValue(0));
+    MOCKER(MigrateRemoteNuma).stubs().will(returnValue(-ENOENT));
+    int ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(-ENOENT, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(CheckMigrateNumaMsg).stubs().will(returnValue(0));
+    MOCKER(MigrateRemoteNuma).stubs().will(returnValue(0));
+    MOCKER(ChangePidRemoteByNuma).expects(once()).will(returnValue(0));
+    ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaNormalThree)
+{
+    struct MigrateNumaMsg msg = { .srcNid = 100, .destNid = 5, .count = 10000 };
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNumaMoveAllowed).stubs().will(returnValue(1));
+    MOCKER(MigrateRemoteNuma).stubs().will(returnValue(-ENOENT));
+    MOCKER(ChangePidRemoteByNuma).expects(never());
+    int ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNumaMoveAllowed).stubs().will(returnValue(1));
+    MOCKER(MigrateRemoteNuma).stubs().will(returnValue(0));
+    MOCKER(ChangePidRemoteByNuma).stubs().will(returnValue(0));
+    ret = ubturbo_smap_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaNotRun)
+{
+    struct MigrateEscapeMsg msg = {
+        .count = 1,
+    };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    msg.payload[0].destNid = 3;
+    EnvAtomicSet(&g_status, 0);
+    int ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePidRemoteEqSrcDst)
+{
+    struct MigrateEscapeMsg msg = {
+        .count = 1,
+    };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    msg.payload[0].destNid = 4;
+    EnvAtomicSet(&g_status, 1);
+    int ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaInvalidSrcNid)
+{
+    struct MigrateEscapeMsg msg = {
+        .count = 1,
+    };
+    msg.payload[0].pid = 1;
+
+    // srcnid less than nrLocalNuma
+    msg.payload[0].srcNid = 3;
+    msg.payload[0].destNid = 5;
+    EnvAtomicSet(&g_status, 1);
+    g_processManager.nrLocalNuma = 4;
+    int ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // srcnid greater than nrLocalNuma
+    msg.payload[0].srcNid = g_processManager.nrLocalNuma + REMOTE_NUMA_BITS;
+    ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaInvaliDestNid)
+{
+    struct MigrateEscapeMsg msg = {
+        .count = 1,
+    };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    msg.payload[0].destNid = 3;
+
+    EnvAtomicSet(&g_status, 1);
+    g_processManager.nrLocalNuma = 4;
+    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+    // destnid less than nrLocalNuma
+    int ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // destnid greater than nrLocalNuma
+    msg.payload[0].destNid = g_processManager.nrLocalNuma + REMOTE_NUMA_BITS;
+    ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaInvalidLenPid)
+{
+    struct MigrateEscapeMsg msg = {
+        .count = 0,
+    };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    msg.payload[0].destNid = 5;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+    // len = 0
+    int ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // len = 1 + MAX_2M_PROCESSES_CNT
+    msg.count = (1 + MAX_2M_PROCESSES_CNT);
+    ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // nullptr
+    ret = ubturbo_smap_pid_remote_numa_migrate(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaInvalidScan)
+{
+    struct MigrateEscapeMsg msg = {
+        .count = 1,
+    };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 5;
+    msg.payload[0].destNid = 6;
+    ProcessAttr attr = {};
+    attr.pid = 1;
+    attr.next = nullptr;
+    attr.scanType = HAM_SCAN;
+    attr.numaAttr.numaNodes = 0b01100000;
+    g_processManager.processes = &attr;
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+
+    int ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int IsPidArrRemoteNumaMatch(struct MigrateEscapeMsg *msg);
+TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaIsPidArrRemoteNumaMatchFail)
+{
+    struct MigrateEscapeMsg msg = {
+        .count = 1,
+    };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    msg.payload[0].destNid = 5;
+    ProcessAttr attr = {};
+    attr.pid = 1;
+    attr.scanType = NORMAL_SCAN;
+    attr.next = nullptr;
+    attr.numaAttr.numaNodes = 0b01100000; // 5 6
+    g_processManager.processes = &attr;
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+
+    // 0b01100000 not eq 4 5
+    int ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    g_processManager.processes = nullptr;
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaIsPidArrIsPidArrInStateFail)
+{
+    struct MigrateEscapeMsg msg = {
+        .count = 1,
+    };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    msg.payload[0].destNid = 5;
+
+    ProcessAttr attr = {};
+    attr.pid = 1;
+    attr.scanType = NORMAL_SCAN;
+    attr.next = nullptr;
+    attr.numaAttr.numaNodes = 0b00110000; // 4 5
+    attr.state = PROC_IDLE;
+    g_processManager.processes = &attr;
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+
+    int ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+    g_processManager.processes = nullptr;
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaIsPidArrMigratePidRemoteNumaFail)
+{
+    struct MigrateEscapeMsg msg = {
+        .count = 1,
+    };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    msg.payload[0].destNid = 5;
+
+    ProcessAttr attr = {};
+    attr.pid = 1;
+    attr.scanType = NORMAL_SCAN;
+    attr.next = nullptr;
+    attr.numaAttr.numaNodes = 0b00110000; // 4 5
+    attr.state = PROC_MOVE;
+    g_processManager.processes = &attr;
+
+    struct ProcessManager manager;
+    EnvMutexInit(&manager.lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().with(eq(msg.payload[0].destNid)).will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().with(eq(msg.payload[0].srcNid)).will(returnValue(true));
+    MOCKER(IsPidArrValid).stubs().will(returnValue(true));
+    MOCKER(IsPidArrRemoteNumaMatch).stubs().will(returnValue(1));
+
+    int ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-22, ret);
+    g_processManager.processes = nullptr;
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaIsPidArrChangePidRemoteByPid)
+{
+    struct MigrateEscapeMsg msg = {
+        .count = 1,
+    };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    msg.payload[0].destNid = 5;
+
+    ProcessAttr attr = {};
+    attr.pid = 1;
+    attr.scanType = NORMAL_SCAN;
+    attr.next = nullptr;
+    attr.numaAttr.numaNodes = 0b00110000; // 4 5
+    attr.state = PROC_MOVE;
+    g_processManager.processes = &attr;
+
+    struct ProcessManager manager;
+    EnvMutexInit(&manager.lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().with(eq(msg.payload[0].destNid)).will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().with(eq(msg.payload[0].srcNid)).will(returnValue(true));
+    MOCKER(IsPidArrValid).stubs().will(returnValue(true));
+    MOCKER(IsPidArrRemoteNumaMatch).stubs().will(returnValue(0));
+    MOCKER(IsPidArrInState).stubs().will(returnValue(1));
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
+    MOCKER(ChangePidRemoteByPid).stubs().will(returnValue(0));
+    int ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-22, ret);
+    g_processManager.processes = nullptr;
+}
+
+extern "C" bool GetAdaptMem(void);
+extern "C" bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid);
+extern "C" int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime);
+TEST_F(InterfaceTest, TestSmapMigrateOutSyncErrMaxWaitTime)
+{
+    int ret;
+    struct MigrateOutMsg msg;
+    int pidType = VM_TYPE;
+    uint64_t maxWaitTime = 1000;
+    ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateOutSyncErrRunMode)
+{
+    int ret;
+    struct MigrateOutMsg msg;
+    int pidType = VM_TYPE;
+    uint64_t maxWaitTime = 10000;
+    MOCKER(GetRunMode).stubs().will(returnValue(0));
+    ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateOutSyncErrPidType)
+{
+    int ret;
+    struct MigrateOutMsg msg;
+    int pidType = 0;
+    uint64_t maxWaitTime = 10000;
+    MOCKER(GetRunMode).stubs().will(returnValue(1));
+    ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateOutSyncFailSmapMigrateOut)
+{
+    int ret;
+    struct MigrateOutMsg msg;
+    int pidType = VM_TYPE;
+    uint64_t maxWaitTime = 10000;
+    MOCKER(GetRunMode).stubs().will(returnValue(1));
+    MOCKER(ubturbo_smap_migrate_out).stubs().will(returnValue(-EPERM));
+    ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateOutSyncSuccess)
+{
+    int ret;
+    struct MigrateOutMsg msg;
+    struct ProcessManager manager;
+    ProcessAttr attr = {};
+    manager.processes = &attr;
+    attr.next = nullptr;
+    attr.pid = 1;
+    msg.count = 1;
+    msg.payload[0].count = 1;
+    msg.payload[0].pid = 1;
+    msg.payload[0].inner[0].ratio = 25;
+    int pidType = VM_TYPE;
+    uint64_t maxWaitTime = 10000;
+
+    EnvMutexInit(&manager.lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetRunMode).stubs().will(returnValue(1));
+    MOCKER(ubturbo_smap_migrate_out).stubs().will(returnValue(0));
+    MOCKER(MigOutIsDone).stubs().will(returnValue(true));
+    ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateOutSyncFail)
+{
+    int ret;
+    struct MigrateOutMsg msg;
+    struct ProcessManager manager;
+    ProcessAttr attr = {};
+    manager.processes = &attr;
+    attr.pid = 1;
+    attr.next = nullptr;
+    msg.count = 1;
+    msg.payload[0].count = 1;
+    msg.payload[0].pid = 1;
+    msg.payload[0].inner[0].ratio = 25;
+    int pidType = VM_TYPE;
+    uint64_t maxWaitTime = 10000;
+
+    EnvMutexInit(&manager.lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetRunMode).stubs().will(returnValue(1));
+    MOCKER(ubturbo_smap_migrate_out).stubs().will(returnValue(0));
+    MOCKER(MigOutIsDone).stubs().will(returnValue(false));
+    ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
+    EXPECT_EQ(-EBUSY, ret);
+}
+
+extern "C" bool ubturbo_smap_is_running(void);
+extern "C" int SyncRunMode(RunMode runMode);
+extern "C" int ubturbo_smap_run_mode_set(int runMode);
+TEST_F(InterfaceTest, TestSetSmapRunModeOne)
+{
+    int runMode = 1;
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(false));
+    int ret = ubturbo_smap_run_mode_set(runMode);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSetSmapRunModeTwo)
+{
+    int runMode = -1;
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
+    int ret = ubturbo_smap_run_mode_set(runMode);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSetSmapRunMode4KSuccess)
+{
+    int runMode = 0;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
+    MOCKER(SyncRunMode).stubs().will(returnValue(0));
+    int ret = ubturbo_smap_run_mode_set(runMode);
+    EXPECT_EQ(0, ret);
+    g_processManager.tracking.pageSize = 0;
+}
+
+TEST_F(InterfaceTest, TestSetSmapRunMode4KFail)
+{
+    int runMode = 0;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
+    MOCKER(SyncRunMode).stubs().will(returnValue(-EINVAL));
+    int ret = ubturbo_smap_run_mode_set(runMode);
+    EXPECT_EQ(-EBADF, ret);
+    g_processManager.tracking.pageSize = 0;
+}
+
+TEST_F(InterfaceTest, TestSetSmapRunMode2MSuccess)
+{
+    int runMode = 1;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
+    MOCKER(SyncRunMode).stubs().will(returnValue(0));
+    int ret = ubturbo_smap_run_mode_set(runMode);
+    EXPECT_EQ(0, ret);
+    g_processManager.tracking.pageSize = 0;
+}
+
+TEST_F(InterfaceTest, TestSetSmapRunMode2MFail)
+{
+    int runMode = 1;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
+    MOCKER(SyncRunMode).stubs().will(returnValue(-EINVAL));
+    int ret = ubturbo_smap_run_mode_set(runMode);
+    EXPECT_EQ(-EBADF, ret);
+    g_processManager.tracking.pageSize = 0;
+}
+
+extern "C" int CheckAddProcessTrackingMsg(pid_t *pidArr, uint32_t *scanTime, uint32_t *duration, int len, int scanType);
+TEST_F(InterfaceTest, TestCheckAddProcessTrackingMsgNullPtr)
+{
+    struct ProcessManager manager;
+    pid_t pidArr[1] = { 1 };
+    uint32_t scanTime[1] = { MIN_SCAN_TIME };
+    uint32_t duration[1] = { 1 };
+    int ret = CheckAddProcessTrackingMsg(nullptr, nullptr, nullptr, 1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckAddProcessTrackingMsgLenCheck)
+{
+    ProcessAttr current;
+    pid_t pidArr[1] = { 1 };
+    uint32_t scanTime[1] = { MIN_SCAN_TIME + 1 };
+    uint32_t duration[1] = { 1 };
+
+    int ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, -1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+    ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, MAX_NR_MIGOUT + 1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckAddProcessTrackingMsgPidInvalid)
+{
+    struct ProcessManager manager;
+    manager.processes = nullptr;
+    pid_t pidArr[1] = { 1 };
+    uint32_t scanTime[1] = { MIN_SCAN_TIME + 1 };
+    uint32_t duration[1] = { 1 };
+
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsMigOutCountValid).stubs().will(returnValue(true));
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(PidIsValid).stubs().will(returnValue(false));
+    int ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, 1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckAddProcessTrackingMsgStateInvalid)
+{
+    struct ProcessManager manager;
+    ProcessAttr current;
+    pid_t pidArr[1] = { 123 };
+    uint32_t scanTime[1] = { MIN_SCAN_TIME + 1 };
+    uint32_t duration[1] = { 1 };
+
+    manager.processes = &current;
+    current.pid = pidArr[0];
+    current.state = PROC_BACK;
+    current.next = nullptr;
+    EnvMutexInit(&manager.lock);
+    MOCKER(IsMigOutCountValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    int ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, 1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckAddProcessTrackingMsgScanTimeInvalid)
+{
+    struct ProcessManager manager;
+    manager.processes = nullptr;
+    pid_t pidArr[1] = { 1 };
+    uint32_t scanTime[1] = { MAX_SCAN_TIME + 1 };
+    uint32_t duration[1] = { 1 };
+
+    EnvMutexInit(&manager.lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsMigOutCountValid).stubs().will(returnValue(true));
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    int ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, 1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+    scanTime[0] = MIN_SCAN_TIME - 1;
+    ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, 1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+    scanTime[0] = MIN_SCAN_TIME * 2 + 1;
+    ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, 1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckAddProcessTrackingMsgDurationInvalid)
+{
+    struct ProcessManager manager;
+    manager.processes = nullptr;
+    pid_t pidArr[1] = { 1 };
+    uint32_t scanTime[1] = { MAX_SCAN_TIME + 1 };
+    uint32_t duration[1] = { 0 };
+
+    EnvMutexInit(&manager.lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsMigOutCountValid).stubs().will(returnValue(true));
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    int ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, 1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+    duration[0] = MAX_SCAN_DURATION_SEC;
+    ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, 1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckAddProcessTrackingMsgScanTypeInvalid)
+{
+    struct ProcessManager manager;
+    manager.processes = nullptr;
+    pid_t pidArr[1] = { 1 };
+    uint32_t scanTime[1] = { MIN_SCAN_TIME };
+    uint32_t duration[1] = { 1 };
+
+    EnvMutexInit(&manager.lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsMigOutCountValid).stubs().will(returnValue(true));
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    int ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, 1, SCAN_TYPE_MAX);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckAddProcessTrackingMsgSuccess)
+{
+    struct ProcessManager *manager = (struct ProcessManager *)malloc(sizeof(struct ProcessManager));
+    ASSERT_NE(nullptr, manager);
+    pid_t pidArr[1] = { 1 };
+    ProcessAttr current;
+    uint32_t scanTime[1] = { MIN_SCAN_TIME };
+    uint32_t duration[1] = { 1 };
+
+    manager->processes = &current;
+    current.pid = pidArr[0];
+    current.state = PROC_MOVE;
+    current.next = nullptr;
+    EnvMutexInit(&manager->lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(manager));
+    MOCKER(IsMigOutCountValid).stubs().will(returnValue(true));
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    int ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, 1, 0);
+    EXPECT_EQ(0, ret);
+    free(manager);
+}
+
+extern "C" int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *duration, int len, int scanType);
+TEST_F(InterfaceTest, AddProcessTrackingLenEqulasZero)
+{
+    int ret;
+    int len = 0;
+    pid_t pid = 1234;
+    uint32_t scanTime = 100;
+    uint32_t duration = 1;
+    int scanType = 0;
+    ProcessAttr process = {};
+    process.numaAttr.numaNodes = 0b00010001;
+
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-1));
+
+    ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
+    EXPECT_EQ(-1, ret);
+}
+
+TEST_F(InterfaceTest, AddProcessTrackingSetProcessLocalNumaZero)
+{
+    int ret;
+    int len = 1;
+    pid_t pid = 1234;
+    uint32_t scanTime = 100;
+    uint32_t duration = 1;
+    int scanType = 0;
+    ProcessAttr process = {};
+    process.numaAttr.numaNodes = 0b00010001;
+
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-1));
+    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(-2));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+
+    ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
+    EXPECT_EQ(-2, ret);
+}
+
+TEST_F(InterfaceTest, AddProcessTrackingNormalScanNullPtr)
+{
+    int ret;
+    int len = 1;
+    pid_t pid = 1234;
+    uint32_t scanTime = 100;
+    uint32_t duration = 1;
+    int scanType = 1;
+    ProcessAttr process = {};
+    process.numaAttr.numaNodes = 0b00010001;
+
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-1));
+    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttribute *)nullptr));
+
+    ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
+    EXPECT_EQ(-22, ret);
+}
+
+TEST_F(InterfaceTest, AddProcessTrackingNormalScanInvalidRemoteValid)
+{
+    int ret;
+    int len = 1;
+    pid_t pid = 1234;
+    uint32_t scanTime = 100;
+    uint32_t duration = 1;
+    int scanType = 1;
+    ProcessAttr process = {};
+    process.numaAttr.numaNodes = 0b00010001;
+
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-1));
+    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&process));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(false));
+
+    ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
+    EXPECT_EQ(-22, ret);
+}
+
+TEST_F(InterfaceTest, AddProcessTrackingNormalScanSuccess)
+{
+    int ret;
+    int len = 1;
+    pid_t pid = 1234;
+    uint32_t scanTime = 100;
+    uint32_t duration = 1;
+    int scanType = 1;
+    ProcessAttr process = {};
+    process.numaAttr.numaNodes = 0b00010001;
+
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
+    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&process));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+
+    ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, AddProcessTrackingHAMScanNullPtrFailed)
+{
+    int ret;
+    int len = 1;
+    pid_t pid = 1234;
+    uint32_t scanTime = 100;
+    uint32_t duration = 1;
+    int scanType = 0;
+    ProcessAttr process = {};
+    process.numaAttr.numaNodes = 0b00010001;
+
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttribute *)nullptr));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-1));
+
+    ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
+    EXPECT_EQ(-1, ret);
+}
+
+TEST_F(InterfaceTest, AddProcessTrackingHAMScanFailed)
+{
+    int ret;
+    int len = 1;
+    pid_t pid = 1234;
+    uint32_t scanTime = 100;
+    uint32_t duration = 1;
+    int scanType = 0;
+    ProcessAttr process = {};
+    process.numaAttr.numaNodes = 0b00010001;
+
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&process));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-1));
+
+    ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
+    EXPECT_EQ(-1, ret);
+}
+
+TEST_F(InterfaceTest, AddProcessTrackingHAMScanSuccess)
+{
+    int ret;
+    int len = 1;
+    pid_t pid = 1234;
+    uint32_t scanTime = 100;
+    uint32_t duration = 1;
+    int scanType = 0;
+    ProcessAttr process = {};
+    process.numaAttr.numaNodes = 0b00010001;
+
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&process));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
+
+    ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapAddProcessTrackingFailed)
+{
+    pid_t pidArr[] = { 1 };
+    uint32_t scanTime[] = { MIN_SCAN_TIME };
+    uint32_t duration[] = { 1 };
+    EnvAtomicSet(&g_status, 0);
+    int ret = ubturbo_smap_process_tracking_add(nullptr, nullptr, nullptr, 1, 0);
+    EXPECT_EQ(-EPERM, ret);
+    // mutex should be unlocked in any case
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckAddProcessTrackingMsg).stubs().will(returnValue(-EINVAL)).then(returnValue(0));
+    MOCKER(AddProcessTracking).stubs().will(returnValue(-EINVAL));
+    ret = ubturbo_smap_process_tracking_add(pidArr, scanTime, duration, 1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+    ret = ubturbo_smap_process_tracking_add(pidArr, scanTime, duration, 1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+}
+
+TEST_F(InterfaceTest, TestSmapAddProcessTrackingCheckAddManage)
+{
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    pid_t pidArr[] = { 1 };
+    uint32_t scanTime[] = { MIN_SCAN_TIME };
+    uint32_t duration[] = { 1 };
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckAddProcessTrackingMsg).stubs().will(returnValue(0));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttr *)nullptr));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
+    MOCKER(ProcessAddManage).stubs().will(returnValue(-EINVAL));
+    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    int ret = ubturbo_smap_process_tracking_add(pidArr, scanTime, duration, 1, 0);
+    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+
+    GlobalMockObject::verify();
+    MOCKER(CheckAddProcessTrackingMsg).stubs().will(returnValue(0));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttr *)nullptr));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
+    MOCKER(ProcessAddManage).stubs().will(returnValue(0));
+    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    ret = ubturbo_smap_process_tracking_add(pidArr, scanTime, duration, 1, 0);
+    EXPECT_EQ(0, ret);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+}
+
+extern "C" int CheckRemoveProcessTrackingMsg(pid_t *pidArr, int len);
+TEST_F(InterfaceTest, TestCheckRemoveProcessTrackingMsgFailed)
+{
+    // null ptr input
+    pid_t pidArr[] = { 1 };
+    int ret = CheckRemoveProcessTrackingMsg(nullptr, 1);
+    EXPECT_EQ(-EINVAL, ret);
+
+    // invalid len
+    ret = CheckRemoveProcessTrackingMsg(pidArr, 0);
+    EXPECT_EQ(-EINVAL, ret);
+    ret = CheckRemoveProcessTrackingMsg(pidArr, MAX_NR_REMOVE + 1);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckRemoveProcessTrackingMsgCheckProcess)
+{
+    struct ProcessManager manager;
+    ProcessAttr current;
+    pid_t *pidArr = (pid_t *)malloc(sizeof(*pidArr));
+    ASSERT_NE(nullptr, pidArr);
+    pidArr[0] = 1;
+
+    // to-remove pid not exist in ProcessManager
+    EnvMutexInit(&manager.lock);
+    manager.processes = &current;
+    current.pid = pidArr[0] + 1;
+    current.state = PROC_IDLE;
+    current.next = nullptr;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    int ret = CheckRemoveProcessTrackingMsg(pidArr, 1);
+    EXPECT_EQ(0, ret);
+
+    // pid scanType check
+    current.pid = pidArr[0];
+    current.scanType = NORMAL_SCAN;
+    ret = CheckRemoveProcessTrackingMsg(pidArr, 1);
+    EXPECT_EQ(-EINVAL, ret);
+
+    current.scanType = HAM_SCAN;
+    ret = CheckRemoveProcessTrackingMsg(pidArr, 1);
+    EXPECT_EQ(0, ret);
+    free(pidArr);
+}
+
+TEST_F(InterfaceTest, TestCheckRemoveProcessTrackingMsgPidStateCheck)
+{
+    struct ProcessManager manager;
+    ProcessAttr current;
+    pid_t pidArr[] = { 1 };
+
+    manager.processes = &current;
+    current.pid = pidArr[0];
+    current.state = PROC_MIGRATE;
+    current.scanType = HAM_SCAN;
+    current.next = nullptr;
+    EnvMutexInit(&manager.lock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    int ret = CheckRemoveProcessTrackingMsg(pidArr, 1);
+    EXPECT_EQ(-EINVAL, ret);
+
+    current.state = PROC_BACK;
+    ret = CheckRemoveProcessTrackingMsg(pidArr, 1);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapRemoveProcessTrackingOne)
+{
+    pid_t pidArr[] = { 1 };
+    struct ProcessManager manager;
+    EnvAtomicSet(&g_status, 0);
+    int ret = ubturbo_smap_process_tracking_remove(nullptr, 1, 0);
+    EXPECT_EQ(-EPERM, ret);
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(CheckRemoveProcessTrackingMsg).stubs().will(returnValue(-1));
+    ret = ubturbo_smap_process_tracking_remove(pidArr, 1, 0);
+    EXPECT_EQ(-1, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapRemoveProcessTrackingTwo)
+{
+    pid_t pidArr[] = { 1 };
+    struct ProcessManager manager;
+    EnvAtomicSet(&g_status, 1);
+    EnvMutexInit(&manager.lock);
+    MOCKER(CheckRemoveProcessTrackingMsg).stubs().will(returnValue(0));
+    MOCKER(AccessIoctlRemovePid).stubs().will(returnValue(-1));
+    int ret = ubturbo_smap_process_tracking_remove(pidArr, 1, 0);
+    EXPECT_EQ(-1, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(CheckRemoveProcessTrackingMsg).stubs().will(returnValue(0));
+    MOCKER(AccessIoctlRemovePid).stubs().will(returnValue(0));
+    MOCKER(RemoveManagedProcess).stubs();
+    ret = ubturbo_smap_process_tracking_remove(pidArr, 1, 0);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapQueryProcessConfigInvalidNid)
+{
+    int ret;
+    int nid;
+    int inLen;
+    int outLen;
+    struct OldProcessPayload payload[4] = {};
+
+    inLen = sizeof(payload) / sizeof(payload[0]);
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(false));
+    ret = ubturbo_smap_process_config_query(nid, payload, inLen, &outLen);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapQueryProcessConfigNullResult)
+{
+    int ret;
+    int nid;
+    int inLen;
+    int outLen;
+    struct OldProcessPayload payload[4] = {};
+
+    inLen = sizeof(payload) / sizeof(payload[0]);
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    ret = ubturbo_smap_process_config_query(nid, nullptr, inLen, &outLen);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapQueryProcessConfigInvalidLen)
+{
+    int ret;
+    int nid;
+    int inLen;
+    int outLen;
+    struct OldProcessPayload payload[4] = {};
+
+    inLen = 0;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    ret = ubturbo_smap_process_config_query(nid, payload, inLen, &outLen);
+    EXPECT_EQ(-EINVAL, ret);
+
+    inLen = sizeof(payload) / sizeof(payload[0]);
+    ret = ubturbo_smap_process_config_query(nid, payload, inLen, nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapQueryProcessConfigNormal)
+{
+    int ret;
+    int inLen;
+    int outLen;
+    int nrLocalNuma = 2;
+    int nid = nrLocalNuma + 1;
+    struct OldProcessPayload payload[2] = {};
+    struct ProcessManager manager = {
+        .processes = nullptr,
+        .nrLocalNuma = 4,
+    };
+    ProcessAttr *attr;
+    ProcessAttr *attr1;
+    ProcessAttr *attr2;
+
+    attr1 = (ProcessAttr *)calloc(1, sizeof(*attr1));
+    attr2 = (ProcessAttr *)calloc(1, sizeof(*attr2));
+
+    ASSERT_NE(nullptr, attr1);
+    ASSERT_NE(nullptr, attr2);
+
+    attr1->type = VM_TYPE;
+    attr1->pid = 1025;
+    attr1->state = PROC_IDLE;
+    attr1->scanTime = VM_LIGHT_STABLE_SCAN_CYCLE;
+    attr1->scanType = NORMAL_SCAN;
+    attr1->numaAttr.numaNodes = 0b00010010;
+    attr1->initLocalMemRatio = 25;
+    attr2->type = VM_TYPE;
+    attr2->pid = 1026;
+    attr2->state = PROC_MOVE;
+    attr2->scanTime = VM_LIGHT_STABLE_SCAN_CYCLE;
+    attr2->scanType = NORMAL_SCAN;
+    attr2->numaAttr.numaNodes = 0b00100001;
+    attr2->initLocalMemRatio = 25;
+
+    EnvAtomicSet(&g_status, 0);
+    ret = ubturbo_smap_process_config_query(5, payload, inLen, &outLen);
+    EXPECT_EQ(-EPERM, ret);
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    LinkedListAdd(&manager.processes, &attr1);
+    LinkedListAdd(&manager.processes, &attr2);
+    EnvMutexInit(&manager.lock);
+    inLen = sizeof(payload) / sizeof(payload[0]);
+    ret = ubturbo_smap_process_config_query(5, payload, inLen, &outLen);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, outLen);
+    EXPECT_EQ(attr2->pid, payload[0].pid);
+    EXPECT_EQ(attr2->type, payload[0].type);
+    EXPECT_EQ(attr2->state, payload[0].state);
+    EXPECT_EQ(attr2->scanTime, payload[0].scanTime);
+    EXPECT_EQ(attr2->scanType, payload[0].scanType);
+    EXPECT_EQ(attr2->strategyAttr.initRemoteMemRatio[0][0], payload[0].ratio);
+    EXPECT_EQ(GetAttrL1(attr2), payload[0].l1Node[0]);
+    EXPECT_EQ(GetAttrL2(attr2), payload[0].l2Node[0]);
+    EXPECT_EQ(NUMA_NO_NODE, payload[0].l1Node[1]);
+    EXPECT_EQ(NUMA_NO_NODE, payload[0].l2Node[1]);
+
+    attr = manager.processes;
+    while (attr) {
+        LinkedListRemove(&attr, &manager.processes);
+        attr = manager.processes;
+    }
+}
+
+TEST_F(InterfaceTest, TestProcessAddTrackingManageNullMsg)
+{
+    int ret = ProcessAddTrackingManage(nullptr, VM_TYPE);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapQueryProcessConfigNormalTwo)
+{
+    int ret;
+    int inLen;
+    int outLen;
+    int nrLocalNuma = 2;
+    int nid = nrLocalNuma + 1;
+    ProcessAttr *attr;
+    ProcessAttr *attr1;
+    ProcessAttr *attr2;
+    struct OldProcessPayload payload[2] = {};
+    struct ProcessManager manager = {
+        .processes = nullptr,
+        .nrLocalNuma = 4,
+    };
+    attr1 = (ProcessAttr *)calloc(1, sizeof(*attr1));
+    attr2 = (ProcessAttr *)calloc(1, sizeof(*attr2));
+
+    attr1->type = PROCESS_TYPE;
+    attr1->pid = 1063;
+    attr1->state = PROC_IDLE;
+    attr1->scanTime = PROCESS_HEAVY_STABLE_SCAN_CYCLE;
+    attr1->scanType = NORMAL_SCAN;
+    attr1->numaAttr.numaNodes = 0b00010010;
+    attr1->initLocalMemRatio = 50;
+    attr2->type = PROCESS_TYPE;
+    attr2->pid = 1026;
+    attr2->state = PROC_MOVE;
+    attr2->scanTime = PROCESS_HEAVY_STABLE_SCAN_CYCLE;
+    attr2->scanType = NORMAL_SCAN;
+    attr2->numaAttr.numaNodes = 0b00100001;
+    attr2->initLocalMemRatio = 50;
+
+    EnvAtomicSet(&g_status, 0);
+    ret = ubturbo_smap_process_config_query(5, payload, inLen, &outLen);
+    EXPECT_EQ(-EPERM, ret);
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    LinkedListAdd(&manager.processes, &attr1);
+    LinkedListAdd(&manager.processes, &attr2);
+    EnvMutexInit(&manager.lock);
+    inLen = sizeof(payload) / sizeof(payload[0]);
+    ret = ubturbo_smap_process_config_query(5, payload, inLen, &outLen);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, outLen);
+    EXPECT_EQ(attr2->pid, payload[0].pid);
+    EXPECT_EQ(attr2->type, payload[0].type);
+    EXPECT_EQ(attr2->state, payload[0].state);
+    EXPECT_EQ(attr2->scanTime, payload[0].scanTime);
+    EXPECT_EQ(attr2->scanType, payload[0].scanType);
+    free(attr1);
+    free(attr2);
+}
+
+TEST_F(InterfaceTest, TestSmapQueryProcessConfigNormalThree)
+{
+    int ret;
+    int inLen;
+    int outLen;
+    int nrLocalNuma = 2;
+    int nid = nrLocalNuma + 1;
+    ProcessAttr *attr;
+    ProcessAttr *attr1;
+    ProcessAttr *attr2;
+    struct OldProcessPayload payload[2] = {};
+    struct ProcessManager manager = {
+        .processes = nullptr,
+        .nrLocalNuma = 4,
+    };
+    attr1 = (ProcessAttr *)calloc(1, sizeof(*attr1));
+    attr2 = (ProcessAttr *)calloc(1, sizeof(*attr2));
+
+    attr1->type = PROCESS_TYPE;
+    attr1->pid = 2048;
+    attr1->state = PROC_IDLE;
+    attr1->scanTime = PROCESS_HEAVY_STABLE_SCAN_CYCLE;
+    attr1->scanType = NORMAL_SCAN;
+    attr1->numaAttr.numaNodes = 0b01000010;
+    attr1->initLocalMemRatio = 50;
+    attr2->type = PROCESS_TYPE;
+    attr2->pid = 3000;
+    attr2->state = PROC_MIGRATE;
+    attr2->scanTime = PROCESS_LIGHT_STABLE_SCAN_CYCLE;
+    attr2->scanType = NORMAL_SCAN;
+    attr2->numaAttr.numaNodes = 0b00100001;
+    attr2->initLocalMemRatio = 50;
+
+    EnvAtomicSet(&g_status, 0);
+    ret = ubturbo_smap_process_config_query(5, payload, inLen, &outLen);
+    EXPECT_EQ(-EPERM, ret);
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    LinkedListAdd(&manager.processes, &attr1);
+    LinkedListAdd(&manager.processes, &attr2);
+    EnvMutexInit(&manager.lock);
+    inLen = sizeof(payload) / sizeof(payload[0]);
+    ret = ubturbo_smap_process_config_query(5, payload, inLen, &outLen);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, outLen);
+    EXPECT_EQ(attr2->pid, payload[0].pid);
+    EXPECT_EQ(attr2->type, payload[0].type);
+    EXPECT_EQ(attr2->state, payload[0].state);
+    EXPECT_EQ(attr2->scanTime, payload[0].scanTime);
+    EXPECT_EQ(attr2->scanType, payload[0].scanType);
+    free(attr1);
+    free(attr2);
+}
+
+TEST_F(InterfaceTest, TestSmapQueryRemoteNumaFreqExceptionBranch)
+{
+    EnvAtomicSet(&g_status, 0);
+    int ret = ubturbo_smap_remote_numa_freq_query(nullptr, nullptr, 1);
+    EXPECT_EQ(-EPERM, ret);
+
+    EnvAtomicSet(&g_status, 1);
+    ret = ubturbo_smap_remote_numa_freq_query(nullptr, nullptr, 1);
+    EXPECT_EQ(-EINVAL, ret);
+
+    uint16_t numa;
+    uint64_t freq;
+    ret = ubturbo_smap_remote_numa_freq_query(&numa, &freq, 19);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapQueryRemoteNumaFreq)
+{
+    uint64_t freq[2] = { 0 };
+    uint16_t numa[2] = { 4, 5 };
+    struct ProcessManager manager = {
+        .processes = nullptr,
+        .nrLocalNuma = 4,
+    };
+    ProcessAttr attr1;
+    ProcessAttr attr2;
+    manager.processes = &attr1;
+    attr1.next = &attr2;
+    attr2.next = nullptr;
+
+    attr1.numaAttr.numaNodes = 0x11;
+    attr1.scanAttr.actCount[4].freqSum = 10;
+    attr2.numaAttr.numaNodes = 0x11;
+    attr2.scanAttr.actCount[4].freqSum = 10;
+
+    EnvMutexInit(&manager.lock);
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    int ret = ubturbo_smap_remote_numa_freq_query(numa, freq, 2);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(20, freq[0]);
+    EXPECT_EQ(0, freq[1]);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrRemoteNumaMatch)
+{
+    int ret;
+    struct MigrateEscapeMsg msg = {
+        .count = 1,
+    };
+    msg.payload[0].srcNid = 6;
+    msg.payload[0].pid = 1;
+
+    ProcessAttr attr = {};
+    attr.numaAttr.numaNodes = 0b01000001;
+    EnvMutexInit(&g_processManager.lock);
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    ret = IsPidArrRemoteNumaMatch(&msg);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrRemoteNumaMatchTwo)
+{
+    int ret;
+    struct MigrateEscapeMsg msg = {
+        .count = 1,
+    };
+    msg.payload[0].srcNid = 6;
+    msg.payload[0].pid = 1;
+
+    ProcessAttr *arr = nullptr;
+    ProcessAttr process = { .pid = 1 };
+    g_processManager.processes = &process;
+    process.numaAttr.numaNodes = 0b00100001;
+    EnvMutexInit(&g_processManager.lock);
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(arr));
+    ret = IsPidArrRemoteNumaMatch(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&process));
+    ret = IsPidArrRemoteNumaMatch(&msg);
+    EXPECT_EQ(-ENXIO, ret);
+}
+
+extern "C" int GetAttrNidInitRatio(pid_t pid, int nid);
+extern "C" int GetAttrNidInitMemSize(pid_t pid, int nid, uint64_t *memSize);
+extern "C" bool IsRemoteNidMemSizeValid(pid_t pid, int nid, uint64_t memSize);
+extern "C" int SmapMigratePidRemoteNumaCheckInner(struct MigrateEscapeMsg *msg);
+extern "C" int BuildMigRemoteNumaMsg(struct MigrateEscapeMsg *msg, struct MigPidRemoteNumaIoctlMsg *ioctlMsg);
+extern "C" int CheckSameMigrateNumaMsg(struct MigrateNumaMsg *msg);
+extern "C" bool IsScanTypeValid(pid_t *pidArr, int len);
+
+TEST_F(InterfaceTest, TestGetAttrNidInitRatio)
+{
+    ProcessAttr attr = { .pid = 1 };
+    attr.strategyAttr.initRemoteMemRatio[0][0] = 50.0;
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.processes = &attr;
+
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+    MOCKER(GetAttrL1).stubs().will(returnValue(0));
+
+    // Test that function can be called (coverage purpose)
+    GetAttrNidInitRatio(1, 4);
+
+    g_processManager.processes = nullptr;
+}
+
+TEST_F(InterfaceTest, TestGetAttrNidInitMemSize)
+{
+    ProcessAttr attr = { .pid = 1 };
+    attr.strategyAttr.memSize[0][0] = 1024;
+    attr.numaAttr.numaNodes = 0b00010001;
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.processes = &attr;
+    uint64_t memSize = 0;
+
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+
+    EXPECT_EQ(0, GetAttrNidInitMemSize(1, 4, &memSize));
+    EXPECT_EQ(1024, memSize);
+    EXPECT_EQ(-EINVAL, GetAttrNidInitMemSize(1, 4, nullptr));
+
+    g_processManager.processes = nullptr;
+}
+
+TEST_F(InterfaceTest, TestIsRemoteNidMemSizeValid)
+{
+    ProcessAttr attr = { .pid = 1 };
+    attr.strategyAttr.memSize[0][0] = 2048;
+    attr.numaAttr.numaNodes = 0b00010001;
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.processes = &attr;
+
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+
+    EXPECT_TRUE(IsRemoteNidMemSizeValid(1, 4, 2048));
+
+    g_processManager.processes = nullptr;
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaCheckInner)
+{
+    struct MigrateEscapeMsg msg = { .count = 1 };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    msg.payload[0].destNid = 5;
+    msg.payload[0].migrateMode = MIG_RATIO_MODE;
+    msg.payload[0].ratio = 50;
+
+    ProcessAttr attr = { .pid = 1 };
+    attr.strategyAttr.initRemoteMemRatio[0][0] = 100.0;
+    attr.numaAttr.numaNodes = 0b00110000;
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.processes = &attr;
+
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(GetRunMode).stubs().will(returnValue(WATERLINE_MODE));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+    MOCKER(GetAttrL1).stubs().will(returnValue(0));
+
+    // Test that function can be called (coverage purpose)
+    SmapMigratePidRemoteNumaCheckInner(&msg);
+
+    g_processManager.processes = nullptr;
+}
+
+TEST_F(InterfaceTest, TestBuildMigRemoteNumaMsg)
+{
+    struct MigrateEscapeMsg msg = { .count = 1 };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    msg.payload[0].destNid = 5;
+    msg.payload[0].ratio = 50;
+    msg.payload[0].memSize = 1024;
+
+    struct MigPidRemoteNumaIoctlMsg ioctlMsg = {};
+
+    ProcessAttr attr = { .pid = 1 };
+    attr.strategyAttr.initRemoteMemRatio[0][0] = 100.0;
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.processes = &attr;
+
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(GetRunMode).stubs().will(returnValue(WATERLINE_MODE));
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+    MOCKER(GetAttrL1).stubs().will(returnValue(0));
+
+    int ret = BuildMigRemoteNumaMsg(&msg, &ioctlMsg);
+    EXPECT_EQ(0, ret);
+
+    free(ioctlMsg.payloads);
+    free(ioctlMsg.migResArray);
+    g_processManager.processes = nullptr;
+}
+
+TEST_F(InterfaceTest, TestCheckSameMigrateNumaMsg)
+{
+    struct MigrateNumaMsg msg = { .count = 1 };
+    msg.srcNid = 4;
+    msg.destNid = 4;
+
+    // Test that function can be called (coverage purpose)
+    CheckSameMigrateNumaMsg(&msg);
+}
+
+TEST_F(InterfaceTest, TestIsScanTypeValid)
+{
+    pid_t pidArr[1] = { 1 };
+    ProcessAttr attr = { .pid = 1, .scanType = NORMAL_SCAN };
+    g_processManager.processes = &attr;
+
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+
+    bool ret = IsScanTypeValid(pidArr, 1);
+    EXPECT_EQ(true, ret);
+
+    g_processManager.processes = nullptr;
+}
+
+extern "C" int ubturbo_smap_same_remote_numa_migrate(struct MigrateNumaMsg *msg);
+TEST_F(InterfaceTest, TestSameRemoteNumaMigrateNotRunning)
+{
+    EnvAtomicSet(&g_status, 0);
+    struct MigrateNumaMsg msg = {};
+    int ret = ubturbo_smap_same_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSameRemoteNumaMigrateInvalidMsg)
+{
+    EnvAtomicSet(&g_status, 1);
+    struct MigrateNumaMsg msg = {};
+    msg.srcNid = 4;
+    msg.destNid = 4;  // same src and dest -> invalid
+    MOCKER(CheckSameMigrateNumaMsg).stubs().will(returnValue(-EINVAL));
+    int ret = ubturbo_smap_same_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+    EnvAtomicSet(&g_status, 0);
+}
+
+TEST_F(InterfaceTest, TestSameRemoteNumaMigrateSuccess)
+{
+    EnvAtomicSet(&g_status, 1);
+    struct MigrateNumaMsg msg = {};
+    msg.srcNid = 4;
+    msg.destNid = 5;
+    g_processManager.nrLocalNuma = 4;
+    MOCKER(CheckSameMigrateNumaMsg).stubs().will(returnValue(0));
+    MOCKER(MigrateRemoteNuma).stubs().will(returnValue(0));
+    MOCKER(ChangePidRemoteByNuma).stubs().will(returnValue(0));
+    int ret = ubturbo_smap_same_remote_numa_migrate(&msg);
+    EXPECT_EQ(0, ret);
+    EnvAtomicSet(&g_status, 0);
+}
+
+extern "C" void SmapAutoRemoveRemoteEmptyProcessesWithFreshData(void);
+TEST_F(InterfaceTest, TestSmapAutoRemoveRemoteEmptyProcesses)
+{
+    MOCKER(GetCurrentMaxNrPid).stubs().will(returnValue(0));
+    SmapAutoRemoveRemoteEmptyProcessesWithFreshData();
+}
+
+extern "C" bool IsScanTypeValid(pid_t *pidArr, int len);
+TEST_F(InterfaceTest, TestIsScanTypeValidHam)
+{
+    pid_t pidArr[1] = { 1 };
+    ProcessAttr attr = { .pid = 1, .scanType = HAM_SCAN };
+    g_processManager.processes = &attr;
+
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+
+    bool ret = IsScanTypeValid(pidArr, 1);
+    EXPECT_EQ(false, ret);  // HAM_SCAN is not valid for IsScanTypeValid
+
+    g_processManager.processes = nullptr;
+}
+
+extern "C" int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime,
+    uint32_t *duration, int len, int scanType);
+TEST_F(InterfaceTest, TestProcessTrackingAddInvalidScanType)
+{
+    pid_t pidArr[1] = { 1 };
+    uint32_t scanTime[1] = { 50 };
+    uint32_t duration[1] = { 1 };
+    EnvAtomicSet(&g_status, 0);
+    int ret = ubturbo_smap_process_tracking_add(pidArr, scanTime, duration, 1, -1);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+extern "C" int CheckMigrateBackReadyMsg(struct MigrateBackMsg *msg);
+TEST_F(InterfaceTest, TestCheckMigrateBackReadyMsg)
+{
+    struct MigrateBackMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].srcNid = 4;
+    msg.payload[0].destNid = 5;
+    ProcessAttr attr = { .pid = 1234, .state = PROC_IDLE };
+    attr.numaAttr.numaNodes = 0b00010001;
+    g_processManager.processes = &attr;
+    g_processManager.nrLocalNuma = 4;
+    EnvMutexInit(&g_processManager.lock);
+    MOCKER(IsAllL2NodePidInState).stubs().will(returnValue(true));
+    int ret = CheckMigrateBackReadyMsg(&msg);
+    EXPECT_EQ(0, ret);
+    g_processManager.processes = nullptr;
+}
+
+// === Additional tests for uncovered functions ===
+
+extern "C" bool IsPidArrValid(pid_t *pidArr, int len, bool ignoreUnmanaged);
+TEST_F(InterfaceTest, TestIsPidArrValidNullPtr)
+{
+    bool ret = IsPidArrValid(nullptr, 1, false);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrValidInvalidLen)
+{
+    pid_t pidArr[1] = { 123 };
+    bool ret = IsPidArrValid(pidArr, 0, false);
+    EXPECT_EQ(false, ret);
+
+    ret = IsPidArrValid(pidArr, MAX_NR_MIGOUT + 1, false);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrValidInvalidPid)
+{
+    pid_t pidArr[1] = { 123 };
+    MOCKER(PidIsValid).stubs().will(returnValue(false));
+    bool ret = IsPidArrValid(pidArr, 1, false);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrValidUnmanagedPid)
+{
+    pid_t pidArr[1] = { 123 };
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessAttr).stubs().will(returnValue((ProcessAttr *)nullptr));
+    bool ret = IsPidArrValid(pidArr, 1, false);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrValidIgnoreUnmanaged)
+{
+    pid_t pidArr[1] = { 123 };
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    bool ret = IsPidArrValid(pidArr, 1, true);
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrValidDuplicatePid)
+{
+    pid_t pidArr[2] = { 123, 123 };
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessAttr).stubs().will(returnValue((ProcessAttr *)nullptr));
+    bool ret = IsPidArrValid(pidArr, 2, true);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIoctlHandlerOpenFailed)
+{
+    int ret;
+    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(-1));
+    struct MigrateBackMsg msg = {};
+    ret = IoctlHandler(&msg, 0, nullptr);
+    EXPECT_EQ(-EBADF, ret);
+}
+
+TEST_F(InterfaceTest, TestIoctlHandlerIoctlFailed)
+{
+    int ret;
+    struct MigrateBackMsg msg = {};
+    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(10));
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-1));
+    ret = IoctlHandler(&msg, 0, nullptr);
+    EXPECT_EQ(-EBADF, ret);
+}
+
+TEST_F(InterfaceTest, TestIoctlHandlerSuccess)
+{
+    int ret;
+    struct MigrateBackMsg msg = {};
+    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(10));
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
+    ret = IoctlHandler(&msg, 0, nullptr);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" bool IsNidInArray(int *nidArray, int nidCnt, int targetNid);
+TEST_F(InterfaceTest, TestIsNidInArray)
+{
+    int nidArray[] = { 4, 5, 6 };
+    bool ret = IsNidInArray(nidArray, 3, 5);
+    EXPECT_EQ(true, ret);
+
+    ret = IsNidInArray(nidArray, 3, 7);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" bool HasDuplicateInt(const int *arr, int count);
+TEST_F(InterfaceTest, TestHasDuplicateInt)
+{
+    int arr[] = { 1, 2, 3 };
+    bool ret = HasDuplicateInt(arr, 3);
+    EXPECT_EQ(false, ret);
+
+    int arrDup[] = { 1, 2, 1 };
+    ret = HasDuplicateInt(arrDup, 3);
+    EXPECT_EQ(true, ret);
+}
+
+extern "C" int CheckMigOutSyncMsg(int pidType, uint64_t maxWaitTime);
+TEST_F(InterfaceTest, TestCheckMigOutSyncMsgInvalidWaitTime)
+{
+    int ret = CheckMigOutSyncMsg(PAGETYPE_HUGE, 5);
+    EXPECT_EQ(-EINVAL, ret);
+
+    ret = CheckMigOutSyncMsg(PAGETYPE_HUGE, 200000);
+    EXPECT_EQ(-EINVAL, ret);
+
+    MOCKER(GetRunMode).stubs().will(returnValue(WATERLINE_MODE));
+    ret = CheckMigOutSyncMsg(PAGETYPE_HUGE, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckMigOutSyncMsgNotMemPoolMode)
+{
+    MOCKER(GetRunMode).stubs().will(returnValue(WATERLINE_MODE));
+    int ret = CheckMigOutSyncMsg(PAGETYPE_HUGE, 15000);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckMigOutSyncMsgNotHugePidType)
+{
+    MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
+    int ret = CheckMigOutSyncMsg(PAGETYPE_NORMAL, 15000);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckMigOutSyncMsgValid)
+{
+    MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
+    int ret = CheckMigOutSyncMsg(PAGETYPE_HUGE, 15000);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" bool IsMigrateOutPayloadRemoteTargetZero(const struct MigrateOutPayload *payload);
+TEST_F(InterfaceTest, TestIsMigrateOutPayloadRemoteTargetZeroNull)
+{
+    bool ret = IsMigrateOutPayloadRemoteTargetZero(nullptr);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsMigrateOutPayloadRemoteTargetZeroInvalidCount)
+{
+    struct MigrateOutPayload payload = { .count = 0 };
+    bool ret = IsMigrateOutPayloadRemoteTargetZero(&payload);
+    EXPECT_EQ(false, ret);
+
+    payload.count = REMOTE_NUMA_NUM + 1;
+    ret = IsMigrateOutPayloadRemoteTargetZero(&payload);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsMigrateOutPayloadRemoteTargetZeroAllRatioZero)
+{
+    struct MigrateOutPayload payload = { .count = 1 };
+    payload.inner[0].migrateMode = MIG_RATIO_MODE;
+    payload.inner[0].ratio = 0;
+    bool ret = IsMigrateOutPayloadRemoteTargetZero(&payload);
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(InterfaceTest, TestIsMigrateOutPayloadRemoteTargetZeroRatioNonZero)
+{
+    struct MigrateOutPayload payload = { .count = 1 };
+    payload.inner[0].migrateMode = MIG_RATIO_MODE;
+    payload.inner[0].ratio = 25;
+    bool ret = IsMigrateOutPayloadRemoteTargetZero(&payload);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsMigrateOutPayloadRemoteTargetZeroMemSizeMode)
+{
+    struct MigrateOutPayload payload = { .count = 1 };
+    payload.inner[0].migrateMode = MIG_MEMSIZE_MODE;
+    payload.inner[0].memSize = 0;
+    bool ret = IsMigrateOutPayloadRemoteTargetZero(&payload);
+    EXPECT_EQ(true, ret);
+
+    payload.inner[0].memSize = 2048;
+    ret = IsMigrateOutPayloadRemoteTargetZero(&payload);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" bool IsMigrateBackNidDuplicatedBefore(struct MigrateBackMsg *msg, int idx);
+TEST_F(InterfaceTest, TestIsMigrateBackNidDuplicatedBefore)
+{
+    struct MigrateBackMsg msg = {};
+    msg.count = 3;
+    msg.payload[0].srcNid = 4;
+    msg.payload[1].srcNid = 5;
+    msg.payload[2].srcNid = 4;
+    bool ret = IsMigrateBackNidDuplicatedBefore(&msg, 2);
+    EXPECT_EQ(true, ret);
+
+    ret = IsMigrateBackNidDuplicatedBefore(&msg, 1);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" bool IsMigrateBackSourceNid(const struct MigrateBackMsg *msg, int nid);
+TEST_F(InterfaceTest, TestIsMigrateBackSourceNid)
+{
+    struct MigrateBackMsg msg = {};
+    msg.count = 2;
+    msg.payload[0].srcNid = 4;
+    msg.payload[1].srcNid = 5;
+    bool ret = IsMigrateBackSourceNid(&msg, 4);
+    EXPECT_EQ(true, ret);
+
+    ret = IsMigrateBackSourceNid(nullptr, 4);
+    EXPECT_EQ(false, ret);
+
+    ret = IsMigrateBackSourceNid(&msg, 6);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" bool IsAutoRemoveCandidate(ProcessAttr *attr);
+TEST_F(InterfaceTest, TestIsAutoRemoveCandidateNull)
+{
+    bool ret = IsAutoRemoveCandidate(nullptr);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsAutoRemoveCandidateNotEligible)
+{
+    ProcessAttr attr = {};
+    attr.autoRemoveWhenRemoteEmpty = true;
+    bool ret = IsAutoRemoveCandidate(&attr);
+    EXPECT_EQ(false, ret);
+
+    attr.autoRemoveWhenRemoteEmpty = false;
+    attr.groupPolicy.enabled = true;
+    ret = IsAutoRemoveCandidate(&attr);
+    EXPECT_EQ(false, ret);
+
+    attr.groupPolicy.enabled = false;
+    attr.scanType = STATISTIC_SCAN;
+    ret = IsAutoRemoveCandidate(&attr);
+    EXPECT_EQ(false, ret);
+
+    attr.scanType = NORMAL_SCAN;
+    attr.syncWaitRemoteEmpty = true;
+    ret = IsAutoRemoveCandidate(&attr);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsAutoRemoveCandidateEligible)
+{
+    ProcessAttr attr = {};
+    attr.autoRemoveWhenRemoteEmpty = true;
+    attr.syncWaitRemoteEmpty = false;
+    attr.groupPolicy.enabled = false;
+    attr.scanType = NORMAL_SCAN;
+    bool ret = IsAutoRemoveCandidate(&attr);
+    EXPECT_EQ(true, ret);
+}
+
+extern "C" bool IsPidAlreadyCollected(pid_t *pids, int count, pid_t pid);
+TEST_F(InterfaceTest, TestIsPidAlreadyCollected)
+{
+    pid_t pids[] = { 123, 456 };
+    bool ret = IsPidAlreadyCollected(pids, 2, 123);
+    EXPECT_EQ(true, ret);
+
+    ret = IsPidAlreadyCollected(pids, 2, 789);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" bool IsRemoveWholeProcess(const struct RemovePayload *payload);
+TEST_F(InterfaceTest, TestIsRemoveWholeProcess)
+{
+    struct RemovePayload payload = { .count = 0 };
+    bool ret = IsRemoveWholeProcess(&payload);
+    EXPECT_EQ(true, ret);
+
+    payload.count = 1;
+    ret = IsRemoveWholeProcess(&payload);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" int AccessRemovePid(pid_t pid);
+TEST_F(InterfaceTest, TestAccessRemovePidSuccess)
+{
+    MOCKER(AccessIoctlRemovePid).stubs().will(returnValue(0));
+    int ret = AccessRemovePid(123);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestAccessRemovePidFailed)
+{
+    MOCKER(AccessIoctlRemovePid).stubs().will(returnValue(-EBADF));
+    int ret = AccessRemovePid(123);
+    EXPECT_EQ(-EBADF, ret);
+}
+
+extern "C" uint32_t ClearRemovePayloadRemoteNodes(ProcessAttr *attr, const struct RemovePayload *payload);
+TEST_F(InterfaceTest, TestClearRemovePayloadRemoteNodes)
+{
+    ProcessAttr attr = {};
+    attr.numaAttr.numaNodes = 0b00010100;
+    struct RemovePayload payload = { .count = 1, .nid = { 4 } };
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    uint32_t ret = ClearRemovePayloadRemoteNodes(&attr, &payload);
+    EXPECT_NE(attr.numaAttr.numaNodes, ret);
+}
+
+extern "C" int CheckSmapRemoveGroupedPidLocked(struct RemoveMsg *msg);
+TEST_F(InterfaceTest, TestCheckSmapRemoveGroupedPidLockedWholeProcessOk)
+{
+    struct RemoveMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].pid = 123;
+    msg.payload[0].count = 0;
+    int ret = CheckSmapRemoveGroupedPidLocked(&msg);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveGroupedPidLockedPartialRemoveNonGrouped)
+{
+    struct RemoveMsg msg = {};
+    ProcessAttr attr = {};
+    attr.groupPolicy.enabled = false;
+    msg.count = 1;
+    msg.payload[0].pid = 123;
+    msg.payload[0].count = 1;
+    msg.payload[0].nid[0] = 4;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    int ret = CheckSmapRemoveGroupedPidLocked(&msg);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveGroupedPidLockedPartialRemoveGrouped)
+{
+    struct RemoveMsg msg = {};
+    ProcessAttr attr = {};
+    attr.groupPolicy.enabled = true;
+    msg.count = 1;
+    msg.payload[0].pid = 123;
+    msg.payload[0].count = 1;
+    msg.payload[0].nid[0] = 4;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    int ret = CheckSmapRemoveGroupedPidLocked(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSmapRemoveGroupedPidLockedPartialRemoveNoAttr)
+{
+    struct RemoveMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].pid = 123;
+    msg.payload[0].count = 1;
+    msg.payload[0].nid[0] = 4;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttr *)nullptr));
+    int ret = CheckSmapRemoveGroupedPidLocked(&msg);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" void BuildGroupedNodeBitmap(const struct GroupedMigrateOutPayload *payload, uint32_t *nodeBitmap);
+TEST_F(InterfaceTest, TestBuildGroupedNodeBitmap)
+{
+    struct GroupedMigrateOutPayload payload = {};
+    uint32_t nodeBitmap = 0;
+    g_processManager.nrLocalNuma = 4;
+    payload.groupCount = 1;
+    payload.groups[0].localCount = 1;
+    payload.groups[0].locals[0].nid = 0;
+    payload.groups[0].targetCount = 1;
+    payload.groups[0].targets[0].nid = 4;
+    BuildGroupedNodeBitmap(&payload, &nodeBitmap);
+    EXPECT_NE(0, nodeBitmap);
+}
+
+extern "C" bool IsGroupedPendingUpdate(pid_t pid);
+TEST_F(InterfaceTest, TestIsGroupedPendingUpdateNullAttr)
+{
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttr *)nullptr));
+    bool ret = IsGroupedPendingUpdate(123);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsGroupedPendingUpdateNotGrouped)
+{
+    ProcessAttr attr = {};
+    attr.groupPolicy.enabled = false;
+    attr.state = PROC_MIGRATE;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    bool ret = IsGroupedPendingUpdate(123);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsGroupedPendingUpdateGroupedMigrating)
+{
+    ProcessAttr attr = {};
+    attr.groupPolicy.enabled = true;
+    attr.state = PROC_MIGRATE;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    bool ret = IsGroupedPendingUpdate(123);
+    EXPECT_EQ(true, ret);
+}
+
+extern "C" bool HasGroupedPendingUpdate(const bool *pendingUpdate, int count);
+TEST_F(InterfaceTest, TestHasGroupedPendingUpdate)
+{
+    bool pending[] = { false, false };
+    bool ret = HasGroupedPendingUpdate(pending, 2);
+    EXPECT_EQ(false, ret);
+
+    bool pending2[] = { false, true };
+    ret = HasGroupedPendingUpdate(pending2, 2);
+    EXPECT_EQ(true, ret);
+}
+
+extern "C" bool IsGroupedAttrByRemoteNid(ProcessAttr *attr, int remoteNid);
+TEST_F(InterfaceTest, TestIsGroupedAttrByRemoteNidNull)
+{
+    bool ret = IsGroupedAttrByRemoteNid(nullptr, 4);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsGroupedAttrByRemoteNidNotGrouped)
+{
+    ProcessAttr attr = {};
+    attr.groupPolicy.enabled = false;
+    bool ret = IsGroupedAttrByRemoteNid(&attr, 4);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsGroupedAttrByRemoteNidMatched)
+{
+    ProcessAttr attr = {};
+    attr.groupPolicy.enabled = true;
+    attr.groupPolicy.groupCount = 1;
+    attr.groupPolicy.groups[0].targetCount = 1;
+    attr.groupPolicy.groups[0].targets[0].nid = 4;
+    bool ret = IsGroupedAttrByRemoteNid(&attr, 4);
+    EXPECT_EQ(true, ret);
+
+    ret = IsGroupedAttrByRemoteNid(&attr, 5);
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" bool IsAnyGroupedPidOnRemoteNid(int remoteNid);
+TEST_F(InterfaceTest, TestIsAnyGroupedPidOnRemoteNidNoProcess)
+{
+    g_processManager.processes = nullptr;
+    bool ret = IsAnyGroupedPidOnRemoteNid(4);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsAnyGroupedPidOnRemoteNidFound)
+{
+    ProcessAttr attr = {};
+    attr.groupPolicy.enabled = true;
+    attr.groupPolicy.groupCount = 1;
+    attr.groupPolicy.groups[0].targetCount = 1;
+    attr.groupPolicy.groups[0].targets[0].nid = 4;
+    attr.next = nullptr;
+    g_processManager.processes = &attr;
+    bool ret = IsAnyGroupedPidOnRemoteNid(4);
+    EXPECT_EQ(true, ret);
+
+    ret = IsAnyGroupedPidOnRemoteNid(5);
+    EXPECT_EQ(false, ret);
+    g_processManager.processes = nullptr;
+}
+
+extern "C" int CheckMigrateNumaMsg(struct MigrateNumaMsg *msg);
+TEST_F(InterfaceTest, TestCheckMigrateNumaMsgNull)
+{
+    int ret = CheckMigrateNumaMsg(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckMigrateNumaMsgSameNid)
+{
+    struct MigrateNumaMsg msg = {};
+    msg.srcNid = 4;
+    msg.destNid = 4;
+    int ret = CheckMigrateNumaMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckMigrateNumaMsgInvalidSrcNid)
+{
+    struct MigrateNumaMsg msg = {};
+    msg.srcNid = 4;
+    msg.destNid = 5;
+    msg.count = 1;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(false));
+    int ret = CheckMigrateNumaMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckMigrateNumaMsgInvalidCount)
+{
+    struct MigrateNumaMsg msg = {};
+    msg.srcNid = 4;
+    msg.destNid = 5;
+    msg.count = 0;
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    int ret = CheckMigrateNumaMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int CheckSameMigrateNumaMsg(struct MigrateNumaMsg *msg);
+TEST_F(InterfaceTest, TestCheckSameMigrateNumaMsgNull)
+{
+    int ret = CheckSameMigrateNumaMsg(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckSameMigrateNumaMsgDifferentNids)
+{
+    struct MigrateNumaMsg msg = {};
+    msg.srcNid = 4;
+    msg.destNid = 5;
+    int ret = CheckSameMigrateNumaMsg(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckQueryVMFreqMsgValidNullData)
+{
+    int ret = CheckQueryVMFreqMsgValid(1, nullptr, 10, nullptr, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckQueryVMFreqMsgValidZeroLength2)
+{
+    uint16_t data[10];
+    uint16_t lengthOut = 0;
+    int ret = CheckQueryVMFreqMsgValid(1, data, 0, &lengthOut, 0);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckQueryVMFreqMsgValidInvalidSource2)
+{
+    uint16_t data[10];
+    uint16_t lengthOut = 0;
+    int ret = CheckQueryVMFreqMsgValid(1, data, 10, &lengthOut, MAX_SOURCE);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestCheckQueryVMFreqMsgValidNotManaged2)
+{
+    uint16_t data[10];
+    uint16_t lengthOut = 0;
+    MOCKER(GetProcessAttr).stubs().will(returnValue((ProcessAttr *)nullptr));
+    int ret = CheckQueryVMFreqMsgValid(1, data, 10, &lengthOut, NORMAL_DATA_SOURCE);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int QueryVMFreqFromUser(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut);
+TEST_F(InterfaceTest, TestQueryVMFreqFromUserPidNotFound2)
+{
+    uint16_t data[10];
+    uint16_t lengthOut = 0;
+    EnvMutexInit(&g_processManager.lock);
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttr *)nullptr));
+    int ret = QueryVMFreqFromUser(1, data, 10, &lengthOut);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestQueryVMFreqFromUserZeroActcLen2)
+{
+    uint16_t data[10];
+    uint16_t lengthOut = 0;
+    ProcessAttr attr = {};
+    EnvMutexInit(&g_processManager.lock);
+    g_processManager.processes = &attr;
+    int ret = QueryVMFreqFromUser(1, data, 10, &lengthOut);
+    EXPECT_EQ(-EINVAL, ret);
+    g_processManager.processes = nullptr;
+}
+
+extern "C" void SetSyncWaitRemoteEmpty(struct MigrateOutMsg *msg, bool enable);
+TEST_F(InterfaceTest, TestSetSyncWaitRemoteEmptyNull)
+{
+    SetSyncWaitRemoteEmpty(nullptr, true);
+}
+
+TEST_F(InterfaceTest, TestSetSyncWaitRemoteEmptyInvalidCount)
+{
+    struct MigrateOutMsg msg = {};
+    msg.count = 0;
+    SetSyncWaitRemoteEmpty(&msg, true);
+}
+
+extern "C" bool ubturbo_smap_is_running(void);
+TEST_F(InterfaceTest, TestUbturboSmapIsRunning)
+{
+    EnvAtomicSet(&g_status, RUNNING);
+    bool ret = ubturbo_smap_is_running();
+    EXPECT_EQ(true, ret);
+
+    EnvAtomicSet(&g_status, SLEEP);
+    ret = ubturbo_smap_is_running();
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" int ubturbo_smap_run_mode_set(int runMode);
+TEST_F(InterfaceTest, TestSmapRunModeSetNotRunning)
+{
+    EnvAtomicSet(&g_status, SLEEP);
+    int ret = ubturbo_smap_run_mode_set(WATERLINE_MODE);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapRunModeSetInvalidMode)
+{
+    EnvAtomicSet(&g_status, RUNNING);
+    int ret = ubturbo_smap_run_mode_set(MAX_RUN_MODE);
+    EXPECT_EQ(-EINVAL, ret);
+
+    ret = ubturbo_smap_run_mode_set(-1);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapRunModeSetMemPoolNotHugeMode)
+{
+    EnvAtomicSet(&g_status, RUNNING);
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    int ret = ubturbo_smap_run_mode_set(MEM_POOL_MODE);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapRunModeSetWaterlineSuccess)
+{
+    EnvAtomicSet(&g_status, RUNNING);
+    MOCKER(SyncRunMode).stubs().will(returnValue(0));
+    int ret = ubturbo_smap_run_mode_set(WATERLINE_MODE);
+    EXPECT_EQ(0, ret);
+    EnvAtomicSet(&g_status, SLEEP);
+}
+
+extern "C" void ubturbo_smap_urgent_migrate_out(uint64_t size);
+TEST_F(InterfaceTest, TestUbturboSmapUrgentMigrateOutNotRunning)
+{
+    EnvAtomicSet(&g_status, SLEEP);
+    ubturbo_smap_urgent_migrate_out(100);
+}
+
+extern "C" int ubturbo_smap_remote_numa_info_set(struct SetRemoteNumaInfoMsg *msg);
+TEST_F(InterfaceTest, TestSmapRemoteNumaInfoSetNotRunning)
+{
+    EnvAtomicSet(&g_status, SLEEP);
+    int ret = ubturbo_smap_remote_numa_info_set(nullptr);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapRemoteNumaInfoSetNullMsg)
+{
+    EnvAtomicSet(&g_status, RUNNING);
+    int ret = ubturbo_smap_remote_numa_info_set(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+    EnvAtomicSet(&g_status, SLEEP);
+}
+
+TEST_F(InterfaceTest, TestSmapRemoteNumaInfoSetInvalidSrcNid)
+{
+    struct SetRemoteNumaInfoMsg msg = {};
+    msg.srcNid = 0;
+    msg.destNid = 5;
+    msg.size = 100;
+    EnvAtomicSet(&g_status, RUNNING);
+    struct ProcessManager pm = { .nrLocalNuma = 4 };
+    MOCKER(GetProcessManager).stubs().will(returnValue(&pm));
+    MOCKER(IsLocalNidValid).stubs().will(returnValue(false));
+    int ret = ubturbo_smap_remote_numa_info_set(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+    EnvAtomicSet(&g_status, SLEEP);
+}
+
+extern "C" int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource);
+TEST_F(InterfaceTest, TestSmapFreqQueryNotRunning)
+{
+    uint16_t data[10];
+    uint32_t lengthOut;
+    EnvAtomicSet(&g_status, SLEEP);
+    int ret = ubturbo_smap_freq_query(1, data, 10, &lengthOut, 0);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+extern "C" int ubturbo_smap_stop(void);
+TEST_F(InterfaceTest, TestSmapStopAlreadyStopped)
+{
+    EnvAtomicSet(&g_status, SLEEP);
+    int ret = ubturbo_smap_stop();
+    EXPECT_EQ(-EPERM, ret);
+}
+
+extern "C" int ubturbo_smap_process_migrate_enable(pid_t *pidArr, int len, int enable, int flags);
+TEST_F(InterfaceTest, TestSmapProcessMigrateEnableNotRunning)
+{
+    EnvAtomicSet(&g_status, SLEEP);
+    pid_t pidArr[1] = { 123 };
+    int ret = ubturbo_smap_process_migrate_enable(pidArr, 1, ENABLE_PROCESS_MIGRATE, 0);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapProcessMigrateEnableInvalidEnable)
+{
+    EnvAtomicSet(&g_status, RUNNING);
+    pid_t pidArr[1] = { 123 };
+    int ret = ubturbo_smap_process_migrate_enable(pidArr, 1, 5, 0);
+    EXPECT_EQ(-EINVAL, ret);
+    EnvAtomicSet(&g_status, SLEEP);
+}
+
+extern "C" int ubturbo_smap_remote_numa_migrate(struct MigrateNumaMsg *msg);
+TEST_F(InterfaceTest, TestSmapRemoteNumaMigrateNotRunning)
+{
+    EnvAtomicSet(&g_status, SLEEP);
+    int ret = ubturbo_smap_remote_numa_migrate(nullptr);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+extern "C" int ubturbo_smap_same_remote_numa_migrate(struct MigrateNumaMsg *msg);
+TEST_F(InterfaceTest, TestSmapSameRemoteNumaMigrateNotRunning)
+{
+    EnvAtomicSet(&g_status, SLEEP);
+    int ret = ubturbo_smap_same_remote_numa_migrate(nullptr);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+extern "C" int ubturbo_smap_process_tracking_remove(pid_t *pidArr, int len, int flag);
+TEST_F(InterfaceTest, TestSmapProcessTrackingRemoveNotRunning)
+{
+    EnvAtomicSet(&g_status, SLEEP);
+    pid_t pidArr[1] = { 123 };
+    int ret = ubturbo_smap_process_tracking_remove(pidArr, 1, 0);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+extern "C" void ClearMigrateBackBusyForbiddenBefore(struct MigrateBackMsg *msg, int count);
+TEST_F(InterfaceTest, TestClearMigrateBackBusyForbiddenBefore)
+{
+    struct MigrateBackMsg msg = {};
+    msg.count = 2;
+    msg.payload[0].srcNid = 4;
+    msg.payload[1].srcNid = 4;
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_MIGBACK_BUSY);
+    ClearMigrateBackBusyForbiddenBefore(&msg, 1);
+    EXPECT_EQ(0, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+extern "C" void CompleteMigrateBackForbidden(struct MigrateBackMsg *msg);
+TEST_F(InterfaceTest, TestCompleteMigrateBackForbidden)
+{
+    struct MigrateBackMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].srcNid = 4;
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_MIGBACK_BUSY);
+    CompleteMigrateBackForbidden(&msg);
+    EXPECT_EQ(NODE_FORBIDDEN_MIGBACK_DONE, EnvAtomicRead(&g_forbiddenNodes[4]));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+extern "C" void ClearMigrateBackBusyForbidden(struct MigrateBackMsg *msg);
+TEST_F(InterfaceTest, TestClearMigrateBackBusyForbidden)
+{
+    struct MigrateBackMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].srcNid = 4;
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_MIGBACK_BUSY);
+    ClearMigrateBackBusyForbidden(&msg);
+    EXPECT_EQ(0, EnvAtomicRead(&g_forbiddenNodes[4]));
+}
+
+/* ====== Coverage-boosting tests for smap_interface.c ====== */
+
+extern "C" bool IsPidArrValid(pid_t *pidArr, int len, bool ignoreUnmanaged);
+TEST_F(InterfaceTest, TestIsPidArrValidNull)
+{
+    bool ret = IsPidArrValid(nullptr, 1, false);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrValidZeroLen)
+{
+    pid_t arr[1] = {1};
+    bool ret = IsPidArrValid(arr, 0, false);
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsPidArrValidTooMany)
+{
+    pid_t arr[MAX_2M_PROCESSES_CNT + 1];
+    bool ret = IsPidArrValid(arr, MAX_2M_PROCESSES_CNT + 1, false);
+    EXPECT_EQ(false, ret);
+}
+

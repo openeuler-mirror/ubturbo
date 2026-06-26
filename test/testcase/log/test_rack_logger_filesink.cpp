@@ -6,14 +6,14 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <mockcpp/mockcpp.hpp>
+#include <sys/stat.h>
 #include <sys/syslog.h>
+#include <unistd.h>
 #include <chrono>
+#include <filesystem>
+#include <mockcpp/mockcpp.hpp>
 #include <sstream>
 #include <thread>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <filesystem>
 
 namespace fs = std::filesystem;
 using namespace ::testing;
@@ -317,7 +317,7 @@ TEST_F(TestRackLoggerFilesink, FileIndexIncrement)
     TurboLoggerEntry rackLoggerEntry3("test_log", TurboLogLevel::INFO, "Test.log", "TestFunction", 3);
     // 设置rackLoggerEntry4的行数为4
     TurboLoggerEntry rackLoggerEntry4("test_log", TurboLogLevel::INFO, "Test.log", "TestFunction", 4);
-    TurboLoggerEntry* entrys[] = {&rackLoggerEntry1, &rackLoggerEntry2, &rackLoggerEntry3, &rackLoggerEntry4};
+    TurboLoggerEntry *entrys[] = {&rackLoggerEntry1, &rackLoggerEntry2, &rackLoggerEntry3, &rackLoggerEntry4};
     // 将4条日志消息写入
     for (const auto &entry : entrys) {
         ASSERT_TRUE(sink.Write(*entry));
@@ -344,14 +344,14 @@ TEST_F(TestRackLoggerFilesink, LogFilePermissions)
 {
     RackLoggerFilesink sink(currentPath + FILE_PATH, 1024, 16); // 1024设置为文件最大大小，16设置为文件最大数量
     TurboLoggerEntry rackLoggerEntry1("test_log", TurboLogLevel::INFO, "Test.log", "TestFunction",
-        1); // rackLoggerEntry1的行数为1
+                                      1); // rackLoggerEntry1的行数为1
     ASSERT_TRUE(sink.Write(rackLoggerEntry1));
 
     auto perms = fs::status(currentPath + FILE_PATH + "test_log.log").permissions();
     EXPECT_TRUE((perms & fs::perms::owner_read) != fs::perms::none);
     EXPECT_TRUE((perms & fs::perms::owner_read) != fs::perms::none);
     EXPECT_TRUE((perms & ~(fs::perms::owner_read | fs::perms::owner_write)) == fs::perms::none); // 确保只有600权限
-    
+
     // ASSERT_EQ(perms, fs::perms::owner_read | fs::perms::owner_write); // 检查日志文件权限是否为600
 }
 
@@ -422,19 +422,20 @@ TEST_F(TestRackLoggerFilesink, TestIsFileStatusChanged)
 {
     int fileMaxSize = 1024;
     int fileMaxNum = 16;
-    RackLoggerFilesink sink(currentPath + FILE_PATH, fileMaxSize, fileMaxNum); // 1024设置为文件最大大小，16设置为文件最大数量
+    RackLoggerFilesink sink(currentPath + FILE_PATH, fileMaxSize,
+                            fileMaxNum); // 1024设置为文件最大大小，16设置为文件最大数量
     TurboLoggerEntry rackLoggerEntry("test_log", TurboLogLevel::INFO, "Test.log", "TestFunction", 1);
     sink.Write(rackLoggerEntry);
     std::string fileName = "test_log";
     ASSERT_FALSE(sink.IsFileStatusChanged(fileName));
 }
 
-
 TEST_F(TestRackLoggerFilesink, TestOpenFileFailed)
 {
     int fileMaxSize = 1024;
     int fileMaxNum = 16;
-    RackLoggerFilesink sink(currentPath + FILE_PATH, fileMaxSize, fileMaxNum); // 1024设置为文件最大大小，16设置为文件最大数量
+    RackLoggerFilesink sink(currentPath + FILE_PATH, fileMaxSize,
+                            fileMaxNum); // 1024设置为文件最大大小，16设置为文件最大数量
     std::string invalidFile = "/dev/null/invalid";
 
     EXPECT_FALSE(sink.OpenFile(invalidFile));

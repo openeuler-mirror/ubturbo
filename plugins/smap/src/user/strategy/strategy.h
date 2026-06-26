@@ -18,7 +18,6 @@
 
 #define FREE_BYTES_INDEX 3
 #define KB_TO_PAGE_SHIFT 2
-#define NR_RESERVED_PAGES 16384
 
 static inline void CalcMaxMigrate(uint divisor, uint64_t total, uint64_t *res)
 {

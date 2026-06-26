@@ -1,6 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include <linux/slab.h>
 
+void *kvmalloc(size_t size, gfp_t flags)
+{
+    return malloc(size);
+}
+
 void *kmalloc(size_t size, gfp_t flags)
 {
     return malloc(size);

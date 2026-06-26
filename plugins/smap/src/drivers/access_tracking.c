@@ -26,7 +26,6 @@
 #include "access_iomem.h"
 #include "access_ioctl.h"
 #include "access_tracking_wrapper.h"
-#include "memory_notifier.h"
 #include "access_pid.h"
 #include "accessed_bit.h"
 #include "access_pid.h"
@@ -119,7 +118,7 @@ static int check_scan_works_status(struct access_tracking_dev *adev)
 			all_complete = false;
 			break;
 		}
-    }
+	}
 	up_read(&ap_data.lock);
 
 	return all_complete ? 0 : -EBUSY;
@@ -128,8 +127,8 @@ static int check_scan_works_status(struct access_tracking_dev *adev)
 static int create_scan_workqueue(void)
 {
 	struct access_tracking_dev *adev = get_first_access_dev();
-	adev->scanq = alloc_workqueue("accessbit_workq", WQ_UNBOUND,
-				      WQ_MAX_THREADS);
+	adev->scanq =
+		alloc_workqueue("accessbit_workq", WQ_UNBOUND, WQ_MAX_THREADS);
 	if (!adev->scanq) {
 		pr_err("unable to init access bit workqueue\n");
 		return -ENOMEM;
@@ -221,18 +220,16 @@ static int actc_buffer_reinit(struct access_tracking_dev *adev)
 static void access_tracking_enable(struct device *ldev)
 {
 	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
+	int ret;
+
 	if (adev->is_hist)
 		return;
 	down_write(&adev->buffer_lock);
-	if (adev->need_reinit_actc) {
-		if (actc_buffer_reinit(adev)) {
-			pr_err("unable to reinit ACTC buffer\n");
-			up_write(&adev->buffer_lock);
-			return;
-		}
-		adev->need_reinit_actc = false;
-	} else {
-		init_actc_data(adev);
+	ret = actc_buffer_reinit(adev);
+	if (ret) {
+		pr_err("unable to reinit ACTC buffer\n");
+		up_write(&adev->buffer_lock);
+		return;
 	}
 	up_write(&adev->buffer_lock);
 	submit_scan_works(adev);
@@ -283,23 +280,11 @@ static int access_tracking_set_page_size(struct device *ldev,
 	return 0;
 }
 
-static void access_tracking_set_reinit_pending(struct device *ldev)
-{
-	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
-	if (adev->is_hist)
-		return;
-	down_write(&adev->buffer_lock);
-	adev->need_reinit_actc = true;
-	up_write(&adev->buffer_lock);
-	pr_debug("set reinit pending flag for node %d\n", adev->node);
-}
-
 static struct tracking_operations access_tracking_ops = {
 	.tracking_enable = access_tracking_enable,
 	.tracking_disable = access_tracking_disable,
 	.tracking_set_page_size = access_tracking_set_page_size,
 	.tracking_mode_set = access_tracking_mode_set,
-	.tracking_set_reinit_pending = access_tracking_set_reinit_pending,
 };
 
 int calc_access_len(struct access_tracking_dev *adev)
@@ -333,7 +318,8 @@ static int access_tracking_add(void)
 	int ret;
 	int devno;
 	struct access_tracking_dev *adev, *n;
-	int access_devices_cnt = enable_hist ? nr_local_numa : SMAP_MAX_NUMNODES;
+	int access_devices_cnt = enable_hist ? nr_local_numa
+					     : SMAP_MAX_NUMNODES;
 
 	for (devno = 0; devno < access_devices_cnt; devno++) {
 		adev = kzalloc(sizeof(struct access_tracking_dev), GFP_KERNEL);
@@ -401,7 +387,8 @@ static void adev_buffer_down_read(void)
 {
 	struct access_tracking_dev *adev;
 	list_for_each_entry(adev, &access_dev, list) {
-		down_read(&adev->buffer_lock);
+		if (!adev->is_hist)
+			down_read(&adev->buffer_lock);
 	}
 }
 
@@ -409,29 +396,36 @@ static void adev_buffer_up_read(void)
 {
 	struct access_tracking_dev *adev;
 	list_for_each_entry(adev, &access_dev, list) {
-		up_read(&adev->buffer_lock);
+		if (!adev->is_hist)
+			up_read(&adev->buffer_lock);
 	}
 }
 
 static void handle_statistic_scan(struct access_pid *ap, ktime_t start_time,
-    s64 scan_time, unsigned long *scan_delay_ms)
+				  s64 scan_time, unsigned long *scan_delay_ms)
 {
 	unsigned long delay_buffer_ms;
 	if (ap->cur_times == 1) {
 		delay_buffer_ms = DELAY_BUFFER_MS;
 	} else {
-		delay_buffer_ms = ktime_to_ms(ktime_sub(start_time, ap->last_scan_end)) - ap->last_scan_delay_ms;
+		delay_buffer_ms =
+			ktime_to_ms(ktime_sub(start_time, ap->last_scan_end)) -
+			ap->last_scan_delay_ms;
 	}
 
 	if (*scan_delay_ms < ((scan_time / MS_TO_US) + delay_buffer_ms)) {
-		pr_warn("pid[%d] scan cost %lums exceeded expected scan time:%lums\n", ap->pid,
-			   (unsigned long)((scan_time / MS_TO_US) + delay_buffer_ms), *scan_delay_ms);
+		pr_err("pid[%d] scan cost %lums exceeded expected scan time:%lums\n",
+		       ap->pid,
+		       (unsigned long)((scan_time / MS_TO_US) +
+				       delay_buffer_ms),
+		       *scan_delay_ms);
 		*scan_delay_ms = 0;
 	} else {
 		*scan_delay_ms -= (scan_time / MS_TO_US + delay_buffer_ms);
 	}
-	pr_debug("pid[%d] statistic scan delay_buffer_ms :%ldms, scan_delay_ms: %ldms \n",
-          ap->pid, delay_buffer_ms, *scan_delay_ms);
+	pr_debug(
+		"pid[%d] statistic scan delay_buffer_ms :%ldms, scan_delay_ms: %ldms \n",
+		ap->pid, delay_buffer_ms, *scan_delay_ms);
 }
 
 static void work_func(struct work_struct *work)
@@ -448,39 +442,40 @@ static void work_func(struct work_struct *work)
 	start_time = ktime_get();
 	scan_work = to_delay_work(work);
 	ap = delay_work_to_ap(scan_work);
+	if (access_pid_cur_last_scanning(ap))
+		access_walk_pagemap_prepare(ap);
+
 	adev_buffer_down_read();
+	down_read(&ap_data.lock);
 	page_size = get_page_size(adev);
 	if (page_size == g_pagesize_huge) {
-		ret = scan_accessed_bit_forward_vm(ap->pid, page_size,
-						   ap->type);
+		ret = scan_accessed_bit_forward_vm(ap, page_size);
 	} else {
-		ret = scan_accessed_bit_forward_mm(ap->pid, page_size,
-						   ap->type);
+		ret = scan_accessed_bit_forward_mm(ap, page_size);
 	}
+	up_read(&ap_data.lock);
 	adev_buffer_up_read();
 	end_time = ktime_get();
 	scan_time = ktime_to_us(ktime_sub(end_time, start_time));
 	if (ret < 0) {
-		pr_debug("unable to scan access-flag, page amount: %llu, page size: %d, node: %d\n",
+		pr_err("unable to scan access-flag, page amount: %llu, page size: %d, node: %d\n",
 		       adev->page_count, page_size, adev->node);
 	}
 	ap->cur_times++;
 	pr_debug("pid[%d] cpu[%d], scan took %lldus for %dth time\n", ap->pid,
-			 raw_smp_processor_id(), scan_time, ap->cur_times);
+		 raw_smp_processor_id(), scan_time, ap->cur_times);
 
 	scan_delay_ms = ap->scan_time;
 	if (ap->type == STATISTIC_SCAN) {
-		handle_statistic_scan(ap, start_time, scan_time, &scan_delay_ms);
+		handle_statistic_scan(ap, start_time, scan_time,
+				      &scan_delay_ms);
 	}
 	ap->last_scan_delay_ms = scan_delay_ms;
 	if (ap->cur_times < ap->ntimes) {
-		queue_delayed_work(adev->scanq, &ap->scan_work, msecs_to_jiffies(scan_delay_ms));
+		queue_delayed_work(adev->scanq, &ap->scan_work,
+				   msecs_to_jiffies(scan_delay_ms));
 		ap->last_scan_end = ktime_get();
 	} else {
-		pr_debug("pid[%d] start to walk pagemap\n", ap->pid);
-		if (ap->type != STATISTIC_SCAN) {
-			access_walk_pagemap(ap);
-		}
 		complete(&ap->work_done);
 	}
 }
@@ -534,7 +529,6 @@ static int __init access_tracking_init(void)
 	if (ret) {
 		goto err_remote_ram;
 	}
-	memory_notifier_init();
 
 	ret = access_ioctl_init();
 	if (ret) {
@@ -568,7 +562,6 @@ err_tracking_add:
 	release_adev();
 	access_ioctl_exit();
 err_ioctl:
-	memory_notifier_exit();
 	release_remote_ram();
 err_remote_ram:
 	reset_acpi_mem();
@@ -584,7 +577,6 @@ static void __exit access_tracking_exit(void)
 	release_adev();
 	release_remote_ram();
 	reset_acpi_mem();
-	memory_notifier_exit();
 	pr_info("access tracking exit successfully\n");
 }
 

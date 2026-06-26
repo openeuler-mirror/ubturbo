@@ -10,17 +10,19 @@
 #include <asm/page.h>
 #include <linux/list.h>
 
+#ifndef MAX
 #define MAX(a, b) ((a) >= (b) ? (a) : (b))
+#endif
+
+#ifndef MIN
 #define MIN(a, b) ((a) <= (b) ? (a) : (b))
+#endif
 
 #define HUNDRED 100
 #define HALF_HUNDRED (HUNDRED / 2)
-#define UNIT_OF_TIME 1000
-#define CYCLE_MAX_RECORD 1000
 #define TWO_MEGA_SHIFT 21
 #define TWO_MEGA_SIZE (1UL << TWO_MEGA_SHIFT)
 #define TWO_MEGA_MASK (~(TWO_MEGA_SIZE - 1))
-#define BAREMETAL_DEFAULT_RATIO 50
 #define MAX_4K_PROCESSES_CNT 300
 #define MAX_2M_PROCESSES_CNT 100
 #define MAX_PER_PID_MIG_LIST_COUNT 8
@@ -32,9 +34,6 @@
 #define SMAP_MAX_NUMNODES 22
 
 extern u32 g_pagesize_huge;
-
-/* last physical address before hole */
-#define ADDR_BH 0x7FFFFFFF
 
 enum node_level {
 	L1,
@@ -87,20 +86,20 @@ struct migrate_numa_msg {
 };
 
 struct mig_payload {
-    pid_t pid;
-    int src_nid;
-    int dest_nid;
-    int ratio;
+	pid_t pid;
+	int src_nid;
+	int dest_nid;
+	int ratio;
 	int keep_ratio;
-    u64 mem_size;
-    bool is_ratio_mode;
-    u64 success_cnt;
+	u64 mem_size;
+	bool is_ratio_mode;
+	u64 success_cnt;
 };
 
 struct migrate_pid_remote_numa_msg {
-    int pid_cnt;
-    struct mig_payload *payloads;
-    int *mig_res_array; // 迁移结果
+	int pid_cnt;
+	struct mig_payload *payloads;
+	int *mig_res_array; // 迁移结果
 };
 
 typedef enum {
@@ -111,15 +110,15 @@ typedef enum {
 
 static inline u64 calc_huge_count(u64 range)
 {
-	return (range & ~TWO_MEGA_MASK) == 0 ?
-		       (u64)(range >> TWO_MEGA_SHIFT) :
-		       (u64)((range >> TWO_MEGA_SHIFT) + 1);
+	return (range & ~TWO_MEGA_MASK) == 0
+		       ? (u64)(range >> TWO_MEGA_SHIFT)
+		       : (u64)((range >> TWO_MEGA_SHIFT) + 1);
 }
 
 static inline u64 calc_normal_count(u64 range)
 {
-	return (range & ~PAGE_MASK) == 0 ? (u64)(range >> PAGE_SHIFT) :
-					   (u64)((range >> PAGE_SHIFT) + 1);
+	return (range & ~PAGE_MASK) == 0 ? (u64)(range >> PAGE_SHIFT)
+					 : (u64)((range >> PAGE_SHIFT) + 1);
 }
 
 static inline bool is_node_invalid(int node)

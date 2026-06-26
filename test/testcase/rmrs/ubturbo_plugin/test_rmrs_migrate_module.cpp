@@ -9,14 +9,14 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 #include "rmrs_json_helper.cpp"
-#include "rmrs_libvirt_helper.h"
-#include "rmrs_migrate_module.h"
-#include "rmrs_memfree_module.h"
-#include "rmrs_resource_export.h"
-#include "rmrs_smap_helper.h"
 #include "rmrs_json_helper.h"
-#include "rmrs_serialize.h"
+#include "rmrs_libvirt_helper.h"
+#include "rmrs_memfree_module.h"
+#include "rmrs_migrate_module.h"
+#include "rmrs_resource_export.h"
 #include "rmrs_rollback_module.h"
+#include "rmrs_serialize.h"
+#include "rmrs_smap_helper.h"
 
 #define MOCKER_CPP(api, TT) MOCKCPP_NS::mockAPI(#api, reinterpret_cast<TT>(api))
 
@@ -44,9 +44,8 @@ protected:
     }
 };
 
- 
 void GetRemoteNumaList(std::vector<NumaHugePageInfo> &numaHugePageInfoSumList, std::vector<uint16_t> &remoteNumaIdList);
- 
+
 void GetLocalVmInfo(std::vector<VmNumaInfo> &allVmNumaInfoInfoList, std::map<pid_t, VmNumaInfo> &VmNumaInfoMap,
                     std::vector<VmDomainInfo> &vmDomainInfos);
 
@@ -75,7 +74,7 @@ TEST_F(TestRmrsMigrateModule, HandlerRollbackSucceed)
     inBuffer.data = builder.GetBufferPointer();
     inBuffer.len = builder.GetSize();
     MOCKER_CPP(&RmrsRollbackModule::MemBorrowRollback,
-        uint32_t(*)(std::map<std::string, std::set<rmrs::serialization::BorrowIdInfo>> & borrowIdsPidsMap))
+               uint32_t(*)(std::map<std::string, std::set<rmrs::serialization::BorrowIdInfo>> & borrowIdsPidsMap))
         .stubs()
         .will(returnValue(0));
     auto res = RmrsRollbackModule::HandlerRollback(inBuffer, outBuffer);
@@ -83,8 +82,8 @@ TEST_F(TestRmrsMigrateModule, HandlerRollbackSucceed)
     ASSERT_EQ(res, 0);
 }
 
-bool TestFromJsonRmrs(std::string &jsonString, std::map<std::string,
-    std::set<rmrs::serialization::BorrowIdInfo>> &value)
+bool TestFromJsonRmrs(std::string &jsonString,
+                      std::map<std::string, std::set<rmrs::serialization::BorrowIdInfo>> &value)
 {
     int oriSize = 10;
 
@@ -101,7 +100,7 @@ TEST_F(TestRmrsMigrateModule, HandlerRollbackSucceed1)
 
     TurboByteBuffer inBuffer;
     TurboByteBuffer outBuffer;
-        std::map<std::string, std::set<rmrs::serialization::BorrowIdInfo>> value;
+    std::map<std::string, std::set<rmrs::serialization::BorrowIdInfo>> value;
     RmrsOutStream builder;
     rmrs::serialization::BorrowIdInfo info;
     info.pid = 1;
@@ -111,7 +110,7 @@ TEST_F(TestRmrsMigrateModule, HandlerRollbackSucceed1)
     inBuffer.data = builder.GetBufferPointer();
     inBuffer.len = builder.GetSize();
     MOCKER_CPP(&RmrsRollbackModule::MemBorrowRollback,
-        uint32_t(*)(std::map<std::string, std::set<rmrs::serialization::BorrowIdInfo>> & borrowIdsPidsMap))
+               uint32_t(*)(std::map<std::string, std::set<rmrs::serialization::BorrowIdInfo>> & borrowIdsPidsMap))
         .stubs()
         .will(returnValue(0));
     auto res = RmrsRollbackModule::HandlerRollback(inBuffer, outBuffer);
@@ -131,17 +130,17 @@ TEST_F(TestRmrsMigrateModule, MemBorrowRollbackFail1)
     borrowIdsPidsMap["example_key"] = pidsSet;
     MOCKER_CPP(
         &RmrsRollbackModule::FillRollbackVmInfo,
-        bool (*)(std::map<pid_t, VmDomainInfo> &vmInfoMap, std::vector<pid_t> &pidList,
-        std::unordered_map<pid_t, uint16_t> &vmPidRemoteNumaMap, std::vector<uint16_t> &remoteNumaIdList))
+        bool (*)(std::map<pid_t, VmDomainInfo> & vmInfoMap, std::vector<pid_t> & pidList,
+                 std::unordered_map<pid_t, uint16_t> & vmPidRemoteNumaMap, std::vector<uint16_t> & remoteNumaIdList))
         .stubs()
         .will(returnValue(false));
     auto res = RmrsRollbackModule::MemBorrowRollback(borrowIdsPidsMap);
     ASSERT_EQ(res, 1);
 }
 
-bool TestFillRollbackVmInfoRmrs(std::map<pid_t, VmDomainInfo> &vmInfoMap,
-    std::vector<pid_t> &pidList, std::unordered_map<pid_t, uint16_t> &vmPidRemoteNumaMap,
-    std::vector<uint16_t> &remoteNumaIdList)
+bool TestFillRollbackVmInfoRmrs(std::map<pid_t, VmDomainInfo> &vmInfoMap, std::vector<pid_t> &pidList,
+                                std::unordered_map<pid_t, uint16_t> &vmPidRemoteNumaMap,
+                                std::vector<uint16_t> &remoteNumaIdList)
 {
     remoteNumaIdList.push_back(1);
     return true;
@@ -190,19 +189,17 @@ TEST_F(TestRmrsMigrateModule, MemBorrowRollbackFail2)
     borrowIdsPidsMap["example_key"] = pidsSet;
     MOCKER_CPP(
         &RmrsRollbackModule::FillRollbackVmInfo,
-        bool (*)(std::map<pid_t, VmDomainInfo> &vmInfoMap, std::vector<pid_t> &pidList,
-        std::unordered_map<pid_t, uint16_t> &vmPidRemoteNumaMap, std::vector<uint16_t> &remoteNumaIdList))
+        bool (*)(std::map<pid_t, VmDomainInfo> & vmInfoMap, std::vector<pid_t> & pidList,
+                 std::unordered_map<pid_t, uint16_t> & vmPidRemoteNumaMap, std::vector<uint16_t> & remoteNumaIdList))
         .stubs()
         .will(invoke(TestFillRollbackVmInfoRmrs));
-    MOCKER_CPP(&RmrsRollbackModule::CanMigrate, bool (*)(std::map<pid_t, VmDomainInfo> &vmInfoMap))
+    MOCKER_CPP(&RmrsRollbackModule::CanMigrate, bool (*)(std::map<pid_t, VmDomainInfo> & vmInfoMap))
         .stubs()
         .will(returnValue(true));
     MOCKER_CPP(&RmrsRollbackModule::DoMigrateRollback, bool (*)(std::unordered_map<pid_t, uint16_t> vmPidRemoteNumaMap))
         .stubs()
         .will(returnValue(true));
-    MOCKER_CPP(&RmrsSmapHelper::SmapEnableRemoteNuma, uint32_t (*)(int remoteNumaId))
-        .stubs()
-        .will(returnValue(1));
+    MOCKER_CPP(&RmrsSmapHelper::SmapEnableRemoteNuma, uint32_t(*)(int remoteNumaId)).stubs().will(returnValue(1));
     auto res = RmrsRollbackModule::MemBorrowRollback(borrowIdsPidsMap);
     ASSERT_EQ(res, 1);
 }
@@ -219,11 +216,11 @@ TEST_F(TestRmrsMigrateModule, MemBorrowRollbackSucceed)
     borrowIdsPidsMap["example_key"] = pidsSet;
     MOCKER_CPP(
         &RmrsRollbackModule::FillRollbackVmInfo,
-        bool (*)(std::map<pid_t, VmDomainInfo> &vmInfoMap, std::vector<pid_t> &pidList,
-                 std::unordered_map<pid_t, uint16_t> &vmPidRemoteNumaMap, std::vector<uint16_t> &remoteNumaIdList))
+        bool (*)(std::map<pid_t, VmDomainInfo> & vmInfoMap, std::vector<pid_t> & pidList,
+                 std::unordered_map<pid_t, uint16_t> & vmPidRemoteNumaMap, std::vector<uint16_t> & remoteNumaIdList))
         .stubs()
         .will(returnValue(true));
-    MOCKER_CPP(&RmrsRollbackModule::CanMigrate, bool (*)(std::map<pid_t, VmDomainInfo> &vmInfoMap))
+    MOCKER_CPP(&RmrsRollbackModule::CanMigrate, bool (*)(std::map<pid_t, VmDomainInfo> & vmInfoMap))
         .stubs()
         .will(returnValue(true));
     MOCKER_CPP(&RmrsRollbackModule::DoMigrateRollback, bool (*)(std::unordered_map<pid_t, uint16_t> vmPidRemoteNumaMap))
@@ -525,8 +522,8 @@ TEST_F(TestRmrsMigrateModule, MemFreeImplFailed3)
         .stubs()
         .will(returnValue(0));
     MOCKER_CPP(&RmrsMemFreeModule::SortRemoteNumaByMemUse,
-               void (*)(std::vector<rmrs::migrate::ReturnNumaInfo> &returnNumaInfoSumList,
-                        std::vector<uint16_t> &remoteNumaIdList))
+               void (*)(std::vector<rmrs::migrate::ReturnNumaInfo> & returnNumaInfoSumList,
+                        std::vector<uint16_t> & remoteNumaIdList))
         .stubs()
         .will(invoke(TestSortRemoteNumaByMemUse));
     auto res = RmrsMemFreeModule::MemFreeImpl(numaIds);
@@ -627,7 +624,7 @@ TEST_F(TestRmrsMigrateModule, MemFreeImplSuccess1)
                RmrsResult(*)(std::vector<VmDomainInfo> & vmDomainInfos))
         .stubs()
         .will(invoke(TestGetVmInfoImmediately1));
-    
+
     auto res = RmrsMemFreeModule::MemFreeImpl(numaIds);
     ASSERT_EQ(res, 0);
 }
@@ -642,9 +639,9 @@ TEST_F(TestRmrsMigrateModule, MemFreeImplSuccess2)
                RmrsResult(*)(std::vector<VmDomainInfo> & vmDomainInfos))
         .stubs()
         .will(invoke(TestGetVmInfoImmediately10));
-    
+
     MOCKER_CPP(&RmrsMemFreeModule::ReturnRemoteNuma,
-        RmrsResult(*)(std::vector<ReturnVmInfo> &canReturnVmInfoList, std::vector<uint16_t> &numaIds))
+               RmrsResult(*)(std::vector<ReturnVmInfo> & canReturnVmInfoList, std::vector<uint16_t> & numaIds))
         .stubs()
         .will(returnValue(0));
     auto res = RmrsMemFreeModule::MemFreeImpl(numaIds);
@@ -753,11 +750,10 @@ TEST_F(TestRmrsMigrateModule, ReturnRemoteNumaFailed1)
     returnVmInfo.pid = 1;
     canReturnVmInfoList.push_back(returnVmInfo);
     MOCKER_CPP(&RmrsSmapHelper::MigrateColdDataToRemoteNumaSync,
-        RmrsResult(*)(std::vector<uint16_t> & remoteNumaIdsIn, std::vector<pid_t> & pidsIn,
-        std::vector<uint64_t> memSizeList,
-        uint64_t waitTime))
+               RmrsResult(*)(std::vector<uint16_t> & remoteNumaIdsIn, std::vector<pid_t> & pidsIn,
+                             std::vector<uint64_t> memSizeList, uint64_t waitTime))
         .stubs()
-    .will(returnValue(1));
+        .will(returnValue(1));
     auto res = RmrsMemFreeModule::ReturnRemoteNuma(canReturnVmInfoList, numaIds);
     ASSERT_EQ(res, 1);
 }
@@ -770,11 +766,10 @@ TEST_F(TestRmrsMigrateModule, ReturnRemoteNumaFailed2)
     returnVmInfo.remoteNumaId = 1;
     returnVmInfo.pid = 1;
     canReturnVmInfoList.push_back(returnVmInfo);
-    
+
     MOCKER_CPP(&RmrsSmapHelper::MigrateColdDataToRemoteNumaSync,
-        RmrsResult(*)(std::vector<uint16_t> & remoteNumaIdsIn, std::vector<pid_t> & pidsIn,
-        std::vector<uint64_t> memSizeList,
-        uint64_t waitTime))
+               RmrsResult(*)(std::vector<uint16_t> & remoteNumaIdsIn, std::vector<pid_t> & pidsIn,
+                             std::vector<uint64_t> memSizeList, uint64_t waitTime))
         .stubs()
         .will(returnValue(0));
     MOCKER_CPP(&RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma, RmrsResult(*)(std::vector<pid_t> & vmPids))
@@ -794,8 +789,7 @@ TEST_F(TestRmrsMigrateModule, ReturnRemoteNumaSucceed)
     canReturnVmInfoList.push_back(returnVmInfo);
     MOCKER_CPP(&RmrsSmapHelper::MigrateColdDataToRemoteNumaSync,
                RmrsResult(*)(std::vector<uint16_t> & remoteNumaIdsIn, std::vector<pid_t> & pidsIn,
-               std::vector<uint64_t> memSizeList,
-                             uint64_t waitTime))
+                             std::vector<uint64_t> memSizeList, uint64_t waitTime))
         .stubs()
         .will(returnValue(0));
     MOCKER_CPP(&RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma, RmrsResult(*)(std::vector<pid_t> & vmPids))
@@ -1050,7 +1044,7 @@ TEST_F(TestRmrsMigrateModule, MigrateStrategyRmrsFail4)
         .stubs()
         .will(invoke(TestGetVmInfoImmediately1));
     MOCKER_CPP(&RmrsMigrateModule::ISRemoteMemorySufficient,
-               bool (*)(std::vector<uint16_t> &remoteNumaIdList, std::map<uint16_t, NumaHugePageInfo> &numaInfoMap,
+               bool (*)(std::vector<uint16_t> & remoteNumaIdList, std::map<uint16_t, NumaHugePageInfo> & numaInfoMap,
                         const uint64_t &memMigrateTotalSize))
         .stubs()
         .will(returnValue(false));
@@ -1080,7 +1074,7 @@ TEST_F(TestRmrsMigrateModule, MigrateStrategyRmrsFail5)
         .stubs()
         .will(invoke(TestGetVmInfoImmediately1));
     MOCKER_CPP(&RmrsMigrateModule::ISRemoteMemorySufficient,
-               bool (*)(std::vector<uint16_t> &remoteNumaIdList, std::map<uint16_t, NumaHugePageInfo> &numaInfoMap,
+               bool (*)(std::vector<uint16_t> & remoteNumaIdList, std::map<uint16_t, NumaHugePageInfo> & numaInfoMap,
                         const uint64_t &memMigrateTotalSize))
         .stubs()
         .will(returnValue(true));
@@ -1115,7 +1109,7 @@ TEST_F(TestRmrsMigrateModule, MigrateStrategyRmrsFail7)
         .stubs()
         .will(invoke(TestGetVmInfoImmediately1));
     MOCKER_CPP(&RmrsMigrateModule::ISRemoteMemorySufficient,
-               bool (*)(std::vector<uint16_t> &remoteNumaIdList, std::map<uint16_t, NumaHugePageInfo> &numaInfoMap,
+               bool (*)(std::vector<uint16_t> & remoteNumaIdList, std::map<uint16_t, NumaHugePageInfo> & numaInfoMap,
                         const uint64_t &memMigrateTotalSize))
         .stubs()
         .will(returnValue(true));
@@ -1146,11 +1140,7 @@ TEST_F(TestRmrsMigrateModule, ISPresetMemorySufficient_1)
     vmNumaInfoMap[index3] = {333, 0, 5, 1024 * 1024, 2048 * 1024};
 
     // pid和最大迁出比例
-    vmPresetParam = {
-        {111, 60},
-        {222, 60},
-        {333, 80}
-    };
+    vmPresetParam = {{111, 60}, {222, 60}, {333, 80}};
     std::map<pid_t, uint64_t> vmMigratableMemMap;
     bool ret = RmrsMigrateModule::ISPresetMemorySufficient(memMigrateTotalSize, vmNumaInfoMap, vmPresetParam,
                                                            vmMigratableMemMap);
@@ -1188,14 +1178,16 @@ TEST_F(TestRmrsMigrateModule, DoMigrateExecuteFailed2)
                RmrsResult(*)(std::vector<uint16_t> &, std::vector<pid_t> &, std::vector<uint64_t>, uint64_t))
         .stubs()
         .will(returnValue(RMRS_ERROR));
-    MOCKER_CPP(RmrsMigrateModule::RollbackVmMigrate,
-        void(*)(const std::vector<rmrs::serialization::VMMigrateOutParam> &, std::unordered_map<pid_t, uint64_t>))
+    MOCKER_CPP(
+        RmrsMigrateModule::RollbackVmMigrate,
+        void (*)(const std::vector<rmrs::serialization::VMMigrateOutParam> &, std::unordered_map<pid_t, uint64_t>))
         .stubs()
         .will(ignoreReturnValue());
-    MOCKER_CPP(RmrsMigrateModule::FillVmOriginSize, RmrsResult(*)(
-        std::vector<rmrs::serialization::VMMigrateOutParam> vmMigrateOutParamList,
-        std::unordered_map<pid_t, uint64_t> &vmOriginSizeMap))
-        .stubs().will(returnValue(RMRS_OK));
+    MOCKER_CPP(RmrsMigrateModule::FillVmOriginSize,
+               RmrsResult(*)(std::vector<rmrs::serialization::VMMigrateOutParam> vmMigrateOutParamList,
+                             std::unordered_map<pid_t, uint64_t> & vmOriginSizeMap))
+        .stubs()
+        .will(returnValue(RMRS_OK));
     auto ret = RmrsMigrateModule::DoMigrateExecute(vmMigrateOutParam, 0);
     EXPECT_EQ(ret, RMRS_ERROR);
 }
@@ -1211,12 +1203,14 @@ TEST_F(TestRmrsMigrateModule, DoMigrateExecuteSucceed)
         .stubs()
         .will(returnValue(RMRS_OK));
     MOCKER_CPP(RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma, RmrsResult(*)(std::vector<pid_t> &))
-        .stubs().will(returnValue(RMRS_ERROR));
+        .stubs()
+        .will(returnValue(RMRS_ERROR));
 
-    MOCKER_CPP(RmrsMigrateModule::FillVmOriginSize, RmrsResult(*)(
-        std::vector<rmrs::serialization::VMMigrateOutParam> vmMigrateOutParamList,
-        std::unordered_map<pid_t, uint64_t> &vmOriginSizeMap))
-        .stubs().will(returnValue(RMRS_OK));
+    MOCKER_CPP(RmrsMigrateModule::FillVmOriginSize,
+               RmrsResult(*)(std::vector<rmrs::serialization::VMMigrateOutParam> vmMigrateOutParamList,
+                             std::unordered_map<pid_t, uint64_t> & vmOriginSizeMap))
+        .stubs()
+        .will(returnValue(RMRS_OK));
     auto ret = RmrsMigrateModule::DoMigrateExecute(vmMigrateOutParam, 0);
     EXPECT_EQ(ret, RMRS_OK);
 }
@@ -1232,7 +1226,8 @@ TEST_F(TestRmrsMigrateModule, RollbackVmMigrate1)
         .stubs()
         .will(returnValue(RMRS_ERROR));
     MOCKER_CPP(RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma, RmrsResult(*)(std::vector<pid_t> &))
-        .stubs().will(returnValue(RMRS_OK));
+        .stubs()
+        .will(returnValue(RMRS_OK));
     std::unordered_map<pid_t, uint64_t> vmOriginSizeMap;
     EXPECT_NO_THROW(RmrsMigrateModule::RollbackVmMigrate(vmMigrateOutParam, vmOriginSizeMap));
 }
@@ -1248,7 +1243,8 @@ TEST_F(TestRmrsMigrateModule, RollbackVmMigrate2)
         .stubs()
         .will(returnValue(RMRS_ERROR));
     MOCKER_CPP(RmrsSmapHelper::SmapRemoveVMPidToRemoteNuma, RmrsResult(*)(std::vector<pid_t> &))
-        .stubs().will(returnValue(RMRS_ERROR));
+        .stubs()
+        .will(returnValue(RMRS_ERROR));
     std::unordered_map<pid_t, uint64_t> vmOriginSizeMap;
     EXPECT_NO_THROW(RmrsMigrateModule::RollbackVmMigrate(vmMigrateOutParam, vmOriginSizeMap));
 }
@@ -1336,10 +1332,10 @@ TEST_F(TestRmrsMigrateModule, ISRemoteMemorySufficient_success_1)
 {
     std::vector<uint16_t> remoteNumaIdList = {4, 5};
     std::map<uint16_t, NumaHugePageInfo> numaInfoMap;
-    NumaHugePageInfo info_1 = NumaHugePageInfo{
-        .numaId = 4, .hugePageTotal = 1024, .hugePageFree = 1024, .isLocal = false, .isRemote = true};
-    NumaHugePageInfo info_2 = NumaHugePageInfo{
-        .numaId = 5, .hugePageTotal = 1024, .hugePageFree = 1024, .isLocal = false, .isRemote = true};
+    NumaHugePageInfo info_1 =
+        NumaHugePageInfo{.numaId = 4, .hugePageTotal = 1024, .hugePageFree = 1024, .isLocal = false, .isRemote = true};
+    NumaHugePageInfo info_2 =
+        NumaHugePageInfo{.numaId = 5, .hugePageTotal = 1024, .hugePageFree = 1024, .isLocal = false, .isRemote = true};
     int index1 = 4;
     int index2 = 5;
     numaInfoMap[index1] = info_1;
@@ -1427,16 +1423,10 @@ TEST_F(TestRmrsMigrateModule, DFSGetMigrationActions_failed_1)
     vmQueryInfo.vmMigratableMemMap[index3] = memSize1;
     vmQueryInfo.vmMigratableMemMap[index4] = memSize2;
 
-    vmQueryInfo.vmNumaInfoMap[index3] = {.pid = pid1,
-                                      .localNumaId = 0,
-                                      .remoteNumaId = nodeId,
-                                      .localUsedMem = memSize3,
-                                      .remoteUsedMem = memSize4};
-    vmQueryInfo.vmNumaInfoMap[index4] = {.pid = pid2,
-                                      .localNumaId = 0,
-                                      .remoteNumaId = nodeId,
-                                      .localUsedMem = memSize3,
-                                      .remoteUsedMem = memSize4};
+    vmQueryInfo.vmNumaInfoMap[index3] = {
+        .pid = pid1, .localNumaId = 0, .remoteNumaId = nodeId, .localUsedMem = memSize3, .remoteUsedMem = memSize4};
+    vmQueryInfo.vmNumaInfoMap[index4] = {
+        .pid = pid2, .localNumaId = 0, .remoteNumaId = nodeId, .localUsedMem = memSize3, .remoteUsedMem = memSize4};
     RmrsResult ret =
         RmrsMigrateModule::DFSGetMigrationActions(memMigrateTotalSize, numaQueryInfo, vmQueryInfo, vmMigrateOutParam);
     ASSERT_EQ(ret, 1);
@@ -1473,16 +1463,10 @@ TEST_F(TestRmrsMigrateModule, FillVmNumaInfo_failed_1)
     vmQueryInfo.vmMigratableMemMap[index3] = memSize1;
     vmQueryInfo.vmMigratableMemMap[index4] = memSize2;
 
-    vmQueryInfo.vmNumaInfoMap[index3] = {.pid = pid1,
-                                      .localNumaId = 0,
-                                      .remoteNumaId = nodeId,
-                                      .localUsedMem = memSize3,
-                                      .remoteUsedMem = memSize4};
-    vmQueryInfo.vmNumaInfoMap[index4] = {.pid = pid2,
-                                      .localNumaId = 0,
-                                      .remoteNumaId = nodeId,
-                                      .localUsedMem = memSize3,
-                                      .remoteUsedMem = memSize4};
+    vmQueryInfo.vmNumaInfoMap[index3] = {
+        .pid = pid1, .localNumaId = 0, .remoteNumaId = nodeId, .localUsedMem = memSize3, .remoteUsedMem = memSize4};
+    vmQueryInfo.vmNumaInfoMap[index4] = {
+        .pid = pid2, .localNumaId = 0, .remoteNumaId = nodeId, .localUsedMem = memSize3, .remoteUsedMem = memSize4};
 
     RmrsMigrateModule::FillVmNumaInfo(numaQueryInfo, vmQueryInfo, vms, numas);
 
@@ -1509,8 +1493,7 @@ TEST_F(TestRmrsMigrateModule, AllocateMemory_failed_1)
     numas.push_back(NumaInfoWithSize{.remoteNumaId = 4, .freeSize = 256 * 2048});
     numas.push_back(NumaInfoWithSize{.remoteNumaId = 5, .freeSize = 128 * 2048});
 
-    RmrsResult ret =
-        RmrsMigrateModule::AllocateMemory(totalSize, vms, numas, result);
+    RmrsResult ret = RmrsMigrateModule::AllocateMemory(totalSize, vms, numas, result);
     ASSERT_EQ(ret, false);
 }
 
@@ -1564,8 +1547,7 @@ TEST_F(TestRmrsMigrateModule, AllocateMemory_failed_2)
     numas.push_back(NumaInfoWithSize{.remoteNumaId = 4, .freeSize = 256 * 2048});
     numas.push_back(NumaInfoWithSize{.remoteNumaId = 5, .freeSize = 100 * 2048});
 
-    RmrsResult ret =
-        RmrsMigrateModule::AllocateMemory(totalSize, vms, numas, result);
+    RmrsResult ret = RmrsMigrateModule::AllocateMemory(totalSize, vms, numas, result);
     ASSERT_EQ(ret, false);
 }
 
@@ -1630,8 +1612,7 @@ TEST_F(TestRmrsMigrateModule, AllocateMemory_failed_3)
     numas.push_back(NumaInfoWithSize{.remoteNumaId = numaId1, .freeSize = memSize3});
     numas.push_back(NumaInfoWithSize{.remoteNumaId = numaId2, .freeSize = memSize4});
 
-    RmrsResult ret =
-        RmrsMigrateModule::AllocateMemory(totalSize, vms, numas, result);
+    RmrsResult ret = RmrsMigrateModule::AllocateMemory(totalSize, vms, numas, result);
     ASSERT_EQ(ret, false);
 }
 
@@ -1650,17 +1631,15 @@ int TestGetSmapQueryProcessConfigFuncMockFailed(int nid, struct ProcessPayload *
 
 TEST_F(TestRmrsMigrateModule, TestGetSmapQueryProcessConfigFuncFailByDlsym)
 {
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
-        .stubs()
-        .will(returnValue(static_cast<void*>(nullptr)));
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *)).stubs().will(returnValue(static_cast<void *>(nullptr)));
     SmapModule::GetSmapQueryProcessConfigFunc();
 }
 
 TEST_F(TestRmrsMigrateModule, TestGetSmapQueryProcessConfigFuncSuccess)
 {
-    MOCKER_CPP(dlsym, void*(*)(void*, const char*))
+    MOCKER_CPP(dlsym, void *(*)(void *, const char *))
         .stubs()
-        .will(returnValue(reinterpret_cast<void*>(&TestGetSmapQueryProcessConfigFuncMock)));
+        .will(returnValue(reinterpret_cast<void *>(&TestGetSmapQueryProcessConfigFuncMock)));
     SmapModule::GetSmapQueryProcessConfigFunc();
     SmapModule::GetSmapQueryProcessConfigFunc();
 }

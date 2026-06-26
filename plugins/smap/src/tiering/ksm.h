@@ -27,12 +27,6 @@ struct ksm_stable_node {
 		unsigned long kpfn;
 		unsigned long chain_prune_time;
 	};
-	/*
-	 * STABLE_NODE_CHAIN can be any negative number in
-	 * rmap_hlist_len negative range, but better not -1 to be able
-	 * to reliably detect underflows.
-	 */
-#define STABLE_NODE_CHAIN (-1024)
 	int rmap_hlist_len;
 #ifdef CONFIG_NUMA
 	int nid;
@@ -59,15 +53,19 @@ struct ksm_rmap_item {
 	};
 };
 
-struct vm_area_struct *smap_vma_interval_tree_iter_first(
-	struct rb_root_cached *root, unsigned long start, unsigned long last);
-struct vm_area_struct *smap_vma_interval_tree_iter_next(
-	struct vm_area_struct *node, unsigned long start, unsigned long last);
+struct vm_area_struct *
+smap_vma_interval_tree_iter_first(struct rb_root_cached *root,
+				  unsigned long start, unsigned long last);
+struct vm_area_struct *
+smap_vma_interval_tree_iter_next(struct vm_area_struct *node,
+				 unsigned long start, unsigned long last);
 
-struct anon_vma_chain *smap_anon_vma_interval_tree_iter_first(
-	struct rb_root_cached *root, unsigned long start, unsigned long last);
-struct anon_vma_chain *smap_anon_vma_interval_tree_iter_next(
-	struct anon_vma_chain *node, unsigned long start, unsigned long last);
+struct anon_vma_chain *
+smap_anon_vma_interval_tree_iter_first(struct rb_root_cached *root,
+				       unsigned long start, unsigned long last);
+struct anon_vma_chain *
+smap_anon_vma_interval_tree_iter_next(struct anon_vma_chain *node,
+				      unsigned long start, unsigned long last);
 
 #define smap_anon_vma_interval_tree_foreach(avc, root, start, last)      \
 	for ((avc) = smap_anon_vma_interval_tree_iter_first(root, start, \

@@ -25,7 +25,7 @@ struct ResCode {
 };
 
 struct UCacheMigrationStrategyParam {
-    int16_t localNumaId{};                 // 执行迁出的本地numa节点。若小于0，代表所有本地numa节点
+    int16_t localNumaId{}; // 执行迁出的本地numa节点。若小于0，代表所有本地numa节点
     std::vector<uint16_t> remoteNumaIds{}; // 执行迁入的远端内存呈现numa节点列表
     std::vector<pid_t> pids{};             // 需要迁移的进程列表
     float ucacheUsageRatio{};              // 给Pagecache分配使用的内存比例
@@ -64,12 +64,12 @@ struct UCacheMigrationStrategyParam {
 struct MigrationInfoParam {
     uint64_t borrowMemKB{};    // 借用内存总大小，单位KB
     std::vector<pid_t> pids{}; // 需要迁移的进程列表
- 
+
     std::string ToString() const
     {
         std::ostringstream oss;
         oss << R"({"borrowMemKB":)" << borrowMemKB << R"(,)";
- 
+
         bool firstPid = true;
         oss << R"("pids": [)";
         for (pid_t pid : pids) {
@@ -78,12 +78,12 @@ struct MigrationInfoParam {
             oss << pid;
             firstPid = false;
         }
- 
+
         oss << R"(]})";
         return oss.str();
     }
 };
- 
+
 struct UCacheRatioRes {
     float ucacheUsageRatio{}; // ucache借用比例
     uint32_t resCode{};       // 是否执行成功

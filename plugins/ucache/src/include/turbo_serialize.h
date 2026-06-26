@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025-2026. All rights reserved.
  */
 
 #ifndef TURBO_SERIALIZE_UTIL_H
@@ -228,7 +228,7 @@ UCacheOutStream &UCacheOutStream::operator<<(const T &data)
 }
 
 template <>
-inline UCacheOutStream &UCacheOutStream::operator<< <std::string>(const std::string &data)
+inline UCacheOutStream &UCacheOutStream::operator<<<std::string>(const std::string &data)
 {
     size_t len = data.size();
     this->Write(reinterpret_cast<const char *>(&len), sizeof(len));

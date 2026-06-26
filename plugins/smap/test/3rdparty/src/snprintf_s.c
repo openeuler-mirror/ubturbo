@@ -6,10 +6,15 @@
 
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include "securec.h"
 
 int snprintf_s(char *strDest, size_t destMax, size_t count, const char *format,
                            ...)
 {
-    return 0;
+    va_list args;
+    va_start(args, format);
+    int ret = vsnprintf(strDest, destMax, format, args);
+    va_end(args);
+    return ret > 0 ? ret : -1;
 }

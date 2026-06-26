@@ -33,13 +33,13 @@ uint32_t UcacheTurboConfig::LoadMigrateConfig()
     uint32_t ret = UCACHE_OK;
     if ((ret = GetConfigValue(UBTurboGetUInt32, "plugin_turbo_ucache", "migrate.migrateInterval", migrateInterval)) !=
         UCACHE_OK) {
-        UBTURBO_LOG_ERROR(UCACHE_MODULE_NAME, UCACHE_MODULE_CODE) <<
-            "Invalid config migrateInterval, value is" << migrateInterval;
+        UBTURBO_LOG_ERROR(UCACHE_MODULE_NAME, UCACHE_MODULE_CODE)
+            << "Invalid config migrateInterval, value is" << migrateInterval;
         return ret;
     }
     if (migrateInterval <= 0) {
-        UBTURBO_LOG_ERROR(UCACHE_MODULE_NAME, UCACHE_MODULE_CODE) <<
-            "migrateInterval is invalid, migrateInterval: " << migrateInterval;
+        UBTURBO_LOG_ERROR(UCACHE_MODULE_NAME, UCACHE_MODULE_CODE)
+            << "migrateInterval is invalid, migrateInterval: " << migrateInterval;
         return UCACHE_ERR;
     }
     return ret;

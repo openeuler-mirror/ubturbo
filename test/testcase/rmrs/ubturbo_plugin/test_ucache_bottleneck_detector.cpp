@@ -3,9 +3,9 @@
  */
 
 #include <dirent.h>
+#include <filesystem>
 #include <fstream>
 #include <string>
-#include <filesystem>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
@@ -33,17 +33,17 @@ protected:
         GlobalMockObject::verify();
         std::cout << "[TestUcacheBottleneckDetector  TearDown End]" << std::endl;
     }
-    RMRS_RES MockGetFileInfo(const std::string& path, std::vector<std::string>& fileLines)
+    RMRS_RES MockGetFileInfo(const std::string &path, std::vector<std::string> &fileLines)
     {
         if (path == "/proc/stat") {
             fileLines = {
-                "cpu  100 200 300 400 500 600 700 800 900 1000",  // 有效的 cpu 行
-                "cpu0 100 200 300 400 500 600 700 800 900 1000",  // 有效的 cpu0 行
-                "cpu1 200 300 400 500 600 700 800 900 1000",      // 有效的 cpu1 行
+                "cpu  100 200 300 400 500 600 700 800 900 1000", // 有效的 cpu 行
+                "cpu0 100 200 300 400 500 600 700 800 900 1000", // 有效的 cpu0 行
+                "cpu1 200 300 400 500 600 700 800 900 1000",     // 有效的 cpu1 行
             };
             return RMRS_OK;
         }
-        return RMRS_ERROR;  // 模拟读取失败
+        return RMRS_ERROR; // 模拟读取失败
     }
 };
 
@@ -68,7 +68,7 @@ double BOTTLENECK_THRESHOLD_IOWAIT = 0.1;
 uint64_t BOTTLENECK_THRESHOLD_LEVEL2 = 10;
 uint64_t BOTTLENECK_THRESHOLD_LEVEL3 = 50;
 uint64_t BOTTLENECK_THRESHOLD_LEVEL4 = 100;
-}
+} // namespace bottleneck_detector
 
 TEST_F(TestUcacheBottleneckDetector, ReadContainerInactiveFileNotFound)
 {
@@ -263,7 +263,7 @@ TEST_F(TestUcacheBottleneckDetector, GetContainerIdFromPidsTest)
     uint32_t ret = GetContainerIdFromPids(pids, containerIds);
     EXPECT_EQ(ret, RMRS_ERROR);
 
-    MOCKER_CPP((bool(std::ifstream::*)())(&std::ifstream::is_open), bool (*)(std::ifstream *))
+    MOCKER_CPP((bool (std::ifstream::*)())(&std::ifstream::is_open), bool (*)(std::ifstream *))
         .stubs()
         .will(returnValue(true));
     ret = GetContainerIdFromPids(pids, containerIds);
@@ -413,11 +413,8 @@ TEST_F(TestUcacheBottleneckDetector, EmptyFile)
 
 TEST_F(TestUcacheBottleneckDetector, SkipNonCpuLines)
 {
-    std::vector<std::string> fileLines = {
-        "something else",
-        "cpu 100 200 300 400 500 600 700 800 900 1000",
-        "cpu0 100 200 300 400 500 600 700 800 900 1000"
-    };
+    std::vector<std::string> fileLines = {"something else", "cpu 100 200 300 400 500 600 700 800 900 1000",
+                                          "cpu0 100 200 300 400 500 600 700 800 900 1000"};
     std::map<int, std::pair<uint64_t, uint64_t>> systemCpuStats;
     for (auto &line : fileLines) {
         ParseContainerCpuStatLine(line, systemCpuStats);
@@ -430,54 +427,52 @@ TEST_F(TestUcacheBottleneckDetector, SkipTotalCpuLine)
     const int cpuSize = 2;
     std::vector<std::string> fileLines = {
         "cpu 100 200 300 400 500 600 700 800 900 1000",  // 总 cpu 行
-        "cpu0 100 200 300 400 500 600 700 800 900 1000",  // 有效的 cpu0 行
-        "cpu1 200 300 400 500 600 700 800 900 1000"       // 有效的 cpu1 行
+        "cpu0 100 200 300 400 500 600 700 800 900 1000", // 有效的 cpu0 行
+        "cpu1 200 300 400 500 600 700 800 900 1000"      // 有效的 cpu1 行
     };
     std::map<int, std::pair<uint64_t, uint64_t>> systemCpuStats;
     for (auto &line : fileLines) {
         ParseContainerCpuStatLine(line, systemCpuStats);
     }
-    EXPECT_EQ(systemCpuStats.size(), cpuSize);  // 跳过了总 cpu 行
+    EXPECT_EQ(systemCpuStats.size(), cpuSize); // 跳过了总 cpu 行
 }
 
 TEST_F(TestUcacheBottleneckDetector, ParseValidCpuLines)
 {
     const int cpuSize = 2;
-    std::vector<std::string> fileLines = {
-        "cpu 100 200 300 400 500 600 700 800 900 1000",
-        "cpu0 100 200 300 400 500 600 700 800 900 1000",
-        "cpu1 200 300 400 500 600 700 800 900 1000"
-    };
+    std::vector<std::string> fileLines = {"cpu 100 200 300 400 500 600 700 800 900 1000",
+                                          "cpu0 100 200 300 400 500 600 700 800 900 1000",
+                                          "cpu1 200 300 400 500 600 700 800 900 1000"};
     std::map<int, std::pair<uint64_t, uint64_t>> systemCpuStats;
     for (auto &line : fileLines) {
         ParseContainerCpuStatLine(line, systemCpuStats);
     }
-    EXPECT_EQ(systemCpuStats.size(), cpuSize);  // 正确解析了 cpu, cpu0 和 cpu1
+    EXPECT_EQ(systemCpuStats.size(), cpuSize); // 正确解析了 cpu, cpu0 和 cpu1
 }
 
 TEST_F(TestUcacheBottleneckDetector, BindCpusToContainerStats)
 {
     ContainerInfo container1;
-    container1.boundCpus = {0, 1};  // 绑定了 cpu0 和 cpu1
+    container1.boundCpus = {0, 1}; // 绑定了 cpu0 和 cpu1
 
     std::vector<ContainerInfo> containerList = {container1};
 
     RMRS_RES result = ExtractContainerCpuStat(containerList);
 
     EXPECT_EQ(result, RMRS_OK);
-    EXPECT_EQ(container1.cpuStats.size(), 0);  // 容器应该有 cpu0 和 cpu1 的统计数据
+    EXPECT_EQ(container1.cpuStats.size(), 0); // 容器应该有 cpu0 和 cpu1 的统计数据
 }
 
 // 测试用例：容器绑定无效的 CPU
 TEST_F(TestUcacheBottleneckDetector, InvalidCpuIdInContainer)
 {
     ContainerInfo container;
-    container.boundCpus = {-1};  // 绑定了无效的 CPU
+    container.boundCpus = {-1}; // 绑定了无效的 CPU
 
     std::vector<ContainerInfo> containerList = {container};
 
     RMRS_RES result = ExtractContainerCpuStat(containerList);
-    EXPECT_EQ(result, RMRS_OK);  // 由于无效的 CPU ID，应该返回错误
+    EXPECT_EQ(result, RMRS_OK); // 由于无效的 CPU ID，应该返回错误
 }
 
 TEST_F(TestUcacheBottleneckDetector, GetIoBytesInfoTest)
@@ -537,10 +532,10 @@ TEST_F(TestUcacheBottleneckDetector, GetCurContainerListTest)
     std::vector<ContainerInfo> list;
     list.push_back({"container-1"});
 
-    MOCKER_CPP(GetIoBytesInfo, bool(*)(std::vector<ContainerInfo> &containerInfoList))
+    MOCKER_CPP(GetIoBytesInfo, bool (*)(std::vector<ContainerInfo> & containerInfoList))
         .stubs()
         .will(returnValue(false));
-    MOCKER_CPP(GetPageCacheInfo, bool(*)(std::vector<ContainerInfo> &containerInfoList))
+    MOCKER_CPP(GetPageCacheInfo, bool (*)(std::vector<ContainerInfo> & containerInfoList))
         .stubs()
         .will(returnValue(false));
 
@@ -549,30 +544,30 @@ TEST_F(TestUcacheBottleneckDetector, GetCurContainerListTest)
     EXPECT_EQ(list.size(), 1u);
 
     GlobalMockObject::verify();
-    MOCKER_CPP(GetIoBytesInfo, bool(*)(std::vector<ContainerInfo> &containerInfoList))
+    MOCKER_CPP(GetIoBytesInfo, bool (*)(std::vector<ContainerInfo> & containerInfoList))
         .stubs()
         .will(returnValue(true));
-    MOCKER_CPP(GetPageCacheInfo, bool(*)(std::vector<ContainerInfo> &containerInfoList))
+    MOCKER_CPP(GetPageCacheInfo, bool (*)(std::vector<ContainerInfo> & containerInfoList))
         .stubs()
         .will(returnValue(true));
-    MOCKER_CPP(ExtractContainerCpuStat, uint32_t(*)(std::vector<ContainerInfo> &containerInfoList))
-    .stubs()
-    .will(returnValue(RMRS_ERROR));
+    MOCKER_CPP(ExtractContainerCpuStat, uint32_t(*)(std::vector<ContainerInfo> & containerInfoList))
+        .stubs()
+        .will(returnValue(RMRS_ERROR));
     ret = GetCurContainerList(list);
     EXPECT_EQ(ret, RMRS_ERROR);
 
     GlobalMockObject::verify();
-    MOCKER_CPP(GetIoBytesInfo, bool(*)(std::vector<ContainerInfo> &containerInfoList))
+    MOCKER_CPP(GetIoBytesInfo, bool (*)(std::vector<ContainerInfo> & containerInfoList))
         .stubs()
         .will(returnValue(true));
-    MOCKER_CPP(GetPageCacheInfo, bool(*)(std::vector<ContainerInfo> &containerInfoList))
+    MOCKER_CPP(GetPageCacheInfo, bool (*)(std::vector<ContainerInfo> & containerInfoList))
         .stubs()
         .will(returnValue(true));
-    MOCKER_CPP(ExtractContainerCpuStat, uint32_t(*)(std::vector<ContainerInfo> &containerInfoList))
-    .stubs()
-    .will(returnValue(RMRS_OK));
+    MOCKER_CPP(ExtractContainerCpuStat, uint32_t(*)(std::vector<ContainerInfo> & containerInfoList))
+        .stubs()
+        .will(returnValue(RMRS_OK));
     ret = GetCurContainerList(list);
     EXPECT_EQ(ret, RMRS_OK);
 }
 
-}
+} // namespace ucache

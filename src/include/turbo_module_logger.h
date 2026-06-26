@@ -32,5 +32,5 @@ public:
     std::string Name() override;
 };
 
-}
-#endif  // UBTURBO_TURBO_MODULE_LOGGER_H
+} // namespace turbo::log
+#endif // UBTURBO_TURBO_MODULE_LOGGER_H

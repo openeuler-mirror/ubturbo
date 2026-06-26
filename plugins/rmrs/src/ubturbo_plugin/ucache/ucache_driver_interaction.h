@@ -8,7 +8,8 @@
  * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
  * See the Mulan PSL v2 for more details.
- */#ifndef UCACHE_DRIVER_INTERACTION_H
+ */
+#ifndef UCACHE_DRIVER_INTERACTION_H
 #define UCACHE_DRIVER_INTERACTION_H
 
 #include <fcntl.h>
@@ -17,7 +18,6 @@
 #include <cstdint>
 
 namespace ucache {
-
 struct MigrateInfo {
     int32_t desNid;
     int32_t nid;
@@ -31,7 +31,7 @@ struct MigrateSuccess {
 };
 
 #define UCACHE_QUERY_MIGRATE_SUCCESS _IOWR(100, 0, struct MigrateSuccess *) // 查询迁移成功率
-#define UCACHE_SCAN_MIGRATE_FOLIOS _IOWR(100, 1, struct MigrateInfo *)     // 迁移文件页
+#define UCACHE_SCAN_MIGRATE_FOLIOS _IOWR(100, 1, struct MigrateInfo *)      // 迁移文件页
 
 class DriverInteraction {
 public:
@@ -68,6 +68,6 @@ private:
     }
 };
 
-} // end namespace rmrs
+} // namespace ucache
 
 #endif

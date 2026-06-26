@@ -17,8 +17,18 @@
 #include "mockcpp/mokc.h"
 #include "stub_struct.h"
 #include "urma.h"
+#include "ubcore_types.h"
+#include "ubcore_opcode.h"
 
 using namespace std;
+
+struct ub_dma_desc_full {
+    struct ub_virt_dma_desc vd;
+    uint64_t src_addr;
+    uint64_t dest_addr;
+    size_t len;
+    struct tmp_urma_segment_info tmp_sge;
+};
 
 class TestUbDmaFeature : public ::testing::Test {
 protected:
@@ -168,7 +178,7 @@ TEST_F(TestUbDmaFeature, test_ub_dma_client_comp_callback)
         break;
     }
     ub_dma_vchan *vchan = container_of(chan, struct ub_dma_vchan, vc.chan);
-    struct ub_dma_desc txd;
+    struct ub_dma_desc_full txd = {};
     dma_device dmaDev;
     device dev;
     txd.vd.tx.cookie = 2; // 2

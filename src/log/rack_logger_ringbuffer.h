@@ -30,7 +30,6 @@ private:
 
 class RingBuffer {
 public:
-
     struct alignas(64) Item { // 64字节对齐，提高内存访问效率
         Item() : isWriting(false), loggerEntry(nullptr, TurboLogLevel::INFO, nullptr, nullptr, 0) {}
         bool isWriting;
@@ -48,12 +47,12 @@ public:
 
     void ResetIndex();
 
-    static void SwapAtomic(std::atomic<unsigned int>& src, std::atomic<unsigned int>& dest);
+    static void SwapAtomic(std::atomic<unsigned int> &src, std::atomic<unsigned int> &dest);
 
     static void Swap(RingBuffer &buffer, RingBuffer &other);
 
     RingBuffer(RingBuffer const &) = delete;
-    RingBuffer &operator = (RingBuffer const &) = delete;
+    RingBuffer &operator=(RingBuffer const &) = delete;
 
 public:
     uint32_t size;
@@ -78,5 +77,5 @@ private:
     RingBuffer writeBuffer;
 };
 
-}
+} // namespace turbo::log
 #endif // TURBO_LOGGER_BUFFER_H

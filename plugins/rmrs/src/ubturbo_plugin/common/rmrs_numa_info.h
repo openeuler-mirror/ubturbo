@@ -21,7 +21,7 @@ namespace rmrs {
 struct NumaMetaData {
     NumaMetaData() = default;
 
-    std::string nodeId{};           // 节点Id
+    std::string nodeId{}; // 节点Id
     uint32_t logicId{};
     int16_t logicSocketId{};
     std::string hostName{};         // 节点HostName
@@ -175,7 +175,7 @@ struct NumaParam {
 
 struct NumaSizeInfo {
     NumaSizeInfo() = default;
-    
+
     time_t timestamp;
     std::string nodeId;
     std::vector<NumaParam> numaParams;

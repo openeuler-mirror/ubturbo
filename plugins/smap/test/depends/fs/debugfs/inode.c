@@ -22,3 +22,6 @@ struct dentry *debugfs_lookup(const char *name, struct dentry *parent)
 {
 	return NULL;
 }
+
+void dput(struct dentry *dentry)
+{}

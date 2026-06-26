@@ -46,7 +46,7 @@ extern struct list_head access_dev;
 
 static inline void reset_actc_data(struct access_tracking_dev *hdev)
 {
-	size_t len = hdev->page_count * sizeof(u16);
+	size_t len = hdev->page_count * sizeof(actc_t);
 
 	if (hdev->access_bit_actc_data)
 		memset(hdev->access_bit_actc_data, 0, len);
@@ -113,7 +113,8 @@ static int actc_buffer_reinit(struct access_tracking_dev *hdev)
 	}
 	actc_buffer_deinit(hdev);
 	if (page_count) {
-		hdev->access_bit_actc_data = vzalloc(page_count * sizeof(u16));
+		hdev->access_bit_actc_data =
+			vzalloc(page_count * sizeof(actc_t));
 		if (!hdev->access_bit_actc_data) {
 			return -ENOMEM;
 		}
@@ -125,18 +126,15 @@ static int actc_buffer_reinit(struct access_tracking_dev *hdev)
 static void hist_tracking_enable(struct device *ldev)
 {
 	struct access_tracking_dev *hdev;
+	int ret;
 
 	hdev = to_access_tracking_dev(ldev);
 	down_write(&hdev->buffer_lock);
-	if (hdev->need_reinit_actc) {
-		if (actc_buffer_reinit(hdev)) {
-			pr_err("unable to reinit ACTC buffer\n");
-			up_write(&hdev->buffer_lock);
-			return;
-		}
-		hdev->need_reinit_actc = false;
-	} else {
-		reset_actc_data(hdev);
+	ret = actc_buffer_reinit(hdev);
+	if (ret) {
+		pr_err("unable to reinit ACTC buffer\n");
+		up_write(&hdev->buffer_lock);
+		return;
 	}
 	up_write(&hdev->buffer_lock);
 	hdev->enable_on = true;
@@ -167,20 +165,10 @@ static int hist_tracking_set_page_size(struct device *ldev, u8 pgsize)
 	return ret;
 }
 
-static void hist_tracking_set_reinit_pending(struct device *ldev)
-{
-	struct access_tracking_dev *hdev = to_access_tracking_dev(ldev);
-	down_write(&hdev->buffer_lock);
-	hdev->need_reinit_actc = true;
-	up_write(&hdev->buffer_lock);
-	pr_debug("set reinit pending flag for node %d\n", hdev->node);
-}
-
 static struct tracking_operations g_hist_tracking_ops = {
 	.tracking_enable = hist_tracking_enable,
 	.tracking_disable = hist_tracking_disable,
 	.tracking_set_page_size = hist_tracking_set_page_size,
-	.tracking_set_reinit_pending = hist_tracking_set_reinit_pending,
 };
 
 static int actc_buffer_init(struct access_tracking_dev *hdev)
@@ -190,56 +178,13 @@ static int actc_buffer_init(struct access_tracking_dev *hdev)
 		hdev->node);
 	if (!hdev->page_count)
 		return 0;
-	hdev->access_bit_actc_data = vzalloc(hdev->page_count * sizeof(u16));
+	hdev->access_bit_actc_data = vzalloc(hdev->page_count * sizeof(actc_t));
 	if (!hdev->access_bit_actc_data) {
 		pr_err("unable to alloc mem for histogram tracking ACTC buffer\n");
 		hdev->page_count = 0;
 		return -ENOMEM;
 	}
 	return 0;
-}
-
-static void scan_hist(struct access_tracking_dev *hdev)
-{
-	u32 pgcount = 0, addr_pg = 0;
-	u64 dev_page_count = hdev->page_count;
-	struct ram_segment *rseg, *tmp;
-	struct addr_seg addr_seg;
-	if (PAGE_SIZE == PAGE_SIZE_64K)
-		dev_page_count *= PAGE_SIZE_64K_DIV_4K;
-	read_lock(&rem_ram_list_lock);
-	list_for_each_entry_safe(rseg, tmp, &remote_ram_list, node) {
-		if (rseg->numa_node != hdev->node) {
-			continue;
-		}
-		addr_seg.start = rseg->start;
-		addr_seg.size = rseg->end - rseg->start + 1;
-		addr_pg = addr_seg.size >>
-			  (hdev->page_size_mode == PAGE_MODE_2M ?
-				   HIST_ADDR_SHIFT_2M :
-				   HIST_ADDR_SHIFT_4K);
-		if (pgcount + addr_pg > dev_page_count) {
-			pr_warn("page index: %u exceeds upper bound of page count: %llu\n",
-				pgcount + addr_pg, dev_page_count);
-			break;
-		}
-		fetch_hist_actc_buf(hdev->access_bit_actc_data + pgcount,
-				    &addr_seg);
-		pgcount += addr_pg;
-	}
-	read_unlock(&rem_ram_list_lock);
-}
-
-static void update_hist_actc_batch(void)
-{
-	struct access_tracking_dev *hdev, *n;
-	list_for_each_entry_safe(hdev, n, &access_dev, list) {
-		if (!hdev->is_hist)
-			continue;
-		down_write(&hdev->buffer_lock);
-		scan_hist(hdev);
-		up_write(&hdev->buffer_lock);
-	}
 }
 
 static void hist_tracking_deinit(void)
@@ -340,7 +285,7 @@ int hist_module_init(void)
 	ret = hist_init(SIZE_2M);
 	if (ret) {
 		pr_err("init SMAP histogram device failed, ret: %d\n", ret);
-		return ret;
+		goto err_acpi_mem;
 	}
 
 	ret = hist_tracking_init();
@@ -348,12 +293,12 @@ int hist_module_init(void)
 		pr_err("init histogram tracking device failed, ret: %d\n", ret);
 		goto err_tracking_add;
 	}
-	hist_set_flush_actc_cb(update_hist_actc_batch);
 	pr_info("smap hist tracking init success.\n");
 	return 0;
 
 err_tracking_add:
 	hist_deinit();
+err_acpi_mem:
 	reset_acpi_mem();
 	return ret;
 }

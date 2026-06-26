@@ -29,6 +29,10 @@ static dev_t ioctl_access_dev;
 static struct class *access_class;
 static struct cdev access_cdev;
 static struct device *access_device;
+static struct user_info ubturbo_ui = { 0 };
+kuid_t procfs_kuid;
+kgid_t procfs_kgid;
+struct proc_dir_entry *smap_procfs_root = NULL;
 
 static char *smap_bitmap_buf = NULL;
 static size_t smap_buf_len = 0;
@@ -171,92 +175,54 @@ static long ioctl_remove_all_pid(void __user *argp)
 	return 0;
 }
 
-static bool is_pid_freq_msg_valid(struct access_pid_freq_msg *msg)
+static void remove_procfs_root(void)
 {
-	int i;
-
-	if (find_access_pid(msg->pid) == NULL) {
-		return false;
-	}
-	for (i = 0; i < ARRAY_SIZE(msg->len); i++) {
-		if (msg->len[i] > MAX_NR_PAGE_PER_NUMA)
-			return false;
-	}
-
-	return true;
+	proc_remove(smap_procfs_root);
+	smap_procfs_root = NULL;
 }
 
-static int transfer_frequency_data(struct access_pid_freq_msg *msg,
-				   actc_t **data)
+static int create_procfs_root(struct user_info *ui)
 {
-	int i;
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
-		if (msg->len[i] == 0)
-			continue;
-		if (copy_to_user(msg->freq[i], data[i],
-				 sizeof(actc_t) * msg->len[i])) {
-			pr_err("failed to copy frequency of pid: %d on node%d to user\n",
-			       msg->pid, i);
-			return -EFAULT;
-		}
+	smap_procfs_root = proc_mkdir(SMAP_PROC_ROOT, NULL);
+	if (!smap_procfs_root) {
+		pr_err("failed to create /proc/%s\n", SMAP_PROC_ROOT);
+		return -ENOMEM;
 	}
+
+	procfs_kuid = make_kuid(&init_user_ns, ui->uid);
+	procfs_kgid = make_kgid(&init_user_ns, ui->gid);
+	proc_set_user(smap_procfs_root, procfs_kuid, procfs_kgid);
 	return 0;
 }
 
-static long ioctl_read_pid_freq(void __user *argp)
+static inline bool is_user_unchanged(struct user_info *ui)
+{
+	return ui && ui->uid == ubturbo_ui.uid && ui->gid == ubturbo_ui.gid;
+}
+
+static long ioctl_create_smap_procfs(void __user *argp)
 {
 	int ret;
-	int i;
-	struct access_pid_freq_msg msg;
-	actc_t *freq[SMAP_MAX_NUMNODES] = { 0 };
+	struct user_info temp_ui;
 
-	pr_debug("read pid frequency\n");
-	if (!check_and_clear_ap_state(&ap_data, AP_STATE_FREQ)) {
-		pr_err("read frequency of access pid is not allowed\n");
-		return -EAGAIN;
+	if (copy_from_user(&temp_ui, argp, sizeof(temp_ui)))
+		return -EFAULT;
+
+	if (smap_procfs_root && is_user_unchanged(&temp_ui)) {
+		pr_info("procfs root directory unchanged\n");
+		return 0;
 	}
 
-	if (copy_from_user(&msg, argp, sizeof(msg))) {
-		ret = -EFAULT;
-		goto out_ret;
-	}
+	remove_procfs_root();
 
-	if (!is_pid_freq_msg_valid(&msg)) {
-		pr_err("invalid pid: %d passed to access read frequency\n",
-		       msg.pid);
-		ret = -EINVAL;
-		goto out_ret;
-	}
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
-		if (msg.len[i] == 0) {
-			continue;
-		}
-		freq[i] = vzalloc(msg.len[i] * sizeof(actc_t));
-		if (!freq[i]) {
-			ret = -ENOMEM;
-			goto out;
-		}
-	}
-
-	ret = read_pid_freq(msg.pid, msg.len, freq);
+	ret = create_procfs_root(&temp_ui);
 	if (ret) {
-		pr_err("failed to read frequency of pid: %d\n", msg.pid);
-		goto out;
+		remove_procfs_root();
+		return ret;
 	}
 
-	ret = transfer_frequency_data(&msg, freq);
-out:
-	for (i = 0; i < ARRAY_SIZE(freq); i++)
-		vfree(freq[i]);
-out_ret:
-	if (ret)
-		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ |
-						     AP_STATE_FREQ);
-	else
-		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ |
-						     AP_STATE_FREQ |
-						     AP_STATE_MIG);
-	return ret;
+	pr_info("procfs root directory create\n");
+	return 0;
 }
 
 #ifndef BYTES_PER_LONG
@@ -265,22 +231,18 @@ out_ret:
 
 static size_t calc_bitmap_len(void)
 {
-	int i;
 	size_t buf_len = 0;
+	struct access_pid *ap;
 
 	/*
 	 * Each process's information layout is as follows:
 	 * +----------+------------------------------------------------------+
 	 * | PID (4B) |        NR_NODE0_PAGE-NR_NODEn_PAGE (n * 8B)          |
-	 * +----------------------------------------------+------------------+
-	 * | NODE0_BITMAP_LEN-NODEn_BITMAP_LEN (n * 8B) |   VM_SIZE (4B)     |
-	 * +-----------------------------------------------------------------+
-	 * | NODE0_BITMAP-NODEn_BITMAP (size is dependent on bitmap length)  |
-	 * +-----------------------------------------------------------------+
-	 * |         MAPPING (size is dependent on process vm size)          |
-	 * +-----------------------------------------------------------------+
+	 * +----------+------------------------------------------------------+
+	 *
+	 * Note: bitmap/mapping data is not transmitted here since mem_freq_read
+	 * already assembles complete actc_data including freq, prior, and white_list.
 	 */
-	struct access_pid *ap;
 	down_read(&ap_data.lock);
 	list_for_each_entry(ap, &ap_data.list, node) {
 		if (ap->type != NORMAL_SCAN) {
@@ -288,13 +250,6 @@ static size_t calc_bitmap_len(void)
 		}
 		buf_len += sizeof(pid_t);
 		buf_len += sizeof(size_t) * SMAP_MAX_NUMNODES;
-		buf_len += sizeof(size_t) * SMAP_MAX_NUMNODES;
-		buf_len += sizeof(u32);
-		for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
-			buf_len += sizeof(unsigned long) * ap->bm_len[i];
-			buf_len += sizeof(unsigned long) * ap->bm_len[i];
-		}
-		buf_len += sizeof(u32) * ap->info.vm_size;
 	}
 	up_read(&ap_data.lock);
 
@@ -344,83 +299,6 @@ static inline void write_bitmap_nrpage(char **buffer, struct access_pid *ap)
 	}
 }
 
-static inline void write_bitmap_bmlen(char **buffer, struct access_pid *ap)
-{
-	int i;
-	if (unlikely(!buffer || !(*buffer) || !ap)) {
-		pr_err("invalid buffer or access pid passed to write bitmap length\n");
-		return;
-	}
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
-		memcpy(*buffer, &ap->bm_len[i], sizeof(ap->bm_len[i]));
-		*buffer += sizeof(ap->bm_len[i]);
-	}
-}
-
-static inline void write_bitmap_vmsize(char **buffer, struct access_pid *ap)
-{
-	if (unlikely(!buffer || !(*buffer) || !ap)) {
-		pr_err("invalid buffer or access pid passed to write VM size\n");
-		return;
-	}
-	memcpy(*buffer, &ap->info.vm_size, sizeof(ap->info.vm_size));
-	*buffer += sizeof(ap->info.vm_size);
-}
-
-static void write_bitmap_paddrbm(char **buffer, struct access_pid *ap)
-{
-	int i;
-	if (unlikely(!buffer || !(*buffer) || !ap)) {
-		pr_err("invalid buffer or access pid passed to write physical address bitmap\n");
-		return;
-	}
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
-		size_t length = sizeof(unsigned long) * ap->bm_len[i];
-		if (length == 0 || !ap->paddr_bm[i]) {
-			pr_debug("no need to write pid %d paddr_bm[%d]\n",
-				 ap->pid, i);
-			continue;
-		}
-		memcpy(*buffer, ap->paddr_bm[i], length);
-		*buffer += length;
-	}
-}
-
-static void write_bitmap_white_list(char **buffer, struct access_pid *ap)
-{
-	int i;
-	if (unlikely(!buffer || !(*buffer) || !ap)) {
-		pr_err("invalid buffer or access pid passed to write white list\n");
-		return;
-	}
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
-		size_t length = sizeof(unsigned long) * ap->bm_len[i];
-		if (length == 0 || !ap->white_list_bm[i]) {
-			pr_debug("no need to write pid %d white_list_bm[%d]\n",
-				 ap->pid, i);
-			continue;
-		}
-		memcpy(*buffer, ap->white_list_bm[i], length);
-		*buffer += length;
-	}
-}
-
-static void write_bitmap_mappig(char **buffer, struct access_pid *ap)
-{
-	size_t length;
-	if (unlikely(!buffer || !(*buffer) || !ap)) {
-		pr_err("invalid buffer or access pid passed to write VM mapping info\n");
-		return;
-	}
-	if (!ap->info.mapping) {
-		pr_debug("no need to write pid %d mapping\n", ap->pid);
-		return;
-	}
-	length = sizeof(u32) * ap->info.vm_size;
-	memcpy(*buffer, ap->info.mapping, length);
-	*buffer += length;
-}
-
 static void write_bitmap_buffer(char **buffer)
 {
 	struct access_pid *ap;
@@ -436,11 +314,6 @@ static void write_bitmap_buffer(char **buffer)
 
 		write_bitmap_pid(buffer, ap);
 		write_bitmap_nrpage(buffer, ap);
-		write_bitmap_bmlen(buffer, ap);
-		write_bitmap_vmsize(buffer, ap);
-		write_bitmap_paddrbm(buffer, ap);
-		write_bitmap_white_list(buffer, ap);
-		write_bitmap_mappig(buffer, ap);
 	}
 	up_read(&ap_data.lock);
 }
@@ -524,21 +397,24 @@ static void update_tracking_data(actc_t *tracking_data,
 	u32 i, idx;
 	payload_info->length =
 		payload_info->length > (stat_info->page_num[L1] +
-					stat_info->page_num[L2]) ?
-			(stat_info->page_num[L1] + stat_info->page_num[L2]) :
-			payload_info->length;
+					stat_info->page_num[L2])
+			? (stat_info->page_num[L1] + stat_info->page_num[L2])
+			: payload_info->length;
 
-	for (idx = 0; idx + SCHEDULE_INTERVAL <= payload_info->length; idx += SCHEDULE_INTERVAL) {
+	for (idx = 0; idx + SCHEDULE_INTERVAL <= payload_info->length;
+	     idx += SCHEDULE_INTERVAL) {
 		for (i = 0; i < SCHEDULE_INTERVAL; i++) {
 			for (j = 0; j < stat_info->window_num; j++)
-				tracking_data[idx + i] += stat_info->sliding_windows[j][idx + i];
+				tracking_data[idx + i] +=
+					stat_info->sliding_windows[j][idx + i];
 		}
 		cond_resched();
 	}
 
 	for (; idx < payload_info->length; idx++) {
 		for (j = 0; j < stat_info->window_num; j++)
-			tracking_data[idx] += stat_info->sliding_windows[j][idx];
+			tracking_data[idx] +=
+				stat_info->sliding_windows[j][idx];
 	}
 }
 
@@ -590,6 +466,16 @@ out_free_payload:
 	return ret;
 }
 
+static long ioctl_get_nr_local_numa(void __user *argp)
+{
+	if (copy_to_user(argp, &nr_local_numa, sizeof(int))) {
+		pr_err("copy_to_user nr_local_numa failed\n");
+		return -EFAULT;
+	}
+	pr_info("passed nr_local_numa %d to user space\n", nr_local_numa);
+	return 0;
+}
+
 static long smap_access_ioctl(struct file *file, unsigned int cmd,
 			      unsigned long arg)
 {
@@ -611,8 +497,12 @@ static long smap_access_ioctl(struct file *file, unsigned int cmd,
 		return ioctl_walk_pagemap(argp);
 	case SMAP_ACCESS_GET_TRACKING:
 		return ioctl_get_tracking(argp);
-	case SMAP_ACCESS_READ_PID_FREQ:
-		return ioctl_read_pid_freq(argp);
+	case SMAP_ACCESS_CREATE_PROCFS:
+		return ioctl_create_smap_procfs(argp);
+	case SMAP_ACCESS_GET_NR_LOCAL_NUMA:
+		return ioctl_get_nr_local_numa(argp);
+	case SMAP_ACCESS_REFRESH_REMOTE_RAM:
+		return refresh_remote_ram();
 	default:
 		rc = -ENOTTY;
 	}
@@ -702,7 +592,11 @@ err_cdev:
 
 void access_ioctl_exit(void)
 {
+	vfree(smap_bitmap_buf);
+	smap_bitmap_buf = NULL;
+	smap_buf_len = 0;
 	access_remove_all_pid();
+	remove_procfs_root();
 	access_dev_exit();
 }
 

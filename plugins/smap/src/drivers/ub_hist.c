@@ -21,6 +21,8 @@
 #include <linux/uaccess.h>
 #include "ub_hist.h"
 
+#define REG_BASE_ADDR_N6_0 0x33030a0000
+#define REG_BASE_ADDR_N7_0 0x2d21320000
 #define UDIE_PHY_ADDR_STS_REGS_N6_OFFSET 0x4000
 #define UDIE_PHY_ADDR_STS_REGS_N7_OFFSET 0x1000
 #define DEVICE_MEM_LEN_N6 0x8000
@@ -134,16 +136,16 @@ static int ub_hist_ba_init(struct ub_hist_ba_device *ba_dev)
 
 static inline u32 ub_hist_get_smap_sts_value_reg_addr(void)
 {
-	return (g_ub_hist_smap_type == UB_HIST_SMAP_TYPE_N7) ?
-		       UDIE_PHY_ADDR_STS_REGS_N7_OFFSET :
-		       UDIE_PHY_ADDR_STS_REGS_N6_OFFSET;
+	return (g_ub_hist_smap_type == UB_HIST_SMAP_TYPE_N7)
+		       ? UDIE_PHY_ADDR_STS_REGS_N7_OFFSET
+		       : UDIE_PHY_ADDR_STS_REGS_N6_OFFSET;
 }
 
 static inline u32 ub_hist_get_ba_sts_value_count(void)
 {
-	return (g_ub_hist_smap_type == UB_HIST_SMAP_TYPE_N7) ?
-		       BA_STS_VALUE_N7_COUNT :
-		       BA_STS_VALUE_N6_COUNT;
+	return (g_ub_hist_smap_type == UB_HIST_SMAP_TYPE_N7)
+		       ? BA_STS_VALUE_N7_COUNT
+		       : BA_STS_VALUE_N6_COUNT;
 }
 
 int ub_hist_rd_clr_sts(struct ub_hist_ba_device *ba_dev, u32 *buf, size_t len)
@@ -294,10 +296,9 @@ static int ub_hist_get_ba_resource(struct platform_device *pdev,
 {
 	int ret;
 	uint64_t value;
-	uint64_t device_mem_len =
-		(g_ub_hist_smap_type == UB_HIST_SMAP_TYPE_N7) ?
-			DEVICE_MEM_LEN_N7 :
-			DEVICE_MEM_LEN_N6;
+	uint64_t device_mem_len = (g_ub_hist_smap_type == UB_HIST_SMAP_TYPE_N7)
+					  ? DEVICE_MEM_LEN_N7
+					  : DEVICE_MEM_LEN_N6;
 
 	if (!ACPI_COMPANION(&pdev->dev)) {
 		pr_err("ACPI companion not found\n");
@@ -372,17 +373,22 @@ static int ub_hist_probe(struct platform_device *pdev)
 
 	ret = ub_hist_ba_init(ba_dev);
 	if (ret)
-		return ret;
+		goto err_ba_init;
 
 	ret = ub_hist_rd_clr_sts(ba_dev, NULL, 0);
 	if (ret)
-		return ret;
+		goto err_rd_clr;
 
 	spin_lock_irqsave(&ub_hist_ba_list_lock, flags);
 	list_add_tail(&ba_dev->list, &ub_hist_ba_list);
 	spin_unlock_irqrestore(&ub_hist_ba_list_lock, flags);
 	pr_debug("ub_hist_probe success\n");
 	return 0;
+
+err_rd_clr:
+err_ba_init:
+	iounmap(ba_dev->base_addr);
+	return ret;
 }
 
 static int ub_hist_remove(struct platform_device *pdev)
@@ -428,6 +434,28 @@ static struct platform_driver ub_hist_platform_driver = {
         },
 };
 
+static int ub_hist_set_hw_type(void)
+{
+	struct ub_hist_ba_device *ba_dev;
+	ba_dev = list_first_entry_or_null(&ub_hist_ba_list,
+					  struct ub_hist_ba_device, list);
+	if (!ba_dev) {
+		pr_err("BA device not found\n");
+		return -ENODEV;
+	}
+	if (ba_dev->info.ba_tag == REG_BASE_ADDR_N6_0) {
+		g_ub_hist_smap_type = UB_HIST_SMAP_TYPE_N6;
+		return 0;
+	}
+	if (ba_dev->info.ba_tag == REG_BASE_ADDR_N7_0) {
+		g_ub_hist_smap_type = UB_HIST_SMAP_TYPE_N7;
+		return 0;
+	}
+
+	pr_err("Invalid hardware type detected\n");
+	return -EINVAL;
+}
+
 ub_hist_smap_type ub_hist_get_hw_type(void)
 {
 	return g_ub_hist_smap_type;
@@ -441,6 +469,11 @@ int ub_hist_init(void)
 	ret = platform_driver_register(&ub_hist_platform_driver);
 	if (ret) {
 		pr_err("failed to register platform driver, ret: %d\n", ret);
+		return ret;
+	}
+	ret = ub_hist_set_hw_type();
+	if (ret) {
+		platform_driver_unregister(&ub_hist_platform_driver);
 		return ret;
 	}
 

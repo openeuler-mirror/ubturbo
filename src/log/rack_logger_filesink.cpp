@@ -49,12 +49,12 @@ RackLoggerFilesink::~RackLoggerFilesink()
 
 bool RackLoggerFilesink::Write(TurboLoggerEntry &loggerEntry)
 {
-    const char* moduleName = loggerEntry.GetModuleName();
+    const char *moduleName = loggerEntry.GetModuleName();
     if (moduleName == nullptr) {
         std::cerr << "LoggerEntry moduleName is nullptr." << std::endl;
         return false;
     }
-    
+
     std::string fileName = moduleName;
     if (!fileMap[fileName].isInitialized) {
         fileMap[fileName].filePath = basePath + "/" + fileName + ".log";
@@ -90,7 +90,8 @@ bool RackLoggerFilesink::Write(TurboLoggerEntry &loggerEntry)
 
 bool RackLoggerFilesink::IsFileStatusChanged(const std::string &fileName)
 {
-    struct stat fileStat {};
+    struct stat fileStat {
+    };
     if (stat(fileMap[fileName].filePath.c_str(), &fileStat) != 0) {
         return true; // 文件不存在或无法访问
     }
@@ -145,7 +146,8 @@ bool RackLoggerFilesink::OpenFile(const std::string &fileName)
     }
 
     if (fileMap[fileName].logFile.is_open()) {
-        struct stat fileStat {};
+        struct stat fileStat {
+        };
         stat(fileMap[fileName].filePath.c_str(), &fileStat);
         fileMap[fileName].inode = fileStat.st_ino;
         try {
@@ -179,7 +181,6 @@ bool RackLoggerFilesink::CompressFile(const std::string &fileName, const std::st
     }
     return true;
 }
-
 
 uint32_t RackLoggerFilesink::RenameCompressedFile(std::vector<std::string> &compressedFiles)
 {

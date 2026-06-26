@@ -16,8 +16,6 @@
 #include "manage.h"
 #include "thread.h"
 
-#define CHECK_THREAD_INTERVAL 2000
-
 static void *ThreadMain(void *args)
 {
     ThreadCtx *ctx = args;
@@ -32,6 +30,7 @@ static void *ThreadMain(void *args)
 
 int InitThread(struct ProcessManager *manager, uint32_t period, WorkFunc workFunc)
 {
+    int ret;
     ThreadCtx *ctx = malloc(sizeof(ThreadCtx));
     if (!ctx) {
         SMAP_LOGGER_ERROR("Alloc mem for thread failed.");
@@ -41,8 +40,13 @@ int InitThread(struct ProcessManager *manager, uint32_t period, WorkFunc workFun
     EnvAtomicSet(&ctx->stop, 0);
     ctx->processManager = manager;
     ctx->workFunc = workFunc;
+    ret = pthread_create(&ctx->thread, NULL, ThreadMain, ctx);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Create thread failed: %d.", ret);
+        free(ctx);
+        return -ret;
+    }
     manager->threadCtx[manager->nrThread] = ctx;
-    pthread_create(&ctx->thread, NULL, ThreadMain, ctx);
     manager->nrThread++;
     return 0;
 }

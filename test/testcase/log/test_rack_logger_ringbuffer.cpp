@@ -62,13 +62,13 @@ TEST_F(RackLoggerRingbufferTest, test_BasicLockUnlock)
     std::atomic_flag flag = ATOMIC_FLAG_INIT;
 
     {
-        SpinLock lock(flag);  // test_and_set() 返回 false → 获得锁
-        EXPECT_TRUE(flag.test_and_set());  // 再次设置应返回 true，说明锁已上
-        flag.clear();  // 恢复状态，防止影响外部验证
+        SpinLock lock(flag);              // test_and_set() 返回 false → 获得锁
+        EXPECT_TRUE(flag.test_and_set()); // 再次设置应返回 true，说明锁已上
+        flag.clear();                     // 恢复状态，防止影响外部验证
     }
 
     // 此时锁已析构，应已 clear，test_and_set 应返回 false
-    EXPECT_FALSE(flag.test_and_set());  // 如果是 false → 表示锁已释放
-    flag.clear();  // 清除
+    EXPECT_FALSE(flag.test_and_set()); // 如果是 false → 表示锁已释放
+    flag.clear();                      // 清除
 }
-}
+} // namespace turbo::log

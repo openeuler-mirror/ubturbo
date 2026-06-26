@@ -8,14 +8,15 @@
  * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
  * See the Mulan PSL v2 for more details.
- */#ifndef RMRS_SERIALIZER_H
+ */
+#ifndef RMRS_SERIALIZER_H
 #define RMRS_SERIALIZER_H
 
 #include <string>
 #include <vector>
 
-#include "turbo_resource_query.h"
 #include "rmrs_serialize.h"
+#include "turbo_resource_query.h"
 
 namespace rmrs::serialization {
 using namespace rmrs::serialize;
@@ -36,7 +37,7 @@ struct VMMigrateOutParam {
 
 struct VMMigrateMultiOutParam {
     pid_t pid;
-    std::vector<uint64_t> memSize;  // 迁出内存大小 单位kb
+    std::vector<uint64_t> memSize;   // 迁出内存大小 单位kb
     std::vector<uint16_t> desNumaId; // 迁移远端numa
 };
 
@@ -73,8 +74,8 @@ struct NumaData {
 
 struct RemoteNumaSocketInfo {
     int16_t borrowRemoteNuma{-1}; // 借入numa, remote 借用时有效，否则为-1
-    std::string lentNode{};      // 借出节点
-    uint16_t lentSocketId{0};    // 借出内存socketId
+    std::string lentNode{};       // 借出节点
+    uint16_t lentSocketId{0};     // 借出内存socketId
     std::string ToString() const
     {
         std::ostringstream oss;
@@ -91,8 +92,8 @@ class MigrateStrategyParamRMRS {
 public:
     std::vector<VMPresetParam> vmInfoList{};
     std::uint64_t borrowSize{};
-    std::map<pid_t, std::vector<uint16_t>> pidRemoteNumaMap;       // 需要匀出本地内存大小
-    std::vector<uint16_t> timeOutNumas;                            // 归还超时的远端numa
+    std::map<pid_t, std::vector<uint16_t>> pidRemoteNumaMap; // 需要匀出本地内存大小
+    std::vector<uint16_t> timeOutNumas;                      // 归还超时的远端numa
 };
 
 class MigrateStrategyResult {

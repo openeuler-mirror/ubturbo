@@ -4,4 +4,9 @@
 
 typedef long long	__kernel_loff_t;
 
+#ifndef __kernel_uid32_t
+typedef unsigned int	__kernel_uid32_t;
+typedef unsigned int	__kernel_gid32_t;
+#endif
+
 #endif

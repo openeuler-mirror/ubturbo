@@ -12,8 +12,8 @@
 #ifndef TURBO_IPC_CLIENT_INNER_H
 #define TURBO_IPC_CLIENT_INNER_H
 
-#include <string>
 #include <functional>
+#include <string>
 #include "turbo_def.h"
 
 namespace turbo::ipc::client {
@@ -39,6 +39,7 @@ public:
     */
     uint32_t UBTurboFunctionCaller(const std::string &function, const TurboByteBuffer &params, TurboByteBuffer &result);
     uint32_t SetTimeLimit(uint32_t timeLimit);
+
 private:
     bool CheckInputIsValid(const std::string &function, const TurboByteBuffer &params);
     uint32_t RecvMessage(int fd, TurboByteBuffer &result);
@@ -48,6 +49,6 @@ private:
     static uint32_t GetHeader(uint8_t *message);
 };
 
-}
+} // namespace turbo::ipc::client
 
 #endif

@@ -47,13 +47,18 @@ struct AccessRemovePidMsg {
 struct AccessPidFreq {
     pid_t pid;
     size_t len[MAX_NODES];
-    uint16_t *freq[MAX_NODES];
+    actc_t *freq[MAX_NODES];
 };
 
 struct TrakingInfoPayload {
     pid_t pid;
     uint32_t length;
-    uint16_t *data;
+    actc_t *data;
+};
+
+struct UserInfo {
+    uid_t uid;
+    gid_t gid;
 };
 
 #define SMAP_ACCESS_MAGIC 0xBB
@@ -62,13 +67,16 @@ struct TrakingInfoPayload {
 #define SMAP_ACCESS_REMOVE_ALL_PID _IOW(SMAP_ACCESS_MAGIC, 3, int)
 #define SMAP_ACCESS_WALK_PAGEMAP _IOW(SMAP_ACCESS_MAGIC, 4, size_t)
 #define SMAP_ACCESS_GET_TRACKING _IOW(SMAP_ACCESS_MAGIC, 5, struct TrakingInfoPayload)
-#define SMAP_ACCESS_READ_PID_FREQ _IOW(SMAP_ACCESS_MAGIC, 6, struct AccessPidFreq)
+#define SMAP_ACCESS_CREATE_PROCFS _IOW(SMAP_ACCESS_MAGIC, 6, struct UserInfo)
+#define SMAP_ACCESS_GET_NR_LOCAL_NUMA _IOR(SMAP_ACCESS_MAGIC, 7, int)
+#define SMAP_ACCESS_REFRESH_REMOTE_RAM _IO(SMAP_ACCESS_MAGIC, 8)
 
 int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload);
 int AccessIoctlRemovePid(int len, struct AccessRemovePidPayload *payload);
 int AccessIoctlRemoveAllPid(void);
 int AccessIoctlWalkPagemap(size_t *len);
-int AccessIoctlReadPidFreq(struct AccessPidFreq *apf);
+int AccessIoctlCreateProcfs(struct UserInfo *ui);
 int AccessRead(size_t len, char *buf);
+void IoctlUpdateUbDmaAvail(uint32_t value);
 
 #endif /* __ACCESS_IOCTL_H__ */

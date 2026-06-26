@@ -10,11 +10,15 @@ struct task_struct;
 
 static struct task_struct *get_current(void)
 {
+#ifdef __aarch64__
 	unsigned long depends_sp_el0;
 
 	asm ("mrs %0, sp_el0" : "=r" (depends_sp_el0));
 
 	return (struct task_struct *)depends_sp_el0;
+#else
+	return (struct task_struct *)0;
+#endif
 }
 
 #define current get_current()
@@ -22,4 +26,3 @@ static struct task_struct *get_current(void)
 #endif
 
 #endif
-

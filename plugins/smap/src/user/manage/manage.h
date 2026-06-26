@@ -19,7 +19,19 @@
 
 #define LOCAL_NUMA_NUM 4
 #define REMOTE_NUMA_NUM 18
-#define RESERVED_RATIO 0.05
+#ifndef MAX_NR_GROUPED_MIGOUT
+#define MAX_NR_GROUPED_MIGOUT MAX_NR_MIGOUT
+#endif
+#ifndef MAX_MIGRATION_GROUP_NUM
+#define MAX_MIGRATION_GROUP_NUM 8
+#endif
+#ifndef MAX_GROUP_LOCAL_NUMA
+#define MAX_GROUP_LOCAL_NUMA LOCAL_NUMA_NUM
+#endif
+#ifndef MAX_GROUP_REMOTE_NUMA
+#define MAX_GROUP_REMOTE_NUMA REMOTE_NUMA_NUM
+#endif
+#define RESERVED_DIVISOR 20
 #define RESERVED_MEMORY 200
 #define MAX_4K_PROCESSES_CNT 300
 #define MAX_2M_PROCESSES_CNT 100
@@ -54,7 +66,7 @@
 #define MMAP_TYPE_SHARED_SEG1 "memAccess='shared'"
 #define MMAP_TYPE_SHARED_SEG2 "access mode='shared'"
 
-#define PERIOD_CONFIG_PATH "/opt/ubturbo/conf/smap/period.config"
+#define STRATEGY_CONFIG_PATH "/opt/ubturbo/conf/smap/period.config"
 #define DEFAULT_NMEMB 1
 #define MAX_MIGRATE_BACK_WAIT_TIME 60
 #define MIGRATE_BACK_CHECK_PERIOD 1000
@@ -69,8 +81,15 @@
 
 #define PID_CMD_LENGTH 64
 #define MAX_LINE_LENGTH 1024
+#define NUMA_MAPS_MAX_PATTERN_LEN 20
+
+#define FREQ_BUCKETS_SIZE 256
 
 extern EnvAtomic g_forbiddenNodes[MAX_NODES];
+
+#define NODE_FORBIDDEN_USER (1 << 0)
+#define NODE_FORBIDDEN_MIGBACK_DONE (1 << 1)
+#define NODE_FORBIDDEN_MIGBACK_BUSY (1 << 2)
 
 typedef uint16_t actc_t;
 
@@ -109,8 +128,8 @@ typedef struct {
     uint64_t addr;
     actc_t freq;
     uint8_t prior;
-    bool isWhiteListPage;
-} ActcData;
+    uint8_t isWhiteListPage;
+} __attribute__((packed)) ActcData;
 
 typedef struct {
     uint64_t addr;
@@ -126,6 +145,9 @@ typedef struct {
     uint64_t freqNum;
     uint64_t pageNum;
     uint64_t freqSum;
+    uint64_t remoteHotNum;
+    uint64_t whiteNum;
+    uint32_t freqBuckets[FREQ_BUCKETS_SIZE]; /* 频次桶：freqBuckets[freq] = 频次为freq的非白名单页面数 */
 } ActCount;
 
 typedef struct {
@@ -133,6 +155,38 @@ typedef struct {
     uint32_t freqWt;
     uint32_t slowThred;
 } SeparateParam;
+
+typedef struct {
+    int nid;
+    uint64_t quotaPages;
+    uint64_t usedPages;
+} GroupTargetAttr;
+
+typedef struct {
+    int nid;
+    uint64_t localReservePages;
+} GroupLocalAttr;
+
+typedef struct {
+    int localCount;
+    GroupLocalAttr locals[MAX_GROUP_LOCAL_NUMA];
+    int targetCount;
+    GroupTargetAttr targets[MAX_GROUP_REMOTE_NUMA];
+    uint8_t swapCandidateRounds;
+} MigrationGroupAttr;
+
+typedef struct {
+    bool enabled;
+    int groupCount;
+    MigrationGroupAttr groups[MAX_MIGRATION_GROUP_NUM];
+} GroupMigrationPolicy;
+
+typedef struct {
+    /* Runtime-only grouped policy staged while the active policy is migrating. */
+    bool valid;
+    uint32_t nodeBitmap;
+    GroupMigrationPolicy policy;
+} PendingGroupMigrationPolicy;
 
 typedef struct {
     int index;
@@ -195,6 +249,7 @@ typedef struct {
     uint64_t actcLen[MAX_NODES];
     ActcData *actcData[MAX_NODES]; // actc数据
     ActCount actCount[MAX_NODES]; // 统计数据
+    uint32_t selectedBuckets[MAX_NODES][FREQ_BUCKETS_SIZE]; // 已选频次为freq的页面数
 } ScanAttribute;
 
 typedef struct {
@@ -216,6 +271,9 @@ struct ProcessAttribute {
     int remoteNumaCnt; // 远端numa数量
     bool isLowMem; // 多numa虚机场景，表示目的端内存不够
     bool enableSwap; // 控制是否开启交换，默认开启
+    bool isFirstScan; // 标记首次扫描，需要恢复扫描周期
+    bool autoRemoveWhenRemoteEmpty; // 上层将远端目标调为0后，远端页清空时自动移除纳管
+    bool syncWaitRemoteEmpty; // 同步迁移等待远端页清空时，临时保护进程不被自动移除
     struct { // 迁移相关参数
         int nid;
         uint64_t memSize; // 迁移内存大小,单位为KB
@@ -224,6 +282,12 @@ struct ProcessAttribute {
     NumaAttribute numaAttr;
     WalkPage walkPage;
     AdaptMem adaptMem;
+    GroupMigrationPolicy groupPolicy;
+    uint64_t groupSwapLastTotalPages;
+    uint8_t groupSwapStableTotalRounds;
+    bool groupSwapTotalPagesValid;
+    bool groupSwapFrozen;
+    PendingGroupMigrationPolicy pendingGroupPolicy;
     StrategyAttribute strategyAttr;
     ScanAttribute scanAttr;
     VMPidAttribute vmPidAttr;
@@ -333,12 +397,6 @@ struct ProcessManager {
 struct ProcessMemBitmap {
     pid_t pid;
     size_t nrPages[MAX_NODES];
-    size_t len[MAX_NODES];
-    unsigned long *data[MAX_NODES];
-    unsigned long *whiteListBm[MAX_NODES];
-    uint32_t vmSize;
-    uint32_t *mapping;
-    uint32_t mappingOffset;
 };
 
 typedef struct {
@@ -355,11 +413,12 @@ typedef struct {
     } numaParam[REMOTE_NUMA_NUM];
 } ProcessParam;
 
-uint64_t CalcRemoteBorrowPages(uint64_t size);
-
 void DebugProcessAttr(struct ProcessManager *manager);
 
 int GetNrLocalNuma(void);
+
+/* Range-check a remote NUMA id against the manager's local/remote layout. */
+bool IsRemoteNidValid(int nid);
 
 int ProcessManagerInit(uint32_t pageType);
 
@@ -389,6 +448,9 @@ int SetProcessLocalNuma(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag);
 int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
 
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap);
+int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
+int ProcessSetPendingGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
+int ApplyPendingGroupedPolicy(ProcessAttr *attr);
 
 void CheckAndRemoveInvalidProcess(void);
 
@@ -437,7 +499,13 @@ static inline bool IsDestNodeInvalid(int nid)
 
 static inline void SetNodeForbidden(int nid)
 {
-    EnvAtomicSet(&g_forbiddenNodes[nid], 1);
+    int oldValue;
+    int newValue;
+
+    do {
+        oldValue = EnvAtomicRead(&g_forbiddenNodes[nid]);
+        newValue = oldValue | NODE_FORBIDDEN_USER;
+    } while (EnvAtomicCmpAndSwap(oldValue, newValue, &g_forbiddenNodes[nid]) != oldValue);
 }
 
 static inline void ClearNodeForbidden(int nid)
@@ -450,18 +518,47 @@ static inline bool IsNodeForbidden(int nid)
     return EnvAtomicRead(&g_forbiddenNodes[nid]);
 }
 
-static inline void SaveNodeForbidden(EnvAtomic *a, int len)
+static inline bool IsNodeForbiddenReason(int nid, int reason)
 {
-    for (int i = 0; i < len; i++) {
-        EnvAtomicSet(&a[i], EnvAtomicRead(&g_forbiddenNodes[i]));
-    }
+    return (EnvAtomicRead(&g_forbiddenNodes[nid]) & reason) != 0;
 }
 
-static inline void RecoverNodeForbidden(EnvAtomic *a, int len)
+static inline void SetNodeForbiddenReason(int nid, int reason)
 {
-    for (int i = 0; i < len; i++) {
-        EnvAtomicSet(&g_forbiddenNodes[i], EnvAtomicRead(&a[i]));
-    }
+    int oldValue;
+    int newValue;
+
+    do {
+        oldValue = EnvAtomicRead(&g_forbiddenNodes[nid]);
+        newValue = oldValue | reason;
+    } while (EnvAtomicCmpAndSwap(oldValue, newValue, &g_forbiddenNodes[nid]) != oldValue);
+}
+
+static inline void ClearNodeForbiddenReason(int nid, int reason)
+{
+    int oldValue;
+    int newValue;
+
+    do {
+        oldValue = EnvAtomicRead(&g_forbiddenNodes[nid]);
+        newValue = oldValue & (~reason);
+    } while (EnvAtomicCmpAndSwap(oldValue, newValue, &g_forbiddenNodes[nid]) != oldValue);
+}
+
+static inline int TrySetNodeForbiddenReason(int nid, int reason)
+{
+    int oldValue;
+    int newValue;
+
+    do {
+        oldValue = EnvAtomicRead(&g_forbiddenNodes[nid]);
+        if (oldValue & reason) {
+            return -EAGAIN;
+        }
+        newValue = oldValue | reason;
+    } while (EnvAtomicCmpAndSwap(oldValue, newValue, &g_forbiddenNodes[nid]) != oldValue);
+
+    return 0;
 }
 
 int EnableProcessMigrate(pid_t *pidArr, int len, int enable);
@@ -476,6 +573,14 @@ ProcessAttr *GetProcessAttrLocked(pid_t pid);
 
 bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid);
 FILE *OpenNumaMaps(pid_t pid);
+int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge);
+int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[MAX_NODES]);
+
+static inline uint64_t KBToHugePageCeil(uint64_t memSize)
+{
+    int pageSizeKB = GetHugePageSize() / KIB;
+    return (memSize + pageSizeKB - 1) / pageSizeKB;
+}
 
 static inline uint64_t KBToHugePage(uint64_t memSize)
 {
@@ -483,10 +588,37 @@ static inline uint64_t KBToHugePage(uint64_t memSize)
     return memSize / (size / KIB);
 }
 
+static inline uint64_t HugePageToKB(uint64_t nr)
+{
+    int size = GetHugePageSize();
+    return nr * (size / KIB);
+}
+
 static inline uint64_t KBToNormalPage(uint64_t memSize)
 {
     int size = GetNormalPageSize();
     return memSize / (size / KIB);
+}
+
+static inline uint64_t NormalPageToKB(uint64_t nr)
+{
+    int size = GetNormalPageSize();
+    return nr * (size / KIB);
+}
+
+static inline uint64_t KBToPage(uint64_t memSize)
+{
+    return IsHugeMode() ? KBToHugePage(memSize) : KBToNormalPage(memSize);
+}
+
+static inline uint64_t PageToKB(uint64_t nr)
+{
+    return IsHugeMode() ? HugePageToKB(nr) : NormalPageToKB(nr);
+}
+
+static inline uint64_t MBToPage(uint64_t memSize)
+{
+    return memSize * MIB / GetPageSize();
 }
 
 static inline int GetCurrentMaxNrPid(void)

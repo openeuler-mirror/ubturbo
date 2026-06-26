@@ -218,33 +218,33 @@ static void CalcMemInfo(ProcessAttr *process)
     SMAP_LOGGER_INFO("L2 nrPage %u, nrHot %u.", p->nrL2Page, p->nrL2Hot);
 }
 
-int GetProcessSceneAttr(Scene scene, SceneInfo *info)
+int GetProcessSceneAttr(Scene scene, SceneInfo *info, PidType type)
 {
     if (scene >= SCENE_MAX || !info) {
         return -EINVAL;
     }
 
     if (scene == UNSTABLE_SCENE) {
-        info->cycles.scanCycle = UNSTABLE_SCAN_CYCLE;
-        info->cycles.migCycle = UNSTABLE_MIGRATE_CYCLE;
+        info->cycles.scanCycle = type == PROCESS_TYPE ? PROCESS_UNSTABLE_SCAN_CYCLE : VM_UNSTABLE_SCAN_CYCLE;
+        info->cycles.migCycle = type == PROCESS_TYPE ? PROCESS_UNSTABLE_MIGRATE_CYCLE : UNSTABLE_MIGRATE_CYCLE;
     } else if (scene == HEAVY_STABLE_SCENE) {
-        info->cycles.scanCycle = HEAVY_STABLE_SCAN_CYCLE;
-        info->cycles.migCycle = HEAVY_STABLE_MIGRATE_CYCLE;
+        info->cycles.scanCycle = type == PROCESS_TYPE ? PROCESS_HEAVY_STABLE_SCAN_CYCLE : VM_HEAVY_STABLE_SCAN_CYCLE;
+        info->cycles.migCycle = type == PROCESS_TYPE ? PROCESS_HEAVY_STABLE_MIGRATE_CYCLE : HEAVY_STABLE_MIGRATE_CYCLE;
     } else {
-        info->cycles.scanCycle = LIGHT_STABLE_SCAN_CYCLE;
-        info->cycles.migCycle = LIGHT_STABLE_MIGRATE_CYCLE;
+        info->cycles.scanCycle = type == PROCESS_TYPE ? PROCESS_LIGHT_STABLE_SCAN_CYCLE : VM_LIGHT_STABLE_SCAN_CYCLE;
+        info->cycles.migCycle = type == PROCESS_TYPE ? PROCESS_LIGHT_STABLE_MIGRATE_CYCLE : LIGHT_STABLE_MIGRATE_CYCLE;
     }
 
     return 0;
 }
 
-int InitSceneInfo(SceneInfo *info)
+int InitSceneInfo(SceneInfo *info, PidType type)
 {
     if (!info) {
         return -EINVAL;
     }
     info->currScene = info->lastScene = LIGHT_STABLE_SCENE;
-    GetProcessSceneAttr(info->currScene, info);
+    GetProcessSceneAttr(info->currScene, info, type);
     info->pageInfoIndex = 0;
 
     return 0;
@@ -423,13 +423,12 @@ static bool IsReadyForAdapt(ProcessAttr *attr)
 static void AdjustVmMemRatio(struct ProcessManager *manager, int *surpluses, int len)
 {
     int i = 0;
-    int nrVms = manager->nr[VM_TYPE];
-    BalanceSurpluses(surpluses, nrVms);
-    ProcessAttr *current = manager->processes;
-    if (len == 0) {
+    if (len <= 0) {
         return;
     }
-    while (current) {
+    BalanceSurpluses(surpluses, len);
+    ProcessAttr *current = manager->processes;
+    while (current && i < len) {
         if (IsReadyForAdapt(current)) {
             SceneInfo *info = &current->sceneInfo;
             PageInfo *p = &info->pageInfo[info->pageInfoIndex];
@@ -443,12 +442,9 @@ static void AdjustVmMemRatio(struct ProcessManager *manager, int *surpluses, int
                 info->currScene = MAX(LIGHT_STABLE_SCENE, (int)info->currScene - 1);
             }
             UpdateMemRatio(current);
+            i++;
         }
-        i++;
         current = current->next;
-        if (i >= len) {
-            break;
-        }
     }
 }
 
@@ -461,12 +457,16 @@ void ConfigMultiVmRatio(struct ProcessManager *manager)
     }
     int i = 0, surpluses[nrVms];
     ProcessAttr *current = manager->processes;
-    while (current) {
+    while (current && i < nrVms) {
+        if (!IsReadyForAdapt(current)) {
+            current = current->next;
+            continue;
+        }
         SceneInfo *info = &current->sceneInfo;
         PageInfo *p = &info->pageInfo[info->pageInfoIndex];
         int l1Node = GetAttrL1(current);
         int l2Node = GetAttrL2(current) - manager->nrLocalNuma;
-        if (l1Node >= 0 && l2Node >= 0 && IsReadyForAdapt(current)) {
+        if (l1Node >= 0 && l2Node >= 0) {
             int localPages = p->nrPages * (HUNDRED - current->strategyAttr.l2RemoteMemRatio[l1Node][l2Node]) / HUNDRED;
             surpluses[i] = localPages - p->nrL1Guarantee;
         } else {
@@ -475,7 +475,7 @@ void ConfigMultiVmRatio(struct ProcessManager *manager)
         i++;
         current = current->next;
     }
-    AdjustVmMemRatio(manager, surpluses, nrVms);
+    AdjustVmMemRatio(manager, surpluses, i);
 }
 
 static void GetMaxNuma(struct ProcessManager *manager, int *maxL1node, int *maxL2node)
@@ -501,9 +501,9 @@ static void GetMaxNuma(struct ProcessManager *manager, int *maxL1node, int *maxL
 static bool ProcessMultiNumaVmNode(ProcessAttr *process)
 {
     if (IsMultiNumaVm(process)) {
-        errno_t ret = memcpy_s(process->strategyAttr.l3RemoteMemRatio,
-            sizeof(double) * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM,
-            process->strategyAttr.l2RemoteMemRatio, sizeof(double) * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM);
+        errno_t ret =
+            memcpy_s(process->strategyAttr.l3RemoteMemRatio, sizeof(double) * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM,
+                     process->strategyAttr.l2RemoteMemRatio, sizeof(double) * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM);
         if (ret != EOK) {
             SMAP_LOGGER_ERROR("memcpy l3 remote mem ratio failed.");
             return false;
@@ -528,6 +528,11 @@ static void ConfigMultiVmRatioInGroups(struct ProcessManager *manager)
         }
 
         if (ProcessMultiNumaVmNode(current)) {
+            current = current->next;
+            continue;
+        }
+
+        if (current->migrateMode == MIG_MEMSIZE_MODE) {
             current = current->next;
             continue;
         }
@@ -565,7 +570,7 @@ static void ConfigMultiVmRatioInGroups(struct ProcessManager *manager)
     EnvMutexUnlock(&manager->lock);
 }
 
-static void ConfigMultiProcessRatio(struct ProcessManager *manager)
+static void SkipMultiProcessRatio(struct ProcessManager *manager)
 {
     EnvMutexLock(&manager->lock);
     ProcessAttr *current = manager->processes;
@@ -587,10 +592,12 @@ static void ConfigMultiProcessRatio(struct ProcessManager *manager)
 void ConfigRatios(struct ProcessManager *manager)
 {
     if (GetPidType(manager) == VM_TYPE) {
-        ConfigMultiVmRatioInGroups(manager);
-    } else {
-        ConfigMultiProcessRatio(manager);
+        if (GetAdaptMem()) {
+            ConfigMultiVmRatioInGroups(manager);
+            return;
+        }
     }
+    SkipMultiProcessRatio(manager);
 }
 
 bool GetAdaptMem(void)

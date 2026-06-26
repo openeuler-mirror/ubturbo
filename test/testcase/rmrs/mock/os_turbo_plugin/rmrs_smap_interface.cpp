@@ -72,4 +72,4 @@ int SmapQueryProcessConfig(int nid, struct ProcessPayload *result, int inLen, in
 {
     return 0;
 }
-}
+} // namespace

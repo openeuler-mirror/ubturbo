@@ -19,6 +19,7 @@
 #include "manage.h"
 #include "device.h"
 #include "access_ioctl.h"
+#include "smap_ioctl.h"
 
 int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
 {
@@ -34,7 +35,12 @@ int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
     }
     struct ProcessManager *manager = GetProcessManager();
     ThreadCtx *ctx = manager->threadCtx[0];
-    uint32_t migrationPeriod = ctx ? ctx->period : LIGHT_STABLE_MIGRATE_CYCLE;
+    uint32_t migrationPeriod;
+    if (ctx) {
+        migrationPeriod = ctx->period;
+    } else {
+        migrationPeriod = IsHugeMode() ? LIGHT_STABLE_MIGRATE_CYCLE : PROCESS_LIGHT_STABLE_MIGRATE_CYCLE;
+    }
 
     for (int i = 0; i < len; i++) {
         accessMsg.payload[i].pid = payload[i].pid;
@@ -112,13 +118,13 @@ int AccessIoctlWalkPagemap(size_t *len)
     return ret;
 }
 
-int AccessIoctlReadPidFreq(struct AccessPidFreq *apf)
+int AccessIoctlCreateProcfs(struct UserInfo *ui)
 {
     struct ProcessManager *manager = GetProcessManager();
 
-    int ret = ioctl(manager->fds.access, SMAP_ACCESS_READ_PID_FREQ, apf);
+    int ret = ioctl(manager->fds.access, SMAP_ACCESS_CREATE_PROCFS, ui);
     if (ret < 0) {
-        SMAP_LOGGER_ERROR("access read pid freq error: %d\n", -errno);
+        SMAP_LOGGER_ERROR("access create procfs error: %d\n", -errno);
         ret = -EBADF;
     }
     return ret;
@@ -147,4 +153,18 @@ int AccessRead(size_t len, char *buf)
         return -EIO;
     }
     return 0;
+}
+
+void IoctlUpdateUbDmaAvail(uint32_t value)
+{
+    struct ProcessManager *manager = GetProcessManager();
+
+    uint32_t val = value;
+    int ret = ioctl(manager->fds.migrate, SMAP_SET_UB_DMA_AVAIL, &val);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("ioctl update ub dma avail failed: %d, errno %d", ret, errno);
+        return;
+    }
+
+    SMAP_LOGGER_INFO("ioctl update ub dma avail: %u", val);
 }

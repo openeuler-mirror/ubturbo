@@ -171,9 +171,11 @@ extern "C" int build_migrate_list(struct migrate_msg *msg, struct mig_list **mli
 extern "C" void free_migrate_list_addr(int len, struct mig_list *mlist);
 extern "C" void free_migrate_list(struct mig_list **mlist);
 extern "C" unsigned int smap_pgsize;
+extern "C" u32 g_pagesize_huge;
 TEST_F(MigInitTest, isMigrateMsgValidFailed)
 {
     smap_pgsize = HUGE_PAGE;
+    g_pagesize_huge = TWO_MEGA_SIZE;
     struct mig_list migList[1];
     struct mig_pra migPar = {.page_size = TWO_MEGA_SIZE, .nr_thread = MAX_NR_MIGRATE_THREADS + 1,
                              .is_mul_thread = false};
@@ -197,6 +199,7 @@ TEST_F(MigInitTest, isMigrateMsgValidFailed)
 TEST_F(MigInitTest, isMigrateMsgValidSuccess)
 {
     smap_pgsize = NORMAL_PAGE;
+    g_pagesize_huge = TWO_MEGA_SIZE;
     struct mig_list migList[1];
     struct mig_pra migPar = {.page_size = PAGE_SIZE, .nr_thread = 1,
                              .is_mul_thread = false};
@@ -567,7 +570,7 @@ static void IoctlMigrateE2ETestMock(struct migrate_msg *msg, unsigned int pageSi
     struct mig_list *migList = msg->mig_list;
     struct page page = {0};
     MOCKER(copy_from_user).stubs()
-        .with(outBoundP(static_cast<void*>(msg), sizeof(struct migrate_msg*)))
+        .with(outBoundP(static_cast<void*>(msg), sizeof(struct migrate_msg)))
         .will(returnValue(0UL));
     MOCKER(build_migrate_list).stubs()
         .with(any(), outBoundP(static_cast<struct mig_list**>(&migList), sizeof(struct mig_list**)))
@@ -576,7 +579,7 @@ static void IoctlMigrateE2ETestMock(struct migrate_msg *msg, unsigned int pageSi
     MOCKER(IS_ERR).stubs().will(returnValue(false));
     MOCKER(isolate_and_migrate_folios).stubs()
         .with(any(), any(), any(), any(), any(), any(),
-             outBoundP(static_cast<unsigned int*>(&mockSuccessMig4KPageNrEachMigList), sizeof(unsigned int*)))
+             outBoundP(static_cast<unsigned int*>(&mockSuccessMig4KPageNrEachMigList), sizeof(unsigned int)))
         .will(returnValue(0));
     MOCKER(copy_to_user).stubs()
         .will(returnValue(0UL));
@@ -587,13 +590,14 @@ static void IoctlMigrateE2ETestMock(struct migrate_msg *msg, unsigned int pageSi
 // __ioctl_migrate end-to-end test
 TEST_F(MigInitTest, __IoctlMigrateE2ETest)
 {
-    struct mig_list *migList;
+    struct mig_list *migList = nullptr;
     int ret;
     int cnt = 2;
     struct migrate_msg argp;
     struct migrate_msg msg;
-    EXPECT_NE(nullptr, migList);
+    g_pagesize_huge = TWO_MEGA_SIZE;
     migList = (struct mig_list*)vzalloc(cnt * sizeof(struct mig_list));
+    ASSERT_NE(nullptr, migList);
     u64 startAddr = 0x100000000;
     int addCnt = 0;
     for (int i = 0; i < cnt; ++i) {
@@ -613,26 +617,23 @@ TEST_F(MigInitTest, __IoctlMigrateE2ETest)
     msg.mul_mig.page_size = TWO_MEGA_SIZE;
     msg.mul_mig.is_mul_thread = false;
 
-    // 10 huge page can migrate, 5120 page migrate success
+    // 10 huge page can migrate, all remaining pages processed via goto again
     IoctlMigrateE2ETestMock(&msg, HUGE_PAGE, 5120, 10);
     ret = __ioctl_migrate(&argp);
     EXPECT_EQ(0, ret);
-    // Each batch processes NR_BATCHED_MIGRATION (512) pages
-    // First batch: 512 - 10 = 502, second batch: 512, total = 1014
-    EXPECT_EQ(1014, migList[0].failed_pre_migrated_nr);
+    EXPECT_EQ(5110, migList[0].failed_pre_migrated_nr);
     EXPECT_EQ(0, migList[0].failed_mig_nr);
-    // migList[1]: similar pattern, first batch 502 + second batch 512 = 1014
-    EXPECT_EQ(1014, migList[1].failed_pre_migrated_nr);
+    EXPECT_EQ(10230, migList[1].failed_pre_migrated_nr);
     EXPECT_EQ(0, migList[1].failed_mig_nr);
 
     GlobalMockObject::verify();
-    // 10 huge page can migrate, 0 page migrate success
+    // 10 huge page can migrate, 0 page migrate success, all batches processed via goto again
     IoctlMigrateE2ETestMock(&msg, HUGE_PAGE, 0, 10);
     ret = __ioctl_migrate(&argp);
     EXPECT_EQ(20, ret);
-    EXPECT_EQ(1014, migList[0].failed_pre_migrated_nr);
+    EXPECT_EQ(5110, migList[0].failed_pre_migrated_nr);
     EXPECT_EQ(10, migList[0].failed_mig_nr);
-    EXPECT_EQ(1014, migList[1].failed_pre_migrated_nr);
+    EXPECT_EQ(10230, migList[1].failed_pre_migrated_nr);
     EXPECT_EQ(10, migList[1].failed_mig_nr);
 
     for (int i = 0; i < cnt; ++i) {

@@ -12,9 +12,7 @@ namespace rmrs {
 // 测试类
 class TestTurboRmrsPlugin : public ::testing::Test {
 protected:
-    void SetUp() override
-    {
-    }
+    void SetUp() override {}
     void TearDown() override
     {
         GlobalMockObject::verify();
@@ -23,18 +21,14 @@ protected:
 
 TEST_F(TestTurboRmrsPlugin, TurboPluginInitFailed1)
 {
-    MOCKER_CPP(&RmrsConfig::Init, RmrsResult(*)(const uint16_t))
-        .stubs()
-        .will(returnValue(1));
+    MOCKER_CPP(&RmrsConfig::Init, RmrsResult(*)(const uint16_t)).stubs().will(returnValue(1));
     auto ret = TurboPluginInit(0);
     EXPECT_EQ(ret, 1);
 }
 
 TEST_F(TestTurboRmrsPlugin, TurboPluginInitFailed2)
 {
-    MOCKER_CPP(&RmrsConfig::Init, RmrsResult(*)(const uint16_t))
-        .stubs()
-        .will(returnValue(0));
+    MOCKER_CPP(&RmrsConfig::Init, RmrsResult(*)(const uint16_t)).stubs().will(returnValue(0));
     MOCKER(CallbackManager::Init).stubs().will(returnValue(1));
     auto ret = TurboPluginInit(0);
     EXPECT_EQ(ret, 1);
@@ -42,9 +36,7 @@ TEST_F(TestTurboRmrsPlugin, TurboPluginInitFailed2)
 
 TEST_F(TestTurboRmrsPlugin, TurboPluginInitFailed3)
 {
-    MOCKER_CPP(&RmrsConfig::Init, RmrsResult(*)(const uint16_t))
-        .stubs()
-        .will(returnValue(0));
+    MOCKER_CPP(&RmrsConfig::Init, RmrsResult(*)(const uint16_t)).stubs().will(returnValue(0));
     MOCKER(CallbackManager::Init).stubs().will(returnValue(0));
     MOCKER(rmrs::exports::ResourceExport::Init).stubs().will(returnValue(1));
     auto ret = TurboPluginInit(0);
@@ -53,9 +45,7 @@ TEST_F(TestTurboRmrsPlugin, TurboPluginInitFailed3)
 
 TEST_F(TestTurboRmrsPlugin, TurboPluginInitFailed4)
 {
-    MOCKER_CPP(&RmrsConfig::Init, RmrsResult(*)(const uint16_t))
-        .stubs()
-        .will(returnValue(0));
+    MOCKER_CPP(&RmrsConfig::Init, RmrsResult(*)(const uint16_t)).stubs().will(returnValue(0));
     MOCKER(CallbackManager::Init).stubs().will(returnValue(0));
     MOCKER(rmrs::exports::ResourceExport::Init).stubs().will(returnValue(0));
     MOCKER(SmapModule::Init).stubs().will(returnValue(1));
@@ -65,15 +55,11 @@ TEST_F(TestTurboRmrsPlugin, TurboPluginInitFailed4)
 
 TEST_F(TestTurboRmrsPlugin, TurboPluginInitSucceed)
 {
-    MOCKER_CPP(&RmrsConfig::Init, RmrsResult(*)(const uint16_t))
-        .stubs()
-        .will(returnValue(0));
+    MOCKER_CPP(&RmrsConfig::Init, RmrsResult(*)(const uint16_t)).stubs().will(returnValue(0));
     MOCKER(CallbackManager::Init).stubs().will(returnValue(0));
     MOCKER(rmrs::exports::ResourceExport::Init).stubs().will(returnValue(0));
     MOCKER(SmapModule::Init).stubs().will(returnValue(0));
-    MOCKER_CPP(&RmrsReboot, void(*)())
-        .stubs()
-        .will(ignoreReturnValue());
+    MOCKER_CPP(&RmrsReboot, void (*)()).stubs().will(ignoreReturnValue());
     auto ret = TurboPluginInit(0);
     EXPECT_EQ(ret, 0);
 }
@@ -91,22 +77,26 @@ TEST_F(TestTurboRmrsPlugin, TurboPluginConfigInitSucceed)
 
 TEST_F(TestTurboRmrsPlugin, RmrsRebootFailed1)
 {
-    MOCKER_CPP((bool(*)(const std::filesystem::path &))(std::filesystem::exists),
-        bool(*)(const std::filesystem::path &))
-        .stubs().will(returnValue(false));
+    MOCKER_CPP((bool (*)(const std::filesystem::path &))(std::filesystem::exists),
+               bool (*)(const std::filesystem::path &))
+        .stubs()
+        .will(returnValue(false));
     EXPECT_NO_THROW(RmrsReboot());
 }
 
 TEST_F(TestTurboRmrsPlugin, RmrsRebootFailed2)
 {
-    MOCKER_CPP((bool(*)(const std::filesystem::path &))(std::filesystem::exists),
-        bool(*)(const std::filesystem::path &))
-        .stubs().will(returnValue(true));
-    MOCKER_CPP((void(std::ifstream::*)(const std::string &, std::ios_base::openmode))(&std::ifstream::open),
-        void(*)(std::ifstream*, const std::string &, std::ios_base::openmode))
-        .stubs().will(ignoreReturnValue());
-    MOCKER_CPP((bool(std::ifstream::*)())(&std::ifstream::is_open),
-        bool(*)(std::ifstream*)).stubs().will(returnValue(false));
+    MOCKER_CPP((bool (*)(const std::filesystem::path &))(std::filesystem::exists),
+               bool (*)(const std::filesystem::path &))
+        .stubs()
+        .will(returnValue(true));
+    MOCKER_CPP((void (std::ifstream::*)(const std::string &, std::ios_base::openmode))(&std::ifstream::open),
+               void (*)(std::ifstream *, const std::string &, std::ios_base::openmode))
+        .stubs()
+        .will(ignoreReturnValue());
+    MOCKER_CPP((bool (std::ifstream::*)())(&std::ifstream::is_open), bool (*)(std::ifstream *))
+        .stubs()
+        .will(returnValue(false));
     EXPECT_NO_THROW(RmrsReboot());
 }
 
@@ -115,7 +105,7 @@ std::ifstream g_fin;
 static void ifstreamOpenForTest(std::ifstream *module, const std::string &, std::ios_base::openmode)
 {
     *module = std::move(g_fin);
-    return ;
+    return;
 }
 
 TEST_F(TestTurboRmrsPlugin, RmrsRebootFailed3)
@@ -137,20 +127,25 @@ TEST_F(TestTurboRmrsPlugin, RmrsRebootFailed3)
     fout.close();
     g_fin.open(path, std::ios::in | std::ios::binary);
 
-    MOCKER_CPP((bool(*)(const std::filesystem::path &))(std::filesystem::exists),
-        bool(*)(const std::filesystem::path &))
-        .stubs().will(returnValue(true));
-    MOCKER_CPP((void(std::ifstream::*)(const std::string &, std::ios_base::openmode))(&std::ifstream::open),
+    MOCKER_CPP((bool (*)(const std::filesystem::path &))(std::filesystem::exists),
+               bool (*)(const std::filesystem::path &))
+        .stubs()
+        .will(returnValue(true));
+    MOCKER_CPP((void (std::ifstream::*)(const std::string &, std::ios_base::openmode))(&std::ifstream::open),
                void (*)(std::ifstream *, const std::string &, std::ios_base::openmode))
         .stubs()
         .will(invoke(ifstreamOpenForTest));
-    MOCKER_CPP(&RmrsSmapHelper::MigrateColdDataToRemoteNumaSync, RmrsResult(*)(std::vector<uint16_t> &,
-        std::vector<pid_t> &, std::vector<uint64_t>, uint64_t waitTime)).stubs().will(returnValue(0));
-    MOCKER_CPP((void(std::ofstream::*)(const std::string &, std::ios_base::openmode))(&std::ofstream::open),
-        void(*)(std::ofstream*, const std::string &, std::ios_base::openmode))
-        .stubs().will(ignoreReturnValue());
-    MOCKER_CPP((void(std::ofstream::*)())(&std::ofstream::close), void(*)(std::ofstream*))
-        .stubs().will(ignoreReturnValue());
+    MOCKER_CPP(&RmrsSmapHelper::MigrateColdDataToRemoteNumaSync,
+               RmrsResult(*)(std::vector<uint16_t> &, std::vector<pid_t> &, std::vector<uint64_t>, uint64_t waitTime))
+        .stubs()
+        .will(returnValue(0));
+    MOCKER_CPP((void (std::ofstream::*)(const std::string &, std::ios_base::openmode))(&std::ofstream::open),
+               void (*)(std::ofstream *, const std::string &, std::ios_base::openmode))
+        .stubs()
+        .will(ignoreReturnValue());
+    MOCKER_CPP((void (std::ofstream::*)())(&std::ofstream::close), void (*)(std::ofstream *))
+        .stubs()
+        .will(ignoreReturnValue());
     EXPECT_NO_THROW(RmrsReboot());
     delete[] req.data;
 }

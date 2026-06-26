@@ -8,8 +8,10 @@
 #define _SRC_ACCESS_IOCTL_H
 
 #include <linux/types.h>
+#include <linux/proc_fs.h>
 
 #include "check.h"
+#include "drv_common.h"
 
 #define ACCESS_DEV "smap_access_dev"
 #define ACCESS_CLASS "smap_access_class"
@@ -17,6 +19,15 @@
 #define BASE_MINOR 0
 #define NR_MINOR 1
 #define MAX_SCAN_DURATION_SEC 300
+
+#define SMAP_PROC_ROOT "smap"
+
+struct actc_data {
+	u64 addr; /* 相对索引位置 */
+	actc_t freq; /* 访问频次 */
+	u8 prior; /* 优先级 */
+	u8 is_white_list; /* 是否白名单页 */
+} __attribute__((packed));
 
 typedef enum {
 	NO_SCAN = -1,
@@ -52,14 +63,23 @@ struct access_remove_pid_msg {
 struct tracking_info_payload {
 	pid_t pid;
 	u32 length;
-	u16 *data;
+	actc_t *data;
 };
 
 struct access_pid_freq_msg {
 	pid_t pid;
 	size_t len[SMAP_MAX_NUMNODES];
-	u16 *freq[SMAP_MAX_NUMNODES];
+	actc_t *freq[SMAP_MAX_NUMNODES];
 };
+
+struct user_info {
+	uid_t uid;
+	gid_t gid;
+};
+
+extern kuid_t procfs_kuid;
+extern kgid_t procfs_kgid;
+extern struct proc_dir_entry *smap_procfs_root;
 
 #define SMAP_ACCESS_MAGIC 0xBB
 #define SMAP_ACCESS_ADD_PID \
@@ -70,8 +90,9 @@ struct access_pid_freq_msg {
 #define SMAP_ACCESS_WALK_PAGEMAP _IOW(SMAP_ACCESS_MAGIC, 4, size_t)
 #define SMAP_ACCESS_GET_TRACKING \
 	_IOW(SMAP_ACCESS_MAGIC, 5, struct tracking_info_payload)
-#define SMAP_ACCESS_READ_PID_FREQ \
-	_IOW(SMAP_ACCESS_MAGIC, 6, struct access_pid_freq_msg)
+#define SMAP_ACCESS_CREATE_PROCFS _IOW(SMAP_ACCESS_MAGIC, 6, struct user_info)
+#define SMAP_ACCESS_GET_NR_LOCAL_NUMA _IOR(SMAP_ACCESS_MAGIC, 7, int)
+#define SMAP_ACCESS_REFRESH_REMOTE_RAM _IO(SMAP_ACCESS_MAGIC, 8)
 
 void access_ioctl_exit(void);
 int access_ioctl_init(void);

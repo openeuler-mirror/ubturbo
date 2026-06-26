@@ -58,7 +58,7 @@ TEST_F(TestRackLoggerManager, TestInit_WhenAlreadyInited)
 TEST_F(TestRackLoggerManager, TestInit_WhenWriterIsNull)
 {
     LoggerOptions options;
-    RackLoggerManager* logManager = RackLoggerManager::Instance();
+    RackLoggerManager *logManager = RackLoggerManager::Instance();
     ASSERT_NE(logManager, nullptr);
     RackLoggerManager::gInited = false;
     auto ret = logManager->Init(options, nullptr);
@@ -69,7 +69,7 @@ TEST_F(TestRackLoggerManager, TestInit_WhenWriterIsNull)
 TEST_F(TestRackLoggerManager, TestInit_Normal)
 {
     LoggerOptions options{TurboLogLevel::INFO, 2, 2, 64, TurboLogLevel::INFO, "/tmp"};
-    RackLoggerManager* logManager = RackLoggerManager::Instance();
+    RackLoggerManager *logManager = RackLoggerManager::Instance();
     ASSERT_NE(logManager, nullptr);
     RackLoggerWriter *writer = new (std::nothrow) RackDefaultLoggerWriter();
     ASSERT_NE(writer, nullptr);
@@ -194,12 +194,9 @@ TEST_F(TestRackLoggerManager, testLogToSyslog)
     RackLoggerManager rackLoggerManager;
     auto level = TurboLogLevel::INFO;
     TurboLoggerEntry loggerEntry("tag", level, "file", "func", 1);
-    MOCKER_CPP(&openlog, void(*)(const char*, int, int))
-        .stubs();
-    MOCKER_CPP(&syslog, void(*)(int, const char*))
-        .stubs();
-    MOCKER_CPP(&closelog, void(*)(void))
-        .stubs();
+    MOCKER_CPP(&openlog, void (*)(const char *, int, int)).stubs();
+    MOCKER_CPP(&syslog, void (*)(int, const char *)).stubs();
+    MOCKER_CPP(&closelog, void (*)(void)).stubs();
     rackLoggerManager.LogToSyslog(loggerEntry);
 }
 

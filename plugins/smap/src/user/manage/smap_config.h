@@ -28,7 +28,8 @@
  * | NUMA_PAYLOAD_LEN | NUMA_PAYLOAD | = 4B + 4B * nrLocalNuma * REMOTE_NUMA_NUM
  * | PROCESS_PAYLOAD_LEN | PROCESS_PAYLOAD | = 4B + CONFIG_PROC_SIZE * N
  */
-#define SMAP_CONFIG_VER 1
+#define SMAP_CONFIG_VER_V1 1
+#define SMAP_CONFIG_VER SMAP_CONFIG_VER_V1
 #define CONFIG_HEADER_LEN sizeof(struct SmapConfigHeader)
 #define PAYLOAD_HEADER_LEN sizeof(struct PayloadHeader)
 #define CONFIG_NUMA_LEN sizeof(struct NumaPayload)

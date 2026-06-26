@@ -47,6 +47,8 @@ set_target_properties(rmrs_ubturbo_plugin PROPERTIES
 
 set(BOUNDSCHECK_LIB /usr/lib64/libboundscheck.so)
 target_link_libraries(rmrs_ubturbo_plugin PRIVATE ${BOUNDSCHECK_LIB})
+target_include_directories(rmrs_ubturbo_plugin PRIVATE ${LIBVIRT_INCLUDE_DIRS})
+target_link_libraries(rmrs_ubturbo_plugin PRIVATE ${LIBVIRT_LIBRARIES})
 
 # 复制配置文件，确保所有用户可读
 file(COPY conf/plugin_rmrs.conf DESTINATION ${CMAKE_BINARY_DIR}/conf 

@@ -123,11 +123,14 @@ struct obmm_ext_addr {
 	u64 pa;
 };
 
-extern int (*fp_migrate_pages)(struct list_head *from, new_folio_t get_new_folio,
-		free_folio_t put_new_folio, unsigned long private,
-		enum migrate_mode mode, int reason, unsigned int *ret_succeeded);
+extern int (*fp_migrate_pages)(struct list_head *from,
+			       new_folio_t get_new_folio,
+			       free_folio_t put_new_folio,
+			       unsigned long private, enum migrate_mode mode,
+			       int reason, unsigned int *ret_succeeded);
 extern void (*fp_putback_movable_pages)(struct list_head *l);
-extern bool (*fp_isolate_folio_to_list)(struct folio *folio, struct list_head *list);
+extern bool (*fp_isolate_folio_to_list)(struct folio *folio,
+					struct list_head *list);
 
 int smap_process_symbols(void);
 struct folio *smap_alloc_huge_page_node(struct folio *folio, int nid,

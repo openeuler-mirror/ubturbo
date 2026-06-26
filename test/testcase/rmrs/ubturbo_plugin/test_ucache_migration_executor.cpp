@@ -9,8 +9,8 @@
 #include <gmock/gmock.h>
 #include <cstring>
 #include <iostream>
-#include "gtest/gtest.h"
 #include "callback_manager.h"
+#include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
 #define private public

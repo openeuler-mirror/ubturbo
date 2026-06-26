@@ -1,0 +1,74 @@
+---
+# .clang-tidy for User-Space Pure C Project
+# 侧重于：安全性(CERT)、逻辑正确性(Analyzer) 和 C语言最佳实践
+
+# 只检查项目内的源文件，忽略第三方库
+HeaderFilterRegex: '^(src|include|app)/.*\.h$'
+
+# 白名单策略：先禁用所有，再逐项启用
+Checks: >
+  -*,
+
+  # --- clang-analyzer: Clang静态分析器 (核心) ---
+  # 检测空指针、内存泄漏、逻辑死路等
+  clang-analyzer-core.*,
+  clang-analyzer-unix.*,
+  clang-analyzer-deadcode.*,
+  -clang-analyzer-unix.Malloc,       # 有时会误报，视情况开启
+  -clang-analyzer-unix.MismatchedDeallocator,
+
+  # --- cert: CERT C 编码标准 (安全相关) ---
+  cert-con36-c,                      # 整数转指针可能丢失精度
+  cert-env33-c,                      # 不要调用system()
+  cert-exp42-c,                      # 不要使用浮点数做循环计数
+  cert-flp30-c,                      # 不要使用浮点数做循环计数器
+  cert-mem57-cpp,                    # 避免分配巨大的对象
+  cert-oop54-cpp,                    # 限制递归深度
+  cert-str34-c,                      # 将字符串转换为数字前去除空白字符
+
+  # --- misc: 杂项 (C语言适用部分) ---
+  misc-macro-parentheses,            # 宏定义参数必须加括号
+  misc-redundant-expression,         # 冗余表达式 (如 if(x==x))
+  misc-static-assert,                # 鼓励使用 static_assert
+  misc-definitions-in-headers,       # 头文件中不应有非内联函数定义
+
+  # --- readability: 可读性 ---
+  readability-braces-around-statements, # if/for/while 必须加花括号
+  readability-duplicate-include,     # 重复 include
+  readability-identifier-naming,     # 命名规范 (见下方 CheckOptions)
+  readability-simplify-boolean-expr, # 简化布尔表达式
+  readability-string-compare,        # 字符串比较优化
+  readability-uppercase-literal-suffix, # 字面量后缀大写 (如 1.0F)
+
+  # --- bugprone: 常见编程错误 (C语言适用部分) ---
+  bugprone-argument-comment,         # 参数注释不匹配
+  bugprone-macro-parentheses,        # 宏参数缺括号
+  bugprone-reserved-identifier,      # 使用保留标识符 (如 __foo)
+  bugprone-sizeof-expression,        # sizeof 误用
+  bugprone-too-small-loop-variable,  # 循环变量类型过小
+  bugprone-unused-raii,              # 未使用的 RAII 对象 (虽主要针对C++，但在C中也有参考价值)
+  bugprone-virtual-near-miss         # 拼写错误检测
+
+WarningsAsErrors: ''
+
+CheckOptions:
+  # --- 命名规范 (可根据团队习惯修改) ---
+  # 这里采用常见的 C 风格：函数/变量小写+下划线，宏全大写
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.VariableNameStyle
+    value: lower_case
+  - key: readability-identifier-naming.GlobalVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.MacroDefinitionCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.ConstantCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.PrivateMemberSuffix
+    value: ''
+  
+  # --- 宏括号检查 ---
+  - key: bugprone-macro-parentheses.IgnoreSingleArgument
+    value: 'true'

@@ -12,19 +12,27 @@
 #ifndef SMAP_CODEC_H
 #define SMAP_CODEC_H
 
-#include <iostream>
-#include <cstring>
 #include <sys/un.h>
 #include <unistd.h>
+#include <cstring>
+#include <iostream>
 
-#include "turbo_def.h"
 #include "smap_interface.h"
+#include "turbo_def.h"
 
 namespace turbo::smap::codec {
 class SmapMigrateOutCodec {
 public:
     int EncodeRequest(TurboByteBuffer &buffer, MigrateOutMsg *msg, int pidType);
     int DecodeRequest(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pidType);
+    int EncodeResponse(TurboByteBuffer &buffer, int returnValue);
+    int DecodeResponse(TurboByteBuffer &buffer);
+};
+
+class SmapMigrateOutGroupedCodec {
+public:
+    int EncodeRequest(TurboByteBuffer &buffer, GroupedMigrateOutMsg *msg, int pidType);
+    int DecodeRequest(const TurboByteBuffer &buffer, GroupedMigrateOutMsg &msg, int &pidType);
     int EncodeResponse(TurboByteBuffer &buffer, int returnValue);
     int DecodeResponse(TurboByteBuffer &buffer);
 };
@@ -79,10 +87,10 @@ public:
 
 class SmapAddProcessTrackingCodec {
 public:
-    int EncodeRequest(TurboByteBuffer &buffer, pid_t *pidArr, uint32_t *scanTime, uint32_t *duration,
-        int len, int scanType);
-    int DecodeRequest(const TurboByteBuffer &buffer, pid_t *pidArr, uint32_t *scanTime, uint32_t *duration,
-        int &len, int &scanType);
+    int EncodeRequest(TurboByteBuffer &buffer, pid_t *pidArr, uint32_t *scanTime, uint32_t *duration, int len,
+                      int scanType);
+    int DecodeRequest(const TurboByteBuffer &buffer, pid_t *pidArr, uint32_t *scanTime, uint32_t *duration, int &len,
+                      int &scanType);
     int EncodeResponse(TurboByteBuffer &buffer, int returnValue);
     int DecodeResponse(TurboByteBuffer &buffer);
 };
@@ -172,9 +180,8 @@ public:
     int EncodeRequest(TurboByteBuffer &buffer, uint16_t *numa, uint16_t length);
     int DecodeRequest(const TurboByteBuffer &buffer, uint16_t *&numa, uint16_t &length);
     int EncodeResponse(TurboByteBuffer &buffer, uint64_t *freq, uint16_t len, int returnValue);
-    int DecodeResponse(TurboByteBuffer &buffer, uint64_t *freq, uint16_t &outLen,
-        int &returnValue);
+    int DecodeResponse(TurboByteBuffer &buffer, uint64_t *freq, uint16_t &outLen, int &returnValue);
 };
 
-}
-#endif  // SMAP_CODEC_H
+} // namespace turbo::smap::codec
+#endif // SMAP_CODEC_H

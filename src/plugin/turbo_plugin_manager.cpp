@@ -11,11 +11,10 @@
  */
 #include "turbo_plugin_manager.h"
 
-#include "turbo_error.h"
 #include "turbo_conf.h"
+#include "turbo_error.h"
 
 #include <dlfcn.h>
-
 
 namespace turbo::plugin {
 using namespace turbo::common;
@@ -56,8 +55,7 @@ RetCode TurboPluginManager::LoadAndInitPlugin(const TurboPluginConf &pluginConf)
 {
     auto ret = LoadPlugin(pluginConf.name, pluginConf.soPath);
     if (ret != TURBO_OK) {
-        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
-            << "[Plugin] Failed to load plugin: " << pluginConf.name << ".";
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Plugin] Failed to load plugin: " << pluginConf.name << ".";
         return ret;
     }
 
@@ -81,7 +79,7 @@ RetCode TurboPluginManager::LoadPlugin(const std::string &pluginName, const std:
     char *canonicalPath = realpath(fileName.c_str(), nullptr);
     if (canonicalPath == nullptr) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Plugin] The path of the so file corresponding to the plugin "
-                                                  << pluginName << " is invalid, file: " << fileName;
+                                                    << pluginName << " is invalid, file: " << fileName;
         return TURBO_ERROR;
     }
 
@@ -92,7 +90,7 @@ RetCode TurboPluginManager::LoadPlugin(const std::string &pluginName, const std:
             << "[Plugin] Failed to load plugin " << pluginName << " so, error: " << dlerror();
         return TURBO_ERROR;
     }
-    
+
     loadedPluginModules[pluginName] = handle;
     return TURBO_OK;
 }
@@ -128,7 +126,7 @@ RetCode TurboPluginManager::DeInitializePlugin(const std::string &pluginName)
     auto handler = it->second;
     if (handler) {
         UBTURBO_LOG_INFO(MODULE_NAME, MODULE_CODE) << "[Plugin] Starting to unload plugin: " << pluginName << ".";
-        auto deInitFunc  = (TurboPluginDeInitFunc)dlsym(handler, "TurboPluginDeInit");
+        auto deInitFunc = (TurboPluginDeInitFunc)dlsym(handler, "TurboPluginDeInit");
         if (deInitFunc) {
             deInitFunc();
             UBTURBO_LOG_INFO(MODULE_NAME, MODULE_CODE)
@@ -148,7 +146,6 @@ RetCode TurboPluginManager::DeInitializePlugin(const std::string &pluginName)
     loadedPluginModules.erase(it);
     return TURBO_OK;
 }
-
 
 TurboPluginInitFunc TurboPluginManager::GetInitFunction(const std::string &pluginName, const std::string &funcName)
 {

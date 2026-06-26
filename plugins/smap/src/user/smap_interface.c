@@ -19,6 +19,9 @@
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <pwd.h>
+#include <grp.h>
 #include "securec.h"
 
 #include "advanced-strategy/scene.h"
@@ -33,12 +36,14 @@
 #include "manage/virt.h"
 #include "manage/smap_config.h"
 #include "strategy/migration.h"
-
+#include "strategy/strategy_config.h"
 #include "smap_interface.h"
 #define DEFAULT_NODE_NUMBER_SIZE 16
 #define REMOTE_NUMA_MEMORY_MAX (TIB / MIB)
-#define NUMA_MAPS_MAX_PATTERN_LEN 20
 #define LOCAL_NUMA_BIT_MAP_MASK 0xF
+#define MIN_GROUP_QUOTA_SIZE_KB KB_PER_2MB
+
+#define UB_URMA_CTP_ROI_MASK (1 << 19)
 
 static EnvAtomic g_status;
 
@@ -174,32 +179,14 @@ static bool IsNidInNumastat(int nid)
     return nodeExists == 1;
 }
 
-static bool IsRemoteNidValid(int nid)
+/* Validate that a remote nid is in range and currently visible in numastat. */
+static bool IsOnlineRemoteNidValid(int nid)
 {
-    struct ProcessManager *pm = GetProcessManager();
-    if (!pm) {
-        SMAP_LOGGER_ERROR("process manager is null.");
-        return false;
-    }
-    if (nid < pm->nrLocalNuma || nid >= (REMOTE_NUMA_BITS + pm->nrLocalNuma)) {
+    if (!IsRemoteNidValid(nid)) {
         return false;
     }
 
     return IsNidInNumastat(nid);
-}
-
-static bool IsRemoveRemoteNidValid(int nid)
-{
-    struct ProcessManager *pm = GetProcessManager();
-    if (!pm) {
-        SMAP_LOGGER_ERROR("process manager is null.");
-        return false;
-    }
-    if (nid < pm->nrLocalNuma || nid >= (REMOTE_NUMA_BITS + pm->nrLocalNuma)) {
-        return false;
-    }
-
-    return true;
 }
 
 static bool IsPidArrValid(pid_t *pidArr, int len, bool ignoreUnmanaged)
@@ -253,7 +240,11 @@ static int InitAllThreads(struct ProcessManager *manager)
 {
     int ret;
     EnvMutexLock(&manager->threadLock);
-    ret = InitThread(manager, SCAN_MIGRATE_PERIOD, ScanMigrateWork);
+    uint32_t migPeriod = IsHugeMode() ? LIGHT_STABLE_MIGRATE_CYCLE : PROCESS_LIGHT_STABLE_MIGRATE_CYCLE;
+    if (GetFileConfSwitchConfig()) {
+        migPeriod = GetMigratePeriodConfig();
+    }
+    ret = InitThread(manager, migPeriod, ScanMigrateWork);
     if (ret) {
         SMAP_LOGGER_ERROR("init scan migrate work thread error: %d.", ret);
         DestroyAllThread(manager);
@@ -273,8 +264,8 @@ static bool IsNidInArray(int *nidArray, int nidCnt, int targetNid)
 }
 
 // return true if remote nid the [pid] used is different from [nid]
-static bool GetNumaInfoFromNumaMaps(char *line, int *nidArray, int nidCnt, pid_t pid,
-                                    uint32_t *nodeBitmap, bool hugeFlag)
+static bool GetNumaInfoFromNumaMaps(char *line, int *nidArray, int nidCnt, pid_t pid, uint32_t *nodeBitmap,
+                                    bool hugeFlag)
 {
     int i, ret;
     int nrLocalNuma = GetNrLocalNuma();
@@ -378,7 +369,7 @@ static bool CheckMigOutPayloadItems(struct MigrateOutPayload *payload, int *tota
 {
     *totalRatio = 0;
     for (int i = 0; i < payload->count; i++) {
-        if (!IsRemoteNidValid(payload->inner[i].destNid)) {
+        if (!IsOnlineRemoteNidValid(payload->inner[i].destNid)) {
             SMAP_LOGGER_ERROR("mig para pid:%d destnode%d invalid.", payload->pid, payload->inner[i].destNid);
             return false;
         }
@@ -394,10 +385,6 @@ static bool CheckMigOutPayloadItems(struct MigrateOutPayload *payload, int *tota
             SMAP_LOGGER_ERROR("[%d] pid: %d migrateMode %d invalid.", i, payload->pid, payload->inner[i].migrateMode);
             return false;
         }
-        if (GetRunMode() == WATERLINE_MODE && payload->inner[i].migrateMode == MIG_MEMSIZE_MODE) {
-            SMAP_LOGGER_ERROR("[%d] smap runMode is WATERLINE_MODE, not supported MIG_MEMSIZE_MODE.", i);
-            return false;
-        }
         if (GetRunMode() == MEM_POOL_MODE && payload->inner[i].migrateMode != MIG_MEMSIZE_MODE) {
             SMAP_LOGGER_ERROR("[%d] smap runMode is MEM_POOL_MODE, not supported mode except MIG_MEMSIZE_MODE.", i);
             return false;
@@ -406,7 +393,7 @@ static bool CheckMigOutPayloadItems(struct MigrateOutPayload *payload, int *tota
             SMAP_LOGGER_ERROR("[%d] pid: %d ratio %d invalid.", i, payload->pid, payload->inner[i].ratio);
             return false;
         }
-        if (payload->inner[i].migrateMode == MIG_MEMSIZE_MODE && payload->inner[i].memSize % KB_PER_2MB != 0) {
+        if (payload->inner[i].migrateMode == MIG_MEMSIZE_MODE && payload->inner[i].memSize % KB_PER_4KB != 0) {
             SMAP_LOGGER_ERROR("[%d] pid: %d memSize %d is not 2M aligned.", i, payload->pid, payload->inner[i].memSize);
             return false;
         }
@@ -477,16 +464,26 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType)
     }
 
     for (i = 0; i < msg->count; i++) {
+        ProcessAttr *attr = GetProcessAttrLocked(msg->payload[i].pid);
+        if (attr && attr->groupPolicy.enabled) {
+            SMAP_LOGGER_ERROR("pid %d already uses grouped migrate out.", msg->payload[i].pid);
+            return -EINVAL;
+        }
         if (msg->payload[i].count <= 0 || msg->payload[i].count > REMOTE_NUMA_NUM) {
-            SMAP_LOGGER_ERROR("pid: %d, migrate out payload count:%d is invalid.",
-                              msg->payload[i].pid, msg->payload[i].count);
-            return false;
+            SMAP_LOGGER_ERROR("pid: %d, migrate out payload count:%d is invalid.", msg->payload[i].pid,
+                              msg->payload[i].count);
+            return -EINVAL;
+        }
+
+        if (pidType == PAGETYPE_NORMAL && msg->payload[i].count > 1) {
+            SMAP_LOGGER_ERROR("4K process migration: Migration to multiple remote NUMA nodes is unsupported.");
+            return -EINVAL;
         }
 
         for (int j = 0; j < msg->payload[i].count; j++) {
             SMAP_LOGGER_INFO("mig out msg num:[%d] pid:%d, destNid:%d, ratio:%d, memSize:%llu, migMode:%d.", j,
-                msg->payload[i].pid, msg->payload[i].inner[j].destNid, msg->payload[i].inner[j].ratio,
-                msg->payload[i].inner[j].memSize, msg->payload[i].inner[j].migrateMode);
+                             msg->payload[i].pid, msg->payload[i].inner[j].destNid, msg->payload[i].inner[j].ratio,
+                             msg->payload[i].inner[j].memSize, msg->payload[i].inner[j].migrateMode);
         }
 
         if (!IsMigParaValid(&msg->payload[i])) {
@@ -497,6 +494,397 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType)
     return 0;
 }
 
+static bool HasDuplicateInt(const int *arr, int count)
+{
+    for (int i = 0; i < count; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (arr[i] == arr[j]) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static int CheckGroupedTarget(const struct MigrationGroup *group, int payloadIdx, int groupIdx)
+{
+    int targets[MAX_GROUP_REMOTE_NUMA] = { 0 };
+    if (!IsCountValid(group->targetCount, MAX_GROUP_REMOTE_NUMA)) {
+        SMAP_LOGGER_ERROR("[%d:%d] grouped target count %d invalid.", payloadIdx, groupIdx, group->targetCount);
+        return -EINVAL;
+    }
+    for (int i = 0; i < group->targetCount; i++) {
+        int nid = group->targets[i].nid;
+        if (!IsOnlineRemoteNidValid(nid)) {
+            SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target nid %d invalid.", payloadIdx, groupIdx, i, nid);
+            return -EINVAL;
+        }
+        if (IsNodeForbidden(nid)) {
+            SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target nid %d is forbidden.", payloadIdx, groupIdx, i, nid);
+            return -EAGAIN;
+        }
+        if (group->targets[i].size < MIN_GROUP_QUOTA_SIZE_KB) {
+            SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target quota %lluKB is too small.", payloadIdx, groupIdx, i,
+                              group->targets[i].size);
+            return -EINVAL;
+        }
+        targets[i] = nid;
+    }
+    if (HasDuplicateInt(targets, group->targetCount)) {
+        SMAP_LOGGER_ERROR("[%d:%d] grouped target nids duplicate.", payloadIdx, groupIdx);
+        return -EINVAL;
+    }
+    return 0;
+}
+
+static int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int payloadIdx)
+{
+    bool localUsed[MAX_NODES] = { 0 };
+    if (!IsCountValid(payload->groupCount, MAX_MIGRATION_GROUP_NUM)) {
+        SMAP_LOGGER_ERROR("[%d] grouped group count %d invalid.", payloadIdx, payload->groupCount);
+        return -EINVAL;
+    }
+    ProcessAttr *attr = GetProcessAttrLocked(payload->pid);
+    if (attr && !attr->groupPolicy.enabled) {
+        SMAP_LOGGER_ERROR("pid %d already uses normal migrate out.", payload->pid);
+        return -EINVAL;
+    }
+    if (attr && attr->state != PROC_IDLE && attr->state != PROC_MIGRATE) {
+        SMAP_LOGGER_ERROR("pid %d state %d is busy for grouped policy update.", payload->pid, attr->state);
+        return -EAGAIN;
+    }
+    for (int i = 0; i < payload->groupCount; i++) {
+        struct MigrationGroup *group = &payload->groups[i];
+        int localNids[MAX_GROUP_LOCAL_NUMA] = { 0 };
+        if (!IsCountValid(group->localCount, MAX_GROUP_LOCAL_NUMA)) {
+            SMAP_LOGGER_ERROR("[%d:%d] grouped local count %d invalid.", payloadIdx, i, group->localCount);
+            return -EINVAL;
+        }
+        for (int j = 0; j < group->localCount; j++) {
+            int nid = group->locals[j].nid;
+            if (group->locals[j].size == 0) {
+                SMAP_LOGGER_ERROR("[%d:%d:%d] grouped local reserve is zero.", payloadIdx, i, j);
+                return -EINVAL;
+            }
+            if (!IsLocalNidValid(nid) || nid < 0 || nid >= MAX_NODES) {
+                SMAP_LOGGER_ERROR("[%d:%d:%d] grouped local nid %d invalid.", payloadIdx, i, j, nid);
+                return -EINVAL;
+            }
+            localNids[j] = nid;
+            if (localUsed[nid]) {
+                SMAP_LOGGER_ERROR("[%d:%d:%d] grouped local nid %d is used by another group.", payloadIdx, i, j, nid);
+                return -EINVAL;
+            }
+            localUsed[nid] = true;
+        }
+        if (HasDuplicateInt(localNids, group->localCount)) {
+            SMAP_LOGGER_ERROR("[%d:%d] grouped local nids duplicate.", payloadIdx, i);
+            return -EINVAL;
+        }
+        int ret = CheckGroupedTarget(group, payloadIdx, i);
+        if (ret) {
+            return ret;
+        }
+    }
+    return 0;
+}
+
+static int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pidType)
+{
+    if (!msg) {
+        SMAP_LOGGER_ERROR("grouped migrate out msg is null.");
+        return -EINVAL;
+    }
+    if (!IsPidTypeValid(pidType) || pidType != VM_TYPE || !IsHugeMode()) {
+        SMAP_LOGGER_ERROR("grouped migrate out only supports 2M VM, pidType %d.", pidType);
+        return -EINVAL;
+    }
+    if (!IsCountValid(msg->count, MAX_NR_GROUPED_MIGOUT)) {
+        SMAP_LOGGER_ERROR("grouped migrate out count %d invalid.", msg->count);
+        return -EINVAL;
+    }
+    for (int i = 0; i < msg->count; i++) {
+        for (int j = i + 1; j < msg->count; j++) {
+            if (msg->payload[j].pid == msg->payload[i].pid) {
+                SMAP_LOGGER_ERROR("grouped migrate out duplicate pid %d.", msg->payload[i].pid);
+                return -EINVAL;
+            }
+        }
+    }
+    pid_t uniquePids[MAX_NR_GROUPED_MIGOUT];
+    for (int i = 0; i < msg->count; i++) {
+        uniquePids[i] = msg->payload[i].pid;
+    }
+    if (!IsMigOutCountValid(uniquePids, msg->count, pidType)) {
+        SMAP_LOGGER_ERROR("grouped migrate out count will exceed max pid count: %d.", GetCurrentMaxNrPid());
+        return -EINVAL;
+    }
+    for (int i = 0; i < msg->count; i++) {
+        int ret = CheckGroupedPayload(&msg->payload[i], i);
+        if (ret) {
+            return ret;
+        }
+    }
+    return 0;
+}
+
+static void BuildGroupedNodeBitmap(const struct GroupedMigrateOutPayload *payload, uint32_t *nodeBitmap)
+{
+    *nodeBitmap = 0;
+    for (int i = 0; i < payload->groupCount; i++) {
+        const struct MigrationGroup *group = &payload->groups[i];
+        for (int j = 0; j < group->localCount; j++) {
+            AddL1(nodeBitmap, group->locals[j].nid);
+        }
+        for (int j = 0; j < group->targetCount; j++) {
+            AddL2ByNid(nodeBitmap, group->targets[j].nid);
+        }
+    }
+}
+
+static int BuildGroupPolicy(const struct GroupedMigrateOutPayload *payload, const uint64_t numaPages[MAX_NODES],
+                            GroupMigrationPolicy *policy)
+{
+    policy->enabled = true;
+    policy->groupCount = payload->groupCount;
+    for (int i = 0; i < payload->groupCount; i++) {
+        const struct MigrationGroup *group = &payload->groups[i];
+        MigrationGroupAttr *attr = &policy->groups[i];
+        attr->localCount = group->localCount;
+        attr->targetCount = group->targetCount;
+        for (int j = 0; j < group->localCount; j++) {
+            attr->locals[j].nid = group->locals[j].nid;
+            attr->locals[j].localReservePages = KBToHugePageCeil(group->locals[j].size);
+            SMAP_LOGGER_INFO("grouped pid %d group %d local %d reserve pages %llu.", payload->pid, i,
+                             attr->locals[j].nid, attr->locals[j].localReservePages);
+        }
+        for (int j = 0; j < group->targetCount; j++) {
+            attr->targets[j].nid = group->targets[j].nid;
+            attr->targets[j].quotaPages = KBToHugePage(group->targets[j].size);
+            attr->targets[j].usedPages = 0;
+            SMAP_LOGGER_INFO("grouped pid %d group %d target %d quota pages %llu.", payload->pid, i,
+                             attr->targets[j].nid, attr->targets[j].quotaPages);
+        }
+    }
+    return InitGroupedUsedPages(payload->pid, policy, numaPages);
+}
+
+static int ProcessAddGroupedTrackingManageFiltered(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                                   const bool *skipTracking)
+{
+    struct AccessAddPidPayload payload[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    int count = 0;
+    for (int i = 0; i < msg->count; i++) {
+        if (skipTracking && skipTracking[i]) {
+            /* The active policy is still migrating; refresh tracking when pending is applied. */
+            SMAP_LOGGER_INFO("skip grouped pid %d tracking update for pending policy.", msg->payload[i].pid);
+            continue;
+        }
+        payload[count].type = NORMAL_SCAN;
+        payload[count].pid = msg->payload[i].pid;
+        payload[count].scanTime = SCAN_TIME_2M;
+        payload[count].numaNodes = nodeBitmap[i];
+        if (!PidIsValid(msg->payload[i].pid)) {
+            SMAP_LOGGER_WARNING("grouped pid %d doesn't exist.", msg->payload[i].pid);
+            payload[count].pid = NON_EXIST_PID;
+        }
+        SMAP_LOGGER_INFO("grouped pid %d numaNodes %#x.", msg->payload[i].pid, payload[count].numaNodes);
+        count++;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    int ret = AccessIoctlAddPid(count, payload);
+    if (ret) {
+        SMAP_LOGGER_ERROR("grouped access module add pids error: %d.", ret);
+    }
+    return ret;
+}
+
+static int ProcessAddGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap)
+{
+    return ProcessAddGroupedTrackingManageFiltered(msg, nodeBitmap, NULL);
+}
+
+static int BuildGroupedPolicies(struct GroupedMigrateOutMsg *msg, GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT])
+{
+    for (int i = 0; i < msg->count; i++) {
+        uint64_t numaPages[MAX_NODES] = { 0 };
+        pid_t pid = msg->payload[i].pid;
+        if (PidIsValid(pid)) {
+            int ret = GetPidNumaPagesFromNumaMaps(pid, numaPages, true);
+            if (ret) {
+                SMAP_LOGGER_ERROR("Get grouped pid %d numa pages failed: %d.", pid, ret);
+                return ret;
+            }
+        }
+
+        int ret = BuildGroupPolicy(&msg->payload[i], numaPages, &policies[i]);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Build grouped pid %d policy failed: %d.", pid, ret);
+            return ret;
+        }
+    }
+    return 0;
+}
+
+static void RollbackGroupedManagerAdds(const pid_t *addedPids, int addedCnt);
+static void RollbackGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, const bool *keepTracking);
+static int AddGroupedProcessesToGlobalManagerFiltered(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                                      GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT],
+                                                      bool keepTracking[MAX_NR_GROUPED_MIGOUT],
+                                                      const bool *pendingUpdate);
+
+static int AddGroupedProcessesToGlobalManager(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                              GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT],
+                                              bool keepTracking[MAX_NR_GROUPED_MIGOUT])
+{
+    return AddGroupedProcessesToGlobalManagerFiltered(msg, nodeBitmap, policies, keepTracking, NULL);
+}
+
+static int AddGroupedProcessesToGlobalManagerFiltered(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                                      GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT],
+                                                      bool keepTracking[MAX_NR_GROUPED_MIGOUT],
+                                                      const bool *pendingUpdate)
+{
+    pid_t addedPids[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    int addedCnt = 0;
+    bool succeeded[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    bool existedBefore[MAX_NR_GROUPED_MIGOUT] = { 0 };
+
+    for (int i = 0; i < msg->count; i++) {
+        if (pendingUpdate && pendingUpdate[i]) {
+            /* Pending PIDs keep their current manager/tracking state until apply time. */
+            keepTracking[i] = true;
+            continue;
+        }
+        existedBefore[i] = GetProcessAttrLocked(msg->payload[i].pid) != NULL;
+        int ret = ProcessAddGroupedManage(msg->payload[i].pid, nodeBitmap[i], &policies[i]);
+        if (ret) {
+            SMAP_LOGGER_ERROR("add grouped process %d failed: %d.", msg->payload[i].pid, ret);
+            RollbackGroupedManagerAdds(addedPids, addedCnt);
+            for (int j = 0; j < i; j++) {
+                if (pendingUpdate && pendingUpdate[j]) {
+                    /* Mixed batches must not rollback tracking for deferred existing PIDs. */
+                    keepTracking[j] = true;
+                    continue;
+                }
+                keepTracking[j] = succeeded[j] && existedBefore[j];
+            }
+            return ret;
+        }
+        succeeded[i] = true;
+        if (!existedBefore[i]) {
+            addedPids[addedCnt++] = msg->payload[i].pid;
+        }
+        keepTracking[i] = true;
+    }
+    return 0;
+}
+
+static void RollbackGroupedTrackingManage(struct GroupedMigrateOutMsg *msg, const bool *keepTracking)
+{
+    struct AccessRemovePidPayload payload[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    int count = 0;
+
+    for (int i = 0; i < msg->count; i++) {
+        if (keepTracking && keepTracking[i]) {
+            continue;
+        }
+        payload[count].pid = msg->payload[i].pid;
+        count++;
+    }
+    if (count == 0) {
+        return;
+    }
+    int ret = AccessIoctlRemovePid(count, payload);
+    if (ret) {
+        SMAP_LOGGER_WARNING("rollback grouped tracking failed: %d.", ret);
+    }
+}
+
+static void RollbackGroupedManagerAdds(const pid_t *addedPids, int addedCnt)
+{
+    struct ProcessManager *manager = GetProcessManager();
+
+    for (int i = 0; i < addedCnt; i++) {
+        ProcessAttr *attr = GetProcessAttrLocked(addedPids[i]);
+        if (!attr || !attr->groupPolicy.enabled) {
+            continue;
+        }
+        LinkedListRemove(&attr, &manager->processes);
+        manager->nr[VM_TYPE]--;
+        SMAP_LOGGER_INFO("rollback grouped pid %d from manager.", addedPids[i]);
+    }
+    if (addedCnt == 0) {
+        return;
+    }
+    int ret = SyncAllProcessConfig();
+    if (ret) {
+        SMAP_LOGGER_WARNING("Synchronize grouped rollback config maybe failed: %d.", ret);
+    }
+}
+
+static bool IsGroupedPendingUpdate(pid_t pid)
+{
+    ProcessAttr *attr = GetProcessAttrLocked(pid);
+    return attr && attr->groupPolicy.enabled && attr->state == PROC_MIGRATE;
+}
+
+static bool HasGroupedPendingUpdate(const bool *pendingUpdate, int count)
+{
+    for (int i = 0; i < count; i++) {
+        if (pendingUpdate[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int SetPendingGroupedPolicies(struct GroupedMigrateOutMsg *msg, uint32_t *nodeBitmap,
+                                     GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT], const bool *pendingUpdate)
+{
+    for (int i = 0; i < msg->count; i++) {
+        if (!pendingUpdate[i]) {
+            continue;
+        }
+        /* Save the fully validated policy; no external ABI changes are needed. */
+        int ret = ProcessSetPendingGroupedManage(msg->payload[i].pid, nodeBitmap[i], &policies[i]);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Set pending grouped pid %d failed: %d.", msg->payload[i].pid, ret);
+            return ret;
+        }
+    }
+    return 0;
+}
+
+static bool IsGroupedAttrByRemoteNid(ProcessAttr *attr, int remoteNid)
+{
+    if (!attr || !attr->groupPolicy.enabled) {
+        return false;
+    }
+    for (int i = 0; i < attr->groupPolicy.groupCount; i++) {
+        MigrationGroupAttr *group = &attr->groupPolicy.groups[i];
+        for (int j = 0; j < group->targetCount; j++) {
+            if (group->targets[j].nid == remoteNid) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool IsAnyGroupedPidOnRemoteNid(int remoteNid)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
+        if (IsGroupedAttrByRemoteNid(attr, remoteNid)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap)
 {
     int ret = 0;
@@ -504,25 +892,31 @@ static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType, uint
         SMAP_LOGGER_ERROR("Smap mig out msg is null.");
         return -EINVAL;
     }
+    uint32_t scanPeriod = DEFAULT_SCAN_PERIOD;
     struct AccessAddPidPayload payload[MAX_NR_MIGOUT] = { 0 };
     for (int i = 0; i < msg->count; ++i) {
         payload[i].type = NORMAL_SCAN;
         payload[i].pid = msg->payload[i].pid;
-        payload[i].scanTime = LIGHT_STABLE_SCAN_CYCLE;
+        payload[i].scanTime = scanPeriod;
         if (!PidIsValid(msg->payload[i].pid)) {
             SMAP_LOGGER_WARNING("pid %d doesn't exist.", msg->payload[i].pid);
             payload[i].pid = NON_EXIST_PID;
             continue;
         }
+        ProcessAttr *current = GetProcessAttrLocked(msg->payload[i].pid);
+        if (current) {
+            payload[i].scanTime = current->scanTime;
+            payload[i].duration = current->duration;
+        }
         // assign values for local numa nodes
-        if (!nodeBitmap) {
+        if (nodeBitmap) {
+            payload[i].numaNodes = nodeBitmap[i];
+        } else {
             ret = SetProcessLocalNuma(msg->payload[i].pid, &payload[i].numaNodes, pidType == VM_TYPE);
             if (ret) {
                 SMAP_LOGGER_ERROR("Query pid %d memory usage failed: %d.", msg->payload[i].pid, ret);
                 return ret;
             }
-        } else {
-            payload[i].numaNodes = nodeBitmap[i];
         }
         // assign values for remote numa nodes
         for (int j = 0; j < msg->payload[i].count; ++j) {
@@ -539,10 +933,32 @@ static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType, uint
     return ret;
 }
 
-static int AddProcessesToGlobalManager(struct MigrateOutMsg *msg, int pidType,
-                                       uint32_t *nodeBitmap, bool *hasInvalidPid)
+static void RollbackInvalidPid(pid_t *failedPids, int failedCount)
+{
+    if (failedCount <= 0) {
+        return;
+    }
+
+    struct AccessRemovePidPayload *removePayload = calloc(failedCount, sizeof(struct AccessRemovePidPayload));
+    if (!removePayload) {
+        SMAP_LOGGER_ERROR("Calloc remove payload failed.");
+        return;
+    }
+
+    for (int i = 0; i < failedCount; i++) {
+        removePayload[i].pid = failedPids[i];
+    }
+    int ret = AccessIoctlRemovePid(failedCount, removePayload);
+    SMAP_LOGGER_INFO("Rollback kernel invalid pids, ret is %d.", ret);
+    free(removePayload);
+}
+
+static int AddProcessesToGlobalManager(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap,
+                                       bool *hasInvalidPid)
 {
     int ret = 0;
+    int failedCount = 0;
+    pid_t failedPids[MAX_NR_MIGOUT] = { 0 };
     uint32_t *nodeBitmapTmp;
     for (int i = 0; i < msg->count; ++i) {
         nodeBitmapTmp = nodeBitmap ? &nodeBitmap[i] : NULL;
@@ -561,16 +977,17 @@ static int AddProcessesToGlobalManager(struct MigrateOutMsg *msg, int pidType,
 
         ret = ProcessAddManage(&param, nodeBitmapTmp);
         if (ret) {
+            failedPids[failedCount++] = param.pid;
             SMAP_LOGGER_ERROR("add process %d failed: %d.", msg->payload[i].pid, ret);
             if (ret == -ESRCH) {
                 *hasInvalidPid = true;
                 ret = 0;
-                continue;
             }
-            return ret;
+            continue;
         }
         SMAP_LOGGER_INFO("add process %d done.", param.pid);
     }
+    RollbackInvalidPid(failedPids, failedCount);
     return ret;
 }
 
@@ -607,6 +1024,35 @@ static int AddProcessNumaBitMap(struct MigrateOutMsg *msg, uint32_t *nodeBitmap,
     return 0;
 }
 
+static int CheckNodeBitmap(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap)
+{
+    struct ProcessManager *manager = GetProcessManager();
+
+    if (GetRunMode() != WATERLINE_MODE || pidType != PAGETYPE_HUGE) {
+        return 0;
+    }
+
+    for (int i = 0; i < msg->count; ++i) {
+        if (GetL1Count(nodeBitmap[i]) > 1) {
+            pid_t invalidPid = msg->payload[i].pid;
+            ProcessAttr *attr = GetProcessAttrLocked(invalidPid);
+
+            if (attr) {
+                struct AccessRemovePidPayload rp = { .pid = invalidPid };
+                AccessIoctlRemovePid(1, &rp);
+                LinkedListRemove(&attr, &manager->processes);
+                manager->nr[pidType]--;
+            }
+            SMAP_LOGGER_ERROR("Pid %d has %d local NUMA nodes, "
+                              "not supported in WATERLINE_MODE, remove it.",
+                              msg->payload[i].pid, GetL1Count(nodeBitmap[i]));
+            return -EINVAL;
+        }
+    }
+
+    return 0;
+}
+
 int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
 {
     struct ProcessManager *manager = GetProcessManager();
@@ -634,6 +1080,13 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
         return ret;
     }
 
+    ret = CheckNodeBitmap(msg, pidType, nodeBitmap);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Pid numa bitmap check failed: %d.", ret);
+        EnvMutexUnlock(&manager->lock);
+        return ret;
+    }
+
     // send ioctl to add pid to access pid list
     ret = ProcessAddTrackingManage(msg, pidType, nodeBitmap);
     if (ret) {
@@ -652,10 +1105,73 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
     return (ret == 0 && hasInvalidPid) ? -ESRCH : ret;
 }
 
-static int CheckMigrateBackMsg(struct MigrateBackMsg *msg)
+int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType)
 {
     struct ProcessManager *manager = GetProcessManager();
 
+    SMAP_LOGGER_INFO("Receive ubturbo_smap_migrate_out_grouped msg.");
+    if (!ubturbo_smap_is_running()) {
+        SMAP_LOGGER_ERROR("Smap already stopped, grouped migrate out failed.");
+        return -EPERM;
+    }
+
+    EnvMutexLock(&manager->lock);
+    int ret = CheckGroupedMigrateOutMsg(msg, pidType);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Grouped migrate out msg check failed, ret: %d.", ret);
+        EnvMutexUnlock(&manager->lock);
+        return ret;
+    }
+
+    uint32_t nodeBitmap[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    for (int i = 0; i < msg->count; i++) {
+        BuildGroupedNodeBitmap(&msg->payload[i], &nodeBitmap[i]);
+    }
+
+    GroupMigrationPolicy policies[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    ret = BuildGroupedPolicies(msg, policies);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Build grouped policies failed: %d.", ret);
+        EnvMutexUnlock(&manager->lock);
+        return ret;
+    }
+
+    bool pendingUpdate[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    for (int i = 0; i < msg->count; i++) {
+        pendingUpdate[i] = IsGroupedPendingUpdate(msg->payload[i].pid);
+    }
+    bool hasPendingUpdate = HasGroupedPendingUpdate(pendingUpdate, msg->count);
+
+    /*
+     * New grouped PIDs still enter tracking immediately. Existing grouped PIDs
+     * in PROC_MIGRATE are staged and refresh tracking after migration results
+     * have been accounted.
+     */
+    ret = hasPendingUpdate ? ProcessAddGroupedTrackingManageFiltered(msg, nodeBitmap, pendingUpdate) :
+                             ProcessAddGroupedTrackingManage(msg, nodeBitmap);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Add grouped process tracking failed: %d.", ret);
+        EnvMutexUnlock(&manager->lock);
+        return ret;
+    }
+
+    bool keepTracking[MAX_NR_GROUPED_MIGOUT] = { 0 };
+    ret = hasPendingUpdate ?
+              AddGroupedProcessesToGlobalManagerFiltered(msg, nodeBitmap, policies, keepTracking, pendingUpdate) :
+              AddGroupedProcessesToGlobalManager(msg, nodeBitmap, policies, keepTracking);
+    if (ret) {
+        RollbackGroupedTrackingManage(msg, keepTracking);
+        EnvMutexUnlock(&manager->lock);
+        return ret;
+    }
+
+    ret = SetPendingGroupedPolicies(msg, nodeBitmap, policies, pendingUpdate);
+    EnvMutexUnlock(&manager->lock);
+    return ret;
+}
+
+static int CheckMigrateBackMsg(struct MigrateBackMsg *msg)
+{
     if (!IsCountValid(msg->count, MAX_NR_MIGBACK)) {
         SMAP_LOGGER_ERROR("migrateback count : %d is invalid.", msg->count);
         return -EINVAL;
@@ -672,6 +1188,14 @@ static int CheckMigrateBackMsg(struct MigrateBackMsg *msg)
             SMAP_LOGGER_ERROR("mig back msg num: [%d] destNode %d invalid.", i, destNid);
             return -EINVAL;
         }
+    }
+    return 0;
+}
+
+static int CheckMigrateBackReadyMsg(struct MigrateBackMsg *msg)
+{
+    for (int i = 0; i < msg->count; i++) {
+        int srcNid = msg->payload[i].srcNid;
         // 检查待迁回的NUMA上是否有正在搬迁远端的进程
         if (IsRemoteNumaMigrateBackAllowed(srcNid) <= 0) {
             SMAP_LOGGER_ERROR("srcNode %d not allowed to migrate back.", srcNid);
@@ -682,6 +1206,82 @@ static int CheckMigrateBackMsg(struct MigrateBackMsg *msg)
             SMAP_LOGGER_ERROR("migrate back error, srcNid %d not ready to migrate back.", srcNid);
             return -EAGAIN;
         }
+    }
+    return 0;
+}
+
+static int CheckMigrateBackGroupedPidLocked(struct MigrateBackMsg *msg)
+{
+    for (int i = 0; i < msg->count; i++) {
+        int srcNid = msg->payload[i].srcNid;
+        if (IsAnyGroupedPidOnRemoteNid(srcNid)) {
+            SMAP_LOGGER_ERROR("migrate back does not support grouped pid on remote node %d.", srcNid);
+            return -EINVAL;
+        }
+    }
+    return 0;
+}
+
+static bool IsMigrateBackNidDuplicatedBefore(struct MigrateBackMsg *msg, int idx)
+{
+    int nid = msg->payload[idx].srcNid;
+
+    for (int i = 0; i < idx; i++) {
+        if (msg->payload[i].srcNid == nid) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void ClearMigrateBackBusyForbiddenBefore(struct MigrateBackMsg *msg, int count)
+{
+    for (int i = 0; i < count; i++) {
+        int srcNid = msg->payload[i].srcNid;
+        if (IsMigrateBackNidDuplicatedBefore(msg, i)) {
+            continue;
+        }
+        ClearNodeForbiddenReason(srcNid, NODE_FORBIDDEN_MIGBACK_BUSY);
+        SMAP_LOGGER_INFO("smap clear node %d migrate back busy forbidden.", srcNid);
+    }
+}
+
+static void ClearMigrateBackBusyForbidden(struct MigrateBackMsg *msg)
+{
+    ClearMigrateBackBusyForbiddenBefore(msg, msg->count);
+}
+
+static void CompleteMigrateBackForbidden(struct MigrateBackMsg *msg)
+{
+    for (int i = 0; i < msg->count; i++) {
+        int srcNid = msg->payload[i].srcNid;
+        if (IsMigrateBackNidDuplicatedBefore(msg, i)) {
+            continue;
+        }
+        SetNodeForbiddenReason(srcNid, NODE_FORBIDDEN_MIGBACK_DONE);
+        ClearNodeForbiddenReason(srcNid, NODE_FORBIDDEN_MIGBACK_BUSY);
+        SMAP_LOGGER_INFO("smap keep node %d forbidden after migrate back.", srcNid);
+    }
+}
+
+static int SetMigrateBackForbiddenLocked(struct MigrateBackMsg *msg)
+{
+    int ret = CheckMigrateBackGroupedPidLocked(msg);
+    if (ret) {
+        return ret;
+    }
+    for (int i = 0; i < msg->count; i++) {
+        int srcNid = msg->payload[i].srcNid;
+        if (IsMigrateBackNidDuplicatedBefore(msg, i)) {
+            continue;
+        }
+        ret = TrySetNodeForbiddenReason(srcNid, NODE_FORBIDDEN_MIGBACK_BUSY);
+        if (ret) {
+            SMAP_LOGGER_ERROR("node %d is already migrate back busy.", srcNid);
+            ClearMigrateBackBusyForbiddenBefore(msg, i);
+            return ret;
+        }
+        SMAP_LOGGER_INFO("smap disable node %d because migrate back.", srcNid);
     }
     return 0;
 }
@@ -700,6 +1300,8 @@ static bool CheckProcessIdle(int nid)
     return false;
 }
 
+static void MarkAutoRemoveByMigrateBack(struct MigrateBackMsg *msg);
+
 int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
 {
     SMAP_LOGGER_INFO("Receive ubturbo_smap_migrate_back msg.");
@@ -716,17 +1318,25 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
         SMAP_LOGGER_ERROR("Smap check mig back msg err: %d.", ret);
         return ret;
     }
-    // save forbidden info
-    EnvAtomic tmpForbiddenNodes[MAX_NODES];
-    for (int i = 0; i < MAX_NODES; i++) {
-        SaveNodeForbidden(tmpForbiddenNodes, MAX_NODES);
+    ret = CheckMigrateBackReadyMsg(msg);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Smap check mig back ready err: %d.", ret);
+        return ret;
     }
+
+    struct ProcessManager *manager = GetProcessManager();
+    EnvMutexLock(&manager->lock);
+    ret = SetMigrateBackForbiddenLocked(msg);
+    EnvMutexUnlock(&manager->lock);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Smap check grouped pid for mig back err: %d.", ret);
+        return ret;
+    }
+
     for (int i = 0; i < msg->count; i++) {
-        SetNodeForbidden(msg->payload[i].srcNid);
-        SMAP_LOGGER_INFO("smap disable node %d because migrate back.", msg->payload[i].srcNid);
         if (!CheckProcessIdle(msg->payload[i].srcNid)) {
             SMAP_LOGGER_ERROR("Smap check migrate idle timeout.");
-            RecoverNodeForbidden(tmpForbiddenNodes, MAX_NODES);
+            ClearMigrateBackBusyForbidden(msg);
             return -EAGAIN;
         }
     }
@@ -734,12 +1344,15 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
     ret = IoctlHandler(msg);
     SMAP_LOGGER_INFO("migrateback result: %d.", ret);
     if (ret != 0) {
-        // recover forbidden info
-        RecoverNodeForbidden(tmpForbiddenNodes, MAX_NODES);
+        ClearMigrateBackBusyForbidden(msg);
+    } else {
+        CompleteMigrateBackForbidden(msg);
+        MarkAutoRemoveByMigrateBack(msg);
     }
     return ret;
 }
 
+/* Validate remove payload shape before touching kernel or manager state. */
 static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType)
 {
     if (!IsCountValid(msg->count, MAX_NR_REMOVE)) {
@@ -751,14 +1364,26 @@ static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType)
         return -EINVAL;
     }
     for (int i = 0; i < msg->count; i++) {
-        if (msg->payload[i].count <= 0 || msg->payload[i].count > REMOTE_NUMA_NUM) {
-            SMAP_LOGGER_ERROR("[%d] smap remove payload nid count%d invalid.", i, msg->payload[i].count);
+        struct RemovePayload *payload = &msg->payload[i];
+        if (payload->count < 0 || payload->count > REMOTE_NUMA_NUM) {
+            SMAP_LOGGER_ERROR("[%d] smap remove payload nid count %d invalid.", i, payload->count);
             return -EINVAL;
         }
-        for (int j = 0; j < msg->payload[i].count; j++) {
-            if (!IsRemoveRemoteNidValid(msg->payload[i].nid[j])) {
-                SMAP_LOGGER_ERROR("[%d] pid:%d remote node%d invalid.",
-                    i, msg->payload[i].pid, msg->payload[i].nid[j]);
+        for (int j = 0; j < payload->count; j++) {
+            if (!IsRemoteNidValid(payload->nid[j])) {
+                SMAP_LOGGER_ERROR("[%d] pid:%d remote node %d invalid.", i, payload->pid, payload->nid[j]);
+                return -EINVAL;
+            }
+            for (int k = j + 1; k < payload->count; k++) {
+                if (payload->nid[j] == payload->nid[k]) {
+                    SMAP_LOGGER_ERROR("[%d] smap remove duplicate remote node %d.", i, payload->nid[j]);
+                    return -EINVAL;
+                }
+            }
+        }
+        for (int j = i + 1; j < msg->count; j++) {
+            if (msg->payload[i].pid == msg->payload[j].pid) {
+                SMAP_LOGGER_ERROR("smap remove duplicate pid %d.", msg->payload[i].pid);
                 return -EINVAL;
             }
         }
@@ -766,84 +1391,207 @@ static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType)
     return 0;
 }
 
-static int IoctlClearProcessRemoteNuma(struct RemoveMsg *msg)
+/* A remove payload with no nid keeps the legacy whole-process remove behavior. */
+static bool IsRemoveWholeProcess(const struct RemovePayload *payload)
 {
-    pid_t pid;
-    int l2node;
+    return payload->count == 0;
+}
+
+/* Remove all access-tracking state for pid from the kernel module. */
+static int AccessRemovePid(pid_t pid)
+{
+    struct AccessRemovePidPayload payload = { .pid = pid };
+    int ret = AccessIoctlRemovePid(1, &payload);
+    if (ret) {
+        SMAP_LOGGER_ERROR("access ioctl remove pid %d error: %d.", pid, ret);
+    }
+    return ret;
+}
+
+/* Build the remaining remote-node mask after clearing requested remote nodes. */
+static uint32_t ClearRemovePayloadRemoteNodes(ProcessAttr *attr, const struct RemovePayload *payload)
+{
+    uint32_t numaNodes = attr->numaAttr.numaNodes;
     int nrLocalNuma = GetNrLocalNuma();
-    // 1. pid不存在的，或者远端numa清空的，直接remove
-    // 2. pid存在，远端numa没有清空的就只更新numanodes
+    for (int i = 0; i < payload->count; i++) {
+        ClearNodeBit(&numaNodes, payload->nid[i] + (LOCAL_NUMA_BITS - nrLocalNuma));
+    }
+    return numaNodes;
+}
+
+/* Refresh kernel access-tracking state with the remaining remote nodes. */
+static int AccessUpdateProcessRemoteNodes(ProcessAttr *attr, uint32_t numaNodes)
+{
+    struct AccessAddPidPayload payload = { .pid = attr->pid };
+    payload.numaNodes = numaNodes;
+    payload.scanTime = attr->scanTime;
+    payload.duration = attr->duration;
+    payload.type = attr->scanType;
+    int ret = AccessIoctlAddPid(1, &payload);
+    if (ret) {
+        SMAP_LOGGER_ERROR("access ioctl update pid %d error: %d.", attr->pid, ret);
+    }
+    return ret;
+}
+
+/* Apply remove requests to kernel access tracking before changing manager state. */
+static int IoctlRemoveProcess(struct RemoveMsg *msg)
+{
     for (int i = 0; i < msg->count; i++) {
-        pid = msg->payload[i].pid;
-        ProcessAttr *attr = GetProcessAttrLocked(pid);
-        if (!attr) {
-            struct AccessRemovePidPayload payload = { .pid = pid };
-            int ret = AccessIoctlRemovePid(1, &payload);
+        struct RemovePayload *payload = &msg->payload[i];
+        pid_t pid = payload->pid;
+        if (IsRemoveWholeProcess(payload)) {
+            int ret = AccessRemovePid(pid);
             if (ret) {
-                SMAP_LOGGER_ERROR("access ioctl remove pid %d error: %d.", pid, ret);
                 return ret;
             }
             continue;
         }
 
-        uint32_t numaNodes = attr->numaAttr.numaNodes;
-        for (int j = 0; j < msg->payload[i].count; j++) {
-            l2node = msg->payload[i].nid[j];
-            ClearNodeBit(&numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
+        ProcessAttr *attr = GetProcessAttrLocked(pid);
+        if (!attr) {
+            int ret = AccessRemovePid(pid);
+            if (ret) {
+                return ret;
+            }
+            continue;
         }
-        if (!GetL2Count(numaNodes)) { // 远端numa清空
-            struct AccessRemovePidPayload payload = { .pid = pid };
-            int ret = AccessIoctlRemovePid(1, &payload);
-            if (ret) {
-                SMAP_LOGGER_ERROR("access ioctl remove pid %d error: %d.", pid, ret);
-                return ret;
-            }
-        } else {
-            struct AccessAddPidPayload payload = { .pid = pid };
-            payload.numaNodes = numaNodes;
-            payload.scanTime = attr->scanTime;
-            payload.duration = attr->duration;
-            payload.type = attr->scanType;
-            int ret = AccessIoctlAddPid(1, &payload);
-            if (ret) {
-                SMAP_LOGGER_ERROR("access ioctl add failed: %d.", ret);
-                return ret;
-            }
+        uint32_t numaNodes = ClearRemovePayloadRemoteNodes(attr, payload);
+        int ret = GetL2Count(numaNodes) == 0 ? AccessRemovePid(pid) : AccessUpdateProcessRemoteNodes(attr, numaNodes);
+        if (ret) {
+            return ret;
         }
     }
     return 0;
 }
 
-static void ClearManagedProcessNuma(int nr, struct RemovePayload *payload)
+/* Partial remove cannot safely update grouped policy state, so reject it. */
+static int CheckSmapRemoveGroupedPidLocked(struct RemoveMsg *msg)
 {
-    int ret;
-    int nrLocalNuma = GetNrLocalNuma();
-    struct ProcessManager *manager = GetProcessManager();
-    PidType type = GetPidType(manager);
-    for (int i = 0; i < nr; i++) {
-        ProcessAttr *attr = manager->processes;
-        pid_t pid = payload[i].pid;
-        while (attr && attr->pid != pid) {
-            attr = attr->next;
-        }
-        if (!attr) {
-            SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", pid);
+    for (int i = 0; i < msg->count; i++) {
+        struct RemovePayload *payload = &msg->payload[i];
+        if (IsRemoveWholeProcess(payload)) {
             continue;
         }
+        ProcessAttr *attr = GetProcessAttrLocked(payload->pid);
+        if (attr && attr->groupPolicy.enabled) {
+            SMAP_LOGGER_ERROR("partial remove does not support grouped pid %d.", payload->pid);
+            return -EINVAL;
+        }
+    }
+    return 0;
+}
 
-        for (int j = 0; j < payload[i].count; j++) {
-            int l2Index = payload[i].nid[j] - nrLocalNuma;
-            ClearNodeBit(&attr->numaAttr.numaNodes, l2Index + LOCAL_NUMA_BITS);
+/* Remove one pid from the user-space manager process list. */
+static void ClearManagedWholeProcess(pid_t pid, bool *removed)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    ProcessAttr *attr = manager->processes;
+    while (attr && attr->pid != pid) {
+        attr = attr->next;
+    }
+    if (!attr) {
+        SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", pid);
+        *removed = false;
+        return;
+    }
+
+    PidType type = attr->type;
+    LinkedListRemove(&attr, &manager->processes);
+    if (type >= PROCESS_TYPE && type < TYPE_MAX && manager->nr[type] > 0) {
+        manager->nr[type]--;
+    }
+    *removed = true;
+    SMAP_LOGGER_INFO("Remove pid: %d, from managed process.", pid);
+}
+
+/* Clear strategy/accounting fields that belong to the removed remote node. */
+static void ClearRemovedRemoteStrategy(ProcessAttr *attr, int remoteNid)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    int remoteIdx = remoteNid - nrLocalNuma;
+    if (remoteIdx < 0 || remoteIdx >= REMOTE_NUMA_NUM) {
+        return;
+    }
+
+    for (int i = 0; i < LOCAL_NUMA_NUM; i++) {
+        attr->strategyAttr.initRemoteMemRatio[i][remoteIdx] = 0;
+        attr->strategyAttr.l2RemoteMemRatio[i][remoteIdx] = 0;
+        attr->strategyAttr.l3RemoteMemRatio[i][remoteIdx] = 0;
+        attr->strategyAttr.memSize[i][remoteIdx] = 0;
+        attr->strategyAttr.allocRemoteNrPages[i][remoteIdx] = 0;
+        attr->strategyAttr.remoteNrPagesAfterMigrate[i][remoteIdx] = 0;
+    }
+    for (int i = 0; i < MAX_NODES; i++) {
+        attr->strategyAttr.nrMigratePages[i][remoteNid] = 0;
+        attr->strategyAttr.nrMigratePages[remoteNid][i] = 0;
+    }
+}
+
+/* Drop one remote node from a managed process and compact migrateParam. */
+static void RemoveManagedProcessRemoteNode(ProcessAttr *attr, int remoteNid)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    int remotePos = remoteNid + (LOCAL_NUMA_BITS - nrLocalNuma);
+    ClearNodeBit(&attr->numaAttr.numaNodes, remotePos);
+    ClearRemovedRemoteStrategy(attr, remoteNid);
+
+    int writeIdx = 0;
+    for (int i = 0; i < attr->remoteNumaCnt; i++) {
+        if (attr->migrateParam[i].nid == remoteNid) {
+            continue;
         }
-        attr->remoteNumaCnt = GetL2Count(attr->numaAttr.numaNodes);
-        if (attr->remoteNumaCnt == 0) {
-            LinkedListRemove(&attr, &manager->processes);
-            SMAP_LOGGER_INFO("Remove pid: %d, from managed process.", pid);
-            manager->nr[type]--;
+        if (writeIdx != i) {
+            attr->migrateParam[writeIdx] = attr->migrateParam[i];
         }
-        ret = SyncAllProcessConfig();
+        writeIdx++;
+    }
+    for (int i = writeIdx; i < REMOTE_NUMA_NUM; i++) {
+        attr->migrateParam[i].nid = 0;
+        attr->migrateParam[i].memSize = 0;
+    }
+    attr->remoteNumaCnt = GetL2Count(attr->numaAttr.numaNodes);
+}
+
+/* Apply a partial remote-node remove to the user-space manager state. */
+static void ClearManagedPartialRemoteNodes(struct RemovePayload *payload, bool *removed, bool *changed)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    ProcessAttr *attr = manager->processes;
+    while (attr && attr->pid != payload->pid) {
+        attr = attr->next;
+    }
+    if (!attr) {
+        SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", payload->pid);
+        *changed = false;
+        return;
+    }
+    for (int i = 0; i < payload->count; i++) {
+        RemoveManagedProcessRemoteNode(attr, payload->nid[i]);
+    }
+    *changed = true;
+    if (attr->remoteNumaCnt == 0) {
+        ClearManagedWholeProcess(payload->pid, removed);
+    }
+}
+
+/* Keep manager state and persisted process config consistent after remove. */
+static void ClearManagedProcess(int nr, struct RemovePayload *payload)
+{
+    bool removed = false;
+    bool changed = false;
+
+    for (int i = 0; i < nr; i++) {
+        if (IsRemoveWholeProcess(&payload[i])) {
+            ClearManagedWholeProcess(payload[i].pid, &removed);
+        } else {
+            ClearManagedPartialRemoteNodes(&payload[i], &removed, &changed);
+        }
+    }
+    if (removed || changed) {
+        int ret = SyncAllProcessConfig();
         if (ret) {
-            SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", pid, ret);
+            SMAP_LOGGER_WARNING("Synchronize process config maybe failed: %d.", ret);
         }
     }
 }
@@ -868,18 +1616,164 @@ int ubturbo_smap_remove(struct RemoveMsg *msg, int pidType)
 
     struct ProcessManager *manager = GetProcessManager();
     EnvMutexLock(&manager->lock);
-    // send ioctl to remove pid
-    ret = IoctlClearProcessRemoteNuma(msg);
+    ret = CheckSmapRemoveGroupedPidLocked(msg);
     if (ret) {
-        SMAP_LOGGER_ERROR("Ioctl clear pid remote numa failed: %d.", ret);
+        SMAP_LOGGER_ERROR("Check grouped pid for smap remove failed: %d.", ret);
+        EnvMutexUnlock(&manager->lock);
+        return ret;
+    }
+    // send ioctl to remove pid
+    ret = IoctlRemoveProcess(msg);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Ioctl remove pid failed: %d.", ret);
         EnvMutexUnlock(&manager->lock);
         return ret;
     }
 
-    ClearManagedProcessNuma(msg->count, msg->payload);
+    ClearManagedProcess(msg->count, msg->payload);
     EnvMutexUnlock(&manager->lock);
     SMAP_LOGGER_INFO("smap remove result: %d.", ret);
     return ret;
+}
+
+static bool HasRemotePages(ProcessAttr *attr)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+
+    for (int nid = nrLocalNuma; nid < MAX_NODES; nid++) {
+        if (attr->walkPage.nrPages[nid] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool IsMigrateBackSourceNid(const struct MigrateBackMsg *msg, int nid)
+{
+    if (!msg) {
+        return false;
+    }
+    for (int i = 0; i < msg->count; i++) {
+        if (msg->payload[i].srcNid == nid) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool IsMigrateBackAutoRemoveCandidate(ProcessAttr *attr, const struct MigrateBackMsg *msg)
+{
+    if (!msg) {
+        return false;
+    }
+    for (int nid = GetNrLocalNuma(); nid < MAX_NODES; nid++) {
+        if (InAttrL2(attr, nid) && IsMigrateBackSourceNid(msg, nid)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool IsAutoRemoveCandidate(ProcessAttr *attr)
+{
+    if (!attr || !attr->autoRemoveWhenRemoteEmpty || attr->syncWaitRemoteEmpty || attr->groupPolicy.enabled ||
+        attr->scanType != NORMAL_SCAN) {
+        return false;
+    }
+    return true;
+}
+
+static void MarkAutoRemoveByMigrateBack(struct MigrateBackMsg *msg)
+{
+    struct ProcessManager *manager = GetProcessManager();
+
+    EnvMutexLock(&manager->lock);
+    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
+        if (!attr->groupPolicy.enabled && attr->scanType == NORMAL_SCAN &&
+            IsMigrateBackAutoRemoveCandidate(attr, msg)) {
+            attr->autoRemoveWhenRemoteEmpty = true;
+            SMAP_LOGGER_INFO("Pid %d will be auto removed after migrate back clears remote pages.", attr->pid);
+        }
+    }
+    EnvMutexUnlock(&manager->lock);
+}
+
+static bool IsPidAlreadyCollected(pid_t *pids, int count, pid_t pid)
+{
+    for (int i = 0; i < count; i++) {
+        if (pids[i] == pid) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int CollectRemoteEmptyAutoRemovePids(pid_t *pids, int maxCount)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    int count = 0;
+
+    EnvMutexLock(&manager->lock);
+    for (ProcessAttr *attr = manager->processes; attr && count < maxCount; attr = attr->next) {
+        if (!IsAutoRemoveCandidate(attr) || HasRemotePages(attr)) {
+            continue;
+        }
+        if (IsPidAlreadyCollected(pids, count, attr->pid)) {
+            continue;
+        }
+        pids[count++] = attr->pid;
+    }
+    EnvMutexUnlock(&manager->lock);
+    return count;
+}
+
+static void RemoveAutoRemovePids(pid_t *pids, int count)
+{
+    struct ProcessManager *manager = GetProcessManager();
+
+    for (int offset = 0; offset < count;) {
+        struct RemoveMsg removeMsg = { 0 };
+        int remain = count - offset;
+        int batch = remain < MAX_NR_REMOVE ? remain : MAX_NR_REMOVE;
+
+        EnvMutexLock(&manager->lock);
+        for (int i = 0; i < batch; i++) {
+            ProcessAttr *attr = GetProcessAttrLocked(pids[offset + i]);
+            if (!IsAutoRemoveCandidate(attr) || HasRemotePages(attr)) {
+                continue;
+            }
+            removeMsg.payload[removeMsg.count].pid = pids[offset + i];
+            removeMsg.payload[removeMsg.count].count = 0;
+            removeMsg.count++;
+        }
+
+        if (removeMsg.count > 0) {
+            int ret = IoctlRemoveProcess(&removeMsg);
+            if (ret) {
+                SMAP_LOGGER_WARNING("Auto remove remote-empty pids failed: %d.", ret);
+            } else {
+                ClearManagedProcess(removeMsg.count, removeMsg.payload);
+            }
+        }
+        EnvMutexUnlock(&manager->lock);
+        offset += batch;
+    }
+}
+
+void SmapAutoRemoveRemoteEmptyProcessesWithFreshData(void)
+{
+    int maxCount = GetCurrentMaxNrPid();
+    pid_t *pids = calloc(maxCount, sizeof(pid_t));
+    if (!pids) {
+        SMAP_LOGGER_ERROR("Calloc auto remove pid array failed.");
+        return;
+    }
+
+    int count = CollectRemoteEmptyAutoRemovePids(pids, maxCount);
+    if (count > 0) {
+        RemoveAutoRemovePids(pids, count);
+    }
+    free(pids);
 }
 
 int ubturbo_smap_node_enable(struct EnableNodeMsg *msg)
@@ -899,10 +1793,19 @@ int ubturbo_smap_node_enable(struct EnableNodeMsg *msg)
         return -EINVAL;
     }
     if (msg->enable == ENABLE_NUMA_MIG) {
-        ClearNodeForbidden(msg->nid);
+        EnvMutexLock(&pm->lock);
+        if (IsNodeForbiddenReason(msg->nid, NODE_FORBIDDEN_MIGBACK_BUSY)) {
+            EnvMutexUnlock(&pm->lock);
+            SMAP_LOGGER_ERROR("node %d is migrate back busy, enable node failed.", msg->nid);
+            return -EAGAIN;
+        }
+        ClearNodeForbiddenReason(msg->nid, NODE_FORBIDDEN_USER | NODE_FORBIDDEN_MIGBACK_DONE);
+        EnvMutexUnlock(&pm->lock);
         SMAP_LOGGER_INFO("smap enable node %d.", msg->nid);
     } else if (msg->enable == DISABLE_NUMA_MIG) {
-        SetNodeForbidden(msg->nid);
+        EnvMutexLock(&pm->lock);
+        SetNodeForbiddenReason(msg->nid, NODE_FORBIDDEN_USER);
+        EnvMutexUnlock(&pm->lock);
         SMAP_LOGGER_INFO("smap disable node %d.", msg->nid);
     } else {
         SMAP_LOGGER_INFO("enable args:%d is invalid.", msg->enable);
@@ -1022,6 +1925,84 @@ static int Recover(void)
     return ret;
 }
 
+#define UBTURBO_NAME "ubturbo"
+
+static int CreateProcfs(void)
+{
+    // Get ubturbo UID
+    struct passwd *pwd = getpwnam(UBTURBO_NAME);
+    if (!pwd) {
+        SMAP_LOGGER_ERROR("Unable to get %s uid: %d.", UBTURBO_NAME, -errno);
+        return -ENOENT;
+    }
+
+    // Get ubturbo GID
+    struct group *grp = getgrnam(UBTURBO_NAME);
+    if (!grp) {
+        SMAP_LOGGER_ERROR("Unable to get %s gid: %d.", UBTURBO_NAME, -errno);
+        return -ENOENT;
+    }
+
+    struct UserInfo ui = {
+        .uid = pwd->pw_uid,
+        .gid = grp->gr_gid,
+    };
+    SMAP_LOGGER_INFO("User %s's uid is %d, gid is %d.", UBTURBO_NAME, ui.uid, ui.gid);
+    return AccessIoctlCreateProcfs(&ui);
+}
+
+static bool CheckUbFeatureUbDma(void)
+{
+    FILE *fp;
+    unsigned long features = 0;
+    char line[BUFFER_SIZE];
+
+    fp = fopen("/sys/bus/ub/ub_feature", "r");
+    if (!fp) {
+        SMAP_LOGGER_WARNING("ub_feature file not found, ub dma unavailable");
+        return false;
+    }
+
+    if (!fgets(line, sizeof(line), fp)) {
+        fclose(fp);
+        SMAP_LOGGER_WARNING("failed to read ub_feature");
+        return false;
+    }
+    fclose(fp);
+
+    features = strtoul(line, NULL, 16); // 16 is hex string
+    SMAP_LOGGER_INFO("ub_feature: 0x%lx", features);
+
+    if (features & UB_URMA_CTP_ROI_MASK) {
+        SMAP_LOGGER_INFO("UB_URMA_CTP_ROI detected, ub dma available");
+        return true;
+    }
+
+    return false;
+}
+
+static void IoctlSetUbDmaAvail(void)
+{
+    int fd;
+    unsigned int val = CheckUbFeatureUbDma() ? 1 : 0;
+    int ret;
+
+    fd = open(TIERING_PATH, O_RDWR);
+    if (fd < 0) {
+        SMAP_LOGGER_ERROR("cannot open migrate dev for ub dma config");
+        return;
+    }
+
+    ret = ioctl(fd, SMAP_SET_UB_DMA_AVAIL, &val);
+    close(fd);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("ioctl set ub dma avail failed: %d, errno %d", ret, errno);
+        return;
+    }
+
+    SMAP_LOGGER_INFO("ioctl set ub dma avail=%u", val);
+}
+
 int ubturbo_smap_start(uint32_t pageType, Logfunc extlog)
 {
     int ret = 0;
@@ -1036,8 +2017,9 @@ int ubturbo_smap_start(uint32_t pageType, Logfunc extlog)
     if (ret) {
         goto EXIT_ENV;
     }
-
     SMAP_LOGGER_INFO("Log init success.");
+    IoctlSetUbDmaAvail();
+
     ret = CheckPidtype(pageType);
     if (ret) {
         SMAP_LOGGER_ERROR("check pid type error %d.", ret);
@@ -1054,6 +2036,13 @@ int ubturbo_smap_start(uint32_t pageType, Logfunc extlog)
     ret = InitTrackingDev(manager);
     if (ret) {
         SMAP_LOGGER_ERROR("Smap init tracking dev failed, ret = %d.", ret);
+        goto EXIT_DEV;
+    }
+
+    // No need to remove procfs if subsequent steps fail
+    ret = CreateProcfs();
+    if (ret) {
+        SMAP_LOGGER_ERROR("Smap create procfs failed, ret = %d.", ret);
         goto EXIT_DEV;
     }
 
@@ -1168,7 +2157,7 @@ int ubturbo_smap_remote_numa_info_set(struct SetRemoteNumaInfoMsg *msg)
         SMAP_LOGGER_ERROR("Set smap remote numa info src node%d invalid.", msg->srcNid);
         return -EINVAL;
     }
-    if (!IsRemoteNidValid(msg->destNid)) {
+    if (!IsOnlineRemoteNidValid(msg->destNid)) {
         SMAP_LOGGER_ERROR("Set smap remote numa info dest node%d invalid.", msg->destNid);
         return -EINVAL;
     }
@@ -1198,8 +2187,7 @@ static int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint32_t lengthIn, 
         return -EINVAL;
     }
     if (dataSource < 0 || dataSource >= MAX_SOURCE) {
-        SMAP_LOGGER_ERROR("dataSource(%d) invalid, limit(%d). ubturbo_smap_freq_query failed.", dataSource,
-                          MAX_SOURCE);
+        SMAP_LOGGER_ERROR("dataSource(%d) invalid, limit(%d). ubturbo_smap_freq_query failed.", dataSource, MAX_SOURCE);
         return -EINVAL;
     }
 
@@ -1231,17 +2219,27 @@ static int QueryVMFreqFromKernel(int pid, uint16_t *data, uint32_t lengthIn, uin
 {
     int ret;
     struct ProcessManager *manager = GetProcessManager();
+    actc_t *tmpData = malloc(sizeof(actc_t) * lengthIn);
+    if (tmpData == NULL) {
+        SMAP_LOGGER_ERROR("QueryVMFreqFromKernel malloc tmpData failed.\n");
+        return -ENOMEM;
+    }
     struct TrakingInfoPayload payload = {
         .pid = pid,
         .length = lengthIn,
-        .data = data,
+        .data = tmpData,
     };
     ret = ioctl(manager->fds.access, SMAP_ACCESS_GET_TRACKING, &payload);
     if (ret < 0) {
         SMAP_LOGGER_ERROR("access ioctl remove get tracking info error: %s\n", strerror(errno));
+        free(tmpData);
         return -EBADF;
     }
     *lengthOut = payload.length;
+    for (uint32_t i = 0; i < payload.length; i++) {
+        data[i] = tmpData[i];
+    }
+    free(tmpData);
     return ret;
 }
 
@@ -1419,7 +2417,7 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
                 free(payload);
                 return -EINVAL;
             }
-            if (!IsRemoteNidValid(GetAttrL2(attr))) {
+            if (!IsOnlineRemoteNidValid(GetAttrL2(attr))) {
                 SMAP_LOGGER_ERROR("pid %d l2 node is invalid, scan type is %d.", attr->pid, scanType);
                 free(payload);
                 return -EINVAL;
@@ -1604,11 +2602,11 @@ static int CheckMigrateNumaMsg(struct MigrateNumaMsg *msg)
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate srcNid = destNid.");
         return -EINVAL;
     }
-    if (!IsRemoteNidValid(msg->srcNid)) {
+    if (!IsOnlineRemoteNidValid(msg->srcNid)) {
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate invalid srcNid %d.", msg->srcNid);
         return -EINVAL;
     }
-    if (!IsRemoteNidValid(msg->destNid)) {
+    if (!IsOnlineRemoteNidValid(msg->destNid)) {
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate invalid destNid %d.", msg->destNid);
         return -EINVAL;
     }
@@ -1663,7 +2661,7 @@ static int CheckSameMigrateNumaMsg(struct MigrateNumaMsg *msg)
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate srcNid = destNid.");
         return -EINVAL;
     }
-    if (!IsRemoteNidValid(msg->srcNid)) {
+    if (!IsOnlineRemoteNidValid(msg->srcNid)) {
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate invalid srcNid %d.", msg->srcNid);
         return -EINVAL;
     }
@@ -1723,8 +2721,61 @@ static int CheckMigOutSyncMsg(int pidType, uint64_t maxWaitTime)
     return 0;
 }
 
+static bool IsMigrateOutPayloadRemoteTargetZero(const struct MigrateOutPayload *payload)
+{
+    if (!payload || payload->count <= 0) {
+        return false;
+    }
+    if (payload->count > REMOTE_NUMA_NUM) {
+        return false;
+    }
+
+    for (int i = 0; i < payload->count; i++) {
+        if (payload->inner[i].migrateMode == MIG_MEMSIZE_MODE) {
+            if (payload->inner[i].memSize != 0) {
+                return false;
+            }
+            continue;
+        }
+        if (payload->inner[i].ratio != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void SetSyncWaitRemoteEmpty(struct MigrateOutMsg *msg, bool enable)
+{
+    struct ProcessManager *manager = GetProcessManager();
+
+    if (!msg) {
+        return;
+    }
+    if (msg->count <= 0 || msg->count > MAX_NR_MIGOUT) {
+        return;
+    }
+
+    EnvMutexLock(&manager->lock);
+    for (int i = 0; i < msg->count; i++) {
+        if (!IsMigrateOutPayloadRemoteTargetZero(&msg->payload[i])) {
+            continue;
+        }
+
+        ProcessAttr *attr = manager->processes;
+        while (attr && attr->pid != msg->payload[i].pid) {
+            attr = attr->next;
+        }
+        if (!attr || attr->groupPolicy.enabled || attr->scanType != NORMAL_SCAN) {
+            continue;
+        }
+        attr->syncWaitRemoteEmpty = enable;
+        SMAP_LOGGER_INFO("Pid %d sync wait remote empty protection %s.", attr->pid, enable ? "enabled" : "disabled");
+    }
+    EnvMutexUnlock(&manager->lock);
+}
+
 static int CheckMigOutSyncResult(struct MigrateOutMsg *msg, int *invalidPidNum, bool *allPidSuccess,
-    uint64_t maxWaitTime)
+                                 uint64_t maxWaitTime)
 {
     int num = 0;
     bool result = true;
@@ -1767,16 +2818,20 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64
     uint64_t waitTime = 0;
     bool allPidSuccess = true;
     int invalidPidNum;
+    bool syncWaitProtected = false;
 
     ret = CheckMigOutSyncMsg(pidType, maxWaitTime);
     if (ret) {
         return ret;
     }
 
+    SetSyncWaitRemoteEmpty(msg, true);
+    syncWaitProtected = true;
+
     ret = ubturbo_smap_migrate_out(msg, pidType);
     if (ret && ret != -ESRCH) {
         SMAP_LOGGER_ERROR("Smap migrate out failed, ret %d.", ret);
-        return ret;
+        goto out;
     }
     SMAP_LOGGER_INFO("Smap migrate out done.");
 
@@ -1786,24 +2841,33 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64
         SMAP_LOGGER_INFO("ubturbo_smap_migrate_out_sync waitTime %llu.", waitTime);
         ret = CheckMigOutSyncResult(msg, &invalidPidNum, &allPidSuccess, maxWaitTime);
         if (ret) {
-            return ret;
+            goto out;
         }
         if (invalidPidNum == msg->count) {
             SMAP_LOGGER_ERROR("ubturbo_smap_migrate_out_sync all pid is invalid.");
-            return -ESRCH;
+            ret = -ESRCH;
+            goto out;
         }
         if (allPidSuccess && !invalidPidNum) {
             SMAP_LOGGER_INFO("ubturbo_smap_migrate_out_sync all pid success.");
-            return 0;
+            ret = 0;
+            goto out;
         } else if (allPidSuccess && invalidPidNum) {
             SMAP_LOGGER_INFO("ubturbo_smap_migrate_out_sync partial pid success.");
-            return -ESRCH;
+            ret = -ESRCH;
+            goto out;
         }
         allPidSuccess = true;
         EnvMsleep(WAIT_TIME);
     }
     SMAP_LOGGER_ERROR("Migration timed out. pidType %d, ret %d.", pidType, ret);
-    return -EBUSY;
+    ret = -EBUSY;
+
+out:
+    if (syncWaitProtected) {
+        SetSyncWaitRemoteEmpty(msg, false);
+    }
+    return ret;
 }
 
 static bool IsScanTypeValid(pid_t *pidArr, int len)
@@ -1881,24 +2945,33 @@ static bool IsRemoteNidRatioValid(pid_t pid, int nid, int ratio)
     return true;
 }
 
-static uint64_t GetAttrNidInitMemSize(pid_t pid, int nid)
+static int GetAttrNidInitMemSize(pid_t pid, int nid, uint64_t *memSize)
 {
     int nrLocalNuma = GetNrLocalNuma();
+    uint64_t curMemSize = 0;
     ProcessAttr *attr = GetProcessAttr(pid);
+    if (!memSize) {
+        return -EINVAL;
+    }
     if (!attr) {
         return -EINVAL;
     }
-    int l1node = GetAttrL1(attr);
-    return attr->strategyAttr.memSize[l1node][nid - nrLocalNuma];
+    for (int i = 0; i < nrLocalNuma; i++) {
+        if (InAttrL1(attr, i)) {
+            curMemSize += attr->strategyAttr.memSize[i][nid - nrLocalNuma];
+        }
+    }
+    *memSize = curMemSize;
+    return 0;
 }
 
 static bool IsRemoteNidMemSizeValid(pid_t pid, int nid, uint64_t memSize)
 {
-    if (memSize % KB_PER_2MB != 0 || memSize == 0) {
+    if (memSize % KB_PER_4KB != 0 || memSize == 0) {
         return false;
     }
-    uint64_t curMemSize = GetAttrNidInitMemSize(pid, nid);
-    if (curMemSize < 0) {
+    uint64_t curMemSize;
+    if (GetAttrNidInitMemSize(pid, nid, &curMemSize)) {
         return false;
     }
     if (memSize > curMemSize) {
@@ -1957,26 +3030,21 @@ static int SmapMigratePidRemoteNumaCheck(struct MigrateEscapeMsg *msg)
 
     for (int i = 0; i < msg->count; i++) {
         if (msg->payload[i].srcNid == msg->payload[i].destNid) {
-            SMAP_LOGGER_ERROR("srcNid must not equal destNid.");
+            SMAP_LOGGER_ERROR("[%d] srcNid == destNid == %d", i, msg->payload[i].srcNid);
             return -EINVAL;
         }
-        if (!IsRemoteNidValid(msg->payload[i].srcNid)) {
+        if (!IsOnlineRemoteNidValid(msg->payload[i].srcNid)) {
             SMAP_LOGGER_ERROR("[%d] srcNid %d invalid, migrate pid remote numa failed.", i, msg->payload[i].srcNid);
             return -EINVAL;
         }
-        if (!IsRemoteNidValid(msg->payload[i].destNid)) {
+        if (!IsOnlineRemoteNidValid(msg->payload[i].destNid)) {
             SMAP_LOGGER_ERROR("[%d] destNid %d invalid, migrate pid remote numa failed.", i, msg->payload[i].destNid);
             return -EINVAL;
         }
 
         if (msg->payload[i].migrateMode < MIG_RATIO_MODE || msg->payload[i].migrateMode > MIG_MEMSIZE_MODE) {
-            SMAP_LOGGER_ERROR("[%d] pid: %d migrateMode %d invalid.",
-                i, msg->payload[i].pid, msg->payload[i].migrateMode);
-            return -EINVAL;
-        }
-
-        if (GetRunMode() == WATERLINE_MODE && msg->payload[i].migrateMode == MIG_MEMSIZE_MODE) {
-            SMAP_LOGGER_ERROR("[%d] smap runMode is WATERLINE_MODE, not supported MIG_MEMSIZE_MODE.", i);
+            SMAP_LOGGER_ERROR("[%d] pid: %d migrateMode %d invalid.", i, msg->payload[i].pid,
+                              msg->payload[i].migrateMode);
             return -EINVAL;
         }
         if (GetRunMode() == MEM_POOL_MODE && msg->payload[i].migrateMode != MIG_MEMSIZE_MODE) {
@@ -1984,14 +3052,26 @@ static int SmapMigratePidRemoteNumaCheck(struct MigrateEscapeMsg *msg)
             return -EINVAL;
         }
         if (msg->payload[i].migrateMode == MIG_RATIO_MODE &&
-                !IsRemoteNidRatioValid(msg->payload[i].pid, msg->payload[i].srcNid, msg->payload[i].ratio)) {
+            !IsRemoteNidRatioValid(msg->payload[i].pid, msg->payload[i].srcNid, msg->payload[i].ratio)) {
             SMAP_LOGGER_ERROR("[%d] pid: %d ratio %d invalid.", i, msg->payload[i].pid, msg->payload[i].ratio);
             return -EINVAL;
         }
-        if (msg->payload[i].migrateMode == MIG_MEMSIZE_MODE &&
-                !IsRemoteNidMemSizeValid(msg->payload[i].pid, msg->payload[i].srcNid, msg->payload[i].memSize)) {
-            SMAP_LOGGER_ERROR("[%d] pid: %d memSize %d invalid.", i, msg->payload[i].pid, msg->payload[i].memSize);
-            return -EINVAL;
+        if (msg->payload[i].migrateMode == MIG_MEMSIZE_MODE) {
+            if (msg->payload[i].memSize == 0) {
+                uint64_t curMemSize;
+                if (GetAttrNidInitMemSize(msg->payload[i].pid, msg->payload[i].srcNid, &curMemSize)) {
+                    SMAP_LOGGER_ERROR("[%d] pid: %d get current memSize failed.", i, msg->payload[i].pid);
+                    return -EINVAL;
+                }
+                msg->payload[i].memSize = curMemSize;
+                SMAP_LOGGER_INFO("[%d] pid: %d memSize is 0, set to curMemSize %llu.", i, msg->payload[i].pid,
+                                 msg->payload[i].memSize);
+            }
+            if (!IsRemoteNidMemSizeValid(msg->payload[i].pid, msg->payload[i].srcNid, msg->payload[i].memSize)) {
+                SMAP_LOGGER_ERROR("[%d] pid: %d memSize %llu invalid.", i, msg->payload[i].pid,
+                                  (unsigned long long)msg->payload[i].memSize);
+                return -EINVAL;
+            }
         }
     }
 
@@ -2023,7 +3103,16 @@ static int BuildMigRemoteNumaMsg(struct MigrateEscapeMsg *msg, struct MigPidRemo
         int srcRatio = GetAttrNidInitRatio(msg->payload[i].pid, msg->payload[i].srcNid);
         ioctlMsg->payloads[i].keepRatio = srcRatio - msg->payload[i].ratio;
         ioctlMsg->payloads[i].memSize = msg->payload[i].memSize;
-        ioctlMsg->payloads[i].isRatioMode = GetRunMode() == WATERLINE_MODE ? true : false;
+        if (GetRunMode() == WATERLINE_MODE && msg->payload[i].ratio != 0) {
+            ioctlMsg->payloads[i].isRatioMode = true;
+        } else {
+            ioctlMsg->payloads[i].isRatioMode = false;
+        }
+
+        SMAP_LOGGER_INFO("[escape_msg] pid=%d from=%d to=%d ratio=%d keep_ratio=%d memsize=%llu is_ratio_mode=%d",
+                         msg->payload[i].pid, msg->payload[i].srcNid, msg->payload[i].destNid, msg->payload[i].ratio,
+                         ioctlMsg->payloads[i].keepRatio, ioctlMsg->payloads[i].memSize,
+                         ioctlMsg->payloads[i].isRatioMode);
     }
     return 0;
 }
@@ -2096,7 +3185,12 @@ static int AssignOldProcessPayload(struct OldProcessPayload *result, ProcessAttr
     result->l2Node[0] = l2Node;
     result->scanTime = attr->scanTime;
     result->migrateMode = attr->migrateMode;
-    result->memSize = attr->strategyAttr.memSize[l1Node][l2Index];
+    for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
+        if (attr->migrateParam[i].nid == l2Node) {
+            result->memSize = attr->migrateParam[i].memSize;
+            break;
+        }
+    }
     // only the first elem of l1Node and l2Node is used, so assign invalid nid to other elems
     for (int i = 1; i < len; i++) {
         result->l1Node[i] = result->l2Node[i] = NUMA_NO_NODE;
@@ -2106,7 +3200,7 @@ static int AssignOldProcessPayload(struct OldProcessPayload *result, ProcessAttr
 
 static int CheckSmapQueryProcessConfig(int nid, struct OldProcessPayload *result, int inLen, int *outLen)
 {
-    if (!IsRemoteNidValid(nid)) {
+    if (!IsOnlineRemoteNidValid(nid)) {
         SMAP_LOGGER_ERROR("ubturbo_smap_process_config_query invalid nid %d.", nid);
         return -EINVAL;
     }
@@ -2187,7 +3281,7 @@ int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t
         return -EINVAL;
     }
     for (i = 0; i < length; i++) {
-        if (!IsRemoteNidValid(numa[i])) {
+        if (!IsOnlineRemoteNidValid(numa[i])) {
             SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_freq_query nid %u invalid.", numa[i]);
             return -EINVAL;
         }

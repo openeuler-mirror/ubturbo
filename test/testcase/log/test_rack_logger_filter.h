@@ -23,7 +23,6 @@ public:
 protected:
     RackLoggerFilter filter;
 };
-}
-
+} // namespace turbo::log
 
 #endif // RACKMANAGER_TEST_RACK_LOG_FILTER_H

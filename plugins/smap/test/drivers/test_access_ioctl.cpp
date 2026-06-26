@@ -405,7 +405,10 @@ TEST_F(AccessIoctlTestKernel, IoctlRemovePid)
 TEST_F(AccessIoctlTestKernel, IoctlRemovePidTwo)
 {
     struct access_remove_pid_msg msg;
+    struct access_remove_pid_payload payload = {};
+
     msg.count = 1;
+    msg.payload = &payload;
     msg.payload[0].pid = 1;
     MOCKER(copy_from_user)
         .stubs()
@@ -841,11 +844,34 @@ TEST_F(AccessIoctlTestKernel, AccessDevInitTwo)
 }
 
 extern "C" void access_remove_all_pid(void);
+extern "C" char *smap_bitmap_buf;
+extern "C" size_t smap_buf_len;
 TEST_F(AccessIoctlTestKernel, AccessIoctlExit)
 {
+    // Test with null bitmap buffer
+    smap_bitmap_buf = nullptr;
+    smap_buf_len = 0;
+    MOCKER(vfree).stubs();
     MOCKER(access_remove_all_pid).stubs().will(ignoreReturnValue());
     MOCKER(access_dev_exit).stubs().will(ignoreReturnValue());
     access_ioctl_exit();
+    EXPECT_EQ(nullptr, smap_bitmap_buf);
+    EXPECT_EQ(0, smap_buf_len);
+}
+
+TEST_F(AccessIoctlTestKernel, AccessIoctlExitWithBitmapBuf)
+{
+    // Test with valid bitmap buffer - should call vfree
+    smap_bitmap_buf = (char *)vmalloc(BITMAP_BUF_LEN);
+    ASSERT_NE(nullptr, smap_bitmap_buf);
+    smap_buf_len = BITMAP_BUF_LEN;
+
+    MOCKER(vfree).stubs();
+    MOCKER(access_remove_all_pid).stubs().will(ignoreReturnValue());
+    MOCKER(access_dev_exit).stubs().will(ignoreReturnValue());
+    access_ioctl_exit();
+    EXPECT_EQ(nullptr, smap_bitmap_buf);
+    EXPECT_EQ(0, smap_buf_len);
 }
 
 extern "C" int access_ioctl_init(void);
@@ -853,89 +879,4 @@ TEST_F(AccessIoctlTestKernel, AccessIoctlInit)
 {
     int ret = access_ioctl_init();
     EXPECT_EQ(ret, 0);
-}
-
-
-extern "C" long ioctl_read_pid_freq(void __user *argp);
-extern "C" int read_pid_freq(pid_t pid, size_t *data_len, u16 **data);
-extern "C" int transfer_frequency_data(struct access_pid_freq_msg *msg, u16 **data);
-
-TEST_F(AccessIoctlTestKernel, IoctlReadPidFreqSuccess)
-{
-    struct access_pid_freq_msg msg = {};
-    msg.pid = 1234;
-    for (int i = 0; i < SMAP_MAX_NUMNODES; i++) {
-        msg.len[i] = 10;
-    }
-    void *user_argp = &msg;
-    ap_data.state_flag = 4;
-    struct access_pid *ap1 = (struct access_pid *)malloc(sizeof(struct access_pid));
-    struct access_pid *ap2 = (struct access_pid *)malloc(sizeof(struct access_pid));
-    ap1->pid = 1234;
-    ap2->pid = 124;
-    INIT_LIST_HEAD(&ap_data.list);
-    list_add_tail(&ap1->node, &ap_data.list);
-    list_add_tail(&ap2->node, &ap_data.list);
-
-    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
-    MOCKER(read_pid_freq).stubs().will(returnValue(0));
-    MOCKER(transfer_frequency_data).stubs().will(returnValue(0));
-
-    long ret = ioctl_read_pid_freq(user_argp);
-    EXPECT_EQ(ret, 0);
-    EXPECT_EQ(ap_data.state_flag, AP_STATE_WALK | AP_STATE_READ | AP_STATE_FREQ | AP_STATE_MIG);
-    ap_data.state_flag = 1;
-    free(ap1);
-    free(ap2);
-}
-
-TEST_F(AccessIoctlTestKernel, IoctlReadPidFreqFail)
-{
-    struct access_pid_freq_msg msg = {};
-    msg.pid = 1234;
-    for (int i = 0; i < SMAP_MAX_NUMNODES; i++) {
-        msg.len[i] = 10;
-    }
-    void *user_argp = &msg;
-    ap_data.state_flag = 4;
-    struct access_pid *ap1 = (struct access_pid *)malloc(sizeof(struct access_pid));
-    struct access_pid *ap2 = (struct access_pid *)malloc(sizeof(struct access_pid));
-    ap1->pid = 1234;
-    ap2->pid = 124;
-    INIT_LIST_HEAD(&ap_data.list);
-    list_add_tail(&ap1->node, &ap_data.list);
-    list_add_tail(&ap2->node, &ap_data.list);
-
-    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
-    MOCKER(read_pid_freq).stubs().will(returnValue(0)).then(returnValue(-EINVAL));
-
-    MOCKER(transfer_frequency_data).stubs().will(returnValue(-EFAULT));
-    // transfer_frequency_data fail
-    long ret = ioctl_read_pid_freq(user_argp);
-    EXPECT_EQ(ret, -EFAULT);
-    EXPECT_EQ(ap_data.state_flag, AP_STATE_WALK | AP_STATE_READ | AP_STATE_FREQ);
-
-    ap_data.state_flag = 4;
-    // read_pid_freq fail
-    ret = ioctl_read_pid_freq(user_argp);
-    EXPECT_EQ(ret, -EINVAL);
-    EXPECT_EQ(ap_data.state_flag, AP_STATE_WALK | AP_STATE_READ | AP_STATE_FREQ);
-
-    ap_data.state_flag = 4;
-    ap1->pid = 123;
-    ap2->pid = 124;
-    // is_pid_freq_msg_valid fail
-    ret = ioctl_read_pid_freq(user_argp);
-    EXPECT_EQ(ret, -EINVAL);
-    EXPECT_EQ(ap_data.state_flag, AP_STATE_WALK | AP_STATE_READ | AP_STATE_FREQ);
-
-    ap_data.state_flag = 1;
-    // check_and_clear_ap_state fail
-    ret = ioctl_read_pid_freq(user_argp);
-    EXPECT_EQ(ret, -EAGAIN);
-    EXPECT_EQ(ap_data.state_flag, AP_STATE_WALK);
-
-    ap_data.state_flag = 1;
-    free(ap1);
-    free(ap2);
 }

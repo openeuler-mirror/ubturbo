@@ -8,7 +8,8 @@
  * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
  * See the Mulan PSL v2 for more details.
- */#include "rmrs_smap_module.h"
+ */
+#include "rmrs_smap_module.h"
 #include <sys/stat.h>
 #include <unistd.h>
 #include "rmrs_config.h"

@@ -8,24 +8,24 @@
  * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
  * See the Mulan PSL v2 for more details.
- */#ifndef UCACHE_MIGRATE_EXCUTOR_H
+ */
+#ifndef UCACHE_MIGRATE_EXCUTOR_H
 #define UCACHE_MIGRATE_EXCUTOR_H
 
-#include <vector>
+#include <atomic>
+#include <mutex>
 #include <optional>
 #include <thread>
-#include <mutex>
-#include <atomic>
+#include <vector>
 
 namespace ucache {
-
 namespace migrate_excutor {
 
 struct MigrationStrategy {
-    std::vector<uint16_t> desNids;       // 迁出目标节点（远端内存）
-    int16_t srcNid;                     // 本地迁出节点(如果小于0，表示所有节点)
-    float ucacheUsageRatio;             // 迁移水位
-    std::vector<pid_t> pids;          // 需要迁移的进程列表
+    std::vector<uint16_t> desNids; // 迁出目标节点（远端内存）
+    int16_t srcNid;                // 本地迁出节点(如果小于0，表示所有节点)
+    float ucacheUsageRatio;        // 迁移水位
+    std::vector<pid_t> pids;       // 需要迁移的进程列表
 };
 
 class UcacheMigrationExecutor {
@@ -91,9 +91,8 @@ private:
     uint64_t GetMemTotalForNode(uint16_t nid);
 };
 
-}
+} // namespace migrate_excutor
 
-
-}   // namespace ucache
+} // namespace ucache
 
 #endif

@@ -14,8 +14,8 @@
 #include <limits>
 #include <regex>
 #include <stdexcept>
-#include "turbo_logger.h"
 #include "rmrs_config.h"
+#include "turbo_logger.h"
 
 namespace rmrs {
 

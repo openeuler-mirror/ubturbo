@@ -5,16 +5,15 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 #define private public
-#include <sys/ioctl.h>
-#include <fstream>
-#include <vector>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
-#include "ucache_driver_interaction.h"
-#include "turbo_logger.h"
-#include "rmrs_error.h"
+#include <fstream>
+#include <vector>
 #include "rmrs_config.h"
+#include "rmrs_error.h"
+#include "turbo_logger.h"
+#include "ucache_driver_interaction.h"
 
 #define MOCKER_CPP(api, TT) MOCKCPP_NS::mockAPI(#api, reinterpret_cast<TT>(api))
 
@@ -37,7 +36,6 @@ protected:
         cout << "[Phase TearDown End]" << endl;
     }
 };
-
 
 TEST_F(TestUcacheDriverInteraction, MigrateSuccessTest)
 {
@@ -74,7 +72,6 @@ TEST_F(TestUcacheDriverInteraction, EnsureDevice)
     EXPECT_EQ(ret, true);
 }
 
-
 TEST_F(TestUcacheDriverInteraction, MigrateSuccessOpenFailTest)
 {
     MOCKER_CPP(&ucache::DriverInteraction::EnsureDevice, bool (*)(void *)).stubs().will(returnValue(false));
@@ -83,7 +80,7 @@ TEST_F(TestUcacheDriverInteraction, MigrateSuccessOpenFailTest)
     uint32_t ret = driver.GetMigrateSuccess(Arg);
     EXPECT_EQ(ret, RMRS_ERROR);
 }
- 
+
 TEST_F(TestUcacheDriverInteraction, MigrateFoliosInfoTest)
 {
     MOCKER_CPP(&ucache::DriverInteraction::EnsureDevice, bool (*)(void *)).stubs().will(returnValue(true));
@@ -98,7 +95,7 @@ TEST_F(TestUcacheDriverInteraction, MigrateFoliosInfoTest)
     ret = driver.MigrateFoliosInfo(1, 1, 1);
     EXPECT_EQ(ret, RMRS_ERROR);
 }
- 
+
 TEST_F(TestUcacheDriverInteraction, MigrateFoliosInfoOpenFailTest)
 {
     MOCKER_CPP(&ucache::DriverInteraction::EnsureDevice, bool (*)(void *)).stubs().will(returnValue(false));

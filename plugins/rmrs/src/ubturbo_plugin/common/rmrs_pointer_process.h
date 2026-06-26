@@ -10,7 +10,6 @@
  * See the Mulan PSL v2 for more details.
  */
 
-
 #ifndef RMRS_MANAGER_POINTER_PROCESS_H
 #define RMRS_MANAGER_POINTER_PROCESS_H
 
@@ -21,8 +20,8 @@
 namespace rmrs {
 using namespace turbo::log;
 
-
-template <typename T> void SafeDeleteArray(T *&ptr)
+template <typename T>
+void SafeDeleteArray(T *&ptr)
 {
     if (ptr) {
         delete[] ptr;
@@ -31,7 +30,7 @@ template <typename T> void SafeDeleteArray(T *&ptr)
 }
 
 template <typename T>
-bool SafeAdd(T a, T b, T& result)
+bool SafeAdd(T a, T b, T &result)
 {
     const auto ret = __builtin_add_overflow(a, b, &result);
     if (ret) {
@@ -41,7 +40,7 @@ bool SafeAdd(T a, T b, T& result)
 }
 
 template <typename T>
-bool SafeSub(T a, T b, T& result)
+bool SafeSub(T a, T b, T &result)
 {
     const auto ret = __builtin_sub_overflow(a, b, &result);
     if (ret) {
@@ -51,7 +50,7 @@ bool SafeSub(T a, T b, T& result)
 }
 
 template <typename T>
-bool SafeMul(T a, T b, T& result)
+bool SafeMul(T a, T b, T &result)
 {
     const auto ret = __builtin_mul_overflow(a, b, &result);
     if (ret) {
@@ -59,12 +58,13 @@ bool SafeMul(T a, T b, T& result)
     }
     return ret;
 }
-template <typename T> void SafeDeleteArray(T *&ptr, size_t ptrLen)
+template <typename T>
+void SafeDeleteArray(T *&ptr, size_t ptrLen)
 {
     if (ptr && ptrLen != 0) {
         delete[] ptr;
         ptr = nullptr;
     }
 }
-}
+} // namespace rmrs
 #endif // RMRS_MANAGER_POINTER_PROCESS_H

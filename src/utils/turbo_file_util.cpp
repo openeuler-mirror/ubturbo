@@ -11,12 +11,11 @@
  */
 #include "turbo_file_util.h"
 
-#include <iostream>
 #include <cstring>
+#include <iostream>
 
 namespace turbo::utils {
 namespace fs = std::filesystem;
-
 
 std::string TurboFileUtil::GetExecutablePath()
 {
@@ -31,8 +30,7 @@ std::string TurboFileUtil::GetExecutablePath()
     }
 
     if (count >= MAX_PATH_LEN - 1) {
-        std::cerr << "[Conf] Read /proc/self/exe failed, file path length is too long."
-                  << std::endl;
+        std::cerr << "[Conf] Read /proc/self/exe failed, file path length is too long." << std::endl;
         return {};
     }
     filePath[count] = '\0'; // 确保字符串以 null 结尾

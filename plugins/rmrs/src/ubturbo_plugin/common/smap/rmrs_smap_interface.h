@@ -8,11 +8,12 @@
  * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
  * See the Mulan PSL v2 for more details.
- */#ifndef __RMRS_SMAP_INTERFACE_H__
+ */
+#ifndef __RMRS_SMAP_INTERFACE_H__
 #define __RMRS_SMAP_INTERFACE_H__
 
-#include <cstdint>
 #include <unistd.h>
+#include <cstdint>
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,14 +36,16 @@ extern "C" {
 #define MIN_SCAN_TIME 5
 #define DEFAULT_L2_NODE (-1)
 
-typedef enum {
+typedef enum
+{
     INPUT_PROCESS = 0,
     INPUT_VM,
     INPUT_MAX
 } InputPidType;
 
 // 迁移模式
-typedef enum {
+typedef enum
+{
     MIG_RATIO_MODE = 0, // 按照比例迁移
     MIG_MEMSIZE_MODE,   // 按照内存大小迁移
 } MigrateMode;
@@ -99,9 +102,9 @@ struct SetRemoteNumaInfoMsg {
 };
 
 struct NumaPayload {
-    uint8_t local; // L1 NUMA ID，0-255
+    uint8_t local;  // L1 NUMA ID，0-255
     uint8_t remote; // L2 NUMA ID，0-255
-    uint32_t size; // Available size, unit is MB
+    uint32_t size;  // Available size, unit is MB
 };
 
 typedef void (*Logfunc)(int level, const char *str, const char *moduleName);

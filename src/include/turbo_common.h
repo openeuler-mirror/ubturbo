@@ -23,8 +23,6 @@ constexpr auto LIB_DEFAULT_DIR = "lib";
 
 constexpr inline auto MODULE_NAME = "ubturbo";
 constexpr inline auto MODULE_CODE = 1;
-}
-
+} // namespace turbo::common
 
 #endif //  TURBO_COMMON_H
-

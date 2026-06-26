@@ -15,6 +15,7 @@
 #include <linux/device.h>
 #include <linux/workqueue.h>
 #include <linux/container_of.h>
+#include <linux/vmalloc.h>
 
 #include "check.h"
 #include "bus.h"
@@ -58,13 +59,16 @@ TEST_F(HistTrackingTest, reset_actc_data)
 
 extern "C" struct smap_hist_dev g_smap_hist_dev;
 extern "C" void hist_tracking_enable(struct device *ldev);
+extern "C" int drivers_actc_buffer_reinit(struct access_tracking_dev *hdev);
 TEST_F(HistTrackingTest, hist_tracking_enable)
 {
-    struct access_tracking_dev hdev;
+    struct access_tracking_dev hdev = {};
     hdev.access_bit_actc_data = nullptr;
     hdev.is_hist = true;
     hdev.enable_on = false;
     hdev.page_count = 0;
+    g_smap_hist_dev.thread_enable = false;
+    MOCKER(drivers_actc_buffer_reinit).stubs().will(returnValue(0));
     hist_tracking_enable(&hdev.ldev);
     EXPECT_EQ(true, hdev.enable_on);
     EXPECT_EQ(true, g_smap_hist_dev.thread_enable);
@@ -73,7 +77,7 @@ TEST_F(HistTrackingTest, hist_tracking_enable)
 extern "C" void hist_tracking_disable(struct device *ldev);
 TEST_F(HistTrackingTest, hist_tracking_disable)
 {
-    struct access_tracking_dev hdev;
+    struct access_tracking_dev hdev = {};
 
     hdev.enable_on = true;
     hdev.is_hist = true;
@@ -138,7 +142,6 @@ TEST_F(HistTrackingTest, hist_dev_pgsize_update)
     hist_dev_pgsize_update(PAGE_MODE_2M);
 }
 
-extern "C" int drivers_actc_buffer_reinit(struct access_tracking_dev *hdev);
 TEST_F(HistTrackingTest, actc_buffer_reinit)
 {
     int ret;
@@ -186,12 +189,12 @@ extern "C" int hist_tracking_set_page_size(struct device *ldev, u8 pgsize);
 TEST_F(HistTrackingTest, hist_tracking_set_page_size)
 {
     int ret;
-    struct device dev;
-    ret = hist_tracking_set_page_size(&dev, 1);
+    struct access_tracking_dev hdev = {};
+    ret = hist_tracking_set_page_size(&hdev.ldev, 1);
     EXPECT_EQ(-EINVAL, ret);
 
     MOCKER(drivers_actc_buffer_reinit).stubs().will(returnValue(0));
-    ret = hist_tracking_set_page_size(&dev, 0);
+    ret = hist_tracking_set_page_size(&hdev.ldev, 0);
     EXPECT_EQ(0, ret);
 }
 
@@ -199,7 +202,7 @@ extern "C" int drivers_actc_buffer_init(struct access_tracking_dev *hdev);
 TEST_F(HistTrackingTest, actc_buffer_init)
 {
     int ret;
-    struct access_tracking_dev dev;
+    struct access_tracking_dev dev = {};
     MOCKER(drivers_calc_access_len).stubs().will(returnValue((u64)0));
     ret = drivers_actc_buffer_init(&dev);
     EXPECT_EQ(0, ret);
@@ -210,45 +213,26 @@ TEST_F(HistTrackingTest, actc_buffer_init)
     EXPECT_EQ(1, dev.page_count);
 }
 
-static void fetch_hist_actc_buf_call(u16 *dst_buf, struct addr_seg *seg)
+TEST_F(HistTrackingTest, actc_buffer_init_alloc_fail)
 {
-    dst_buf[0] = 1;
-    return;
-}
+    int ret;
+    struct access_tracking_dev dev = {};
 
-extern "C" void scan_hist(struct access_tracking_dev *hdev);
-TEST_F(HistTrackingTest, scan_hist)
-{
-    struct access_tracking_dev hdev = {
-        .node = 0,
-    };
-    INIT_LIST_HEAD(&drivers_remote_ram_list);
-    struct ram_segment newdata1 = {
-        .numa_node = 0,
-        .start = 0,
-        .end = 10,
-    };
-    list_add(&newdata1.node, &drivers_remote_ram_list);
-    scan_hist(&hdev);
-}
-
-extern "C" void update_hist_actc_batch(void);
-TEST_F(HistTrackingTest, update_hist_actc_batch)
-{
-    struct access_tracking_dev hdev;
-    INIT_LIST_HEAD(&access_dev);
-    list_add(&hdev.list, &access_dev);
-    MOCKER(scan_hist).stubs();
-    update_hist_actc_batch();
-    list_del(&hdev.list);
+    MOCKER(drivers_calc_access_len).stubs().will(returnValue((u64)2));
+    MOCKER(vzalloc).stubs().will(returnValue((void *)nullptr));
+    ret = drivers_actc_buffer_init(&dev);
+    EXPECT_EQ(-ENOMEM, ret);
+    EXPECT_EQ(0, dev.page_count);
 }
 
 extern "C" void hist_tracking_deinit(void);
 TEST_F(HistTrackingTest, hist_tracking_deinit)
 {
+    INIT_LIST_HEAD(&access_dev);
     struct access_tracking_dev *hdev = (struct access_tracking_dev *)kmalloc(
         sizeof(struct access_tracking_dev), GFP_KERNEL);
     hdev->page_count = 1;
+    hdev->is_hist = 1;
     hdev->tracking_dev = (struct tracking_dev *)malloc(sizeof(struct tracking_dev));
     list_add_tail(&hdev->list, &access_dev);
     MOCKER(tracking_dev_remove).stubs().will(ignoreReturnValue());
@@ -280,6 +264,17 @@ TEST_F(HistTrackingTest, hist_tracking_init_two)
     GlobalMockObject::verify();
     MOCKER(drivers_actc_buffer_init).stubs().will(returnValue(0));
     MOCKER(tracking_dev_add).stubs().will(returnValue((struct tracking_dev *)nullptr));
+    ret = hist_tracking_init();
+    EXPECT_EQ(-ENODEV, ret);
+}
+
+TEST_F(HistTrackingTest, hist_tracking_init_device_setup_fail)
+{
+    int ret;
+
+    INIT_LIST_HEAD(&access_dev);
+    MOCKER(drivers_actc_buffer_init).stubs().will(returnValue(0));
+    MOCKER(device_add).stubs().will(returnValue(-1));
     ret = hist_tracking_init();
     EXPECT_EQ(-ENODEV, ret);
 }
