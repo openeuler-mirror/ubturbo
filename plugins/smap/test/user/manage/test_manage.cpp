@@ -1746,10 +1746,14 @@ TEST_F(ManageTest, TestMigOutIsDoneSuccess)
     bool isMultiNumaPid = false;
     ProcessAttr attr = {};
     attr.walkPage.nrPages[0] = NR_PAGES_L1;
+    attr.walkPage.nrPages[4] = NR_PAGES_L1;
     attr.walkPage.nrPage = NR_PAGE;
     attr.pid = PID;
     attr.migrateMode = MIG_MEMSIZE_MODE;
-    attr.strategyAttr.memSize[0][0] = 10240;
+    attr.migrateParam[0].nid = 4;
+    attr.migrateParam[0].memSize = 10240;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
     g_processManager.processes = nullptr;
     ret = MigOutIsDone(&attr, &isMultiNumaPid);
     EXPECT_EQ(false, ret);
@@ -1759,6 +1763,32 @@ TEST_F(ManageTest, TestMigOutIsDoneSuccess)
     g_processManager.processes = &attr;
     ret = MigOutIsDone(&attr, &isMultiNumaPid);
     EXPECT_EQ(true, ret);
+}
+
+TEST_F(ManageTest, TestMigOutIsDoneSingleRemoteUsesRemotePages)
+{
+    bool isMultiNumaPid = false;
+    ProcessAttr attr = {};
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    attr.pid = PID;
+    attr.migrateMode = MIG_MEMSIZE_MODE;
+    attr.numaAttr.numaNodes = 0b00010001;
+    attr.remoteNumaCnt = 1;
+    attr.migrateParam[0].nid = 4;
+    attr.migrateParam[0].memSize = 1024 * 1000;
+    attr.walkPage.nrPages[0] = 200;
+    attr.walkPage.nrPages[4] = 0;
+    attr.walkPage.nrPage = 1000;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 500;
+
+    EXPECT_TRUE(MigOutIsDone(&attr, &isMultiNumaPid));
+    EXPECT_FALSE(isMultiNumaPid);
+
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 499;
+    attr.walkPage.nrPages[4] = 499;
+    EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
 }
 
 // Helper function to convert KB to pages for testing
@@ -1817,6 +1847,7 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_FirstMigration)
     uint64_t expectedPages = KBToPages(2 * GIB / KIB, PAGESIZE_4K);
     uint64_t expectedMemSize = expectedPages * (PAGESIZE_4K / KIB);
     EXPECT_EQ(expectedMemSize, attr.strategyAttr.memSize[0][0]);
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
     EXPECT_EQ(4, attr.migrateParam[0].nid);
     EXPECT_EQ(2 * GIB / KIB, attr.migrateParam[0].memSize);
 }
@@ -1824,7 +1855,7 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_FirstMigration)
 /*
  * Test SetSingleRemoteNumaConfig: Migration size increased (positive migration)
  * Scenario: Remote already has 2GB, user sets new target to 3GB
- * Expected: memSize should increase by 1GB (using +=)
+ * Expected: memSize records 3GB target, remoteNrPagesAfterMigrate records 2GB existing pages
  */
 TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_IncreaseMigration)
 {
@@ -1861,6 +1892,7 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_IncreaseMigration)
     uint64_t expectedPages = KBToPages(3 * GIB / KIB, PAGESIZE_4K);
     uint64_t expectedMemSize = expectedPages * (PAGESIZE_4K / KIB);
     EXPECT_EQ(expectedMemSize, attr.strategyAttr.memSize[0][0]);
+    EXPECT_EQ((uint32_t)existingPages, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
     EXPECT_EQ(3 * GIB / KIB, attr.migrateParam[0].memSize);
 }
 
@@ -1902,6 +1934,7 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_NoChange)
     // No change: memSize should remain the same
     uint64_t expectedMemSize = existingPages * (PAGESIZE_4K / KIB);
     EXPECT_EQ(expectedMemSize, attr.strategyAttr.memSize[0][0]);
+    EXPECT_EQ((uint32_t)existingPages, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
     EXPECT_EQ(2 * GIB / KIB, attr.migrateParam[0].memSize);
 }
 
@@ -1945,6 +1978,7 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_DecreaseMigration)
     uint64_t expectedPages = KBToPages(1 * GIB / KIB, PAGESIZE_4K);
     uint64_t expectedMemSize = expectedPages * (PAGESIZE_4K / KIB);
     EXPECT_EQ(expectedMemSize, attr.strategyAttr.memSize[0][0]);
+    EXPECT_EQ((uint32_t)existingPages, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
     EXPECT_EQ(1 * GIB / KIB, attr.migrateParam[0].memSize);
 }
 
