@@ -515,6 +515,127 @@ static void MigratePagesToRemote(ProcessAttr *attr, int l2Index, const uint64_t 
     }
 }
 
+static void ClearSingleRemoteTarget(ProcessAttr *attr, int l2Index, int nrLocalNuma)
+{
+    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+        attr->strategyAttr.memSize[i][l2Index] = 0;
+        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] = 0;
+    }
+}
+
+static void AccountExistingRemotePagesByOldAccount(ProcessAttr *attr, int l2Index, uint64_t remotePages,
+                                                   uint64_t oldTotal, int nrLocalNuma)
+{
+    uint64_t nrLeft = remotePages;
+
+    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+        if (!InAttrL1(attr, i)) {
+            continue;
+        }
+
+        uint64_t oldPages = attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index];
+        uint64_t nrPages = oldTotal == 0 ? 0 : remotePages * oldPages / oldTotal;
+        if (nrPages > nrLeft) {
+            nrPages = nrLeft;
+        }
+        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] = nrPages;
+        nrLeft -= nrPages;
+    }
+
+    for (int i = nrLocalNuma - 1; i >= 0 && nrLeft > 0; i--) {
+        if (!InAttrL1(attr, i)) {
+            continue;
+        }
+        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] += nrLeft;
+        break;
+    }
+}
+
+static void AccountExistingRemotePagesByLocalPages(ProcessAttr *attr, int l2Index,
+                                                   const uint64_t pagesPerNuma[MAX_NODES], uint64_t remotePages,
+                                                   int nrLocalNuma)
+{
+    uint64_t localTotal = 0;
+    uint64_t nrLeft = remotePages;
+
+    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+        if (InAttrL1(attr, i)) {
+            localTotal += pagesPerNuma[i];
+        }
+    }
+
+    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+        if (!InAttrL1(attr, i)) {
+            continue;
+        }
+
+        uint64_t nrPages = 0;
+        if (localTotal > 0) {
+            nrPages = remotePages * pagesPerNuma[i] / localTotal;
+        }
+        if (nrPages > nrLeft) {
+            nrPages = nrLeft;
+        }
+        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] = nrPages;
+        nrLeft -= nrPages;
+    }
+
+    for (int i = nrLocalNuma - 1; i >= 0 && nrLeft > 0; i--) {
+        if (!InAttrL1(attr, i)) {
+            continue;
+        }
+        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] += nrLeft;
+        break;
+    }
+}
+
+static void AccountExistingRemotePages(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES],
+                                       uint64_t remotePages, int nrLocalNuma)
+{
+    uint64_t oldTotal = 0;
+
+    if (remotePages == 0) {
+        return;
+    }
+
+    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+        if (InAttrL1(attr, i)) {
+            oldTotal += attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index];
+        }
+    }
+
+    if (oldTotal > 0) {
+        AccountExistingRemotePagesByOldAccount(attr, l2Index, remotePages, oldTotal, nrLocalNuma);
+    } else {
+        AccountExistingRemotePagesByLocalPages(attr, l2Index, pagesPerNuma, remotePages, nrLocalNuma);
+    }
+}
+
+static void SetSingleRemoteTargetPages(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES],
+                                       uint64_t targetPages, int nrLocalNuma)
+{
+    uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
+    uint64_t nrLeft = targetPages;
+    int lastLocal = NUMA_NO_NODE;
+
+    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM && nrLeft > 0; i++) {
+        if (!InAttrL1(attr, i)) {
+            continue;
+        }
+
+        uint64_t accounted = attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index];
+        uint64_t capacity = accounted + pagesPerNuma[i];
+        uint64_t nrPages = MIN(capacity, nrLeft);
+        attr->strategyAttr.memSize[i][l2Index] = nrPages * (pageSize / KIB);
+        nrLeft -= nrPages;
+        lastLocal = i;
+    }
+
+    if (nrLeft > 0 && lastLocal != NUMA_NO_NODE) {
+        attr->strategyAttr.memSize[lastLocal][l2Index] += nrLeft * (pageSize / KIB);
+    }
+}
+
 /* Recall pages from remote NUMA in reverse order (NUMA(n-1) -> ... -> NUMA1 -> NUMA0) */
 static void RecallPagesFromRemote(ProcessAttr *attr, int l2Index, uint64_t pages)
 {
@@ -563,12 +684,9 @@ static void SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, in
         attr->strategyAttr.initRemoteMemRatio[i][l2Index] = param->numaParam[0].ratio;
     }
 
-    /* Handle migration based on comparison between target and existing */
-    if (targetPages > remoteExistingPages) {
-        MigratePagesToRemote(attr, l2Index, pagesPerNuma, targetPages - remoteExistingPages);
-    } else if (targetPages < remoteExistingPages) {
-        RecallPagesFromRemote(attr, l2Index, remoteExistingPages - targetPages);
-    }
+    ClearSingleRemoteTarget(attr, l2Index, nrLocalNuma);
+    AccountExistingRemotePages(attr, l2Index, pagesPerNuma, remoteExistingPages, nrLocalNuma);
+    SetSingleRemoteTargetPages(attr, l2Index, pagesPerNuma, targetPages, nrLocalNuma);
 
     attr->migrateParam[0].memSize = param->numaParam[0].memSize;
     attr->migrateParam[0].nid = remoteNid;
@@ -584,6 +702,7 @@ static void UpdateProcessMigrateConfig(ProcessAttr *attr, ProcessParam *param)
 
     attr->migrateMode = param->numaParam[0].migrateMode;
     attr->remoteNumaCnt = param->count;
+    attr->scanType = param->scanType;
 
     int localRatio = HUNDRED;
     for (int i = 0; i < param->count; i++) {
@@ -2643,6 +2762,43 @@ int IsRemoteNumaMoveAllowed(int nid)
     return 1;
 }
 
+static bool IsRemoteTargetMigOutDone(ProcessAttr *attr, int remoteNid, uint64_t targetPages)
+{
+    if (remoteNid < 0 || remoteNid >= MAX_NODES) {
+        SMAP_LOGGER_ERROR("Invalid remote node %d of pid %d.", remoteNid, attr->pid);
+        return false;
+    }
+
+    int remoteIdx = remoteNid - GetNrLocalNuma();
+    uint64_t accountedPages = 0;
+    if (remoteIdx >= 0 && remoteIdx < REMOTE_NUMA_NUM) {
+        for (int local = 0; local < LOCAL_NUMA_NUM; local++) {
+            accountedPages += attr->strategyAttr.remoteNrPagesAfterMigrate[local][remoteIdx];
+        }
+    }
+    uint64_t remotePages = attr->walkPage.nrPages[remoteNid];
+    SMAP_LOGGER_INFO("Pid: %d, remote node: %d, target pages: %llu, accounted pages: %llu, current remote pages: %llu.",
+                     attr->pid, remoteNid, targetPages, accountedPages, remotePages);
+
+    if (targetPages > 0 && accountedPages == targetPages) {
+        return true;
+    }
+    return remotePages == targetPages;
+}
+
+static bool GetRemoteTargetPages(ProcessAttr *attr, int remoteNid, uint64_t *targetPages)
+{
+    for (int i = 0; i < attr->remoteNumaCnt; i++) {
+        if (attr->migrateParam[i].nid != remoteNid) {
+            continue;
+        }
+        *targetPages = KBToHugePage(attr->migrateParam[i].memSize);
+        return true;
+    }
+
+    return false;
+}
+
 bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid)
 {
     bool ret = false;
@@ -2655,28 +2811,26 @@ bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid)
         for (int i = 0; i < attr->remoteNumaCnt; i++) {
             int l2node = attr->migrateParam[i].nid;
             remoteNum = KBToHugePage(attr->migrateParam[i].memSize);
-            SMAP_LOGGER_INFO("Pid: %d, l2node: %d, remoteNum: %lu, actcLen: %lu.", pid, l2node, remoteNum,
-                             attr->scanAttr.actcLen[l2node]);
-            if (attr->scanAttr.actcLen[l2node] != remoteNum) {
+            if (!IsRemoteTargetMigOutDone(attr, l2node, remoteNum)) {
                 return false;
             }
         }
         attr->enableSwap = true;
         ret = true;
     } else {
-        int l1Node = GetAttrL1(attr);
-        int l2Node = GetAttrL2(attr) - g_processManager.nrLocalNuma;
-        if (l1Node < 0 || l2Node < 0) {
-            SMAP_LOGGER_ERROR("Invalid l1Node %d l2Node %d of pid %d.", l1Node, l2Node, pid);
+        int l2Node = GetAttrL2(attr);
+        if (l2Node < g_processManager.nrLocalNuma || l2Node >= MAX_NODES) {
+            SMAP_LOGGER_ERROR("Invalid l2Node %d of pid %d.", l2Node, pid);
             return false;
         }
-        remoteNum = KBToHugePage(attr->strategyAttr.memSize[l1Node][l2Node]);
+        if (!GetRemoteTargetPages(attr, l2Node, &remoteNum)) {
+            SMAP_LOGGER_ERROR("Pid %d has no migrate target for remote node %d.", pid, l2Node);
+            return false;
+        }
         if (remoteNum > attr->walkPage.nrPage) {
             SMAP_LOGGER_WARNING("Pid %d mig memSize is larger than nrPage.", attr->pid);
         }
-        uint64_t localNum = remoteNum >= attr->walkPage.nrPage ? 0 : (attr->walkPage.nrPage - remoteNum);
-        SMAP_LOGGER_INFO("localNum %llu, attr->nrPages[l1Node] %llu.", localNum, attr->walkPage.nrPages[l1Node]);
-        if (attr->walkPage.nrPage && localNum == attr->walkPage.nrPages[l1Node]) {
+        if (attr->walkPage.nrPage && IsRemoteTargetMigOutDone(attr, l2Node, remoteNum)) {
             attr->enableSwap = true;
             ret = true;
         }
