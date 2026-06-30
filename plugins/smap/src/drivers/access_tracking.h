@@ -42,7 +42,7 @@ enum hist_status {
 #define AB_ACTC_ELEM_SIZE 16
 #define WORKQ_NAME_SIZE 32
 #define WORKQ_NAME_MAX_LEN (WORKQ_NAME_SIZE - 1)
-#define WQ_MAX_THREADS 8
+#define WQ_MAX_THREADS 0
 
 extern struct list_head access_dev;
 extern u8 access_page_size;

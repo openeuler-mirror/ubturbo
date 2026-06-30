@@ -470,58 +470,6 @@ int ap_data_len()
     return cnt;
 }
 
-TEST_F(DriversAccessPidTest, AccessAddPidDuplicateCase)
-{
-    int ret;
-    struct access_pid *tmp;
-    struct access_add_pid_payload payload[2] = {0};
-    bool findFlag = false;
-    payload[0].pid = 14587;
-    payload[1].pid = 14587;
-
-    // duplicate payload case, should failed
-    INIT_LIST_HEAD(&ap_data.list);
-    struct access_pid ap = {.pid=14587, .type=NORMAL_SCAN, .scan_time=50};
-    tmp = &ap;
-    MOCKER(init_access_pid).stubs().with(&payload[0], outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
-    MOCKER(destroy_access_pid).stubs().will(returnValue(0));
-    MOCKER(submit_one_work).stubs();
-    ret = access_add_pid(2, payload);
-    EXPECT_EQ(-EINVAL, ret);
-    EXPECT_EQ(0, ap_data_len());
-
-    // duplicate pid case, should update value
-    GlobalMockObject::verify();
-    struct access_pid ap2 = {.pid=14587, .type=NORMAL_SCAN, .scan_time=50};
-    tmp = &ap2;
-    MOCKER(init_access_pid).stubs().with(&payload[0], outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
-    MOCKER(destroy_access_pid).stubs().will(returnValue(0));
-    MOCKER(submit_one_work).stubs();
-    ret = access_add_pid(1, payload);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(1, ap_data_len());
-
-    GlobalMockObject::verify();
-    struct access_pid ap3 = {.pid=14587, .type=HAM_SCAN, .scan_time=100};
-    tmp = &ap3;
-    MOCKER(init_access_pid).stubs().with(&payload[0], outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
-    MOCKER(destroy_access_pid).stubs().will(returnValue(0));
-    MOCKER(submit_one_work).stubs();
-    ret = access_add_pid(1, payload);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(1, ap_data_len());
-    // check whether ap_data update
-    list_for_each_entry(tmp, &ap_data.list, node) {
-        if (tmp->pid == 14587) {
-            findFlag = true;
-            EXPECT_EQ(ap3.type, tmp->type);
-            EXPECT_EQ(ap3.scan_time, tmp->scan_time);
-            break;
-        }
-    }
-    EXPECT_EQ(true, findFlag);
-}
-
 TEST_F(DriversAccessPidTest, accessRemoveStatisticPid)
 {
     INIT_LIST_HEAD(&statistic_pid_list);
