@@ -90,6 +90,55 @@ module_param_cb(hist_4k_scan_mode_param, &hist_4k_scan_mode_ops,
 MODULE_PARM_DESC(hist_4k_scan_mode_param,
 		 "4K scan mode: 0=multi-granularity, 1=seq-loop (default)");
 
+static int hist_scan_duration_per_win_set(const char *val, const struct kernel_param *kp);
+
+/* Custom parameter operations structure */
+static const struct kernel_param_ops hist_scan_duration_per_win_ops = {
+	.set = hist_scan_duration_per_win_set,
+	.get = param_get_uint,
+};
+
+/* Scan duration per window kernel parameter: default 64ms */
+unsigned int hist_scan_duration_per_win = 64;
+module_param_cb(hist_scan_duration_per_win, &hist_scan_duration_per_win_ops,
+		&hist_scan_duration_per_win, 0644);
+MODULE_PARM_DESC(hist_scan_duration_per_win,
+		 "Scan duration per window in ms (default: 64)");
+
+/**
+ * hist_scan_duration_per_win_set - Callback for setting scan duration per window parameter
+ * @val: String containing the new scan duration value
+ * @kp: Pointer to kernel_param structure
+ *
+ * When user modifies the parameter via sysfs:
+ * - Validate the value is positive
+ * - Update the global scan duration per window
+ */
+static int hist_scan_duration_per_win_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned int new_duration;
+	int ret;
+
+	/* Parse parameter value */
+	ret = kstrtouint(val, 10, &new_duration);
+	if (ret)
+		return ret;
+
+	/* Validate parameter range: must be positive */
+	if (new_duration == 0 || new_duration > HIST_THREAD_PERIOD) {
+		pr_err("invalid scan duration per win: %u, must be > 0 and < 512\n", new_duration);
+		return -EINVAL;
+	}
+
+	pr_info("hist scan duration per win changed: %u -> %u\n",
+		hist_scan_duration_per_win, new_duration);
+
+	/* Update scan duration */
+	hist_scan_duration_per_win = new_duration;
+
+	return 0;
+}
+
 static inline u64 align_addr(u64 addr, u32 low_bit_len)
 {
 	return (addr >> low_bit_len) << low_bit_len;
@@ -461,7 +510,7 @@ static int generate_aligned_4k_scan_wins_info(struct segs_info *win_info,
 	struct smap_hist_dev *dev = &g_smap_hist_dev;
 	int ret;
 	int max_wins_4k_per_ba =
-		HIST_THREAD_PERIOD / HIST_SCAN_DURATION_PER_WIN -
+		HIST_THREAD_PERIOD / hist_scan_duration_per_win -
 		dev->scan_wins_num_per_ba;
 	u32 nr_wins_4k = count_nr_windows(info->segs, info->cnt, STS_SIZE_4K);
 	if (nr_wins_4k == 0 || max_wins_4k_per_ba <= 0)
@@ -915,7 +964,7 @@ static int do_hist_scan_sliding(struct segs_info *info, bool do_multi_gran,
 	 * Multi-granularity scan: dynamically calculated based on window count
 	 */
 	scan_time = (do_multi_gran || do_4k_seq_loop)
-			    ? HIST_SCAN_DURATION_PER_WIN
+			    ? hist_scan_duration_per_win
 			    : HIST_THREAD_PERIOD / dev->scan_wins_num_per_ba;
 	pr_debug("scan_time_per_win: %u ms\n", scan_time);
 
