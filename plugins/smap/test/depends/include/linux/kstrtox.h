@@ -12,7 +12,7 @@ extern "C" {
 
 int kstrtouint(const char *s, unsigned int base, unsigned int *res);
 int kstrtoint(const char *s, unsigned int base, int *res);
-
+int kstrtoul(const char *s, unsigned int base, unsigned long *res);
 int kstrtoull(const char *s, unsigned int base, unsigned long long *res);
 
 #ifdef __cplusplus

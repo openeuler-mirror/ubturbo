@@ -10,3 +10,13 @@ int param_set_uint(const char *val, const struct kernel_param *kp)
 {
     return 0;
 }
+
+int param_get_ulong(char *buffer, const struct kernel_param *kp)
+{
+    return 0;
+}
+
+int param_set_ulong(const char *val, const struct kernel_param *kp)
+{
+    return 0;
+}

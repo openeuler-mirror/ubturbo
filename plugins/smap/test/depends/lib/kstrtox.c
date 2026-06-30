@@ -28,6 +28,20 @@ int kstrtouint(const char *str, unsigned int base, unsigned int *result)
 	return 0;
 }
 
+int kstrtoul(const char *str, unsigned int base, unsigned long *result)
+{
+    unsigned long long tmp;
+
+    errno = 0;
+    tmp = strtoull(str, NULL, base);
+    if (errno)
+        return -errno;
+    if (tmp != (unsigned long)tmp)
+        return -ERANGE;
+    *result = (unsigned long)tmp;
+    return 0;
+}
+
 int kstrtoull(const char *s, unsigned int base, unsigned long long *res)
 {
     unsigned long long tmp;
