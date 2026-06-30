@@ -942,99 +942,54 @@ int access_add_statistic_pid(int len, struct access_add_pid_payload *payload,
 	return ret;
 }
 
-static void move_to_ap_data_list(struct list_head *tmp_head)
-{
-	struct access_pid *ap, *tmp, *tmp2;
-	LIST_HEAD(dup_head);
-
-	down_write(&ap_data.lock);
-	/* check if pids to be added already exists in ap_data.list */
-	list_for_each_entry_safe(ap, tmp, tmp_head, node) {
-		list_for_each_entry(tmp2, &ap_data.list, node) {
-			if (ap->pid == tmp2->pid) {
-				pr_info("set pid: %d NUMA mask from %#x to %#x\n",
-					ap->pid, tmp2->numa_nodes,
-					ap->numa_nodes);
-				tmp2->numa_nodes = ap->numa_nodes;
-				tmp2->scan_time = ap->scan_time;
-				tmp2->ntimes = ap->ntimes;
-				tmp2->type = ap->type;
-				list_move_tail(&ap->node, &dup_head);
-				break;
-			}
-		}
-	}
-	/* move all new pids to ap_data.list */
-	list_for_each_entry_safe(ap, tmp, tmp_head, node) {
-		/*
-		 * A new pid may be attached during scan period or migrate period,
-		 * For performance reasons,
-		 * set cur_times to zero directly to ensure a complete scan can be performed.
-		 */
-		ap->cur_times = 0;
-		pid_pte_mkold(ap);
-		submit_one_work(ap);
-		list_move_tail(&ap->node, &ap_data.list);
-	}
-	up_write(&ap_data.lock);
-	list_for_each_entry_safe(ap, tmp, &dup_head, node) {
-		list_del(&ap->node);
-		destroy_access_pid(ap);
-	}
-}
-
 int access_add_pid(int len, struct access_add_pid_payload *payload)
 {
 	int i, ret;
-	struct access_pid *ap, *tmp, *existing;
-	LIST_HEAD(tmp_head);
+	struct access_pid *ap, *existing;
 
-	/* Pre-check: mark completely duplicate pids */
-	down_read(&ap_data.lock);
 	for (i = 0; i < len; i++) {
 		if (payload[i].pid < 0)
 			continue;
+
+		down_write(&ap_data.lock);
 		list_for_each_entry(existing, &ap_data.list, node) {
-			if (payload[i].pid == existing->pid &&
-			    payload[i].numa_nodes == existing->numa_nodes &&
-			    payload[i].scan_time == existing->scan_time &&
-			    payload[i].type == existing->type &&
-			    payload[i].ntimes == existing->ntimes) {
-				pr_info("pid %d is completely duplicate, skip processing\n",
-					payload[i].pid);
-				payload[i].pid = DUPLICATE_PID;
-				break;
+			if (payload[i].pid == existing->pid) {
+				if (payload[i].numa_nodes == existing->numa_nodes &&
+				    payload[i].scan_time == existing->scan_time &&
+				    payload[i].type == existing->type &&
+				    payload[i].ntimes == existing->ntimes) {
+					pr_info("pid %d is completely duplicate, skip processing\n",
+						payload[i].pid);
+				} else {
+					pr_info("set pid: %d NUMA mask from %#x to %#x\n",
+						existing->pid, existing->numa_nodes,
+						payload[i].numa_nodes);
+					existing->numa_nodes = payload[i].numa_nodes;
+					existing->scan_time = payload[i].scan_time;
+					existing->ntimes = payload[i].ntimes;
+					existing->type = payload[i].type;
+				}
+				up_write(&ap_data.lock);
+				goto next_pid;
 			}
 		}
-	}
-	up_read(&ap_data.lock);
 
-	for (i = 0; i < len; i++) {
-		if (payload[i].pid < 0)
-			continue;
-		/* check if payload has duplicate pid */
-		list_for_each_entry(tmp, &tmp_head, node) {
-			if (unlikely(payload[i].pid == tmp->pid)) {
-				ret = -EINVAL;
-				goto err;
-			}
-		}
-		/* allocate memory for pid */
 		ret = init_access_pid(&payload[i], &ap);
-		if (ret)
-			goto err;
-		list_add_tail(&ap->node, &tmp_head);
+		if (ret) {
+			up_write(&ap_data.lock);
+			return ret;
+		}
+		ap->cur_times = 0;
+		pid_pte_mkold(ap);
+		submit_one_work(ap);
+		list_add_tail(&ap->node, &ap_data.list);
+		up_write(&ap_data.lock);
+
+next_pid:
+		continue;
 	}
-	move_to_ap_data_list(&tmp_head);
+
 	return 0;
-
-err:
-	list_for_each_entry_safe(ap, tmp, &tmp_head, node) {
-		list_del(&ap->node);
-		destroy_access_pid(ap);
-	}
-
-	return ret;
 }
 
 void access_remove_ham_pid(int len, struct access_remove_pid_payload *payload)

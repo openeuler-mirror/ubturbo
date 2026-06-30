@@ -1370,7 +1370,7 @@ static void CalcActcStats(ProcessAttr *attr)
         if (nid < nrLocalNuma) {
             for (int f = 0; f < FREQ_BUCKETS_SIZE; f++) {
                 if (count->freqBuckets[f] > 0) {
-                    SMAP_LOGGER_DEBUG("Node%d freq=%d pages=%u", nid, f, count->freqBuckets[f]);
+                    SMAP_LOGGER_INFO("Node%d freq=%d pages=%u", nid, f, count->freqBuckets[f]);
                 }
             }
         }

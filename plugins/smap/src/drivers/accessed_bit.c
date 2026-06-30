@@ -372,8 +372,7 @@ static void actc_data_update(int nid, u64 pa_index)
 
 	if (unlikely(!adev || pa_index >= adev->page_count))
 		return;
-	if (!adev->is_hist)
-		adev->access_bit_actc_data[pa_index]++;
+	adev->access_bit_actc_data[pa_index]++;
 }
 
 static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
@@ -401,8 +400,7 @@ static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
 	if (unlikely(!adev || pa_index >= adev->page_count))
 		return;
 
-	if (!adev->is_hist)
-		adev->access_bit_actc_data[pa_index]++;
+	adev->access_bit_actc_data[pa_index]++;
 }
 
 static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
@@ -1317,11 +1315,6 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 		return 0;
 	nid = page_to_nid(page);
 	is_local = nid < nr_local_numa;
-	if (!is_local && enable_hist && pte_walk->type == NORMAL_SCAN) {
-		is_young = false;
-		goto save_res;
-	}
-
 	/* 64KiB分组优化：NORMAL_SCAN类型，首页young则跳过后续页 */
 	if (pte_walk->type == NORMAL_SCAN) {
 		bool is_first = (addr & (SCAN_GROUP_SIZE - 1)) == 0;
