@@ -18,6 +18,7 @@
 #include "access_tracking.h"
 #include "access_pid.h"
 #include "access_ioctl.h"
+#include "hist_ops.h"
 
 #undef pr_fmt
 #define pr_fmt(fmt) "access_ioctl: " fmt
@@ -524,7 +525,10 @@ static long smap_access_ioctl(struct file *file, unsigned int cmd,
 	case SMAP_ACCESS_GET_NR_LOCAL_NUMA:
 		return ioctl_get_nr_local_numa(argp);
 	case SMAP_ACCESS_REFRESH_REMOTE_RAM:
-		return refresh_remote_ram();
+		rc = refresh_remote_ram();
+		if (!rc)
+			hist_set_iomem();
+		return rc;
 	case SMAP_ACCESS_SET_SCAN_CPU:
 		return ioctl_set_scan_cpu(argp);
 	default:
