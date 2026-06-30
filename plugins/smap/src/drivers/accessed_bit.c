@@ -49,6 +49,53 @@ spinlock_t ham_lock;
 struct rw_semaphore statistic_lock;
 static u64 freq_info_num;
 
+static int scan_group_size_set(const char *val, const struct kernel_param *kp);
+
+/* Custom parameter operations structure */
+static const struct kernel_param_ops scan_group_size_ops = {
+	.set = scan_group_size_set,
+	.get = param_get_ulong,
+};
+
+/* Scan group size kernel parameter: default 64KiB */
+unsigned long scan_group_size = 64UL * 1024;
+module_param_cb(scan_group_size, &scan_group_size_ops, &scan_group_size, 0644);
+MODULE_PARM_DESC(scan_group_size, "Scan group size in bytes (default: 64KiB)");
+
+/**
+ * scan_group_size_set - Callback for setting scan group size parameter
+ * @val: String containing the new group size value
+ * @kp: Pointer to kernel_param structure
+ *
+ * When user modifies the parameter via sysfs:
+ * - Validate the value is positive and a power of 2
+ * - Update the global scan group size
+ */
+static int scan_group_size_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned long new_size;
+	int ret;
+
+	/* Parse parameter value */
+	ret = kstrtoul(val, 10, &new_size);
+	if (ret)
+		return ret;
+
+	/* Validate parameter: must be positive and power of 2 */
+	if (new_size == 0 || (new_size & (new_size - 1)) != 0) {
+		pr_err("invalid scan group size: %lu, must be > 0 and power of 2\n",
+		       new_size);
+		return -EINVAL;
+	}
+
+	pr_info("scan group size changed: %lu -> %lu\n", scan_group_size, new_size);
+
+	/* Update scan group size */
+	scan_group_size = new_size;
+
+	return 0;
+}
+
 struct smap_vma_struct {
 	unsigned long start_vaddr;
 	unsigned long end_vaddr;
@@ -1324,7 +1371,7 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 
 	/* 64KiB分组优化：NORMAL_SCAN类型，首页young则跳过后续页 */
 	if (pte_walk->type == NORMAL_SCAN) {
-		bool is_first = (addr & (SCAN_GROUP_SIZE - 1)) == 0;
+		bool is_first = (addr & (scan_group_size - 1)) == 0;
 		if (is_first)
 			pte_walk->group_hot = is_young;
 		else if (pte_walk->group_hot) {
