@@ -756,22 +756,162 @@ TEST_F(MigrationTest, TestUpdateAllProcessScanTime)
     UpdateAllProcessScanTime(&ctx);
 }
 
+extern "C" int HandleScene(ThreadCtx *ctx);
+TEST_F(MigrationTest, TestHandleSceneFirstScanNoPages)
+{
+    struct ProcessManager manager = { 0 };
+    ProcessAttr current = {};
+    ThreadCtx ctx = {};
+    manager.processes = &current;
+    ctx.processManager = &manager;
+    current.next = nullptr;
+    current.isFirstScan = true;
+    current.walkPage.nrPage = 0;
+    current.scanTime = 0;
+
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+
+    int ret = HandleScene(&ctx);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(DEFAULT_SCAN_PERIOD, current.scanTime);
+}
+
+TEST_F(MigrationTest, TestHandleSceneFirstScanWithPages)
+{
+    struct ProcessManager manager = { 0 };
+    ProcessAttr current = {};
+    ThreadCtx ctx = {};
+    manager.processes = &current;
+    ctx.processManager = &manager;
+    current.next = nullptr;
+    current.isFirstScan = true;
+    current.walkPage.nrPage = 1;
+    current.scanType = NORMAL_SCAN;
+
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(UpdateScanTime).stubs().will(returnValue(0));
+
+    int ret = HandleScene(&ctx);
+    EXPECT_EQ(0, ret);
+    EXPECT_FALSE(current.isFirstScan);
+}
+
+TEST_F(MigrationTest, TestHandleSceneFirstScanUpdateScanTimeFail)
+{
+    struct ProcessManager manager = { 0 };
+    ProcessAttr current = {};
+    ThreadCtx ctx = {};
+    manager.processes = &current;
+    ctx.processManager = &manager;
+    current.next = nullptr;
+    current.isFirstScan = true;
+    current.walkPage.nrPage = 1;
+    current.scanType = NORMAL_SCAN;
+
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(UpdateScanTime).stubs().will(returnValue(-1));
+
+    int ret = HandleScene(&ctx);
+    EXPECT_EQ(0, ret);
+    EXPECT_TRUE(current.isFirstScan);
+}
+
+TEST_F(MigrationTest, TestUpdateAllProcessScanTimeFirstScanSkip)
+{
+    struct ProcessManager manager = { 0 };
+    ProcessAttr current = {};
+    ThreadCtx ctx = {};
+    manager.processes = &current;
+    ctx.processManager = &manager;
+    current.next = nullptr;
+    current.isFirstScan = true;
+    current.scanType = NORMAL_SCAN;
+
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(UpdateScanTime).expects(never());
+
+    UpdateAllProcessScanTime(&ctx);
+}
+
 extern "C" bool GetFileConfSwitchConfig(void);
 extern "C" bool GetMigratePeriodChanged(void);
 extern "C" uint32_t GetMigratePeriodConfig(void);
 extern "C" bool GetScanPeriodChanged(void);
 extern "C" void UpdatePeriodFromConfig(ThreadCtx *ctx);
+extern "C" void IoctlUpdateUbDmaAvail(uint32_t value);
+extern "C" uint32_t GetMigrateModeConfig(void);
 TEST_F(MigrationTest, TestUodatePeriodFromConfig)
 {
+    struct ProcessManager manager = { 0 };
     ThreadCtx ctx = {};
+    ctx.processManager = &manager;
     ctx.period = 500;
     MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(true));
     MOCKER(GetScanPeriodChanged).stubs().will(returnValue(false));
     MOCKER(GetMigratePeriodChanged).stubs().will(returnValue(true));
     MOCKER(GetMigratePeriodConfig).stubs().will(returnValue(1000));
+    MOCKER(IoctlUpdateUbDmaAvail).stubs();
+    MOCKER(GetMigrateModeConfig).stubs().will(returnValue(0));
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
 
     UpdatePeriodFromConfig(&ctx);
     EXPECT_EQ(1000, ctx.period);
+}
+
+TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanNoPages)
+{
+    struct ProcessManager manager = { 0 };
+    ProcessAttr current = {};
+    ThreadCtx ctx = {};
+    manager.processes = &current;
+    ctx.processManager = &manager;
+    ctx.period = 500;
+    current.next = nullptr;
+    current.isFirstScan = true;
+    current.walkPage.nrPage = 0;
+    current.scanTime = 0;
+
+    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(true));
+    MOCKER(GetScanPeriodChanged).stubs().will(returnValue(false));
+    MOCKER(GetMigratePeriodChanged).stubs().will(returnValue(false));
+    MOCKER(IoctlUpdateUbDmaAvail).stubs();
+    MOCKER(GetMigrateModeConfig).stubs().will(returnValue(0));
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+
+    UpdatePeriodFromConfig(&ctx);
+    EXPECT_EQ(DEFAULT_SCAN_PERIOD, current.scanTime);
+}
+
+TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanWithPages)
+{
+    struct ProcessManager manager = { 0 };
+    ProcessAttr current = {};
+    ThreadCtx ctx = {};
+    manager.processes = &current;
+    ctx.processManager = &manager;
+    ctx.period = 500;
+    current.next = nullptr;
+    current.isFirstScan = true;
+    current.walkPage.nrPage = 1;
+    current.scanType = NORMAL_SCAN;
+
+    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(true));
+    MOCKER(GetScanPeriodChanged).stubs().will(returnValue(false));
+    MOCKER(GetMigratePeriodChanged).stubs().will(returnValue(false));
+    MOCKER(IoctlUpdateUbDmaAvail).stubs();
+    MOCKER(GetMigrateModeConfig).stubs().will(returnValue(0));
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(UpdateScanTime).stubs().will(returnValue(0));
+
+    UpdatePeriodFromConfig(&ctx);
+    EXPECT_FALSE(current.isFirstScan);
 }
 
 extern "C" void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager);
