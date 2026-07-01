@@ -456,7 +456,6 @@ int VMPreprocess(pid_t pid, ProcessAttr *attr)
 static void SetBasicProcessConfig(ProcessAttr *attr, ProcessParam *param)
 {
     attr->pid = param->pid;
-    attr->scanTime = param->scanTime;
     attr->duration = param->duration;
     attr->scanType = param->scanType;
     attr->migrateMode = param->numaParam[0].migrateMode;
