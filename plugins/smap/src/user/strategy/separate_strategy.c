@@ -25,7 +25,7 @@
 #define DEFAULT_SLOW_THRED_2M (2 * DEFAULT_FREQ_WT_2M)
 #define MAX_MIGRATE_DIVISOR_2M 1
 #define MULTI_NUMA_VM_OOM 66
-
+#define PRIOR_MAX_VALUE 63
 typedef struct NumaInfo {
     int localNid;
     int remoteNid;
@@ -52,119 +52,6 @@ static bool ShouldMigrate(ProcessAttr *process)
     return true;
 }
 
-static int ActcFreqAscFunc(const void *actc1, const void *actc2)
-{
-    ActcData *a1 = (ActcData *)actc1, *a2 = (ActcData *)actc2;
-    if (a1->isWhiteListPage != a2->isWhiteListPage) {
-        return a1->isWhiteListPage ? 1 : -1;
-    }
-    if (a1->freq < a2->freq) {
-        return -1;
-    } else if (a1->freq > a2->freq) {
-        return 1;
-    } else {
-        return (int)a2->prior - (int)a1->prior;
-    }
-}
-
-static int ActcFreqDescFunc(const void *actc1, const void *actc2)
-{
-    ActcData *a1 = (ActcData *)actc1, *a2 = (ActcData *)actc2;
-    if (a1->isWhiteListPage != a2->isWhiteListPage) {
-        return a1->isWhiteListPage ? 1 : -1;
-    }
-    if (a1->freq < a2->freq) {
-        return 1;
-    } else if (a1->freq > a2->freq) {
-        return -1;
-    } else {
-        return (int)a1->prior - (int)a2->prior;
-    }
-}
-
-static uint64_t CalLowMigrateNum(uint64_t migrateNum, uint64_t freqWt, uint32_t slowThred, ProcessAttr *process)
-{
-    uint64_t low = 0, high = migrateNum;
-    int l1Node = GetAttrL1(process);
-    int l2Node = GetAttrL2(process);
-    if (l1Node < 0 || l2Node < 0) {
-        SMAP_LOGGER_ERROR("CalcMigrateNumByFreq pid %d L1 %d or L2 %d is invalid.", process->pid, l1Node, l2Node);
-        return 0;
-    }
-    // calculate migrate num based on freq
-    while (low < high) {
-        uint64_t mid = low + (high - low + 1) / 2;
-        if (mid < 1) {
-            return 0;
-        }
-        uint64_t freqL1 = freqWt * process->scanAttr.actcData[l1Node][mid - 1].freq;
-        uint64_t freqL2 = process->scanAttr.actcData[l2Node][mid - 1].freq;
-        if ((GetZeroFreqMigrateEnableConfig() && (freqL1 == 0) && (freqL2 > 0)) || (freqL1 + slowThred < freqL2)) {
-            low = mid;
-        } else {
-            high = mid - 1;
-        }
-    }
-    return low;
-}
-
-/*
- * Calculate migrate num by frequency
- *
- * Before call this function, make sure process->actcData[L1] is in ascending order
- * and process->actcData[L2] is in descending order
- */
-static uint64_t CalcMigrateNumByFreq(ProcessAttr *process)
-{
-    uint64_t migrateNum, low = 0, high;
-    uint64_t freqWt;
-    uint64_t freqNum;
-    uint32_t slowThred;
-    uint16_t l1FreqMax, l2FreqMax;
-    ActCount *l1Act = GetL1ActCount(process);
-    ActCount *l2Act = GetL2ActCount(process);
-    int l2Node = GetAttrL2(process);
-    int l1Len = GetL1ActcLen(process);
-    int l2Len = GetL2ActcLen(process);
-    int remoteFreePages = GetNrFreeHugePagesByNode(l2Node);
-
-    // calculate migrate num based on actc length, max migrate num and free page num
-    migrateNum = MIN(l1Len, l2Len);
-    migrateNum = MIN(migrateNum, process->separateParam.maxMigrate);
-    migrateNum = MIN(migrateNum, remoteFreePages);
-    migrateNum = MIN(migrateNum, (l2Act ? l2Act->freqNum : 0));
-
-    if (!process->enableSwap) {
-        SMAP_LOGGER_INFO("Pid %d not enable swap.", process->pid);
-        return 0;
-    }
-
-    // calculate freq weight
-    l1FreqMax = (l1Act ? l1Act->freqMax : 0);
-    l2FreqMax = (l2Act ? l2Act->freqMax : 0);
-    // removing excessively large outliers
-    if (l2Len > 0 && l2Act && l2Act->freqMax > 0) {
-        int percentile = GetRemoteFreqPercentileConfig();
-        double numToSkip = ((double)(PERCENTAGE_BASE_INT - percentile) / PERCENTAGE_BASE_DOUBLE) * l2Len;
-        size_t maxIndex = (size_t)floor(numToSkip);
-        l2FreqMax = process->scanAttr.actcData[l2Node][maxIndex].freq;
-    } else {
-        l2FreqMax = 0;
-    }
-    if (l1FreqMax) {
-        freqWt = (uint64_t)((double)l2FreqMax / l1FreqMax);
-    } else {
-        freqWt = l2FreqMax;
-    }
-    freqWt = MAX(freqWt, process->separateParam.freqWt);
-    freqWt = GetFreqWtConfig() == 0 ? freqWt : GetFreqWtConfig();
-    slowThred = process->separateParam.slowThred * freqWt;
-    SMAP_LOGGER_DEBUG("Pid %d freqWt %lu, slowThred: %u.", process->pid, freqWt, slowThred);
-
-    migrateNum = CalLowMigrateNum(migrateNum, freqWt, slowThred, process);
-    return migrateNum;
-}
-
 static void FreeMlist(struct MigList mlist[MAX_NODES][MAX_NODES])
 {
     for (int from = 0; from < MAX_NODES; from++) {
@@ -178,193 +65,214 @@ static void FreeMlist(struct MigList mlist[MAX_NODES][MAX_NODES])
     }
 }
 
-static int BaseStrategyInner(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], int from, int to)
+static actc_t FindKthFreqAsc(const uint32_t *buckets, uint64_t k)
 {
-    uint32_t nrMig = mlist[from][to].nr;
-    if (nrMig > 0) {
-        mlist[from][to].nr = nrMig;
-        mlist[from][to].addr = calloc(nrMig, sizeof(uint64_t));
-        if (!mlist[from][to].addr) {
-            return -ENOMEM;
-        }
-        if (!process->scanAttr.actcData[from]) {
-            return -EINVAL;
-        }
-        for (uint32_t idx = 0; idx < nrMig && idx < process->scanAttr.actcLen[from]; idx++) {
-            mlist[from][to].addr[idx] = process->scanAttr.actcData[from][idx].addr;
-        }
-    }
-    return 0;
-}
-
-static int BaseStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], uint64_t rawMigrateNum,
-                        MigrateDirection dir)
-{
-    int ret = 0;
-    uint64_t freePageNum;
-    NodeLevel level;
-    int l1Node = GetAttrL1(process);
-    int l2Node = GetAttrL2(process);
-
-    if (dir > SWAP || dir < DEMOTE) {
-        return -EINVAL;
-    }
-    if (l1Node < 0 || l2Node < 0) {
-        SMAP_LOGGER_ERROR("BaseStrategy pid %d L1 %d or L2 %d is invalid.", process->pid, l1Node, l2Node);
-        return -EINVAL;
-    }
-
-    // 1. calculate migrate num based on raw migrate num
-    qsort(process->scanAttr.actcData[l1Node], GetL1ActcLen(process), sizeof(ActcData), ActcFreqAscFunc);
-    qsort(process->scanAttr.actcData[l2Node], GetL2ActcLen(process), sizeof(ActcData), ActcFreqDescFunc);
-    uint64_t SwapMigrateNum = CalcMigrateNumByFreq(process);
-    mlist[l1Node][l2Node].nr = mlist[l2Node][l1Node].nr = SwapMigrateNum;
-    if (dir == DEMOTE) {
-        mlist[l1Node][l2Node].nr = MAX(SwapMigrateNum, rawMigrateNum);
-        mlist[l2Node][l1Node].nr = mlist[l1Node][l2Node].nr - rawMigrateNum;
-    } else if (dir == PROMOTE) {
-        mlist[l2Node][l1Node].nr = MAX(SwapMigrateNum, rawMigrateNum);
-        mlist[l1Node][l2Node].nr = mlist[l2Node][l1Node].nr - rawMigrateNum;
-    } else {
-        freePageNum = IsHugeMode() ? GetNrFreeHugePagesByNode(l1Node) : GetNrFreePagesByNode(l1Node);
-        mlist[l1Node][l2Node].nr = mlist[l2Node][l1Node].nr = MIN(freePageNum, SwapMigrateNum);
-    }
-
-    for (int from = 0; from < MAX_NODES; from++) {
-        for (int to = 0; to < MAX_NODES; to++) {
-            ret = BaseStrategyInner(process, mlist, from, to);
-            if (ret) {
-                SMAP_LOGGER_ERROR("BaseStrategy pid %d from %d to %d failed %d.", process->pid, from, to, ret);
-                FreeMlist(mlist);
-                return ret;
-            }
-        }
-    }
-    process->strategyAttr.dir[l1Node] = dir;
-    process->strategyAttr.dir[l2Node] = dir;
-    return 0;
-}
-
-static int PromotionStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], uint64_t rawMigrateNum)
-{
-    SMAP_LOGGER_INFO("Pid %d promotion, raw migrate num %lu.", process->pid, rawMigrateNum);
-    return BaseStrategy(process, mlist, rawMigrateNum, PROMOTE);
-}
-
-static int DemotionStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], uint64_t rawMigrateNum)
-{
-    SMAP_LOGGER_INFO("Pid %d demotion, raw migrate num %lu.", process->pid, rawMigrateNum);
-    return BaseStrategy(process, mlist, rawMigrateNum, DEMOTE);
-}
-
-static int SwapStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
-{
-    SMAP_LOGGER_INFO("Pid %d swap.", process->pid);
-    return BaseStrategy(process, mlist, 0, SWAP);
-}
-
-int SeparateStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
-{
-    if (process->separateParam.freqWt == 0) {
-        InitSeparateParam(process);
-    }
-    CalcMaxMigrate(MAX_MIGRATE_DIVISOR_2M, process->walkPage.nrPage, &process->separateParam.maxMigrate);
-    SMAP_LOGGER_INFO("Pid %d maxMigrate: %llu.", process->pid, process->separateParam.maxMigrate);
-
-    if (!ShouldMigrate(process)) {
+    if (k == 0) {
         return 0;
     }
 
-    int l1Node = GetAttrL1(process);
-    int l2Node = GetAttrL2(process);
-    SMAP_LOGGER_DEBUG("SeparateStrategy VM Pid %d l1Node: %d l2Node: %d.", process->pid, l1Node, l2Node);
-
-    if (l1Node < 0 || l2Node < 0) {
-        SMAP_LOGGER_ERROR("SeparateStrategy pid %d L1 %d or L2 %d is invalid.", process->pid, l1Node, l2Node);
-        return -EINVAL;
+    uint64_t countSoFar = 0;
+    for (int freq = 0; freq < FREQ_BUCKETS_SIZE; freq++) {
+        countSoFar += buckets[freq];
+        if (countSoFar >= k) {
+            return (actc_t)freq;
+        }
     }
-
-    if (process->strategyAttr.nrMigratePages[l1Node][l2Node] > 0) {
-        return DemotionStrategy(process, mlist, process->strategyAttr.nrMigratePages[l1Node][l2Node]);
-    } else if (process->strategyAttr.nrMigratePages[l2Node][l1Node] > 0) {
-        return PromotionStrategy(process, mlist, process->strategyAttr.nrMigratePages[l2Node][l1Node]);
-    }
-
-    return SwapStrategy(process, mlist);
+    return FREQ_BUCKETS_SIZE - 1;
 }
 
-static void SortActcData(ProcessAttr *process)
+static actc_t FindKthFreqDesc(const uint32_t *buckets, uint64_t k)
 {
-    ScanAttribute *scan = &process->scanAttr;
-    for (int n = 0; n < GetNrLocalNuma(); n++) {
-        if (NotInAttrL1(process, n)) {
-            continue;
-        }
-        qsort(scan->actcData[n], scan->actcLen[n], sizeof(ActcData), ActcFreqAscFunc);
+    if (k == 0) {
+        return 0;
     }
-    for (int n = GetNrLocalNuma(); n < MAX_NODES; n++) {
-        if (NotInAttrL2(process, n)) {
-            continue;
-        }
-        qsort(scan->actcData[n], scan->actcLen[n], sizeof(ActcData), ActcFreqDescFunc);
-    }
-}
 
-static int BuildMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
-                          uint64_t numaOffset[MAX_NODES], int from, int to)
-{
-    uint32_t nrMig = mlist[from][to].nr;
-    if (nrMig > 0) {
-        mlist[from][to].nr = nrMig;
-        mlist[from][to].addr = calloc(nrMig, sizeof(uint64_t));
-        if (!mlist[from][to].addr) {
-            return -ENOMEM;
-        }
-        if (!process->scanAttr.actcData[from]) {
-            return -EINVAL;
-        }
-        for (int idx = 0; idx < nrMig && idx < process->scanAttr.actcLen[from] - numaOffset[from]; idx++) {
-            mlist[from][to].addr[idx] = process->scanAttr.actcData[from][idx + numaOffset[from]].addr;
+    uint64_t countSoFar = 0;
+    for (int freq = FREQ_BUCKETS_SIZE - 1; freq >= 0; freq--) {
+        countSoFar += buckets[freq];
+        if (countSoFar >= k) {
+            return (actc_t)freq;
         }
     }
     return 0;
 }
 
-static uint64_t CalcSwapNum4K(ProcessAttr *process, int localNid, int remoteNid, const uint64_t numaOffset[],
-                              const uint64_t numaFreePage[])
+static uint64_t BuildFreqBucketsForNode(ProcessAttr *process, int nid, uint64_t offset, uint32_t *buckets)
+{
+    uint64_t count = 0;
+    uint64_t actcLen = process->scanAttr.actcLen[nid];
+    ActcData *actcData = process->scanAttr.actcData[nid];
+
+    if (!actcData || offset >= actcLen) {
+        return 0;
+    }
+
+    for (uint64_t i = offset; i < actcLen; i++) {
+        int freq = actcData[i].freq;
+        freq = MIN(freq, FREQ_BUCKETS_SIZE - 1);
+        buckets[freq]++;
+        count++;
+    }
+
+    return count;
+}
+
+static uint64_t CalcFreqWeightForVm(ProcessAttr *process, int localNid, int remoteNid,
+                                     const uint32_t *l2Buckets, uint64_t l2ActcLen)
+{
+    uint64_t freqWt;
+    actc_t l1FreqMax = process->scanAttr.actCount[localNid].freqMax;
+    actc_t l2FreqMax = process->scanAttr.actCount[remoteNid].freqMax;
+
+    if (l2ActcLen > 0 && l2FreqMax > 0) {
+        int percentile = GetRemoteFreqPercentileConfig();
+        double numToSkip = ((double)(PERCENTAGE_BASE_INT - percentile) / PERCENTAGE_BASE_DOUBLE) * l2ActcLen;
+        uint64_t skipCount = (uint64_t)floor(numToSkip);
+
+        if (skipCount > 0 && skipCount < l2ActcLen) {
+            l2FreqMax = FindKthFreqDesc(l2Buckets, skipCount + 1);
+        }
+    }
+
+    if (l1FreqMax > 0) {
+        freqWt = (uint64_t)((double)l2FreqMax / l1FreqMax);
+    } else {
+        freqWt = l2FreqMax;
+    }
+
+    freqWt = MAX(freqWt, process->separateParam.freqWt);
+    freqWt = MAX(freqWt, 1);
+
+    if (GetFreqWtConfig() > 0) {
+        freqWt = GetFreqWtConfig();
+    }
+
+    return freqWt;
+}
+
+static uint64_t CalLowMigrateNumByBuckets(uint64_t migrateNum, uint64_t freqWt, uint32_t slowThred,
+                                           const uint32_t *l1Buckets, const uint32_t *l2Buckets,
+                                           uint64_t l1Count, uint64_t l2Count)
+{
+    uint64_t low = 0;
+    uint64_t high = MIN(migrateNum, MIN(l1Count, l2Count));
+    if (high == 0) {
+        return 0;
+    }
+
+    while (low < high) {
+        uint64_t mid = low + (high - low + 1) / 2;
+        uint64_t freqL1 = freqWt * FindKthFreqAsc(l1Buckets, mid);
+        uint64_t freqL2 = FindKthFreqDesc(l2Buckets, mid);
+        if ((GetZeroFreqMigrateEnableConfig() && (freqL1 == 0) && (freqL2 > 0)) || (freqL1 + slowThred < freqL2)) {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    return low;
+}
+
+static uint64_t CalcSwapNumForVm(ProcessAttr *process, int localNid, int remoteNid,
+                                    const uint64_t numaOffset[], const uint64_t numaFreePage[])
 {
     uint64_t migrateNum;
-    uint64_t lastFreqNum;
-    uint64_t lastZeroNum;
+    uint64_t freqWt;
+    uint32_t slowThred;
+
+    // 获取统计数据
     ActCount *localActCount = &process->scanAttr.actCount[localNid];
     ActCount *remoteActCount = &process->scanAttr.actCount[remoteNid];
-    uint64_t localLen = process->scanAttr.actcLen[localNid] - numaOffset[localNid];
-    uint64_t localFree = localActCount->pageNum - localActCount->whiteNum;
-    uint64_t remoteFree = remoteActCount->pageNum - remoteActCount->whiteNum;
-    uint64_t freqBucketZero = localActCount->freqBuckets[0];
-    /* The number of pages with swap should not exceed 1% */
-    uint64_t maxByTotal = process->walkPage.nrPage / HUNDRED;
-    if (freqBucketZero > numaOffset[localNid]) {
-        lastZeroNum = freqBucketZero - numaOffset[localNid];
-    } else {
-        lastZeroNum = 0;
+
+    // 计算有效范围
+    uint64_t localOffset = numaOffset[localNid];
+    uint64_t remoteOffset = numaOffset[remoteNid];
+    uint64_t localLen = process->scanAttr.actcLen[localNid];
+    uint64_t remoteLen = process->scanAttr.actcLen[remoteNid];
+
+    if (localOffset >= localLen || remoteOffset >= remoteLen) {
+        return 0;
     }
-    if (remoteActCount->freqNum > numaOffset[remoteNid]) {
-        lastFreqNum = remoteActCount->freqNum - numaOffset[remoteNid];
-    } else {
-        lastFreqNum = 0;
+
+    // 构建频率桶
+    uint32_t l1Buckets[FREQ_BUCKETS_SIZE] = {0};
+    uint32_t l2Buckets[FREQ_BUCKETS_SIZE] = {0};
+
+    uint64_t l1Count = BuildFreqBucketsForNode(process, localNid, localOffset, l1Buckets);
+    uint64_t l2Count = BuildFreqBucketsForNode(process, remoteNid, remoteOffset, l2Buckets);
+
+    if (l1Count == 0 || l2Count == 0) {
+        return 0;
     }
-    migrateNum = MIN(localLen, process->separateParam.maxMigrate);
+
+    // 计算基础迁移数量（复用原有 MIN 链逻辑）
+    migrateNum = MIN(localLen - localOffset, remoteLen - remoteOffset);
+    migrateNum = MIN(migrateNum, process->separateParam.maxMigrate);
     migrateNum = MIN(migrateNum, numaFreePage[localNid]);
-    migrateNum = MIN(migrateNum, lastZeroNum);
-    migrateNum = MIN(migrateNum, lastFreqNum);
-    migrateNum = MIN(migrateNum, localFree);
-    migrateNum = MIN(migrateNum, remoteFree);
-    migrateNum = MIN(migrateNum, maxByTotal);
+    migrateNum = MIN(migrateNum, remoteActCount->freqNum);  // 远端有频次的页面数
+
+    // 检查是否开启 swap
+    if (!process->enableSwap) {
+        SMAP_LOGGER_INFO("Pid %d not enable swap.", process->pid);
+        return 0;
+    }
+
+    // 计算频率权重和阈值
+    freqWt = CalcFreqWeightForVm(process, localNid, remoteNid, l2Buckets, remoteLen - remoteOffset);
+    slowThred = process->separateParam.slowThred * freqWt;
+
+    SMAP_LOGGER_INFO("Pid %d VM swap: freqWt %lu, slowThred: %u, localNid: %d, remoteNid: %d.",
+                      process->pid, freqWt, slowThred, localNid, remoteNid);
+
+    // 使用桶统计 + 二分查找计算迁移数量
+    migrateNum = CalLowMigrateNumByBuckets(migrateNum, freqWt, slowThred,
+                                            l1Buckets, l2Buckets, l1Count, l2Count);
+
     return migrateNum;
 }
 
-static void FindThreshold(const SelectionMode mode, uint64_t nrMig, const uint32_t *buckets, int *thresholdFreq,
+static uint64_t CalcSwapNum(ProcessAttr *process, int localNid, int remoteNid,
+                              const uint64_t numaOffset[], const uint64_t numaFreePage[])
+{
+    if (process->type == PROCESS_TYPE) {
+        uint64_t migrateNum;
+        uint64_t lastFreqNum;
+        uint64_t lastZeroNum;
+        ActCount *localActCount = &process->scanAttr.actCount[localNid];
+        ActCount *remoteActCount = &process->scanAttr.actCount[remoteNid];
+        uint64_t localLen = process->scanAttr.actcLen[localNid] - numaOffset[localNid];
+        uint64_t localFree = localActCount->pageNum - localActCount->whiteNum;
+        uint64_t remoteFree = remoteActCount->pageNum - remoteActCount->whiteNum;
+        uint64_t freqBucketZero = localActCount->freqBuckets[0];
+        /* The number of pages with swap should not exceed 1% */
+        uint64_t maxByTotal = process->walkPage.nrPage / HUNDRED;
+        if (freqBucketZero > numaOffset[localNid]) {
+            lastZeroNum = freqBucketZero - numaOffset[localNid];
+        } else {
+            lastZeroNum = 0;
+        }
+        if (remoteActCount->freqNum > numaOffset[remoteNid]) {
+            lastFreqNum = remoteActCount->freqNum - numaOffset[remoteNid];
+        } else {
+            lastFreqNum = 0;
+        }
+        migrateNum = MIN(localLen, process->separateParam.maxMigrate);
+        migrateNum = MIN(migrateNum, numaFreePage[localNid]);
+        migrateNum = MIN(migrateNum, lastZeroNum);
+        migrateNum = MIN(migrateNum, lastFreqNum);
+        migrateNum = MIN(migrateNum, localFree);
+        migrateNum = MIN(migrateNum, remoteFree);
+        migrateNum = MIN(migrateNum, maxByTotal);
+
+        return migrateNum;
+    } else if (process->type == VM_TYPE) {
+        return CalcSwapNumForVm(process, localNid, remoteNid, numaOffset, numaFreePage);
+    }
+
+    return 0;
+}
+
+void FindThreshold(const SelectionMode mode, uint64_t nrMig, const uint32_t *buckets, int *thresholdFreq,
                           uint32_t *takeAtThreshold)
 {
     (*thresholdFreq) = mode == SELECT_TOP_K ? 0 : FREQ_BUCKETS_SIZE;
@@ -398,15 +306,75 @@ static void FindThreshold(const SelectionMode mode, uint64_t nrMig, const uint32
     }
 }
 
-static void CollectPages(const SelectionMode mode, uint64_t offset, uint64_t actcLen, ActcData *currentData,
+static void CollectPagesVm(const SelectionMode mode, uint64_t actcLen, ActcData *currentData,
+                           struct MigList *currMlist, uint64_t nrMig, int thresholdFreq,
+                           uint32_t takeAtThreshold, uint32_t *selectedBuckets)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+
+    /* Pre-pass: 统计边界频次页面的 prior 分布 */
+    uint64_t priorCounts[PRIOR_MAX_VALUE + 1] = {0};
+    for (size_t i = 0; i < actcLen; ++i) {
+        if (currentData[i].isSelected) {
+            continue;
+        }
+        if (currentData[i].freq != (actc_t)thresholdFreq) {
+            continue;
+        }
+        priorCounts[currentData[i].prior]++;
+    }
+
+    /* 计算每个 prior 级别需取多少页 */
+    uint32_t remaining = takeAtThreshold;
+    uint64_t takeFrom[PRIOR_MAX_VALUE + 1] = {0};
+    for (int p = PRIOR_MAX_VALUE; p >= 0 && remaining > 0; --p) {
+        uint64_t take = MIN(priorCounts[p], remaining);
+        takeFrom[p] = take;
+        remaining -= take;
+    }
+
+    /* Unified pass: 一次遍历收集全部页面，天然升序 */
+    size_t collectedCount = 0;
+    for (size_t i = 0; i < actcLen && collectedCount < nrMig; ++i) {
+        if (currentData[i].isSelected) {
+            continue;
+        }
+
+        int freq = currentData[i].freq;
+        bool shouldTake = (mode == SELECT_TOP_K) ?
+                          (freq > thresholdFreq) : (freq < thresholdFreq);
+
+        if (!shouldTake && freq == thresholdFreq && takeFrom[currentData[i].prior] > 0) {
+            shouldTake = true;
+            takeFrom[currentData[i].prior]--;
+        }
+        if (!shouldTake) {
+            continue;
+        }
+
+        if (currMlist->from < nrLocalNuma && currentData[i].isWhiteListPage) {
+            continue;
+        }
+
+        currMlist->addr[collectedCount++] = i;
+        selectedBuckets[MIN(freq, FREQ_BUCKETS_SIZE - 1)]++;
+        currentData[i].isSelected = 1;
+    }
+
+    currMlist->nr = collectedCount;
+}
+
+static void CollectPages4K(const SelectionMode mode, uint64_t actcLen, ActcData *currentData,
                          struct MigList *currMlist, uint64_t nrMig, int thresholdFreq, uint32_t takeAtThreshold,
                          uint32_t *selectedBuckets)
 {
     int nrLocalNuma = GetNrLocalNuma();
     uint32_t tmp = takeAtThreshold;
-    size_t collected_count = 0;
-    size_t write_idx = offset;
-    for (size_t i = offset; i < actcLen && collected_count < nrMig; ++i) {
+    size_t collectedCount = 0;
+    for (size_t i = 0; i < actcLen && collectedCount < nrMig; ++i) {
+        if (currentData[i].isSelected) {
+            continue;
+        }
         int freq = currentData[i].freq;
         bool shouldTake = false;
 
@@ -420,20 +388,16 @@ static void CollectPages(const SelectionMode mode, uint64_t offset, uint64_t act
             if (currMlist->from < nrLocalNuma && currentData[i].isWhiteListPage) {
                 continue;
             }
-            currMlist->addr[collected_count++] = currentData[i].addr;
+            currMlist->addr[collectedCount++] = i;
             int bucketIdx = MIN(freq, FREQ_BUCKETS_SIZE - 1);
             selectedBuckets[bucketIdx]++;
-            if (i != write_idx) {
-                ActcData temp = currentData[i];
-                currentData[i] = currentData[write_idx];
-                currentData[write_idx] = temp;
-            }
-            write_idx++;
+            currentData[i].isSelected = 1;
             if (freq == thresholdFreq) {
                 tmp--;
             }
         }
     }
+    currMlist->nr = collectedCount;
 }
 
 static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
@@ -452,9 +416,10 @@ static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_
         currentMig->nr = 0;
         return 0;
     }
-    uint64_t rangeLen = n - offset;
+
+    uint64_t remainLen = n - offset;
     uint64_t nrMig = mlist[from][to].nr;
-    nrMig = MIN(nrMig, rangeLen);
+    nrMig = MIN(nrMig, remainLen);
     currentMig->nr = nrMig;
     if (nrMig == 0) {
         return 0;
@@ -478,13 +443,18 @@ static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_
     int thresholdFreq;
     uint32_t takeAtThreshold;
     FindThreshold(mode, nrMig, remainBuckets, &thresholdFreq, &takeAtThreshold);
-    CollectPages(mode, offset, n, currentData, currentMig, nrMig, thresholdFreq, takeAtThreshold, selectedBuckets);
+
+    if (process->type == VM_TYPE) {
+        CollectPagesVm(mode, n, currentData, currentMig, nrMig, thresholdFreq, takeAtThreshold, selectedBuckets);
+    } else {
+        CollectPages4K(mode, n, currentData, currentMig, nrMig, thresholdFreq, takeAtThreshold, selectedBuckets);
+    }
+
     return 0;
 }
 
-static int SeparateStrategy4KInner(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
-                                   uint64_t numaOffset[MAX_NODES], uint64_t numaFreePage[MAX_NODES],
-                                   struct NumaInfo info, uint64_t swapNum)
+static int SeparateStrategyInner(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
+                                   uint64_t numaOffset[MAX_NODES], struct NumaInfo info, uint64_t swapNum)
 {
     int ret = 0;
     int localNid = info.localNid;
@@ -518,17 +488,6 @@ static int SeparateStrategy4KInner(ProcessAttr *process, struct MigList mlist[MA
 
     numaOffset[localNid] += mlist[localNid][remoteNid].nr;
     numaOffset[remoteNid] += mlist[remoteNid][localNid].nr;
-
-    if (numaFreePage[remoteNid] > mlist[localNid][remoteNid].nr) {
-        numaFreePage[remoteNid] -= mlist[localNid][remoteNid].nr;
-    } else {
-        numaFreePage[remoteNid] = 0;
-    }
-    if (numaFreePage[localNid] > mlist[remoteNid][localNid].nr) {
-        numaFreePage[localNid] -= mlist[remoteNid][localNid].nr;
-    } else {
-        numaFreePage[localNid] = 0;
-    }
 
     return ret;
 }
@@ -571,7 +530,7 @@ static void UpdateSwapNum(ProcessAttr *process, uint64_t swapNum[LOCAL_NUMA_BITS
                 sa->nrMigratePages[localNid][remoteNid] == 0) {
                 continue;
             }
-            swapNum[localNid][remoteNid] = CalcSwapNum4K(process, localNid, remoteNid, numaOffset, numaFreePage);
+            swapNum[localNid][remoteNid] = CalcSwapNum(process, localNid, remoteNid, numaOffset, numaFreePage);
             numaOffset[localNid] += swapNum[localNid][remoteNid];
             numaOffset[remoteNid] += swapNum[localNid][remoteNid];
         }
@@ -592,7 +551,7 @@ static void UpdateSwapNum(ProcessAttr *process, uint64_t swapNum[LOCAL_NUMA_BITS
     }
 }
 
-int SeparateStrategy4K(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
+int SeparateStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
 {
     int ret = 0;
     if (process->separateParam.freqWt == 0) {
@@ -607,7 +566,7 @@ int SeparateStrategy4K(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX
     uint64_t numaFreePages[MAX_NODES] = { 0 };
     for (int nid = 0; nid < MAX_NODES; ++nid) {
         if (InAttrL1(process, nid) || InAttrL2(process, nid)) {
-            numaFreePages[nid] = GetNrFreePagesByNode(nid);
+            numaFreePages[nid] = IsHugeMode() ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
         }
     }
 
@@ -622,7 +581,7 @@ int SeparateStrategy4K(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX
             if (NotInAttrL2(process, info.remoteNid)) {
                 continue;
             }
-            if ((ret = SeparateStrategy4KInner(process, mlist, numaOffset, numaFreePages, info,
+            if ((ret = SeparateStrategyInner(process, mlist, numaOffset, info,
                                                swapNum[info.localNid][info.remoteNid])) != 0) {
                 FreeMlist(mlist);
                 return ret;
@@ -644,6 +603,16 @@ static int FreqAscFunc(const void *actc1, const void *actc2)
     } else {
         return (int)a2->prior - (int)a1->prior;
     }
+}
+
+static int AddrAscFunc(const void *a, const void *b)
+{
+    uint64_t addr1 = *(uint64_t *)a;
+    uint64_t addr2 = *(uint64_t *)b;
+    if (addr1 == addr2) {
+        return 0;
+    }
+    return addr1 < addr2 ? -1 : 1;
 }
 
 static int FreqDescFunc(const void *actc1, const void *actc2)
@@ -807,6 +776,11 @@ static int BuildMigListForDirection(MigrateDirection dir, uint64_t *migAddrArray
                 mlist[from][to].addr[i] = migAddrArray[from][curMigIndex + i];
             }
 
+            // 地址升序排序，确保 convert_pos_to_paddr_sorted 正确工作
+            if (pagesToThisDest > 1) {
+                qsort(mlist[from][to].addr, pagesToThisDest, sizeof(uint64_t), AddrAscFunc);
+            }
+
             destFreeList[to] -= pagesToThisDest;
             curMigIndex += pagesToThisDest;
 
@@ -891,7 +865,7 @@ static int BuildLevelActcData(ProcessAttr *process, LevelActcData *levelActcData
             if (actcIdx >= nrPages) {
                 break;
             }
-            levelActcData[actcIdx].addr = process->scanAttr.actcData[i][idx].addr;
+            levelActcData[actcIdx].addr = idx;
             levelActcData[actcIdx].node = i;
             levelActcData[actcIdx].freq = process->scanAttr.actcData[i][idx].freq;
             levelActcData[actcIdx].prior = process->scanAttr.actcData[i][idx].prior;
@@ -916,6 +890,7 @@ static int PromoteMultiNumaVmStrategy(ProcessAttr *process, struct MigList mlist
                                       RemoteMigInfo remoteMigInfo[REMOTE_NUMA_NUM], int nrLocalNuma)
 {
     uint64_t localFreeHugePages[LOCAL_NUMA_NUM] = { 0 };
+    uint64_t numaOffset[MAX_NODES] = { 0 };
     for (int nid = 0; nid < nrLocalNuma; nid++) {
         if (InAttrL1(process, nid)) {
             localFreeHugePages[nid] = GetNrFreeHugePagesByNode(nid);
@@ -927,20 +902,18 @@ static int PromoteMultiNumaVmStrategy(ProcessAttr *process, struct MigList mlist
             continue;
         }
         int from = i + nrLocalNuma;
-        qsort(process->scanAttr.actcData[from], process->scanAttr.actcLen[from], sizeof(ActcData), ActcFreqDescFunc);
+        // use topk algorithm instead of qsort
         for (int to = 0; to < nrLocalNuma; to++) {
             if (!InAttrL1(process, to)) {
                 continue;
             }
             mlist[from][to].nr = MIN(remoteMigInfo[i].nrMig, localFreeHugePages[to]);
-            mlist[from][to].addr = calloc(mlist[from][to].nr, sizeof(uint64_t));
+            int ret = BuildSelectKMlistAddr(process, mlist, numaOffset, from, to, SELECT_TOP_K);
+            if (ret) {
+                SMAP_LOGGER_ERROR("PromoteMultiNumaVmStrategy build mlist addr failed %d.", ret);
+                return ret;
+            }
             SMAP_LOGGER_INFO("migrate %lu pages from NUMA %d to NUMA %d", mlist[from][to].nr, from, to);
-            if (!mlist[from][to].addr) {
-                return -ENOMEM;
-            }
-            for (int index = 0; index < mlist[from][to].nr && index < process->scanAttr.actcLen[from]; index++) {
-                mlist[from][to].addr[index] = process->scanAttr.actcData[from][index].addr;
-            }
             localFreeHugePages[to] -= mlist[from][to].nr;
             remoteMigInfo[i].nrMig -= mlist[from][to].nr;
         }

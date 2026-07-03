@@ -370,7 +370,7 @@ static uint64_t BuildCompMigListFromScan(ProcessAttr *process, GroupSwapCompPlan
     list->to = plan->to;
     list->nr = nr;
     for (uint64_t i = 0; i < nr; i++) {
-        list->addr[i] = process->scanAttr.actcData[plan->from][i].addr;
+        list->addr[i] = i;
     }
     plan->built = nr;
     if (nr < plan->need) {

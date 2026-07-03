@@ -12,7 +12,6 @@
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/ioctl.h>
-#include <linux/sort.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
 
@@ -29,9 +28,6 @@
 #undef pr_fmt
 #define pr_fmt(fmt) "SMAP_mig: " fmt
 
-#define CMP_LT (-1)
-#define CMP_EQ 0
-#define CMP_GT 1
 #define MAX_MIGRATE_PID_NUMA_RETRY_TIME 100
 
 static dev_t mig_dev = 0;
@@ -130,17 +126,6 @@ out:
 	return ret;
 }
 
-static int cmp_mlist_addr_ascend(const void *a, const void *b)
-{
-	u64 tmp_a = *(u64 *)a;
-	u64 tmp_b = *(u64 *)b;
-
-	if (tmp_a == tmp_b) {
-		return CMP_EQ;
-	}
-	return tmp_a < tmp_b ? CMP_LT : CMP_GT;
-}
-
 static int convert_migrate_list(int len, struct mig_list *mlist)
 {
 	int i, ret;
@@ -152,10 +137,7 @@ static int convert_migrate_list(int len, struct mig_list *mlist)
 	for (i = 0; i < len; i++) {
 		struct mig_list *ml = &mlist[i];
 
-		/* Sort ml->addr to accelerate conversion */
-		sort(ml->addr, ml->nr, sizeof(u64), cmp_mlist_addr_ascend,
-		     NULL);
-
+		/* Input addresses are already in ascending order, no need to sort */
 		ret = convert_pos_to_paddr_sorted(ml->pid, ml->from, ml->nr,
 						  ml->addr);
 		if (ret) {

@@ -18,6 +18,7 @@
 #include "securec.h"
 #include "smap_user_log.h"
 #include "strategy.h"
+#include "separate_strategy.h"
 #include "grouped_strategy.h"
 #include "strategy_config.h"
 
@@ -58,6 +59,27 @@ typedef struct {
     uint64_t oldUsedPages;
 } GroupTargetEntry;
 
+static int CmpU64Asc(const void *a, const void *b)
+{
+    uint64_t ua = *(const uint64_t *)a;
+    uint64_t ub = *(const uint64_t *)b;
+    if (ua < ub) {
+        return -1;
+    }
+    if (ua > ub) {
+        return 1;
+    }
+    return 0;
+}
+
+static void SortMigListAddr(struct MigList *list)
+{
+    if (list->nr > 1) {
+        // 对 addr 数组升序排序
+        qsort(list->addr, list->nr, sizeof(uint64_t), CmpU64Asc);
+    }
+}
+
 static int GroupPageAscFunc(const void *data1, const void *data2)
 {
     const GroupPageData *p1 = (const GroupPageData *)data1;
@@ -78,22 +100,6 @@ static int GroupPageDescFunc(const void *data1, const void *data2)
 {
     const GroupPageData *p1 = (const GroupPageData *)data1;
     const GroupPageData *p2 = (const GroupPageData *)data2;
-    if (p1->isWhiteListPage != p2->isWhiteListPage) {
-        return p1->isWhiteListPage ? 1 : -1;
-    }
-    if (p1->freq < p2->freq) {
-        return 1;
-    }
-    if (p1->freq > p2->freq) {
-        return -1;
-    }
-    return (int)p1->prior - (int)p2->prior;
-}
-
-static int ActcDataDescFunc(const void *data1, const void *data2)
-{
-    const ActcData *p1 = (const ActcData *)data1;
-    const ActcData *p2 = (const ActcData *)data2;
     if (p1->isWhiteListPage != p2->isWhiteListPage) {
         return p1->isWhiteListPage ? 1 : -1;
     }
@@ -512,7 +518,7 @@ static int CollectLocalPages(ProcessAttr *process, const MigrationGroupAttr *gro
     for (int i = 0; i < group->localCount; i++) {
         int nid = group->locals[i].nid;
         for (uint64_t j = 0; j < process->scanAttr.actcLen[nid]; j++) {
-            data[pos].addr = process->scanAttr.actcData[nid][j].addr;
+            data[pos].addr = j;
             data[pos].freq = process->scanAttr.actcData[nid][j].freq;
             data[pos].prior = process->scanAttr.actcData[nid][j].prior;
             data[pos].isWhiteListPage = process->scanAttr.actcData[nid][j].isWhiteListPage;
@@ -526,6 +532,62 @@ static int CollectLocalPages(ProcessAttr *process, const MigrationGroupAttr *gro
     return 0;
 }
 
+static uint64_t CollectPagesFromNode(ProcessAttr *process, int nid, uint64_t usedPages, uint64_t remoteOffset,
+                                     GroupPageData *data, uint64_t startPos)
+{
+    uint64_t actcLen = process->scanAttr.actcLen[nid];
+    uint64_t offset = remoteOffset;
+
+    if (offset >= actcLen) {
+        return 0;
+    }
+
+    uint64_t limit = MIN(usedPages, actcLen - offset);
+    uint32_t buckets[FREQ_BUCKETS_SIZE] = {0};
+
+    // 统计频率分布
+    for (uint64_t j = 0; j < actcLen; j++) {
+        if (process->scanAttr.actcData[nid][j].isSelected) {
+            continue;
+        }
+        int freq = process->scanAttr.actcData[nid][j].freq;
+        freq = MIN(freq, FREQ_BUCKETS_SIZE - 1);
+        buckets[freq]++;
+    }
+
+    // 找阈值
+    int thresholdFreq;
+    uint32_t takeAtThreshold;
+    FindThreshold(SELECT_TOP_K, limit, buckets, &thresholdFreq, &takeAtThreshold);
+
+    // 收集满足条件的页面
+    uint32_t tmp = takeAtThreshold;
+    uint64_t collected = 0;
+
+    for (uint64_t j = 0; j < actcLen && collected < limit; j++) {
+        if (process->scanAttr.actcData[nid][j].isSelected) {
+            continue;
+        }
+        int freq = process->scanAttr.actcData[nid][j].freq;
+        bool shouldTake = (freq > thresholdFreq) || (freq == thresholdFreq && tmp > 0);
+
+        if (shouldTake) {
+            data[startPos + collected].addr = j;
+            data[startPos + collected].freq = freq;
+            data[startPos + collected].prior = process->scanAttr.actcData[nid][j].prior;
+            data[startPos + collected].isWhiteListPage = process->scanAttr.actcData[nid][j].isWhiteListPage;
+            data[startPos + collected].nid = nid;
+            process->scanAttr.actcData[nid][j].isSelected = 1;
+            collected++;
+            if (freq == thresholdFreq) {
+                tmp--;
+            }
+        }
+    }
+
+    return collected;
+}
+
 static int CollectRemotePages(ProcessAttr *process, const MigrationGroupAttr *group, const uint64_t remoteOffsets[],
                               GroupPageData **pages, uint64_t *nrPages)
 {
@@ -537,36 +599,29 @@ static int CollectRemotePages(ProcessAttr *process, const MigrationGroupAttr *gr
         }
         total += MIN(group->targets[i].usedPages, process->scanAttr.actcLen[nid] - remoteOffsets[nid]);
     }
+
     *pages = NULL;
     *nrPages = 0;
     if (total == 0) {
         return 0;
     }
+
     GroupPageData *data = calloc(total, sizeof(GroupPageData));
     if (!data) {
         return -ENOMEM;
     }
+
     uint64_t pos = 0;
     for (int i = 0; i < group->targetCount; i++) {
         int nid = group->targets[i].nid;
-        if (remoteOffsets[nid] >= process->scanAttr.actcLen[nid]) {
-            continue;
-        }
-        qsort(process->scanAttr.actcData[nid], process->scanAttr.actcLen[nid], sizeof(ActcData), ActcDataDescFunc);
-        uint64_t limit = MIN(group->targets[i].usedPages, process->scanAttr.actcLen[nid] - remoteOffsets[nid]);
-        for (uint64_t j = 0; j < limit; j++) {
-            uint64_t actcIdx = remoteOffsets[nid] + j;
-            data[pos].addr = process->scanAttr.actcData[nid][actcIdx].addr;
-            data[pos].freq = process->scanAttr.actcData[nid][actcIdx].freq;
-            data[pos].prior = process->scanAttr.actcData[nid][actcIdx].prior;
-            data[pos].isWhiteListPage = process->scanAttr.actcData[nid][actcIdx].isWhiteListPage;
-            data[pos].nid = nid;
-            pos++;
-        }
+        uint64_t offset = remoteOffsets[nid];
+        uint64_t collected = CollectPagesFromNode(process, nid, group->targets[i].usedPages, offset, data, pos);
+        pos += collected;
     }
-    qsort(data, total, sizeof(GroupPageData), GroupPageDescFunc);
+
+    qsort(data, pos, sizeof(GroupPageData), GroupPageDescFunc);
     *pages = data;
-    *nrPages = total;
+    *nrPages = pos;
     return 0;
 }
 
@@ -1181,6 +1236,15 @@ int GroupedMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODE
     if (ret) {
         SMAP_LOGGER_ERROR("grouped pid %d swap stage failed: %d.", process->pid, ret);
     }
+
+    for (int i = 0; i < MAX_NODES; i++) {
+        for (int j = 0; j < MAX_NODES; j++) {
+            if (mlist[i][j].nr > 0) {
+                SortMigListAddr(&mlist[i][j]);
+            }
+        }
+    }
+
     return ret;
 }
 
