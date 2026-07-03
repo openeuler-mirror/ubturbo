@@ -29,6 +29,7 @@ struct actc_data {
 
 #define ACTC_WHITE_LIST_BIT  BIT(0)
 #define ACTC_SELECT_BIT      BIT(1)
+#define ACTC_PRIOR_BITS      6
 #define ACTC_PRIOR_GET(f)    (((f) >> 2) & 0x3F)
 #define ACTC_PRIOR_SET(p)    (((p) & 0x3F) << 2)
 
