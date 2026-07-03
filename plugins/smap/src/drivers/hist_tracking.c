@@ -105,7 +105,7 @@ static int actc_buffer_reinit(struct access_tracking_dev *hdev)
 	u64 page_count;
 	page_count = calc_access_len(hdev);
 	if (!page_count) {
-		pr_info("no page found on node: %d\n", hdev->node);
+		pr_debug("no page found on node: %d\n", hdev->node);
 	}
 	if (hdev->page_count == page_count) {
 		reset_actc_data(hdev);
