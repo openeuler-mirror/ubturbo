@@ -289,7 +289,6 @@ TEST_F(MigrationTest, TestBuildMigrationMsgL2NodeForbidden)
     EXPECT_EQ(-EPERM, ret);
 }
 
-extern "C" uint64_t CalcMigrateNumByFreq(ProcessAttr *process);
 extern "C" int RunStrategyStub(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], size_t mlistSize);
 TEST_F(MigrationTest, TestBuildMigrationMsgSuccess)
 {
@@ -1422,8 +1421,6 @@ TEST_F(MigrationTest, TestPostMigrationCompensatesGroupedSwapImbalance)
     struct MigrateMsg mMsg = {};
     ActcData localPages[2] = {};
 
-    localPages[0].addr = 0x1000;
-    localPages[1].addr = 0x2000;
     InitSingleGroupedSwapProcess(&current, 123, 5);
     current.scanAttr.actcLen[0] = 2;
     current.scanAttr.actcData[0] = localPages;

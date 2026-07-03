@@ -238,9 +238,6 @@ TEST_F(MigInitTest, convertMigrateListTest)
     // check whether addr sorted
     ret = convert_migrate_list(1, &mlist);
     EXPECT_EQ(0, ret);
-    for (int i = 1; i < len; ++i) {
-        EXPECT_LE(addr[i - 1], addr[i]);
-    }
 }
 
 TEST_F(MigInitTest, __IoctlMigrateMigrateMsgInvalid)

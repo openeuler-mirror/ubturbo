@@ -23,11 +23,14 @@
 #define SMAP_PROC_ROOT "smap"
 
 struct actc_data {
-	u64 addr; /* 相对索引位置 */
-	actc_t freq; /* 访问频次 */
-	u8 prior; /* 优先级 */
-	u8 is_white_list; /* 是否白名单页 */
+	actc_t freq;       /* 访问频次 */
+	u8 flags;  /* 位域:bit0=白名单页, bit1=已选中, bits2-7=优先级 */
 } __attribute__((packed));
+
+#define ACTC_WHITE_LIST_BIT  BIT(0)
+#define ACTC_SELECT_BIT      BIT(1)
+#define ACTC_PRIOR_GET(f)    (((f) >> 2) & 0x3F)
+#define ACTC_PRIOR_SET(p)    (((p) & 0x3F) << 2)
 
 typedef enum {
 	NO_SCAN = -1,
