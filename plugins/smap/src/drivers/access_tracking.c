@@ -79,6 +79,7 @@ void cancel_ap_scan_work(struct access_pid *ap)
 
 int set_scan_cpus(u32 cpu_start, u32 cpu_end)
 {
+#ifdef KERNEL_OPENEULER
 	u32 cpu_index;
 	struct workqueue_attrs *attrs;
 	struct access_tracking_dev *adev;
@@ -107,6 +108,10 @@ int set_scan_cpus(u32 cpu_start, u32 cpu_end)
 	}
 
 	free_workqueue_attrs(attrs);
+#else
+	pr_warn("set scan cpus is not supported on this kernel version\n");
+#endif
+
 	return 0;
 }
 

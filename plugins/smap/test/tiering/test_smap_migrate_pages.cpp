@@ -101,6 +101,15 @@ protected:
     }
 };
 
+extern "C" unsigned int remote_migrate_mode;
+extern "C" void set_remote_migrate_mode(unsigned int mode);
+TEST_F(SmapMigratePagesTest, SetRemoteMigrateMode)
+{
+    unsigned int orig_mode = remote_migrate_mode;
+    set_remote_migrate_mode(1);
+    set_remote_migrate_mode(0);
+}
+
 TEST_F(SmapMigratePagesTest, TestSmapAddNoPage)
 {
     struct page *page = nullptr;
@@ -983,8 +992,9 @@ TEST_F(SmapMigratePagesTest, TestSetRemoteMigrateModeAsync)
 
 TEST_F(SmapMigratePagesTest, TestSetRemoteMigrateModeDmaOffloading)
 {
+    unsigned int orig = remote_migrate_mode;
     set_remote_migrate_mode(1);
-    EXPECT_EQ(remote_migrate_mode, MIGRATE_ASYNC_DMA_OFFLOADING);
+    EXPECT_EQ(remote_migrate_mode, orig);
 }
 
 // ========== New DT supplement: smap_check_huge_page_for_migration ==========

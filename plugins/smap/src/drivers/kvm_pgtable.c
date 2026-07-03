@@ -49,7 +49,11 @@ static u32 kvm_pgtable_idx(struct kvm_pgtable_walk_data *data, u32 level)
 
 static bool kvm_pte_table(kvm_pte_t pte, u32 level)
 {
+#ifdef KERNEL_VELINUX
+	if (level == KVM_PGTABLE_LAST_LEVEL || !kvm_pte_valid(pte))
+#else
 	if (level == KVM_PGTABLE_MAX_LEVELS - 1 || !kvm_pte_valid(pte))
+#endif
 		return false;
 
 	return FIELD_GET(KVM_PTE_TYPE, pte) == KVM_PTE_TYPE_TABLE;
@@ -167,7 +171,11 @@ static int __kvm_pgtable_walk(struct kvm_pgtable_walk_data *data,
 	u32 idx;
 	int ret = 0;
 
+#ifdef KERNEL_VELINUX
+	if (WARN_ON_ONCE(level < KVM_PGTABLE_FIRST_LEVEL || level > KVM_PGTABLE_LAST_LEVEL))
+#else
 	if (WARN_ON_ONCE(level >= KVM_PGTABLE_MAX_LEVELS))
+#endif
 		return -EINVAL;
 
 	for (idx = kvm_pgtable_idx(data, level); idx < PTRS_PER_PTE; ++idx) {

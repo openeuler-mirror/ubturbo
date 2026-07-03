@@ -18,7 +18,6 @@
 #include "common.h"
 #include "acpi_mem.h"
 #include "iomem.h"
-#include "ham_migration.h"
 #include "smap_migrate_pages.h"
 #ifdef CRITICAL_OFF
 #include "critical.h"

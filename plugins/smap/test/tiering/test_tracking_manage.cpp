@@ -20,6 +20,7 @@ using namespace std;
 
 extern "C" char *qemu_name;
 extern "C" int node_modes[SMAP_MAX_NUMNODES];
+extern "C" unsigned int smap_pgsize;
 
 class TrackingManageTest : public ::testing::Test {
 protected:
@@ -35,6 +36,18 @@ protected:
         cout << "[Phase TearDown End]" << endl;
     }
 };
+
+extern "C" bool is_smap_pg_huge(void);
+TEST_F(TrackingManageTest, IsSmapPgHuge)
+{
+    smap_pgsize = HUGE_PAGE;
+    bool ret = is_smap_pg_huge();
+    EXPECT_EQ(true, ret);
+
+    smap_pgsize = 0;
+    ret = is_smap_pg_huge();
+    EXPECT_EQ(false, ret);
+}
 
 extern "C" int refresh_remote_ram(void);
 extern "C" int iterate_obmm_dev(void);
