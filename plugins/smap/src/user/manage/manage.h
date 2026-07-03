@@ -126,10 +126,10 @@ enum {
 };
 
 typedef struct {
-    uint64_t addr;
     actc_t freq;
-    uint8_t prior;
-    uint8_t isWhiteListPage;
+    uint8_t isWhiteListPage : 1;  // bit 0
+    uint8_t isSelected : 1;         // bit 1
+    uint8_t prior : 6;            // bits 2-7
 } __attribute__((packed)) ActcData;
 
 typedef struct {

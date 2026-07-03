@@ -760,9 +760,6 @@ TEST_F(ManageTest, TestDistributeActcData)
     attr.scanAttr.actcData[0][0] = oldData[0];
     pmb.nrPages[0] = 2;
     pmb.nrPages[2] = 1;
-    buf[0].addr = 0x1000;
-    buf[1].addr = 0x2000;
-    buf[2].addr = 0x3000;
 
     int ret = DistributeActcData(&attr, &pmb, buf);
     EXPECT_EQ(0, ret);
@@ -770,9 +767,6 @@ TEST_F(ManageTest, TestDistributeActcData)
     ASSERT_NE(nullptr, attr.scanAttr.actcData[2]);
     EXPECT_EQ((uint64_t)2, attr.scanAttr.actcLen[0]);
     EXPECT_EQ((uint64_t)1, attr.scanAttr.actcLen[2]);
-    EXPECT_EQ((uint64_t)0x1000, attr.scanAttr.actcData[0][0].addr);
-    EXPECT_EQ((uint64_t)0x2000, attr.scanAttr.actcData[0][1].addr);
-    EXPECT_EQ((uint64_t)0x3000, attr.scanAttr.actcData[2][0].addr);
 
     free(attr.scanAttr.actcData[0]);
     free(attr.scanAttr.actcData[2]);

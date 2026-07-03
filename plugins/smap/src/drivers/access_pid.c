@@ -305,27 +305,26 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 			break;
 		}
 
-		/* 填充addr - 使用相对索引 */
-		actc[len_cnt].addr = len_cnt;
-
+		u8 flags = 0;
 		/* 填充freq */
 		actc[len_cnt].freq = adev->access_bit_actc_data[acidx];
 
 		/* 填充prior - 从mapping获取 */
 		if (ap->info.vm_size && ap->info.mapping) {
-			actc[len_cnt].prior = (mapping_offset + len_cnt) < ap->info.vm_size ?
-				(ap->info.mapping[mapping_offset + len_cnt] & 0xff) : 0;
+			if ((mapping_offset + len_cnt) < ap->info.vm_size) {
+				flags |= ACTC_PRIOR_SET(ap->info.mapping[mapping_offset + len_cnt] & 0x3f);
+			}
 		} else {
-			actc[len_cnt].prior = get_page_prior_flag(nid, acidx);
+			flags |= ACTC_PRIOR_SET(get_page_prior_flag(nid, acidx));
 		}
 
 		/* 填充is_white_list */
 		if (ap->white_list_bm[nid] &&
-		    test_bit(acidx, ap->white_list_bm[nid])) {
-			actc[len_cnt].is_white_list = 1;
-		} else {
-			actc[len_cnt].is_white_list = 0;
+			test_bit(acidx, ap->white_list_bm[nid])) {
+			flags |= ACTC_WHITE_LIST_BIT;
 		}
+
+		actc[len_cnt].flags = flags;
 
 		len_cnt++;
 		acidx++;

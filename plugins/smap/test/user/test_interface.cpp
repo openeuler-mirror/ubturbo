@@ -2192,8 +2192,8 @@ TEST_F(InterfaceTest, TestQueryVMFreqFromUserNormalOne)
     struct ProcessManager manager;
     ProcessAttr attr = { .pid = 1, .next = nullptr };
     EnvAtomicSet(&g_status, 1);
-    ActcData actcData1[3] = { { .addr = 0, .freq = 0 }, { .addr = 0, .freq = 1 }, { .addr = 0, .freq = 2 } };
-    ActcData actcData2[2] = { { .addr = 0, .freq = 3 }, { .addr = 0, .freq = 4 } };
+    ActcData actcData1[3] = { { .freq = 0 }, { .freq = 1 }, { .freq = 2 } };
+    ActcData actcData2[2] = { { .freq = 3 }, { .freq = 4 } };
     int len1 = sizeof(actcData1) / sizeof(ActcData);
     int len2 = sizeof(actcData2) / sizeof(ActcData);
     attr.scanAttr.actcData[0] = actcData1;
@@ -2220,11 +2220,11 @@ TEST_F(InterfaceTest, TestQueryVMFreqFromUserNormalTwo)
     size_t dataLen = sizeof(data) / sizeof(uint16_t);
     struct ProcessManager manager;
     ProcessAttr attr = { .pid = 1, .next = nullptr };
-    ActcData actcData1[5] = { { .addr = 0, .freq = 0 },
-                              { .addr = 0, .freq = 1 },
-                              { .addr = 0, .freq = 2 },
-                              { .addr = 0, .freq = 3 },
-                              { .addr = 0, .freq = 4 } };
+    ActcData actcData1[5] = { { .freq = 0 },
+                              { .freq = 1 },
+                              { .freq = 2 },
+                              { .freq = 3 },
+                              { .freq = 4 } };
     int len1 = sizeof(actcData1) / sizeof(ActcData);
     EnvAtomicSet(&g_status, 1);
     attr.scanAttr.actcData[0] = actcData1;
@@ -2252,8 +2252,8 @@ TEST_F(InterfaceTest, TestQueryVMFreqFromUserNormalThree)
     size_t dataLen = sizeof(data) / sizeof(uint16_t);
     struct ProcessManager manager;
     ProcessAttr attr = { .pid = 1, .next = nullptr };
-    ActcData actcData1[2] = { { .addr = 0, .freq = 0 }, { .addr = 0, .freq = 1 } };
-    ActcData actcData2[2] = { { .addr = 0, .freq = 2 }, { .addr = 0, .freq = 3 } };
+    ActcData actcData1[2] = { { .freq = 0 }, { .freq = 1 } };
+    ActcData actcData2[2] = { { .freq = 2 }, { .freq = 3 } };
     int len1 = sizeof(actcData1) / sizeof(ActcData);
     int len2 = sizeof(actcData2) / sizeof(ActcData);
     EnvAtomicSet(&g_status, 1);
