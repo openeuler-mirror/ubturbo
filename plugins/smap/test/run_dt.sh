@@ -271,6 +271,6 @@ echo Success
 ./smap_dt
 
 mkdir -p build/gcovr_report
-lcov --d ./ --c --output-file test.info --rc lcov_branch_coverage=1
-lcov -e test.info "*/dt_src/src/*" -output-file coverage.info --rc lcov_branch_coverage=1
-genhtml -o gcovr_report coverage.info --show-details --legend --rc lcov_branch_coverage=1
+lcov --d ./ --c --output-file test.info --rc branch_coverage=1 --ignore-errors inconsistent
+lcov -e test.info "*/dt_src/src/*" -output-file coverage.info --rc branch_coverage=1 --ignore-errors inconsistent
+genhtml -o gcovr_report coverage.info --show-details --legend --rc branch_coverage=1
