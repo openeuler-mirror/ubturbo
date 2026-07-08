@@ -12,6 +12,14 @@ smap_histogram_tracking-objs := ub_hist.o
 
 ccflags-y += -DACPI_NOT_READY
 
+ifeq ($(KERNEL_VERSION), ocos)
+    ccflags-y += -DKERNEL_OCOS
+else ifeq ($(KERNEL_VERSION), velinux)
+    ccflags-y += -DKERNEL_VELINUX
+else
+    ccflags-y += -DKERNEL_OPENEULER
+endif
+
 .PHONY: modules clean
 .default: modules
 
