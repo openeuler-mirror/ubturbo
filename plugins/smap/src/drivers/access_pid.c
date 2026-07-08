@@ -27,7 +27,7 @@
 
 #define NODE_PATH "/dev/smap_node%d"
 
-#define VM_MEMSLOT_PRIOR_THRE (3 * (1 << GB_TO_4K_SHIFT))
+#define VM_MEMSLOT_PRIOR_THRE (3 * (1 << GB_TO_NORMAL_PAGE_SHIFT))
 #define SEC_TO_MS 1000
 #define SCAN_TIMES_NEEDED_BY_NEW_PID 2
 #define DEFAULT_PERIOD_MS 50
@@ -132,18 +132,18 @@ static int scan_kvm_gfn(struct kvm *kvm, struct vm_mapping_info *info)
 	}
 
 	kvm_for_each_memslot(memslot, bkt, slots) {
-		if (memslot->npages < (1 << HUGE_TO_4K_SHIFT))
+		if (memslot->npages < (1 << HUGE_TO_NORMAL_PAGE_SHIFT))
 			continue;
-		if (memslot->base_gfn < (1 << GB_TO_4K_SHIFT))
+		if (memslot->base_gfn < (1 << GB_TO_NORMAL_PAGE_SHIFT))
 			continue;
-		if (memslot->base_gfn == (1 << GB_TO_4K_SHIFT) &&
+		if (memslot->base_gfn == (1 << GB_TO_NORMAL_PAGE_SHIFT) &&
 		    memslot->npages > gfn_thre) {
 			tmp_slot = memslot;
 			add_kvm_seg(info, memslot, gfn_thre, memslot->npages);
 		} else {
 			add_kvm_seg(info, memslot, 0, memslot->npages);
 		}
-		info->vm_size += (memslot->npages >> HUGE_TO_4K_SHIFT);
+		info->vm_size += (memslot->npages >> HUGE_TO_NORMAL_PAGE_SHIFT);
 	}
 	if (tmp_slot) {
 		u64 gfn = MIN(gfn_thre, tmp_slot->npages);
