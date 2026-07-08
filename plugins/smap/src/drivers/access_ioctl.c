@@ -24,6 +24,8 @@
 #define MAX_NR_MIGOUT 40
 #define MAX_NR_REMOVE MAX_NR_MIGOUT
 #define SCHEDULE_INTERVAL (100000)
+#define MAX_4K_PROCESSES_CNT 300
+#define MAX_2M_PROCESSES_CNT 100
 
 static dev_t ioctl_access_dev;
 static struct class *access_class;
@@ -43,8 +45,9 @@ static int check_msg_validity(struct access_add_pid_msg *msg)
 		pr_err("null pid message passed to access tracking\n");
 		return -EINVAL;
 	}
-	if (msg->count <= 0 || msg->count > MAX_NR_MIGOUT) {
-		pr_err("invalid message count passed to access tracking\n");
+	int max_count = is_access_hugepage() ? MAX_2M_PROCESSES_CNT : MAX_4K_PROCESSES_CNT;
+	if (msg->count <= 0 || msg->count > max_count) {
+		pr_err("invalid message count: %d passed to access tracking\n", msg->count);
 		return -EINVAL;
 	}
 	if (!msg->payload) {
