@@ -726,7 +726,7 @@ TEST_F(DriversAccessPidTest, InitVmMapping)
     GlobalMockObject::verify();
     ret = init_vm_mapping(&info);
     EXPECT_EQ(0, ret);
-    vfree(info.mapping);
+    vfree(info.priors);
 }
 
 extern "C" int access_walk_pagemap_prepare(struct access_pid *ap);
@@ -738,7 +738,7 @@ TEST_F(DriversAccessPidTest, AccessWalkPagemapPrepareFail)
     struct access_tracking_dev adev;
     ap = &tmp;
     tmp.type = NORMAL_SCAN;
-    tmp.info.mapping = nullptr;
+    tmp.info.priors = nullptr;
     adev.node = 0;
     adev.page_count = 1;
     list_add(&adev.list, &access_dev);
@@ -759,8 +759,8 @@ TEST_F(DriversAccessPidTest, InitAccessPidWalkPagemapPrepareFail)
     struct access_pid ap;
     struct access_pid *tmp;
     struct access_add_pid_payload payload = { 0 };
-    ap.info.mapping = (u32 *)vmalloc(sizeof(u32) * 2);
-    ASSERT_NE(nullptr, ap.info.mapping);
+    ap.info.priors = (u8 *)vmalloc(sizeof(u8) * 2);
+    ASSERT_NE(nullptr, ap.info.priors);
     MOCKER(kmalloc).stubs().will(returnValue((void *)&ap));
     MOCKER(init_vm_mapping_info).stubs().will(returnValue(0));
     MOCKER(access_walk_pagemap_prepare).stubs().will(returnValue(-ENOMEM));
@@ -1253,7 +1253,7 @@ TEST_F(DriversAccessPidTest, FillActcDataByBitmapWithDev)
     ap.paddr_bm[0] = &bitmap;
     ap.bm_len[0] = 1;
     ap.info.vm_size = 0;
-    ap.info.mapping = nullptr;
+    ap.info.priors = nullptr;
     ap.white_list_bm[0] = nullptr;
     adev.node = 0;
     adev.page_count = 64;
@@ -1309,7 +1309,7 @@ TEST_F(DriversAccessPidTest, MemFreqReadSuccess)
     ap.paddr_bm[0] = &bitmap_val;
     ap.bm_len[0] = 1;
     ap.info.vm_size = 0;
-    ap.info.mapping = nullptr;
+    ap.info.priors = nullptr;
     ap.white_list_bm[0] = nullptr;
     filp.private_data = &ap;
     ap_data.state_flag = AP_STATE_FREQ;
