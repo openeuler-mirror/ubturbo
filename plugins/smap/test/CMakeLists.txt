@@ -15,7 +15,7 @@ set(CMAKE_SHARED_LINKER_FLAGS " -lgcov --coverage ")
 
 add_subdirectory(3rdparty)
 
-add_compile_definitions(USE_DT)
+add_compile_definitions(USE_DT CONFIG_MIGRATE_PAGES_DMA_OFFLOADING)
 
 # include all source files
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/tiering TEST_SRC)

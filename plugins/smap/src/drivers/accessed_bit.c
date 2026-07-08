@@ -1337,8 +1337,13 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 		if (pte_walk->type == STATISTIC_SCAN)
 			pte_walk->statistic_vaddr[pte_walk->statistic_cnt++] =
 				addr;
-		if (!is_file_or_shared_page(page))
+		if (!is_file_or_shared_page(page)) {
+#ifdef KERNEL_VELINUX
+			__ptep_test_and_clear_young(pte);
+#else
 			__ptep_test_and_clear_young(NULL, 0, pte);
+#endif
+		}
 		pte_walk->flag = true;
 	}
 
@@ -1604,7 +1609,11 @@ static int pte_pure_clear(pte_t *pte, unsigned long addr, unsigned long next,
 
 	if (pte_young(*pte)) {
 		pte_walk->flag = true;
+#ifdef KERNEL_VELINUX
+		__ptep_test_and_clear_young(pte);
+#else
 		__ptep_test_and_clear_young(NULL, 0, pte);
+#endif
 	}
 
 	return 0;

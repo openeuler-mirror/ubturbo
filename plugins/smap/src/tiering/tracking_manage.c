@@ -26,7 +26,9 @@
 #include "dump_info.h"
 #include "acpi_mem.h"
 #include "iomem.h"
+#ifdef HAM_ENABLED
 #include "ham_migration.h"
+#endif
 #include "pid_ioctl.h"
 #ifdef CRITICAL_OFF
 #include "critical.h"
@@ -91,7 +93,9 @@ static void resource(void)
 	exit_migrate();
 	smap_dev_exit();
 	smap_debugfs_mod_exit();
+#ifdef HAM_ENABLED
 	ham_exit();
+#endif
 }
 
 static int is_qemu_name_valid(void)
@@ -238,17 +242,21 @@ static int __init tracking_init(void)
 		pr_err("failed to init migrate, ret: %d\n", ret);
 		goto out_dev_int;
 	}
+#ifdef HAM_ENABLED
 	ret = ham_init();
 	if (ret < 0) {
 		pr_err("failed to init HAM, ret: %d\n", ret);
 		goto out_migrate_int;
 	}
+#endif
 	queue_delayed_work(migrate_back_wq, &migrate_back_work,
 			   msecs_to_jiffies(MB_INTV));
 	pr_info("SMAP init successfully\n");
 	return 0;
+#ifdef HAM_ENABLED
 out_migrate_int:
 	exit_migrate();
+#endif
 out_dev_int:
 	smap_dev_exit();
 out_debugfs:

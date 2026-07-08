@@ -29,9 +29,10 @@ This package contains the Huawei SMAP Driver
 %setup -q -T -b 0 -c -n smap
 
 %build
-cd %{_builddir}/smap/src/drivers && make -j`nproc`
+%{!?KERNEL_VERSION:%global KERNEL_VERSION openeuler}
+cd %{_builddir}/smap/src/drivers && make KERNEL_VERSION=%{KERNEL_VERSION} -j`nproc`
 cp %{_builddir}/smap/src/drivers/Module.symvers %{_builddir}/smap/src/tiering/depends
-cd %{_builddir}/smap/src/tiering && make -j`nproc`
+cd %{_builddir}/smap/src/tiering && make KERNEL_VERSION=%{KERNEL_VERSION} -j`nproc`
 cd %{_builddir}/smap/src/ucache && make -j`nproc`
 cd %{_builddir}/smap && cmake -DCMAKE_BUILD_TYPE=Release %{_builddir}/smap
 make -j`nproc` install
