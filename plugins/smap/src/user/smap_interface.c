@@ -110,10 +110,10 @@ static int CheckPidtype(uint32_t pageType)
         SMAP_LOGGER_ERROR("cannot find migrate dev under /dev.");
         return -ENODEV;
     }
-    ret = ioctl(fd, SMAP_CHECK_PAGESIZE, &pageType);
+    ret = ioctl(fd, SMAP_SET_PAGETYPE, &pageType);
     if (ret < 0) {
         close(fd);
-        SMAP_LOGGER_ERROR("ioctl check page type failed: %d.", ret);
+        SMAP_LOGGER_ERROR("ioctl set page type failed: %d.", ret);
         return -EINVAL;
     }
     close(fd);

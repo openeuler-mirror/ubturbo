@@ -138,18 +138,6 @@ static int insert_remote_ram(u64 pa_start, u64 pa_end, struct list_head *head)
 	return 0;
 }
 
-static int fixed_remote_ram(struct list_head *head)
-{
-	struct ram_segment *seg = kmalloc(sizeof(*seg), GFP_KERNEL);
-	if (!seg)
-		return -ENOMEM;
-	seg->start = REMOTE_PA_START;
-	seg->end = REMOTE_PA_END;
-	seg->numa_node = REMOTE_NUMA_ID;
-	list_add_tail(&seg->node, head);
-	return 0;
-}
-
 static int update_resource(struct resource *r, void *arg)
 {
 	int ret;
@@ -467,11 +455,7 @@ int refresh_remote_ram(void)
 	int ret;
 	LIST_HEAD(tmp_head);
 
-	if (smap_scene == UB_QEMU_SCENE) {
-		ret = fixed_remote_ram(&tmp_head);
-	} else {
-		ret = walk_system_ram_remote_range(&tmp_head);
-	}
+	ret = walk_system_ram_remote_range(&tmp_head);
 	if (ret) {
 		return ret;
 	}

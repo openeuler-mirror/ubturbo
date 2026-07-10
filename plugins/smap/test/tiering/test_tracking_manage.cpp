@@ -18,8 +18,7 @@
 
 using namespace std;
 
-extern "C" char *qemu_name;
-extern "C" int node_modes[SMAP_MAX_NUMNODES];
+extern "C" unsigned int smap_pgtype;
 
 class TrackingManageTest : public ::testing::Test {
 protected:
@@ -35,6 +34,18 @@ protected:
         cout << "[Phase TearDown End]" << endl;
     }
 };
+
+extern "C" bool is_smap_pg_huge(void);
+TEST_F(TrackingManageTest, IsSmapPgHuge)
+{
+    smap_pgtype = HUGE_PAGE;
+    bool ret = is_smap_pg_huge();
+    EXPECT_EQ(true, ret);
+
+    smap_pgtype = 0;
+    ret = is_smap_pg_huge();
+    EXPECT_EQ(false, ret);
+}
 
 extern "C" int refresh_remote_ram(void);
 extern "C" int iterate_obmm_dev(void);
@@ -62,54 +73,6 @@ TEST_F(TrackingManageTest, Resource)
     MOCKER(smap_debugfs_mod_exit).stubs().will(ignoreReturnValue());
     MOCKER(ham_exit).stubs().will(ignoreReturnValue());
     resource();
-}
-
-extern "C" int is_qemu_name_valid(void);
-TEST_F(TrackingManageTest, IsQemuNameValid)
-{
-    int ret;
-
-    qemu_name = "\0";
-    ret = is_qemu_name_valid();
-    EXPECT_EQ(-EINVAL, ret);
-
-    qemu_name = "qemu-kvm";
-    ret = is_qemu_name_valid();
-    EXPECT_EQ(0, ret);
-}
-
-extern "C" int is_smap_args_valid(void);
-TEST_F(TrackingManageTest, IsArgsVaild)
-{
-    int ret;
-
-    smap_pgsize = 10;
-    ret = is_smap_args_valid();
-    EXPECT_EQ(-EINVAL, ret);
-
-    smap_pgsize = 0;
-    smap_mode = 9;
-    ret = is_smap_args_valid();
-    EXPECT_EQ(-EINVAL, ret);
-
-    smap_pgsize = 0;
-    smap_mode = 0;
-    node_modes[0] = 100;
-    ret = is_smap_args_valid();
-    EXPECT_EQ(-EINVAL, ret);
-
-    for (int i = 0; i < 10; i++) {
-        node_modes[i] = i;
-    }
-
-    MOCKER(is_qemu_name_valid).stubs().will(returnValue(-EINVAL));
-    ret = is_smap_args_valid();
-    EXPECT_EQ(-EINVAL, ret);
-
-    GlobalMockObject::verify();
-    MOCKER(is_qemu_name_valid).stubs().will(returnValue(0));
-    ret = is_smap_args_valid();
-    EXPECT_EQ(0, ret);
 }
 
 extern "C" struct list_head migrate_back_task_list;
@@ -199,12 +162,6 @@ TEST_F(TrackingManageTest, TestTrackingInit)
 {
     int ret;
 
-    MOCKER(is_smap_args_valid).stubs().will(returnValue(-1));
-    ret = tracking_init();
-    EXPECT_EQ(-1, ret);
-
-    GlobalMockObject::verify();
-    MOCKER(is_smap_args_valid).stubs().will(returnValue(0));
     MOCKER(smap_process_symbols).stubs().will(returnValue(-1));
     ret = tracking_init();
     EXPECT_EQ(-1, ret);
@@ -216,9 +173,7 @@ TEST_F(TrackingManageTest, TestTrackingInitAcpiAndRemoteRamFailure)
     struct ram_segment seg = {};
 
     INIT_LIST_HEAD(&remote_ram_list);
-    smap_scene = NORMAL_SCENE;
 
-    MOCKER(is_smap_args_valid).stubs().will(returnValue(0));
     MOCKER(smap_process_symbols).stubs().will(returnValue(0));
     MOCKER(init_acpi_mem).stubs().will(returnValue(-1));
     ret = tracking_init();
@@ -226,20 +181,8 @@ TEST_F(TrackingManageTest, TestTrackingInitAcpiAndRemoteRamFailure)
 
     GlobalMockObject::verify();
     INIT_LIST_HEAD(&remote_ram_list);
-    MOCKER(is_smap_args_valid).stubs().will(returnValue(0));
-    MOCKER(smap_process_symbols).stubs().will(returnValue(0));
-    MOCKER(init_acpi_mem).stubs().will(returnValue(0));
-    MOCKER(refresh_remote_ram).stubs().will(returnValue(0));
-    MOCKER(release_remote_ram).stubs().will(ignoreReturnValue());
-    MOCKER(reset_acpi_mem).stubs().will(ignoreReturnValue());
-    ret = tracking_init();
-    EXPECT_EQ(-EINVAL, ret);
-    GlobalMockObject::verify();
-
-    INIT_LIST_HEAD(&remote_ram_list);
     INIT_LIST_HEAD(&seg.node);
     list_add(&seg.node, &remote_ram_list);
-    MOCKER(is_smap_args_valid).stubs().will(returnValue(0));
     MOCKER(smap_process_symbols).stubs().will(returnValue(0));
     MOCKER(init_acpi_mem).stubs().will(returnValue(0));
     MOCKER(refresh_remote_ram).stubs().will(returnValue(0));

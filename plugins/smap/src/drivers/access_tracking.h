@@ -17,20 +17,12 @@
 #include "bus.h"
 #include "hist_tracking.h"
 
-extern unsigned int smap_scene;
 extern u32 g_pagesize_huge;
 extern unsigned int enable_hist;
 
 enum access_page_mode {
 	PAGE_MODE_4K = 0,
 	PAGE_MODE_2M = 9, // 考虑上层提供的其他常见页面粒度，这里对此做预留
-};
-
-enum smap_scene_args {
-	NORMAL_SCENE,
-	UB_QEMU_SCENE,
-	UB_QEMU_SCENE_ADVANCED,
-	NR_SCENE_ARGS,
 };
 
 enum hist_status {
