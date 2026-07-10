@@ -41,7 +41,7 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
      <pre class="screen" id="screen1810215131197"><p class="p" id="p995994814275">insmod smap_histogram_tracking.ko</p></pre>
    * 安装smap_access_tracking.ko。在UB仿真中安装时，如使能SMAP硬件判热功能，则增加enable_hist=1参数。
      
-     <pre class="screen"><p class="p" id="p8959848192712">insmod smap_access_tracking.ko smap_scene=2</p></pre>
+     <pre class="screen"><p class="p" id="p8959848192712">insmod smap_access_tracking.ko</p></pre>
 3. 检查扫描驱动是否载入成功。
    
    <pre class="screen" id="screen1884674894220"><p class="p" id="p9960648142719">lsmod | grep tracking</p></pre>
@@ -56,10 +56,8 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
    
    <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen14933143815411"><p class="p" id="p8962164813273">cd /lib/modules/smap</p></pre>
    
-   * 容器场景
-     <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen10449144916557"><p class="p" id="p4962648122720">insmod smap_tiering.ko smap_pgsize=0</p></pre>
-   * 虚拟化场景
-     <pre class="screen" id="screen10850151716211"><p class="p" id="p1296384811277">insmod smap_tiering.ko smap_scene=2</p></pre>
+   pageType（容器4K=0 / 虚拟化2M=1）由 ubturbo_smap_start(pageType) 下发，insmod 阶段不再通过参数区分场景。
+   <pre class="screen"><p class="p" id="p4962648122720">insmod smap_tiering.ko</p></pre>
 6. 检查迁移驱动是否载入成功，返回smap信息即表示安装成功。
    
    <pre class="screen"><p class="p" id="p20963104815273">lsmod | grep smap</p></pre>

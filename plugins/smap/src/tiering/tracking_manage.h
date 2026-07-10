@@ -7,14 +7,10 @@
 #ifndef _TRACKING_MANAGE_H
 #define _TRACKING_MANAGE_H
 
-#define QEMU_NAME_LEN 30
-
 #include "numa.h"
 #include "smap_migrate_pages.h"
 #include "smap_debugfs.h"
 #include "smap_migrate_wrapper.h"
 #include "mig_init.h"
-
-int is_smap_args_valid(void);
 
 #endif /* _TRACKING_MANAGE_H */
