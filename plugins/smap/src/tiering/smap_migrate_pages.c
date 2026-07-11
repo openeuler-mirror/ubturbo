@@ -800,162 +800,268 @@ static inline bool is_filter_anon(struct page *page)
 	return !PageAnon(page) || page_mapcount(page) > 1;
 }
 
+/*
+ * struct mig_batch - per-batch mutable state for one NR_BATCHED_MIGRATION slice.
+ *
+ * Holds the folio array being filled and the counters that are reset each
+ * batch. Cross-batch/cross-entry accumulators live in struct mig_stats.
+ */
+struct mig_batch {
+	struct folio **folios;
+	unsigned int nr_folios;
+	unsigned int cnt;
+	unsigned int tmp_pre_nr;
+	unsigned int pre_failed;
+	int pre_err;
+};
+
+/*
+ * struct mig_stats - cross-entry migration statistics accumulated over one ioctl.
+ *
+ * Throttled down from do_migrate through process_mig_entry/migrate_one_batch/
+ * collect_one_folio as a single pointer in place of four counter pointers.
+ * pre_migrate_num is reset per entry by process_mig_entry.
+ */
+struct mig_stats {
+	unsigned int mig_num;
+	unsigned int non_anon_num;
+	unsigned int failed_num;
+	unsigned int pre_migrate_num;
+};
+
+/*
+ * collect_one_folio - filter and isolate a single candidate folio.
+ *
+ * Counts every visited folio into stats->mig_num, then skips invalid /
+ * non-anon / 4k pages; otherwise queues the folio for migration. On success
+ * stats->pre_migrate_num and batch->tmp_pre_nr are bumped; on isolation failure
+ * batch->pre_failed and batch->pre_err record it.
+ */
+static void collect_one_folio(int idx, struct mig_list *mig_list,
+			      struct migrate_msg *msg, u64 j,
+			      struct mig_batch *batch, struct mig_stats *stats)
+{
+	struct page *p_page;
+	unsigned long pfn;
+	u64 p_addr = mig_list[idx].addr[j];
+	int err, flag;
+
+	stats->mig_num++;
+	if (p_addr == INVALID_PADDR)
+		return;
+
+	pfn = PHYS_PFN(p_addr);
+	if (!pfn_valid(pfn)) {
+		pr_debug("invalid PA\n");
+		return;
+	}
+
+	p_page = pfn_to_online_page(pfn);
+	if (!p_page)
+		return;
+
+	if (mig_list[idx].from < nr_local_numa && is_filter_anon(p_page)) {
+		stats->non_anon_num++;
+		return;
+	}
+
+	err = is_filter_4k(p_page, msg->mul_mig.page_size);
+	if (err >= 0) {
+		nr_abnormal[err]++;
+		return;
+	}
+
+	flag = smap_add_page_for_migration(p_page, batch->folios,
+					   &batch->nr_folios, mig_list[idx].pid,
+					   MPOL_MF_MOVE_ALL);
+	if (!flag) {
+		stats->pre_migrate_num++;
+		batch->tmp_pre_nr++;
+	} else {
+		batch->pre_failed++;
+		batch->pre_err = flag;
+	}
+}
+
+/*
+ * migrate_one_batch - collect and migrate one folio batch of an entry.
+ *
+ * Walks up to NR_BATCHED_MIGRATION folios starting at the offset implied by
+ * nr_remain via collect_one_folio, then invokes smu_migrate(). Returns the
+ * remaining folio count (0 when the entry is done), -ENOMEM if the folio array
+ * cannot be allocated, or -EINVAL on a critical node error.
+ */
+static int migrate_one_batch(int idx, struct migrate_msg *msg,
+			     struct mig_list *mig_list, u64 nr_remain,
+			     struct mig_stats *stats)
+{
+	struct mig_batch batch = { 0 };
+	u64 j, folio_index, nr_this_migrate;
+
+	if (node_is_critical_err(mig_list[idx].from) ||
+	    node_is_critical_err(mig_list[idx].to)) {
+		pr_warn_ratelimited("[%d] critical error node from %d to %d\n",
+				    idx, mig_list[idx].from, mig_list[idx].to);
+		return -EINVAL;
+	}
+
+	nr_this_migrate = MIN(nr_remain, NR_BATCHED_MIGRATION);
+	folio_index = mig_list[idx].nr - nr_remain;
+	batch.folios = vzalloc(nr_this_migrate * sizeof(struct folio *));
+	if (!batch.folios)
+		return -ENOMEM;
+
+	for (j = folio_index;
+	     j < mig_list[idx].nr && batch.cnt < nr_this_migrate;
+	     j++, batch.cnt++)
+		collect_one_folio(idx, mig_list, msg, j, &batch, stats);
+
+	if (batch.pre_failed)
+		pr_warn("pre_migrate fail %u pages, ret: %d\n",
+			batch.pre_failed, batch.pre_err);
+
+	mig_list[idx].failed_pre_migrated_nr +=
+		nr_this_migrate - batch.tmp_pre_nr;
+	if (batch.nr_folios == 0) {
+		pr_debug("no page to migrate\n");
+		vfree(batch.folios);
+		return nr_remain - batch.cnt;
+	}
+
+	mig_list[idx].failed_mig_nr += smu_migrate(
+		batch.folios, batch.nr_folios, mig_list[idx].to, &msg->mul_mig);
+	stats->failed_num += mig_list[idx].failed_mig_nr;
+	mig_list[idx].success_to_user = true;
+
+	if (mig_list[idx].failed_mig_nr)
+		pr_debug(
+			"[%d]: migrate failed, pre_migrate_num: %d, failed_num: %llu\n",
+			idx, stats->pre_migrate_num,
+			mig_list[idx].failed_mig_nr);
+
+	pr_debug("[%d]: mig_num %d, pre_migrate_num %d, failed_num %llu\n", idx,
+		 stats->mig_num, stats->pre_migrate_num,
+		 mig_list[idx].failed_mig_nr);
+
+	vfree(batch.folios);
+	return nr_remain - batch.cnt;
+}
+
+/*
+ * process_mig_entry - migrate all folios of a single mig_list entry.
+ *
+ * Validates the entry, then drives migrate_one_batch over the folios in
+ * NR_BATCHED_MIGRATION sized batches until done. Returns 0 on success,
+ * -EINVAL if the from/to node, nr is invalid, or a critical node error
+ * occurs (caller skips the entry), or -ENOMEM if a batch folio array cannot
+ * be allocated (caller aborts the whole ioctl). pre_migrate_num is reset
+ * here so it accumulates per entry.
+ */
+static int process_mig_entry(int idx, struct migrate_msg *msg,
+			     struct mig_list *mig_list, struct mig_stats *stats)
+{
+	u64 nr_remain;
+	int ret;
+
+	pr_debug("[%d] pid %d from %d to %d nr %llu\n", idx, mig_list[idx].pid,
+		 mig_list[idx].from, mig_list[idx].to, mig_list[idx].nr);
+
+	if (is_node_invalid(mig_list[idx].from) ||
+	    is_node_invalid(mig_list[idx].to)) {
+		pr_warn_ratelimited("[%d] invalid node from %d to %d\n", idx,
+				    mig_list[idx].from, mig_list[idx].to);
+		return -EINVAL;
+	}
+
+	if (mig_list[idx].nr <= 0 || mig_list[idx].nr > MAX_MIG_LIST_NR) {
+		pr_warn_ratelimited("[%d] invalid nr %llu\n", idx,
+				    mig_list[idx].nr);
+		return -EINVAL;
+	}
+
+	nr_remain = mig_list[idx].nr;
+	mig_list[idx].failed_pre_migrated_nr = 0;
+	mig_list[idx].failed_mig_nr = 0;
+	stats->pre_migrate_num = 0;
+
+	while (nr_remain > 0) {
+		ret = migrate_one_batch(idx, msg, mig_list, nr_remain, stats);
+		if (ret < 0)
+			return ret;
+		nr_remain = ret;
+	}
+
+	return 0;
+}
+
+/*
+ * do_migrate - drive the cold/hot swap for a batch of mig_list entries.
+ *
+ * Entries are grouped and processed per pid: for each pid, promotion
+ * (migrate-back, from a remote node) is issued before demotion (migrate-out,
+ * from a local node). Although a pid's own promotion still runs before its own
+ * demotion, grouping per pid interleaves the directions across pids as
+ * (back, out, back, out, ...): each pid's demotion frees local memory before
+ * the next pid's promotion needs it. This avoids the previous behavior where
+ * every pid's promotion ran first and exhausted local memory, leaving later
+ * pids unable to migrate back. Pids are visited in order of first appearance
+ * in mig_list.
+ */
 int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 {
-	int i;
-	int pre_migrate_err;
-	u64 j, p_addr;
-	unsigned int mig_num = 0;
-	unsigned int pre_migrate_num;
-	unsigned int pre_migrate_failed;
-	unsigned int failed_num = 0;
-	unsigned int non_anon_num = 0;
-	unsigned int tmp_pre_migrate_nr;
-	unsigned long pfn;
-	int pre_migrate_flag = -1;
-	struct page *p_page = NULL;
-	int *arr;
+	int i, index;
+	int ret;
+	struct mig_stats stats = { 0 };
+	int *done;
+
 	memset(nr_abnormal, 0, sizeof(nr_abnormal));
 	if (msg->cnt == 0) {
 		return 0;
 	}
 
-	arr = kzalloc(msg->cnt * sizeof(*arr), GFP_KERNEL);
-	if (!arr)
+	done = kzalloc(msg->cnt * sizeof(*done), GFP_KERNEL);
+	if (!done)
 		return -ENOMEM;
 
-	while (1) {
-		int index;
-		int max_from = NUMA_NO_NODE;
-		struct folio **migrate_folios;
-		unsigned int nr_folios = 0;
-		u64 nr_remain_folios, nr_this_migrate, folio_index;
-		int cnt;
+	for (index = 0; index < msg->cnt; index++) {
+		pid_t cur_pid;
 
-		/* Do promotion before demotion */
-		for (index = 0; index < msg->cnt; index++) {
-			if (arr[index])
-				continue;
-			if (mig_list[index].from > max_from) {
-				max_from = mig_list[index].from;
-				i = index;
-			}
-		}
-		if (max_from == NUMA_NO_NODE) {
-			break;
-		}
-		pr_info("[%d] pid %d from %d to %d nr %llu\n", i,
-			mig_list[i].pid, mig_list[i].from, mig_list[i].to,
-			mig_list[i].nr);
-		arr[i] = 1;
-
-		if (is_node_invalid(mig_list[i].from) ||
-		    is_node_invalid(mig_list[i].to)) {
+		if (done[index])
 			continue;
-		}
-		if (mig_list[i].nr <= 0 || mig_list[i].nr > MAX_MIG_LIST_NR) {
-			continue;
-		}
-		pre_migrate_failed = 0;
-		pre_migrate_num = 0;
+		cur_pid = mig_list[index].pid;
 
-		nr_remain_folios = mig_list[i].nr;
-		mig_list[i].failed_pre_migrated_nr = 0;
-		mig_list[i].failed_mig_nr = 0;
-
-again:
-		tmp_pre_migrate_nr = 0;
-		if (node_is_critical_err(mig_list[i].from) ||
-		    node_is_critical_err(mig_list[i].to)) {
-			continue;
-		}
-
-		nr_this_migrate = MIN(nr_remain_folios, NR_BATCHED_MIGRATION);
-		folio_index = mig_list[i].nr - nr_remain_folios;
-
-		migrate_folios =
-			vzalloc(nr_this_migrate * sizeof(struct folio *));
-		if (!migrate_folios) {
-			kfree(arr);
-			return -ENOMEM;
-		}
-
-		cnt = nr_folios = 0;
-		for (j = folio_index;
-		     j < mig_list[i].nr && cnt < nr_this_migrate; j++, cnt++) {
-			int err;
-
-			mig_num++;
-			p_addr = mig_list[i].addr[j];
-			if (p_addr == INVALID_PADDR) {
+		/* Phase 1: promotion (migrate-back) for this pid. */
+		for (i = index; i < msg->cnt; i++) {
+			if (done[i] || mig_list[i].pid != cur_pid)
 				continue;
-			}
-			pfn = PHYS_PFN(p_addr);
-			if (!pfn_valid(pfn)) {
-				pr_debug("invalid PA\n");
+			if (mig_list[i].from < nr_local_numa)
 				continue;
-			}
-			p_page = pfn_to_online_page(pfn);
-			if (!p_page)
-				continue;
-			if (mig_list[i].from < nr_local_numa &&
-			    is_filter_anon(p_page)) {
-				non_anon_num++;
-				continue;
-			}
-			err = is_filter_4k(p_page, msg->mul_mig.page_size);
-			if (err >= 0) {
-				nr_abnormal[err]++;
-				continue;
-			}
-			pre_migrate_flag = smap_add_page_for_migration(
-				p_page, migrate_folios, &nr_folios,
-				mig_list[i].pid, MPOL_MF_MOVE_ALL);
-			if (pre_migrate_flag == 0) {
-				pre_migrate_num++;
-				tmp_pre_migrate_nr++;
-			} else {
-				pre_migrate_failed++;
-				pre_migrate_err = pre_migrate_flag;
+			done[i] = 1;
+			ret = process_mig_entry(i, msg, mig_list, &stats);
+			if (ret && ret != -EINVAL) {
+				kfree(done);
+				return ret;
 			}
 		}
-		nr_remain_folios -= cnt;
 
-		if (pre_migrate_failed) {
-			pr_warn("pre_migrate fail %u pages, ret: %d\n",
-				pre_migrate_failed, pre_migrate_err);
+		/* Phase 2: demotion (migrate-out) for this pid, frees local memory for the next pid. */
+		for (i = index; i < msg->cnt; i++) {
+			if (done[i] || mig_list[i].pid != cur_pid)
+				continue;
+			if (mig_list[i].from >= nr_local_numa)
+				continue;
+			done[i] = 1;
+			ret = process_mig_entry(i, msg, mig_list, &stats);
+			if (ret && ret != -EINVAL) {
+				kfree(done);
+				return ret;
+			}
 		}
-
-		mig_list[i].failed_pre_migrated_nr +=
-			nr_this_migrate - tmp_pre_migrate_nr;
-		if (nr_folios == 0) {
-			pr_debug("no page to migrate\n");
-			vfree(migrate_folios);
-			if (nr_remain_folios > 0)
-				goto again;
-			continue;
-		}
-		mig_list[i].failed_mig_nr +=
-			smu_migrate(migrate_folios, nr_folios, mig_list[i].to,
-				    &msg->mul_mig);
-		failed_num += mig_list[i].failed_mig_nr;
-		mig_list[i].success_to_user = true;
-		if (mig_list[i].failed_mig_nr) {
-			pr_debug(
-				"[%d]: migrate failed, pre_migrate_num: %d, failed_num: %llu\n",
-				i, pre_migrate_num, mig_list[i].failed_mig_nr);
-		}
-		pr_debug(
-			"[%d]: mig_num %d, pre_migrate_num %d, failed_num %llu\n",
-			i, mig_num, pre_migrate_num, mig_list[i].failed_mig_nr);
-		vfree(migrate_folios);
-
-		if (nr_remain_folios > 0)
-			goto again;
 	}
-	kfree(arr);
-	pr_debug("non anon page number: %u\n", non_anon_num);
-	return failed_num;
+
+	kfree(done);
+	pr_debug("non anon page number: %u\n", stats.non_anon_num);
+	return stats.failed_num;
 }
 
 static int smap_pre_migrate_range(struct folio **folios,

@@ -58,24 +58,14 @@ int AddMigList(struct MigrateMsg *mMsg, struct MigList *mList)
 {
     int i;
     ssize_t j;
-    uint64_t oldNum, migrateNum, freePageNum;
     if (!mMsg || !mList) {
         return 0;
     }
     if (mList->nr == 0 || mList->addr == NULL) {
         return 0;
     }
-    freePageNum = IsHugeMode() ? GetNrFreeHugePagesByNode(mList->to) : GetNrFreePagesByNode(mList->to);
-    if (freePageNum == 0) {
-        return 0;
-    }
-
-    migrateNum = MIN(mList->nr, freePageNum);
-    SMAP_LOGGER_DEBUG("mList->nr: %lu, migrateNum: %lu.", mList->nr, migrateNum);
-    if (migrateNum < mList->nr) {
-        SMAP_LOGGER_INFO("Change migrate num from %llu to %llu.", mList->nr, migrateNum);
-    }
-    mMsg->migList[mMsg->cnt].addr = malloc(sizeof(uint64_t) * migrateNum);
+    SMAP_LOGGER_DEBUG("mList->nr: %lu.", mList->nr);
+    mMsg->migList[mMsg->cnt].addr = malloc(sizeof(uint64_t) * mList->nr);
     if (!mMsg->migList[mMsg->cnt].addr) {
         SMAP_LOGGER_ERROR("migList->addr malloc failed.");
         return -ENOMEM;
@@ -83,8 +73,8 @@ int AddMigList(struct MigrateMsg *mMsg, struct MigList *mList)
     mMsg->migList[mMsg->cnt].from = mList->from;
     mMsg->migList[mMsg->cnt].to = mList->to;
     mMsg->migList[mMsg->cnt].pid = mList->pid;
-    mMsg->migList[mMsg->cnt].nr = migrateNum;
-    for (i = 0; i < migrateNum; i++) {
+    mMsg->migList[mMsg->cnt].nr = mList->nr;
+    for (i = 0; i < mList->nr; i++) {
         mMsg->migList[mMsg->cnt].addr[i] = mList->addr[i];
     }
     mMsg->cnt++;
