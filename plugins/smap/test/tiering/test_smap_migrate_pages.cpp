@@ -694,6 +694,74 @@ TEST_F(SmapMigratePagesTest, DoMigrateMultiListFailed)
     EXPECT_EQ(0, mig_list[1].failed_pre_migrated_nr);
 }
 
+// do_migrate must group entries per pid and, within each pid, run promotion
+// (migrate-back, from a remote node) before demotion (migrate-out, from a
+// local node). smu_migrate returns a distinct value per call so the call order
+// is reflected in per-entry failed_mig_nr. Expected call order is
+// idx1->10, idx0->20, idx3->30, idx2->40 (per-pid, back before out). The old
+// global "promotion before demotion" order would yield 10/20/30/40 mapped to
+// idx1/idx3/idx0/idx2 i.e. 30/10/40/20, which is distinguishable.
+TEST_F(SmapMigratePagesTest, DoMigratePerPidPromotionBeforeDemotion)
+{
+    struct page p_page;
+    struct migrate_msg msg;
+    struct mig_list mig_list[4];
+    u64 addrs[4] = { 0x100000, 0x200000, 0x300000, 0x400000 };
+    unsigned int nr_folios = 1;
+    int saved_nr_local_numa = nr_local_numa;
+
+    nr_local_numa = 4;
+    msg.cnt = 4;
+    msg.mul_mig.page_size = 0x1000;
+    msg.mig_list = mig_list;
+
+    /* pid 1: migrate-back (remote 4 -> local 0) then migrate-out (local 0 -> remote 4) */
+    mig_list[0].addr = &addrs[0];
+    mig_list[0].pid = 1;
+    mig_list[0].from = 0;
+    mig_list[0].to = 4;
+    mig_list[0].nr = 1;
+    mig_list[1].addr = &addrs[1];
+    mig_list[1].pid = 1;
+    mig_list[1].from = 4;
+    mig_list[1].to = 0;
+    mig_list[1].nr = 1;
+    /* pid 2: same pair of directions */
+    mig_list[2].addr = &addrs[2];
+    mig_list[2].pid = 2;
+    mig_list[2].from = 0;
+    mig_list[2].to = 4;
+    mig_list[2].nr = 1;
+    mig_list[3].addr = &addrs[3];
+    mig_list[3].pid = 2;
+    mig_list[3].from = 4;
+    mig_list[3].to = 0;
+    mig_list[3].nr = 1;
+
+    MOCKER(pfn_valid).stubs().will(returnValue(true));
+    MOCKER(pfn_to_online_page).stubs().will(returnValue(&p_page));
+    MOCKER(is_filter_anon).stubs().will(returnValue(false));
+    MOCKER(is_filter_4k).stubs().will(returnValue(-1));
+    MOCKER(smap_add_page_for_migration)
+        .stubs()
+        .with(any(), any(), outBoundP(&nr_folios, sizeof(nr_folios)), any(), any())
+        .will(returnValue(0));
+    MOCKER(smu_migrate)
+        .stubs()
+        .will(returnValue(10))
+        .then(returnValue(20))
+        .then(returnValue(30))
+        .then(returnValue(40));
+    int ret = do_migrate(&msg, mig_list);
+    EXPECT_EQ(100, ret);
+    EXPECT_EQ(20, mig_list[0].failed_mig_nr);
+    EXPECT_EQ(10, mig_list[1].failed_mig_nr);
+    EXPECT_EQ(40, mig_list[2].failed_mig_nr);
+    EXPECT_EQ(30, mig_list[3].failed_mig_nr);
+
+    nr_local_numa = saved_nr_local_numa;
+}
+
 TEST_F(SmapMigratePagesTest, DoMigrateKzallocFailed)
 {
     int ret = 0;
