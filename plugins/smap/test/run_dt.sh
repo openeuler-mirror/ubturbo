@@ -67,6 +67,10 @@ add_extern()
     for f in ${header_files}
     do
         sed -i -r '0,/^\w/s/(^\w.*$)/#ifdef __cplusplus\nextern "C" {\n#endif\n\1/' ${f}
+        # 如果第一段sed未匹配到^\w行(文件无\w开头的行),则跳过插入闭合}
+        if ! grep -q '^extern "C" {' "${f}"; then
+            continue
+        fi
         (grep -n -E "^#endif" ${f} || echo "no") > tmp
         if [ "$(cat tmp)" = "no" ]; then
             continue
@@ -137,8 +141,6 @@ replace_string "${code_dir}/src/drivers/access_iomem.c" "ram_changed" "drivers_r
 replace_string "${code_dir}/src/drivers/access_iomem.c" "refresh_remote_ram" "drivers_refresh_remote_ram"
 replace_string "${code_dir}/src/drivers/access_iomem.c" "calc_paddr_acidx_iomem" "drivers_calc_paddr_acidx_iomem"
 replace_string "${code_dir}/src/drivers/access_iomem.c" "nr_local_numa" "drivers_nr_local_numa"
-replace_string "${code_dir}/src/drivers/access_iomem.c" "smap_scene" "drivers_smap_scene"
-replace_string "${code_dir}/src/drivers/access_iomem.c" "fixed_remote_ram" "drivers_fixed_remote_ram"
 replace_string "${code_dir}/src/drivers/access_iomem.c" "calc_acidx_paddr_iomem" "drivers_calc_acidx_paddr_iomem"
 replace_string "${code_dir}/src/drivers/access_iomem.c" "merge_ram_segments" "drivers_merge_ram_segments"
 replace_string "${code_dir}/src/drivers/access_iomem.c" "update_resource" "drivers_update_resource"
@@ -186,8 +188,6 @@ replace_string "${code_dir}/src/drivers/access_tracking_wrapper.c" "lookup_kalls
 replace_string "${code_dir}/src/drivers/access_tracking.c" "lookup_kallsyms_lookup_name" "drivers_lookup_kallsyms_lookup_name"
 replace_string "${code_dir}/src/drivers/access_tracking.c" "ram_changed" "drivers_ram_changed"
 replace_string "${code_dir}/src/drivers/access_tracking.c" "refresh_remote_ram" "drivers_refresh_remote_ram"
-replace_string "${code_dir}/src/drivers/access_tracking.c" "smap_scene" "drivers_smap_scene"
-replace_string "${code_dir}/src/drivers/access_tracking.h" "smap_scene" "drivers_smap_scene"
 
 replace_string "${code_dir}/src/drivers/hist_tracking.c" "reset_actc_data" "drivers_reset_actc_data"
 replace_string "${code_dir}/src/drivers/hist_tracking.c" "actc_buffer_deinit" "drivers_actc_buffer_deinit"

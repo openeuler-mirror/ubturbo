@@ -122,20 +122,6 @@ TEST_F(AccessIomemTest, insert_remote_ram_two)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" int drivers_fixed_remote_ram(struct list_head *head);
-TEST_F(AccessIomemTest, fixed_remote_ram)
-{
-    struct ram_segment *seg;
-    struct ram_segment *tmp;
-    LIST_HEAD(head);
-    int ret = drivers_fixed_remote_ram(&head);
-    EXPECT_EQ(0, ret);
-    list_for_each_entry_safe(seg, tmp, &head, node) {
-        list_del(&seg->node);
-        kfree(seg);
-    }
-}
-
 extern "C" int drivers_update_resource(struct resource *r, void *arg);
 TEST_F(AccessIomemTest, update_resource)
 {
@@ -183,33 +169,15 @@ TEST_F(AccessIomemTest, release_remote_ram)
     drivers_release_remote_ram();
 }
 
-extern unsigned int drivers_smap_scene;
-TEST_F(AccessIomemTest, refresh_remote_ram_normal_scene)
+TEST_F(AccessIomemTest, refresh_remote_ram)
 {
     int ret;
-    drivers_smap_scene = NORMAL_SCENE;
     MOCKER(drivers_walk_system_ram_remote_range).stubs().will(returnValue(-EINVAL));
     ret = drivers_refresh_remote_ram();
     EXPECT_EQ(-EINVAL, ret);
 
     GlobalMockObject::reset();
     MOCKER(drivers_walk_system_ram_remote_range).stubs().will(returnValue(0));
-    MOCKER(drivers_free_remote_ram).stubs().will(ignoreReturnValue());
-    MOCKER(move_remote_ram).stubs().will(ignoreReturnValue());
-    ret = drivers_refresh_remote_ram();
-    EXPECT_EQ(0, ret);
-}
-
-TEST_F(AccessIomemTest, refresh_remote_ram_ub_qemu_scene)
-{
-    int ret;
-    drivers_smap_scene = UB_QEMU_SCENE;
-    MOCKER(drivers_fixed_remote_ram).stubs().will(returnValue(-EINVAL));
-    ret = drivers_refresh_remote_ram();
-    EXPECT_EQ(-EINVAL, ret);
-
-    GlobalMockObject::reset();
-    MOCKER(drivers_fixed_remote_ram).stubs().will(returnValue(0));
     MOCKER(drivers_free_remote_ram).stubs().will(ignoreReturnValue());
     MOCKER(move_remote_ram).stubs().will(ignoreReturnValue());
     ret = drivers_refresh_remote_ram();

@@ -12,14 +12,9 @@
 
 #include "check.h"
 
-#define REMOTE_NUMA_ID 4
-#define REMOTE_PA_START 0x40000000000
-#define REMOTE_PA_END 0x47fffffffff
-
 extern struct list_head remote_ram_list;
 extern int nr_local_numa;
 extern rwlock_t rem_ram_list_lock;
-extern unsigned int smap_scene;
 struct ram_segment {
 	struct list_head node;
 	int numa_node;

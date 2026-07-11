@@ -17,7 +17,6 @@
 
 #define MAX_NR_MIGBACK 50
 
-extern unsigned int smap_mode;
 extern int nr_local_numa;
 
 struct migrate_back_inner_msg {

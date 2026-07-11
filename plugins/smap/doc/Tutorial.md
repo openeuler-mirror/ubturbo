@@ -126,24 +126,13 @@ sh build.sh
 
 ## Getting Started: Installation Guide
 
-SMAP的运行模式根据进程的页面大小, 分为4K模式和2M模式, 通过在插入ko时传参来控制, 若需要切换模式, 需要重插ko。smap_histogram_tracking.ko依赖硬件, 按实际需求插入。下面列举了不同模式的安装命令：
-
-- 4KMode
+SMAP的运行模式根据进程的页面大小, 分为4K模式和2M模式。模式由 ubturbo_smap_start(pageType) 入参控制（0=4K，1=2M），不再在插入ko时通过参数指定，与ko加载解耦，切换模式无需重插ko。smap_histogram_tracking.ko依赖硬件, 按实际需求插入。安装命令如下：
 
     ```shell
     insmod src/drivers/smap_tracking_core.ko
     insmod src/drivers/smap_histogram_tracking.ko
     insmod src/drivers/smap_access_tracking.ko
-    insmod src/tiering/smap_tiering.ko smap_scene=2 smap_pgsize=0
-    ```
-
-- 2M Mode
-
-    ```shell
-    insmod src/drivers/smap_tracking_core.ko
-    insmod src/drivers/smap_histogram_tracking.ko
-    insmod src/drivers/smap_access_tracking.ko
-    insmod src/tiering/smap_tiering.ko smap_scene=2
+    insmod src/tiering/smap_tiering.ko
     ```
 
 ## Getting Started: Test Guide

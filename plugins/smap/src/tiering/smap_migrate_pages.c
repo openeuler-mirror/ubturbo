@@ -164,7 +164,7 @@ static int thread_fn(void *data)
 	if (ret) {
 		pr_err("failed to migrate pages, ret: %d\n", ret);
 	}
-	if (smap_pgsize == HUGE_PAGE) {
+	if (smap_pgtype == HUGE_PAGE) {
 		nr_succeeded >>= (__builtin_ctz(g_pagesize_huge) - PAGE_SHIFT);
 	}
 	ms->end_time = ktime_get();
@@ -366,14 +366,14 @@ unsigned int smap_migrate(struct folio **folios, unsigned int nr_folios,
 		else if (err < 0)
 			pr_err("failed to migrate folios, err: %d\n", err);
 	}
-	if (smap_pgsize == HUGE_PAGE) {
+	if (smap_pgtype == HUGE_PAGE) {
 		nr_succeeded >>= (__builtin_ctz(g_pagesize_huge) - PAGE_SHIFT);
 	}
 	mig_time = calc_time_us(start_time);
 	pr_debug(
 		"migration time spend: %lldus, nr_folios: %u, nr_succeeded: %d\n",
 		mig_time, nr_folios, nr_succeeded);
-	if (err == 0 && nr_succeeded == 0 && smap_pgsize == NORMAL_PAGE) {
+	if (err == 0 && nr_succeeded == 0 && smap_pgtype == NORMAL_PAGE) {
 		if (folio_try_get(folios[0])) {
 			shake_page(&folios[0]->page);
 			folio_put(folios[0]);

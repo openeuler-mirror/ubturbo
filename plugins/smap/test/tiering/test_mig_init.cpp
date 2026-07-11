@@ -170,11 +170,11 @@ extern "C" bool is_migrate_msg_valid(struct migrate_msg *msg);
 extern "C" int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist);
 extern "C" void free_migrate_list_addr(int len, struct mig_list *mlist);
 extern "C" void free_migrate_list(struct mig_list **mlist);
-extern "C" unsigned int smap_pgsize;
+extern "C" unsigned int smap_pgtype;
 extern "C" u32 g_pagesize_huge;
 TEST_F(MigInitTest, isMigrateMsgValidFailed)
 {
-    smap_pgsize = HUGE_PAGE;
+    smap_pgtype = HUGE_PAGE;
     g_pagesize_huge = TWO_MEGA_SIZE;
     struct mig_list migList[1];
     struct mig_pra migPar = {.page_size = TWO_MEGA_SIZE, .nr_thread = MAX_NR_MIGRATE_THREADS + 1,
@@ -198,7 +198,7 @@ TEST_F(MigInitTest, isMigrateMsgValidFailed)
 
 TEST_F(MigInitTest, isMigrateMsgValidSuccess)
 {
-    smap_pgsize = NORMAL_PAGE;
+    smap_pgtype = NORMAL_PAGE;
     g_pagesize_huge = TWO_MEGA_SIZE;
     struct mig_list migList[1];
     struct mig_pra migPar = {.page_size = PAGE_SIZE, .nr_thread = 1,
@@ -212,7 +212,7 @@ TEST_F(MigInitTest, isMigrateMsgValidSuccess)
     ret = is_migrate_msg_valid(&msg);
     EXPECT_EQ(true, ret);
 
-    smap_pgsize = HUGE_PAGE;
+    smap_pgtype = HUGE_PAGE;
     msg.mul_mig.page_size = TWO_MEGA_SIZE;
     ret = is_migrate_msg_valid(&msg);
     EXPECT_EQ(true, ret);
@@ -353,35 +353,35 @@ TEST_F(MigInitTest, __IoctlMigratePidRemoteNuma)
     EXPECT_EQ(-EINVAL, ret);
 }
 
-extern "C" int __ioctl_check_pagesize(void __user *argp);
-TEST_F(MigInitTest, __IoctlCheckPagesizeNormal)
+extern "C" int __ioctl_set_pagetype(void __user *argp);
+TEST_F(MigInitTest, __IoctlSetPagetypeNormal)
 {
     uint32_t pageType = 1;
     MOCKER(copy_from_user)
         .stubs()
         .with(outBoundP(static_cast<void*>(&pageType), sizeof(uint32_t)))
         .will(returnValue(0UL));
-    int ret = __ioctl_check_pagesize(NULL);
+    int ret = __ioctl_set_pagetype(NULL);
     EXPECT_EQ(0, ret);
 }
 
-TEST_F(MigInitTest, __IoctlCheckPagesizeAbnormalOne)
+TEST_F(MigInitTest, __IoctlSetPagetypeCopyFail)
 {
     MOCKER(copy_from_user)
         .stubs()
         .will(returnValue(1UL));
-    int ret = __ioctl_check_pagesize(NULL);
+    int ret = __ioctl_set_pagetype(NULL);
     EXPECT_EQ(-EFAULT, ret);
 }
 
-TEST_F(MigInitTest, __IoctlCheckPagesizeAbnormalTwo)
+TEST_F(MigInitTest, __IoctlSetPagetypeInvalid)
 {
-    uint32_t pageType = 0;
+    uint32_t pageType = 2;
     MOCKER(copy_from_user)
         .stubs()
         .with(outBoundP(static_cast<void*>(&pageType), sizeof(uint32_t)))
         .will(returnValue(0UL));
-    int ret = __ioctl_check_pagesize(NULL);
+    int ret = __ioctl_set_pagetype(NULL);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -551,7 +551,7 @@ extern "C" int smap_check_huge_page_for_migration(struct page *page, pid_t pid);
 static void IoctlMigrateE2ETestMock(struct migrate_msg *msg, unsigned int pageSize,
     unsigned int mockSuccessMig4KPageNrEachMigList, unsigned int mockCanMig2MPageNrEachMigList)
 {
-    smap_pgsize = pageSize;
+    smap_pgtype = pageSize;
     if (pageSize == HUGE_PAGE) {
         MOCKER(PageHuge).stubs().will(returnValue(1));
         MOCKER(is_filter_4k).stubs().will(returnValue(-1));

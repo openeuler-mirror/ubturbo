@@ -270,21 +270,6 @@ TEST_F(IomemTest, insert_remote_rams_dt_Nine)
     list_del(&test_node.node);
 }
 
-extern "C" int fixed_remote_ram(struct list_head *head);
-TEST_F(IomemTest, fixed_remote_ram_dt)
-{
-    struct ram_segment *seg = (struct ram_segment*)kmalloc(sizeof(*seg), GFP_KERNEL);
-    LIST_HEAD(test_list);
-    int ret = fixed_remote_ram(&test_list);
-    EXPECT_EQ(ret, 0);
-}
-TEST_F(IomemTest, fixed_remote_ram_dt_One)
-{
-    LIST_HEAD(test_list);
-    MOCKER(kmalloc).stubs().will(returnValue((void*)nullptr));
-    int ret = fixed_remote_ram(&test_list);
-    EXPECT_EQ(ret, -ENOMEM);
-}
 extern "C" int walk_system_ram_remote_range(struct list_head *head);
 extern "C" int walk_iomem_res_desc(unsigned long desc, unsigned long flags, u64 start,
     u64 end, void *arg, int (*func)(struct resource *, void *));
@@ -381,20 +366,11 @@ TEST_F(IomemTest, release_remote_ram_dt)
 extern "C" int refresh_remote_ram(void);
 TEST_F(IomemTest, refresh_remote_ram_dt)
 {
-    smap_scene = NORMAL_SCENE;
     MOCKER(walk_system_ram_remote_range).stubs().will(returnValue(1)).then(returnValue(0));
     int ret = refresh_remote_ram();
     EXPECT_EQ(ret, 1);
     ret = refresh_remote_ram();
     EXPECT_EQ(ret, 0);
-}
-TEST_F(IomemTest, refresh_remote_ram_dt_One)
-{
-    smap_scene = UB_QEMU_SCENE;
-    MOCKER(fixed_remote_ram).stubs().will(returnValue(0));
-    int ret = refresh_remote_ram();
-    EXPECT_EQ(ret, 0);
-    smap_scene = NORMAL_SCENE;
 }
 extern "C" bool is_smap_pg_huge(void);
 extern "C" int calc_acidx_paddr_iomem(u64 index, int nid, u64 *paddr);
