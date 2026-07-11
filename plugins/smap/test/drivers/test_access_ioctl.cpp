@@ -237,7 +237,7 @@ TEST_F(AccessIoctlTestKernel, CheckMsgValidityTest)
     msg.count = 0;
     EXPECT_EQ(-EINVAL, check_msg_validity(&msg));
 
-    msg.count = 41;
+    msg.count = 301;
     EXPECT_EQ(-EINVAL, check_msg_validity(&msg));
 
     msg.payload = nullptr;
