@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <limits.h>
 #include <sched.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -174,6 +175,25 @@ bool PidIsValid(pid_t pid)
         return false;
     }
     return access(path, F_OK) == 0;
+}
+
+bool IsSystemPid(pid_t pid)
+{
+    /* 固定系统进程：idle(0)、init/systemd(1)、kthreadd(2) */
+    if (pid == 0 || pid == 1 || pid == 2) {
+        return true;
+    }
+    /* 内核线程无用户态可执行文件，/proc/<pid>/exe readlink 失败 */
+    char exePath[32];
+    char target[PATH_MAX];
+    int ret = snprintf_s(exePath, sizeof(exePath), sizeof(exePath), "/proc/%d/exe", pid);
+    if (ret < 0) {
+        return false;
+    }
+    if (readlink(exePath, target, sizeof(target) - 1) < 0) {
+        return true;
+    }
+    return false;
 }
 
 int IsQemuTask(pid_t pid)

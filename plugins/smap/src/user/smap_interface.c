@@ -206,6 +206,10 @@ static bool IsPidArrValid(pid_t *pidArr, int len, bool ignoreUnmanaged)
             SMAP_LOGGER_ERROR("invalid pid %d.", pid);
             return false;
         }
+        if (IsSystemPid(pid)) {
+            SMAP_LOGGER_ERROR("system pid %d.", pid);
+            return false;
+        }
         if (!ignoreUnmanaged && !GetProcessAttr(pid)) {
             SMAP_LOGGER_ERROR("unmanaged pid %d.", pid);
             return false;
@@ -222,6 +226,30 @@ static bool IsPidArrValid(pid_t *pidArr, int len, bool ignoreUnmanaged)
         }
     }
     return true;
+}
+
+static int CheckSystemMigOutPids(struct MigrateOutMsg *msg)
+{
+    for (int i = 0; i < msg->count; i++) {
+        pid_t pid = msg->payload[i].pid;
+        if (IsSystemPid(pid)) {
+            SMAP_LOGGER_ERROR("migrate out pid %d is system/kernel thread, not allowed.", pid);
+            return -EINVAL;
+        }
+    }
+    return 0;
+}
+
+static int CheckSystemGroupedPids(struct GroupedMigrateOutMsg *msg)
+{
+    for (int i = 0; i < msg->count; i++) {
+        pid_t pid = msg->payload[i].pid;
+        if (IsSystemPid(pid)) {
+            SMAP_LOGGER_ERROR("grouped migrate out pid %d is system/kernel thread, not allowed.", pid);
+            return -EINVAL;
+        }
+    }
+    return 0;
 }
 
 static int InitVirAPI(void)
@@ -431,6 +459,7 @@ static bool IsMigParaValid(struct MigrateOutPayload *payload)
 static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType)
 {
     int i;
+    int ret;
     if (!msg) {
         SMAP_LOGGER_ERROR("Smap mig out msg is null.");
         return -EINVAL;
@@ -442,6 +471,11 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType)
     if (!IsCountValid(msg->count, MAX_NR_MIGOUT)) {
         SMAP_LOGGER_ERROR("migrate out count: %d is invalid.", msg->count);
         return -EINVAL;
+    }
+
+    ret = CheckSystemMigOutPids(msg);
+    if (ret) {
+        return ret;
     }
 
     for (i = 0; i < msg->count; i++) {
@@ -591,6 +625,7 @@ static int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int pay
 
 static int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pidType)
 {
+    int ret;
     if (!msg) {
         SMAP_LOGGER_ERROR("grouped migrate out msg is null.");
         return -EINVAL;
@@ -602,6 +637,10 @@ static int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pidTy
     if (!IsCountValid(msg->count, MAX_NR_GROUPED_MIGOUT)) {
         SMAP_LOGGER_ERROR("grouped migrate out count %d invalid.", msg->count);
         return -EINVAL;
+    }
+    ret = CheckSystemGroupedPids(msg);
+    if (ret) {
+        return ret;
     }
     for (int i = 0; i < msg->count; i++) {
         for (int j = i + 1; j < msg->count; j++) {
