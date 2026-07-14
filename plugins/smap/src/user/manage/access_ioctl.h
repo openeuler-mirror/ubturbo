@@ -28,6 +28,7 @@ struct AccessAddPidPayload {
     uint32_t duration;
     ScanType type;
     uint32_t nTimes;
+    uint32_t pidType; /* per-pid 身份：VM_TYPE/PROCESS_TYPE，与全局 pageType 解耦，镜像内核 access_pid.pid_type */
 };
 
 struct AccessAddPidMsg {

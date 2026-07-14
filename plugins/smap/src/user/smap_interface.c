@@ -73,10 +73,10 @@ static inline bool IsRatioValid(int ratio)
     return (ratio >= 0 && ratio <= HUNDRED);
 }
 
-static bool IsMigOutCountValid(pid_t *pidArr, int len, int pidType)
+static bool IsMigOutCountValid(pid_t *pidArr, int len)
 {
     int newNum = 0;
-    int oldNum = (pidType == PAGETYPE_NORMAL ? LoadMangerNrProcessNum() : LoadMangerNrVmNum());
+    int oldNum = LoadMangerNrProcessNum() + LoadMangerNrVmNum();
     for (int i = 0; i < len; i++) {
         ProcessAttr *attr = GetProcessAttrLocked(pidArr[i]);
         if (!attr) {
@@ -122,14 +122,29 @@ static int CheckPidtype(uint32_t pageType)
 
 static bool IsPidTypeValid(int pidType)
 {
-    struct ProcessManager *pm = GetProcessManager();
-    if (!pm) {
-        SMAP_LOGGER_ERROR("process manager is null.");
+    return pidType == PROCESS_TYPE || pidType == VM_TYPE;
+}
+
+/* 公共 API 的 pageType 入参语义与 ubturbo_smap_start 一致：须为合法页大小且与启动时全局页大小匹配。 */
+static bool IsPageTypeConsistent(int pageType)
+{
+    if (pageType != PAGETYPE_NORMAL && pageType != PAGETYPE_HUGE) {
         return false;
     }
-    int size = GetNormalPageSize();
-    int type = pm->tracking.pageSize == size ? PAGETYPE_NORMAL : PAGETYPE_HUGE;
-    return pidType == type;
+    if (pageType == PAGETYPE_NORMAL) {
+        return !IsHugeMode();
+    }
+    return IsHugeMode();
+}
+
+/*
+ * 本期不支持 4K 虚机与 2M 普通进程：pid 身份须与全局页大小匹配（VM 仅 2M / PROCESS 仅 4K）。
+ * IsPidUsingHugePages != IsHugeMode 只拦页大小不匹配，拦不住「页大小匹配但身份与页大小组合本期不支持」，
+ * 故补此身份-模式一致性校验。
+ */
+static bool IsPidTypeCompatibleWithMode(int pidType)
+{
+    return IsHugeMode() ? (pidType == VM_TYPE) : (pidType == PROCESS_TYPE);
 }
 
 static bool IsLocalNidValid(int nid)
@@ -339,7 +354,7 @@ static bool GetNumaInfoFromNumaMaps(char *line, int *nidArray, int nidCnt, pid_t
     return false;
 }
 
-static bool IsPidRemoteNidValid(int *nidArray, int nidCnt, pid_t pid, uint32_t *nodeBitmap, int pidType)
+static bool IsPidRemoteNidValid(int *nidArray, int nidCnt, pid_t pid, uint32_t *nodeBitmap)
 {
     bool ret = false;
     FILE *fp;
@@ -353,7 +368,7 @@ static bool IsPidRemoteNidValid(int *nidArray, int nidCnt, pid_t pid, uint32_t *
     }
 
     while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
-        ret = GetNumaInfoFromNumaMaps(line, nidArray, nidCnt, pid, nodeBitmap, pidType == VM_TYPE);
+        ret = GetNumaInfoFromNumaMaps(line, nidArray, nidCnt, pid, nodeBitmap, IsHugeMode());
         if (ret) {
             SMAP_LOGGER_ERROR("Pid %d nids match numa maps line %s.", pid, line);
             break;
@@ -456,7 +471,7 @@ static bool IsMigParaValid(struct MigrateOutPayload *payload)
     return true;
 }
 
-static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType)
+static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
 {
     int i;
     int ret;
@@ -464,8 +479,8 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType)
         SMAP_LOGGER_ERROR("Smap mig out msg is null.");
         return -EINVAL;
     }
-    if (!IsPidTypeValid(pidType)) {
-        SMAP_LOGGER_ERROR("migrate out pidType %d != current pid type.", pidType);
+    if (!IsPageTypeConsistent(pageType)) {
+        SMAP_LOGGER_ERROR("migrate out pageType %d mismatch global page size.", pageType);
         return -EINVAL;
     }
     if (!IsCountValid(msg->count, MAX_NR_MIGOUT)) {
@@ -492,7 +507,7 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType)
     for (i = 0; i < msg->count; i++) {
         uniquePids[i] = msg->payload[i].pid;
     }
-    if (!IsMigOutCountValid(uniquePids, msg->count, pidType)) {
+    if (!IsMigOutCountValid(uniquePids, msg->count)) {
         SMAP_LOGGER_ERROR("migrate out count will exceed current max pid count: %d.", GetCurrentMaxNrPid());
         return -EINVAL;
     }
@@ -509,8 +524,23 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType)
             return -EINVAL;
         }
 
-        if (pidType == PAGETYPE_NORMAL && msg->payload[i].count > 1) {
-            SMAP_LOGGER_ERROR("4K process migration: Migration to multiple remote NUMA nodes is unsupported.");
+        int pidType = GetPidTypeFromComm(msg->payload[i].pid);
+        if (!IsPidTypeValid(pidType)) {
+            SMAP_LOGGER_ERROR("migrate out pid %d type detect failed: %d.", msg->payload[i].pid, pidType);
+            return -EINVAL;
+        }
+        if (!IsPidTypeCompatibleWithMode(pidType)) {
+            SMAP_LOGGER_ERROR("migrate out pid %d type %d not allowed in current page mode "
+                              "(4K VM and 2M process unsupported).", msg->payload[i].pid, pidType);
+            return -EINVAL;
+        }
+        if (pidType == PROCESS_TYPE && msg->payload[i].count > 1) {
+            SMAP_LOGGER_ERROR("Process migration: Migration to multiple remote NUMA nodes is unsupported.");
+            return -EINVAL;
+        }
+
+        if (IsPidUsingHugePages(msg->payload[i].pid) != IsHugeMode()) {
+            SMAP_LOGGER_ERROR("migrate out pid %d page type mismatch smap mode.", msg->payload[i].pid);
             return -EINVAL;
         }
 
@@ -623,15 +653,15 @@ static int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int pay
     return 0;
 }
 
-static int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pidType)
+static int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pageType)
 {
     int ret;
     if (!msg) {
         SMAP_LOGGER_ERROR("grouped migrate out msg is null.");
         return -EINVAL;
     }
-    if (!IsPidTypeValid(pidType) || pidType != VM_TYPE || !IsHugeMode()) {
-        SMAP_LOGGER_ERROR("grouped migrate out only supports 2M VM, pidType %d.", pidType);
+    if (pageType != PAGETYPE_HUGE || !IsHugeMode()) {
+        SMAP_LOGGER_ERROR("grouped migrate out only supports huge page, pageType %d.", pageType);
         return -EINVAL;
     }
     if (!IsCountValid(msg->count, MAX_NR_GROUPED_MIGOUT)) {
@@ -643,6 +673,10 @@ static int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pidTy
         return ret;
     }
     for (int i = 0; i < msg->count; i++) {
+        if (GetPidTypeFromComm(msg->payload[i].pid) != VM_TYPE) {
+            SMAP_LOGGER_ERROR("grouped migrate out only supports VM, pid %d.", msg->payload[i].pid);
+            return -EINVAL;
+        }
         for (int j = i + 1; j < msg->count; j++) {
             if (msg->payload[j].pid == msg->payload[i].pid) {
                 SMAP_LOGGER_ERROR("grouped migrate out duplicate pid %d.", msg->payload[i].pid);
@@ -654,7 +688,7 @@ static int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pidTy
     for (int i = 0; i < msg->count; i++) {
         uniquePids[i] = msg->payload[i].pid;
     }
-    if (!IsMigOutCountValid(uniquePids, msg->count, pidType)) {
+    if (!IsMigOutCountValid(uniquePids, msg->count)) {
         SMAP_LOGGER_ERROR("grouped migrate out count will exceed max pid count: %d.", GetCurrentMaxNrPid());
         return -EINVAL;
     }
@@ -723,6 +757,7 @@ static int ProcessAddGroupedTrackingManageFiltered(struct GroupedMigrateOutMsg *
         payload[count].pid = msg->payload[i].pid;
         payload[count].scanTime = SCAN_TIME_2M;
         payload[count].numaNodes = nodeBitmap[i];
+        payload[count].pidType = VM_TYPE; /* grouped 准入保证 VM-only */
         if (!PidIsValid(msg->payload[i].pid)) {
             SMAP_LOGGER_WARNING("grouped pid %d doesn't exist.", msg->payload[i].pid);
             payload[count].pid = NON_EXIST_PID;
@@ -924,7 +959,7 @@ static bool IsAnyGroupedPidOnRemoteNid(int remoteNid)
     return false;
 }
 
-static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap)
+static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, uint32_t *nodeBitmap)
 {
     int ret = 0;
     if (!msg) {
@@ -942,6 +977,13 @@ static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType, uint
             payload[i].pid = NON_EXIST_PID;
             continue;
         }
+        int pidType = GetPidTypeFromComm(msg->payload[i].pid);
+        if (!IsPidTypeValid(pidType)) {
+            SMAP_LOGGER_WARNING("pid %d type detect failed: %d.", msg->payload[i].pid, pidType);
+            payload[i].pid = NON_EXIST_PID;
+            continue;
+        }
+        payload[i].pidType = pidType;
         ProcessAttr *current = GetProcessAttrLocked(msg->payload[i].pid);
         if (current) {
             payload[i].scanTime = current->scanTime;
@@ -951,7 +993,7 @@ static int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType, uint
         if (nodeBitmap) {
             payload[i].numaNodes = nodeBitmap[i];
         } else {
-            ret = SetProcessLocalNuma(msg->payload[i].pid, &payload[i].numaNodes, pidType == VM_TYPE);
+            ret = SetProcessLocalNuma(msg->payload[i].pid, &payload[i].numaNodes, IsHugeMode());
             if (ret) {
                 SMAP_LOGGER_ERROR("Query pid %d memory usage failed: %d.", msg->payload[i].pid, ret);
                 return ret;
@@ -992,7 +1034,7 @@ static void RollbackInvalidPid(pid_t *failedPids, int failedCount)
     free(removePayload);
 }
 
-static int AddProcessesToGlobalManager(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap,
+static int AddProcessesToGlobalManager(struct MigrateOutMsg *msg, uint32_t *nodeBitmap,
                                        bool *hasInvalidPid)
 {
     int ret = 0;
@@ -1003,7 +1045,7 @@ static int AddProcessesToGlobalManager(struct MigrateOutMsg *msg, int pidType, u
         nodeBitmapTmp = nodeBitmap ? &nodeBitmap[i] : NULL;
         ProcessParam param = { 0 };
         param.pid = msg->payload[i].pid;
-        param.scanTime = pidType == VM_TYPE ? SCAN_TIME_2M : SCAN_TIME_4K;
+        param.scanTime = IsHugeMode() ? SCAN_TIME_2M : SCAN_TIME_4K;
         param.scanType = NORMAL_SCAN;
         param.count = msg->payload[i].count;
 
@@ -1030,7 +1072,7 @@ static int AddProcessesToGlobalManager(struct MigrateOutMsg *msg, int pidType, u
     return ret;
 }
 
-static int AddProcessNumaBitMap(struct MigrateOutMsg *msg, uint32_t *nodeBitmap, int pidType)
+static int AddProcessNumaBitMap(struct MigrateOutMsg *msg, uint32_t *nodeBitmap)
 {
     for (int i = 0; i < msg->count; ++i) {
         if (msg->payload[i].count == 0) {
@@ -1043,7 +1085,7 @@ static int AddProcessNumaBitMap(struct MigrateOutMsg *msg, uint32_t *nodeBitmap,
         for (int j = 0; j < msg->payload[i].count; ++j) {
             nidArray[j] = msg->payload[i].inner[j].destNid;
         }
-        if (!IsPidRemoteNidValid(nidArray, msg->payload[i].count, msg->payload[i].pid, &nodeBitmap[i], pidType)) {
+        if (!IsPidRemoteNidValid(nidArray, msg->payload[i].count, msg->payload[i].pid, &nodeBitmap[i])) {
             SMAP_LOGGER_ERROR("Pid %d remote nid conflict.", msg->payload[i].pid);
             free(nidArray);
             return -EINVAL;
@@ -1063,15 +1105,18 @@ static int AddProcessNumaBitMap(struct MigrateOutMsg *msg, uint32_t *nodeBitmap,
     return 0;
 }
 
-static int CheckNodeBitmap(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap)
+static int CheckNodeBitmap(struct MigrateOutMsg *msg, uint32_t *nodeBitmap)
 {
     struct ProcessManager *manager = GetProcessManager();
 
-    if (GetRunMode() != WATERLINE_MODE || pidType != PAGETYPE_HUGE) {
+    if (GetRunMode() != WATERLINE_MODE) {
         return 0;
     }
 
     for (int i = 0; i < msg->count; ++i) {
+        if (GetPidTypeFromComm(msg->payload[i].pid) != VM_TYPE) {
+            continue;
+        }
         if (GetL1Count(nodeBitmap[i]) > 1) {
             pid_t invalidPid = msg->payload[i].pid;
             ProcessAttr *attr = GetProcessAttrLocked(invalidPid);
@@ -1080,7 +1125,7 @@ static int CheckNodeBitmap(struct MigrateOutMsg *msg, int pidType, uint32_t *nod
                 struct AccessRemovePidPayload rp = { .pid = invalidPid };
                 AccessIoctlRemovePid(1, &rp);
                 LinkedListRemove(&attr, &manager->processes);
-                manager->nr[pidType]--;
+                manager->nr[VM_TYPE]--;
             }
             SMAP_LOGGER_ERROR("Pid %d has %d local NUMA nodes, "
                               "not supported in WATERLINE_MODE, remove it.",
@@ -1092,7 +1137,7 @@ static int CheckNodeBitmap(struct MigrateOutMsg *msg, int pidType, uint32_t *nod
     return 0;
 }
 
-int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
+int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pageType)
 {
     struct ProcessManager *manager = GetProcessManager();
     bool hasInvalidPid = false;
@@ -1104,7 +1149,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
     }
 
     EnvMutexLock(&manager->lock);
-    int ret = CheckMigrateOutMsg(msg, pidType);
+    int ret = CheckMigrateOutMsg(msg, pageType);
     if (ret) {
         SMAP_LOGGER_ERROR("Migrate out msg check failed, ret: %d.", ret);
         EnvMutexUnlock(&manager->lock);
@@ -1112,14 +1157,14 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
     }
 
     uint32_t nodeBitmap[MAX_NR_MIGOUT] = { 0 };
-    ret = AddProcessNumaBitMap(msg, nodeBitmap, pidType);
+    ret = AddProcessNumaBitMap(msg, nodeBitmap);
     if (ret) {
         SMAP_LOGGER_ERROR("Pid remote nid check failed: %d.", ret);
         EnvMutexUnlock(&manager->lock);
         return ret;
     }
 
-    ret = CheckNodeBitmap(msg, pidType, nodeBitmap);
+    ret = CheckNodeBitmap(msg, nodeBitmap);
     if (ret) {
         SMAP_LOGGER_ERROR("Pid numa bitmap check failed: %d.", ret);
         EnvMutexUnlock(&manager->lock);
@@ -1127,7 +1172,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
     }
 
     // send ioctl to add pid to access pid list
-    ret = ProcessAddTrackingManage(msg, pidType, nodeBitmap);
+    ret = ProcessAddTrackingManage(msg, nodeBitmap);
     if (ret) {
         SMAP_LOGGER_ERROR("Add process tracking failed: %d.", ret);
         EnvMutexUnlock(&manager->lock);
@@ -1135,7 +1180,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
     }
 
     // add pid to process manager
-    ret = AddProcessesToGlobalManager(msg, pidType, nodeBitmap, &hasInvalidPid);
+    ret = AddProcessesToGlobalManager(msg, nodeBitmap, &hasInvalidPid);
     if (ret) {
         SMAP_LOGGER_ERROR("Add processes to global manager failed: %d.", ret);
     }
@@ -1144,7 +1189,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
     return (ret == 0 && hasInvalidPid) ? -ESRCH : ret;
 }
 
-int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType)
+int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pageType)
 {
     struct ProcessManager *manager = GetProcessManager();
 
@@ -1155,7 +1200,7 @@ int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidTy
     }
 
     EnvMutexLock(&manager->lock);
-    int ret = CheckGroupedMigrateOutMsg(msg, pidType);
+    int ret = CheckGroupedMigrateOutMsg(msg, pageType);
     if (ret) {
         SMAP_LOGGER_ERROR("Grouped migrate out msg check failed, ret: %d.", ret);
         EnvMutexUnlock(&manager->lock);
@@ -1392,14 +1437,14 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
 }
 
 /* Validate remove payload shape before touching kernel or manager state. */
-static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType)
+static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pageType)
 {
     if (!IsCountValid(msg->count, MAX_NR_REMOVE)) {
         SMAP_LOGGER_ERROR("smap remove msg count : %d is invalid.", msg->count);
         return -EINVAL;
     }
-    if (!IsPidTypeValid(pidType)) {
-        SMAP_LOGGER_ERROR("smap remove msg pidType %d != current pid type.", pidType);
+    if (!IsPageTypeConsistent(pageType)) {
+        SMAP_LOGGER_ERROR("smap remove msg pageType %d mismatch global page size.", pageType);
         return -EINVAL;
     }
     for (int i = 0; i < msg->count; i++) {
@@ -1466,6 +1511,7 @@ static int AccessUpdateProcessRemoteNodes(ProcessAttr *attr, uint32_t numaNodes)
     payload.scanTime = attr->scanTime;
     payload.duration = attr->duration;
     payload.type = attr->scanType;
+    payload.pidType = attr->type;
     int ret = AccessIoctlAddPid(1, &payload);
     if (ret) {
         SMAP_LOGGER_ERROR("access ioctl update pid %d error: %d.", attr->pid, ret);
@@ -1635,7 +1681,7 @@ static void ClearManagedProcess(int nr, struct RemovePayload *payload)
     }
 }
 
-int ubturbo_smap_remove(struct RemoveMsg *msg, int pidType)
+int ubturbo_smap_remove(struct RemoveMsg *msg, int pageType)
 {
     int ret = 0;
     SMAP_LOGGER_INFO("Receive ubturbo_smap_remove msg.");
@@ -1647,7 +1693,7 @@ int ubturbo_smap_remove(struct RemoveMsg *msg, int pidType)
         SMAP_LOGGER_ERROR("Smap remove msg is null.");
         return -EINVAL;
     }
-    ret = CheckSmapRemoveMsg(msg, pidType);
+    ret = CheckSmapRemoveMsg(msg, pageType);
     if (ret) {
         SMAP_LOGGER_ERROR("Check smap remove msg failed: %d.", ret);
         return ret;
@@ -1883,6 +1929,7 @@ static int SyncProcessToKernel(void)
         payload[i].scanTime = attr->scanTime;
         payload[i].type = attr->scanType;
         payload[i].duration = attr->duration;
+        payload[i].pidType = attr->type;
         i++;
     }
     if (i == 0) {
@@ -1905,7 +1952,6 @@ static void RecoverRemoveInvalidProcess(void)
 {
     int ret;
     struct ProcessManager *manager = GetProcessManager();
-    PidType type = GetPidType(manager);
 
     EnvMutexLock(&manager->lock);
     for (ProcessAttr *attr = manager->processes; attr;) {
@@ -1913,8 +1959,9 @@ static void RecoverRemoveInvalidProcess(void)
         ProcessAttr *next = attr->next;
         SMAP_LOGGER_INFO("Recover check if pid %d is valid.", pid);
         if (!PidIsValid(pid)) {
+            PidType pidType = attr->type;
             LinkedListRemove(&attr, &manager->processes);
-            manager->nr[type]--;
+            manager->nr[pidType]--;
             ret = SyncAllProcessConfig();
             if (ret) {
                 SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", pid, ret);
@@ -2385,8 +2432,7 @@ static int CheckAddProcessTrackingMsg(pid_t *pidArr, uint32_t *scanTime, uint32_
         SMAP_LOGGER_ERROR("Smap check add process tracking pidArr len is invalid.");
         return -EINVAL;
     }
-    int pidType = IsHugeMode() ? PAGETYPE_HUGE : PAGETYPE_NORMAL;
-    if (!IsMigOutCountValid(pidArr, len, pidType)) {
+    if (!IsMigOutCountValid(pidArr, len)) {
         SMAP_LOGGER_ERROR("Smap add process tracking len %d is invalid.", len);
         return -EINVAL;
     }
@@ -2461,6 +2507,19 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
                 SetL2ByNid(&payload[i].numaNodes, GetAttrL2(attr));
             }
         }
+        int pidTypeDetected = attr ? attr->type : GetPidTypeFromComm(pidArr[i]);
+        if (!IsPidTypeValid(pidTypeDetected)) {
+            SMAP_LOGGER_ERROR("pid %d type detect failed: %d.", pidArr[i], pidTypeDetected);
+            free(payload);
+            return -EINVAL;
+        }
+        if (scanType != STATISTIC_SCAN && !IsPidTypeCompatibleWithMode(pidTypeDetected)) {
+            SMAP_LOGGER_ERROR("pid %d type %d not allowed in current page mode "
+                              "(4K VM and 2M process unsupported).", pidArr[i], pidTypeDetected);
+            free(payload);
+            return -EINVAL;
+        }
+        payload[i].pidType = (uint32_t)pidTypeDetected;
     }
     ret = AccessIoctlAddPid(len, payload);
     if (ret) {
@@ -2479,8 +2538,8 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
         SMAP_LOGGER_ERROR("Smap isn't running, add process tracking failed.");
         return -EPERM;
     }
-    if (!IsPidTypeValid(PAGETYPE_HUGE) && scanType != STATISTIC_SCAN) {
-        SMAP_LOGGER_ERROR("Smap Add Process Tracking pid type invalid, expected %d.", PAGETYPE_HUGE);
+    if (!IsHugeMode() && scanType != STATISTIC_SCAN) {
+        SMAP_LOGGER_ERROR("Smap Add Process Tracking non-statistic scan requires huge mode, scanType %d.", scanType);
         return -EINVAL;
     }
     EnvMutexLock(&manager->lock);
@@ -2731,9 +2790,13 @@ int ubturbo_smap_same_remote_numa_migrate(struct MigrateNumaMsg *msg)
     return ret;
 }
 
-static int CheckMigOutSyncMsg(int pidType, uint64_t maxWaitTime)
+static int CheckMigOutSyncMsg(struct MigrateOutMsg *msg, int pageType, uint64_t maxWaitTime)
 {
     SMAP_LOGGER_INFO("received ubturbo_smap_migrate_out_sync msg, maxWaitTime:%llu.", maxWaitTime);
+    if (!msg) {
+        SMAP_LOGGER_ERROR("Smap migrate out sync msg is null.");
+        return -EINVAL;
+    }
     if ((maxWaitTime < MIN_WAIT_TIME || maxWaitTime > MAX_WAIT_TIME) && maxWaitTime != 0) {
         SMAP_LOGGER_ERROR("The maxWaitTime parameter is improper,The maxWaitTime from 10s to 1 min.");
         return -EINVAL;
@@ -2744,9 +2807,17 @@ static int CheckMigOutSyncMsg(int pidType, uint64_t maxWaitTime)
         return -EINVAL;
     }
 
-    if (pidType != PAGETYPE_HUGE) {
-        SMAP_LOGGER_ERROR("pidType is not 2M, ubturbo_smap_migrate_out_sync failed.");
+    if (!IsCountValid(msg->count, MAX_NR_MIGOUT)) {
+        SMAP_LOGGER_ERROR("migrate out sync msg count %d is invalid.", msg->count);
         return -EINVAL;
+    }
+
+    /* sync 为 VM 池特性：批内 pid 须均为 VM，身份逐 pid 自动判别 */
+    for (int i = 0; i < msg->count; i++) {
+        if (GetPidTypeFromComm(msg->payload[i].pid) != VM_TYPE) {
+            SMAP_LOGGER_ERROR("migrate out sync only supports VM, pid %d.", msg->payload[i].pid);
+            return -EINVAL;
+        }
     }
 
     return 0;
@@ -2843,7 +2914,7 @@ static int CheckMigOutSyncResult(struct MigrateOutMsg *msg, int *invalidPidNum, 
     return 0;
 }
 
-int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime)
+int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint64_t maxWaitTime)
 {
     int ret;
     uint64_t waitTime = 0;
@@ -2851,7 +2922,7 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64
     int invalidPidNum;
     bool syncWaitProtected = false;
 
-    ret = CheckMigOutSyncMsg(pidType, maxWaitTime);
+    ret = CheckMigOutSyncMsg(msg, pageType, maxWaitTime);
     if (ret) {
         return ret;
     }
@@ -2859,7 +2930,7 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64
     SetSyncWaitRemoteEmpty(msg, true);
     syncWaitProtected = true;
 
-    ret = ubturbo_smap_migrate_out(msg, pidType);
+    ret = ubturbo_smap_migrate_out(msg, pageType);
     if (ret && ret != -ESRCH) {
         SMAP_LOGGER_ERROR("Smap migrate out failed, ret %d.", ret);
         goto out;
@@ -2891,7 +2962,7 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64
         allPidSuccess = true;
         EnvMsleep(WAIT_TIME);
     }
-    SMAP_LOGGER_ERROR("Migration timed out. pidType %d, ret %d.", pidType, ret);
+    SMAP_LOGGER_ERROR("Migration timed out. pageType %d, ret %d.", pageType, ret);
     ret = -EBUSY;
 
 out:

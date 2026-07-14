@@ -483,7 +483,7 @@ static void work_func(struct work_struct *work)
 	adev_buffer_down_read();
 	down_read(&ap_data.lock);
 	page_size = get_page_size(adev);
-	if (page_size == g_pagesize_huge) {
+	if (ap->pid_type == SMAP_PID_VM) {
 		ret = scan_accessed_bit_forward_vm(ap, page_size);
 	} else {
 		ret = scan_accessed_bit_forward_mm(ap, page_size);

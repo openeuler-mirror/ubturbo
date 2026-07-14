@@ -20,7 +20,7 @@ using namespace turbo::smap::codec;
 using namespace turbo::ipc::client;
 using namespace turbo::smap::ulog;
 
-int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
+int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pageType)
 {
     TurboByteBuffer send;
     TurboByteBuffer recv;
@@ -29,7 +29,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
         IPC_CLIENT_LOGGER_ERROR("[Smap] Migrate out msg is null.\n");
         return -EINVAL;
     }
-    int ret = handler.EncodeRequest(send, msg, pidType);
+    int ret = handler.EncodeRequest(send, msg, pageType);
     if (ret) {
         IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_migrate_out Encode request error %d.\n", ret);
         return IPC_ERROR;
@@ -49,7 +49,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
     return ret;
 }
 
-int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType)
+int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pageType)
 {
     TurboByteBuffer send;
     TurboByteBuffer recv;
@@ -58,7 +58,7 @@ int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidTy
         IPC_CLIENT_LOGGER_ERROR("[Smap] Migrate out grouped msg is null.\n");
         return -EINVAL;
     }
-    int ret = handler.EncodeRequest(send, msg, pidType);
+    int ret = handler.EncodeRequest(send, msg, pageType);
     if (ret) {
         IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_migrate_out_grouped Encode request error %d.\n", ret);
         return IPC_ERROR;
@@ -107,7 +107,7 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
     return ret;
 }
 
-int ubturbo_smap_remove(struct RemoveMsg *msg, int pidType)
+int ubturbo_smap_remove(struct RemoveMsg *msg, int pageType)
 {
     TurboByteBuffer send;
     TurboByteBuffer recv;
@@ -116,7 +116,7 @@ int ubturbo_smap_remove(struct RemoveMsg *msg, int pidType)
         IPC_CLIENT_LOGGER_ERROR("[Smap] Remove msg is null.\n");
         return -EINVAL;
     }
-    int ret = handler.EncodeRequest(send, msg, pidType);
+    int ret = handler.EncodeRequest(send, msg, pageType);
     if (ret) {
         IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_remove Encode request error %d.\n", ret);
         return IPC_ERROR;
@@ -461,7 +461,7 @@ bool ubturbo_smap_is_running(void)
     return ret;
 }
 
-int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime)
+int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint64_t maxWaitTime)
 {
     TurboByteBuffer send;
     TurboByteBuffer recv;
@@ -470,7 +470,7 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64
         IPC_CLIENT_LOGGER_ERROR("[Smap] Migrate out sync msg is null.\n");
         return -EINVAL;
     }
-    int ret = handler.EncodeRequest(send, msg, pidType, maxWaitTime);
+    int ret = handler.EncodeRequest(send, msg, pageType, maxWaitTime);
     if (ret) {
         IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_migrate_out_sync Encode request error %d.\n", ret);
         return IPC_ERROR;
