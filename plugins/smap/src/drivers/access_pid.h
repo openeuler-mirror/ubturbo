@@ -48,7 +48,7 @@ struct vm_mapping_info {
 	u8 nr_segs;
 	u32 vm_size;
 	struct va_segment segs[MAX_NODE_NUM];
-	u32 *mapping;
+	u8 *priors;
 };
 
 typedef enum {
@@ -147,10 +147,10 @@ static inline bool access_pid_cur_prior_decay(struct access_pid *ap)
 	return ap->type == NORMAL_SCAN && (ap->acc_times >= SMAP_ACC_CNT_MAX);
 }
 
-static inline void clear_vm_mapping(u32 *mapping, u32 len)
+static inline void clear_vm_mapping(u8 *priors, u32 len)
 {
-	if (mapping)
-		memset(mapping, 0xff, len * sizeof(u32));
+	if (priors)
+		memset(priors, 0xff, len * sizeof(u8));
 }
 
 static inline void set_ap_whole_state(struct access_pid_struct *aps,
