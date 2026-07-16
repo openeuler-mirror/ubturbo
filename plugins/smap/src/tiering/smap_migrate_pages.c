@@ -897,6 +897,7 @@ static int migrate_one_batch(int idx, struct migrate_msg *msg,
 {
 	struct mig_batch batch = { 0 };
 	u64 j, folio_index, nr_this_migrate;
+	unsigned int batch_failed;
 
 	if (node_is_critical_err(mig_list[idx].from) ||
 	    node_is_critical_err(mig_list[idx].to)) {
@@ -928,9 +929,10 @@ static int migrate_one_batch(int idx, struct migrate_msg *msg,
 		return nr_remain - batch.cnt;
 	}
 
-	mig_list[idx].failed_mig_nr += smu_migrate(
-		batch.folios, batch.nr_folios, mig_list[idx].to, &msg->mul_mig);
-	stats->failed_num += mig_list[idx].failed_mig_nr;
+	batch_failed = smu_migrate(batch.folios, batch.nr_folios,
+				   mig_list[idx].to, &msg->mul_mig);
+	mig_list[idx].failed_mig_nr += batch_failed;
+	stats->failed_num += batch_failed;
 	mig_list[idx].success_to_user = true;
 
 	if (mig_list[idx].failed_mig_nr)
