@@ -45,9 +45,11 @@ static int check_msg_validity(struct access_add_pid_msg *msg)
 		pr_err("null pid message passed to access tracking\n");
 		return -EINVAL;
 	}
-	int max_count = is_access_hugepage() ? MAX_2M_PROCESSES_CNT : MAX_4K_PROCESSES_CNT;
+	int max_count = is_access_hugepage() ? MAX_2M_PROCESSES_CNT
+					     : MAX_4K_PROCESSES_CNT;
 	if (msg->count <= 0 || msg->count > max_count) {
-		pr_err("invalid message count: %d passed to access tracking\n", msg->count);
+		pr_err("invalid message count: %d passed to access tracking\n",
+		       msg->count);
 		return -EINVAL;
 	}
 	if (!msg->payload) {
