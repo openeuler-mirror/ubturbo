@@ -2006,12 +2006,6 @@ static void CalRemoteNumaAllocPerPid(int i, int j, uint32_t tmpNrPagesToUse,
     }
 }
 
-static inline uint64_t CalAvailPages(uint64_t sizeMb)
-{
-    uint64_t reservedPages = MIN(MBToPage(sizeMb) / RESERVED_DIVISOR, MBToPage(RESERVED_MEMORY));
-    return MBToPage(sizeMb) - reservedPages;
-}
-
 static void CalAvailBorrowPage(uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
                                uint32_t availSharedPages[REMOTE_NUMA_NUM])
 {
@@ -2019,12 +2013,12 @@ static void CalAvailBorrowPage(uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE
 
     for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
         if (rmi->sharedSize[j] > 0) {
-            availSharedPages[j] = CalAvailPages(rmi->sharedSize[j]);
+            availSharedPages[j] = MBToPage(rmi->sharedSize[j]);
             SMAP_LOGGER_DEBUG("availSharedPages[%d] %llu", j, availSharedPages[j]);
         }
         for (int i = 0; i < GetNrLocalNuma() && i < LOCAL_NUMA_NUM; i++) {
             if (rmi->privateSize[i][j] > 0) {
-                availPrivatePages[i][j] = CalAvailPages(rmi->privateSize[i][j]);
+                availPrivatePages[i][j] = MBToPage(rmi->privateSize[i][j]);
                 SMAP_LOGGER_DEBUG("availPrivatePages[%d][%d] %llu", i, j, availPrivatePages[i][j]);
             }
         }
@@ -2167,7 +2161,6 @@ static void CalRemoteNumaSizeAllocPerNuma(void)
 
     uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
     uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
-    // 在远端预留多少内存, 暂不支持混用, 否则预留的内存会比预期多(超过200M)
     CalAvailBorrowPage(availPrivatePages, availSharedPages);
 
     // 先满足迁移模式为 MIG_MEMSIZE_MODE 的进程
