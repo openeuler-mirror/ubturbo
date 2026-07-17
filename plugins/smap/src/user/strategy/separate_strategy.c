@@ -542,7 +542,6 @@ static uint64_t CalcAdditionalPage(ProcessAttr *process, int localNid, int remot
     additionalNum = MIN(swappableNum, aimNum);
     additionalNum = MIN(additionalNum, process->separateParam.maxMigrate);
     additionalNum = MIN(additionalNum, numaFreePage[localNid]);
-    additionalNum = MIN(additionalNum, numaFreePage[remoteNid]);
     return additionalNum;
 }
 

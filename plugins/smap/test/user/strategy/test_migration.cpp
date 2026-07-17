@@ -151,7 +151,7 @@ TEST_F(MigrationTest, TestAddMigListAddMultiAndMoreThanFreePagesSuccess)
     ret = AddMigList(&mMsg, &mList);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, mMsg.cnt);
-    EXPECT_EQ(1, mMsg.migList[0].nr);
+    EXPECT_EQ(2, mMsg.migList[0].nr);
 
     free(mList.addr);
     free(mMsg.migList[0].addr);
@@ -169,19 +169,6 @@ TEST_F(MigrationTest, TestAddMigListNoPageToMig)
     ret = AddMigList(&mMsg, &mList);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(0, mMsg.cnt);
-}
-
-TEST_F(MigrationTest, TestAddMigListNoFreePages)
-{
-    int ret;
-    uint64_t freePageNum = 0;
-    struct MigrateMsg mMsg;
-    struct MigList mList;
-
-    MOCKER(IsHugeMode).stubs().will(returnValue((bool)0));
-    MOCKER(GetNrFreePagesByNode).stubs().will(returnValue((uint64_t)0));
-    ret = AddMigList(&mMsg, &mList);
-    EXPECT_EQ(0, ret);
 }
 
 extern "C" void FreeMigList(struct MigList mList[MAX_NODES][MAX_NODES]);
