@@ -342,7 +342,7 @@ static int AppendCompMigResults(struct MigrateMsg *mMsg, const struct MigrateMsg
 static uint64_t BuildCompMigListFromScan(ProcessAttr *process, GroupSwapCompPlan *plan, struct MigList *list)
 {
     uint64_t sourcePages = process->scanAttr.actcLen[plan->from];
-    uint64_t destFreePages = GetNrFreeHugePagesByNode(plan->to);
+    uint64_t destFreePages = IsHugeMode() ? GetNrFreeHugePagesByNode(plan->to) : GetNrFreePagesByNode(plan->to);
     uint64_t nr = MIN(plan->need, sourcePages);
     nr = MIN(nr, destFreePages);
     if (nr == 0 || !process->scanAttr.actcData[plan->from]) {
@@ -524,7 +524,6 @@ int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager)
 
 static int InitMigrateMsg(struct MigrateMsg *mMsg, struct ProcessManager *manager)
 {
-    PidType type = GetPidType(manager);
     // 按照pid粒度进行迁移，申请的迁移数组大小为pid的数量*2
     int maxProcessCnt = GetCurrentMaxNrPid();
     int maxPathNum = maxProcessCnt * MAX_PER_PID_MIG_LIST_COUNT;
@@ -894,6 +893,7 @@ static int UpdateScanTime(ProcessAttr *process)
     payload.numaNodes = process->numaAttr.numaNodes;
     payload.type = process->scanType;
     payload.duration = process->duration;
+    payload.pidType = process->type;
     payload.scanTime = GetFileConfSwitchConfig() ? GetScanPeriodConfig() : process->sceneInfo.cycles.scanCycle;
     int ret = AccessIoctlAddPid(1, &payload);
     if (ret) {
@@ -934,13 +934,13 @@ static int HandleScene(ThreadCtx *ctx)
     int ret = 0;
     Scene worstScene = LIGHT_STABLE_SCENE, scene;
     struct ProcessManager *manager = ctx->processManager;
-    PidType type = GetPidType(manager);
+    PageType pageType = IsHugeMode() ? PAGETYPE_HUGE : PAGETYPE_NORMAL;
     EnvMutexLock(&manager->lock);
     ProcessAttr *current = manager->processes;
     while (current) {
         // 更新进程的场景
         SceneInfo *info = &current->sceneInfo;
-        GetProcessSceneAttr(info->currScene, info, current->type);
+        GetProcessSceneAttr(info->currScene, info, pageType);
         if (current->isFirstScan) {
             if (current->walkPage.nrPage == 0) {
                 current->scanTime = DEFAULT_SCAN_PERIOD;
@@ -963,7 +963,7 @@ static int HandleScene(ThreadCtx *ctx)
     if (manager->sceneInfo.currScene != worstScene) {
         SMAP_LOGGER_INFO("Manager changed scene from %d to %d.", manager->sceneInfo.currScene, worstScene);
         manager->sceneInfo.currScene = worstScene;
-        GetProcessSceneAttr(worstScene, &manager->sceneInfo, type);
+        GetProcessSceneAttr(worstScene, &manager->sceneInfo, pageType);
         SceneCycle *cycles = &manager->sceneInfo.cycles;
         ctx->period = cycles->migCycle;
     }

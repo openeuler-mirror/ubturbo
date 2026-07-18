@@ -218,33 +218,33 @@ static void CalcMemInfo(ProcessAttr *process)
     SMAP_LOGGER_INFO("L2 nrPage %u, nrHot %u.", p->nrL2Page, p->nrL2Hot);
 }
 
-int GetProcessSceneAttr(Scene scene, SceneInfo *info, PidType type)
+int GetProcessSceneAttr(Scene scene, SceneInfo *info, PageType pageType)
 {
     if (scene >= SCENE_MAX || !info) {
         return -EINVAL;
     }
 
     if (scene == UNSTABLE_SCENE) {
-        info->cycles.scanCycle = type == PROCESS_TYPE ? PROCESS_UNSTABLE_SCAN_CYCLE : VM_UNSTABLE_SCAN_CYCLE;
-        info->cycles.migCycle = type == PROCESS_TYPE ? PROCESS_UNSTABLE_MIGRATE_CYCLE : UNSTABLE_MIGRATE_CYCLE;
+        info->cycles.scanCycle = pageType == PAGETYPE_NORMAL ? PROCESS_UNSTABLE_SCAN_CYCLE : VM_UNSTABLE_SCAN_CYCLE;
+        info->cycles.migCycle = pageType == PAGETYPE_NORMAL ? PROCESS_UNSTABLE_MIGRATE_CYCLE : UNSTABLE_MIGRATE_CYCLE;
     } else if (scene == HEAVY_STABLE_SCENE) {
-        info->cycles.scanCycle = type == PROCESS_TYPE ? PROCESS_HEAVY_STABLE_SCAN_CYCLE : VM_HEAVY_STABLE_SCAN_CYCLE;
-        info->cycles.migCycle = type == PROCESS_TYPE ? PROCESS_HEAVY_STABLE_MIGRATE_CYCLE : HEAVY_STABLE_MIGRATE_CYCLE;
+        info->cycles.scanCycle = pageType == PAGETYPE_NORMAL ? PROCESS_HEAVY_STABLE_SCAN_CYCLE : VM_HEAVY_STABLE_SCAN_CYCLE;
+        info->cycles.migCycle = pageType == PAGETYPE_NORMAL ? PROCESS_HEAVY_STABLE_MIGRATE_CYCLE : HEAVY_STABLE_MIGRATE_CYCLE;
     } else {
-        info->cycles.scanCycle = type == PROCESS_TYPE ? PROCESS_LIGHT_STABLE_SCAN_CYCLE : VM_LIGHT_STABLE_SCAN_CYCLE;
-        info->cycles.migCycle = type == PROCESS_TYPE ? PROCESS_LIGHT_STABLE_MIGRATE_CYCLE : LIGHT_STABLE_MIGRATE_CYCLE;
+        info->cycles.scanCycle = pageType == PAGETYPE_NORMAL ? PROCESS_LIGHT_STABLE_SCAN_CYCLE : VM_LIGHT_STABLE_SCAN_CYCLE;
+        info->cycles.migCycle = pageType == PAGETYPE_NORMAL ? PROCESS_LIGHT_STABLE_MIGRATE_CYCLE : LIGHT_STABLE_MIGRATE_CYCLE;
     }
 
     return 0;
 }
 
-int InitSceneInfo(SceneInfo *info, PidType type)
+int InitSceneInfo(SceneInfo *info, PageType pageType)
 {
     if (!info) {
         return -EINVAL;
     }
     info->currScene = info->lastScene = LIGHT_STABLE_SCENE;
-    GetProcessSceneAttr(info->currScene, info, type);
+    GetProcessSceneAttr(info->currScene, info, pageType);
     info->pageInfoIndex = 0;
 
     return 0;
@@ -591,7 +591,8 @@ static void SkipMultiProcessRatio(struct ProcessManager *manager)
 
 void ConfigRatios(struct ProcessManager *manager)
 {
-    if (GetPidType(manager) == VM_TYPE) {
+    /* 自适应内存比仅对 VM 生效；混合模式下存在 VM 即按 VM 组配置（纯进程走 SkipMultiProcessRatio） */
+    if (manager->nr[VM_TYPE] > 0) {
         if (GetAdaptMem()) {
             ConfigMultiVmRatioInGroups(manager);
             return;

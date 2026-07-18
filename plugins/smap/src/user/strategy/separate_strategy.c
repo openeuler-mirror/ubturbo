@@ -674,10 +674,10 @@ static uint64_t CalcMultiNumaVmSwapNumByFreq(ProcessAttr *process, LevelActcData
     uint64_t freeHugePage[NR_LEVEL] = { 0 };
     for (int nid = 0; nid < MAX_NODES; ++nid) {
         if (InAttrL1(process, nid)) {
-            freeHugePage[L1] += GetNrFreeHugePagesByNode(nid);
+            freeHugePage[L1] += IsHugeMode() ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
         }
         if (InAttrL2(process, nid)) {
-            freeHugePage[L2] += GetNrFreeHugePagesByNode(nid);
+            freeHugePage[L2] += IsHugeMode() ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
         }
     }
 
@@ -805,7 +805,7 @@ static int BuildDemoteMultiNumaMigLists(uint64_t *migAddrArray[MAX_NODES], uint6
 
     for (int nid = nrLocalNuma; nid < MAX_NODES; nid++) {
         if (remoteMigInfo[nid - nrLocalNuma].dir == DEMOTE && remoteMigInfo[nid - nrLocalNuma].nrMig > 0) {
-            freeHugePages[nid] = GetNrFreeHugePagesByNode(nid);
+            freeHugePages[nid] = IsHugeMode() ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
             freeHugePages[nid] = MIN(freeHugePages[nid], remoteMigInfo[nid - nrLocalNuma].nrMig);
         }
     }
@@ -892,7 +892,7 @@ static int PromoteMultiNumaVmStrategy(ProcessAttr *process, struct MigList mlist
     uint64_t numaOffset[MAX_NODES] = { 0 };
     for (int nid = 0; nid < nrLocalNuma; nid++) {
         if (InAttrL1(process, nid)) {
-            localFreeHugePages[nid] = GetNrFreeHugePagesByNode(nid);
+            localFreeHugePages[nid] = IsHugeMode() ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
         }
     }
 
@@ -1003,7 +1003,7 @@ static int BuildSwapMigLists(ProcessAttr *process, struct MigList mlist[MAX_NODE
     uint64_t freeHugePages[MAX_NODES] = { 0 };
     for (int nid = 0; nid < nrLocalNuma; nid++) {
         if (InAttrL1(process, nid)) {
-            freeHugePages[nid] = GetNrFreeHugePagesByNode(nid);
+            freeHugePages[nid] = IsHugeMode() ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
         }
     }
 

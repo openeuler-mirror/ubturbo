@@ -62,14 +62,14 @@ N/A
 
 #### 实现方法
 
-<pre class="screen"><p class="p" id="p987171415182">int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType);</p></pre>
+<pre class="screen"><p class="p" id="p987171415182">int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pageType);</p></pre>
 
 #### 参数说明
 
 | 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
 | --- | --- | --- | --- | --- |
 | msg | struct MigrateOutMsg\* | * 单次最多配置40个pid。SMAP可管理的最大虚机个数为100个，最大4K进程个数为300个。* 配置的虚机PID重复时参数错误。* 远端NUMA需要存在。* 迁出比例有效值为[0-100]。* 迁出内存量memSize单位KB，必须为2MB的倍数* PID对应进程名在黑名单中时参数错误。* 虚拟化内存水线场景下，迁出比例非精确的迁出比例，其含义为pid可迁出到远端NUMA的内存比例，SMAP会根据SetSmapRemoteNumaInfo接口传入的借用内存量进行调整；在多虚机场景也会根据虚机的冷热信息调整实际迁出比例。* 内存碎片场景下，migrateMode只能是按照memSize迁移。在保证迁出内存足够的情况下，迁出比例含义为pid总的实际使用内存的迁出比例，迁移大小为pid总的实际使用内存的迁出大小（KB）。 | 入参 | 详细如下 |
-| pidType | int | {0,1} | 入参 | int配置类型：* 0-进程（4K）* 1-虚机（2M） |
+| pageType | int | {0,1} | 入参 | 页面类型：0=4K页，1=2M页。 |
 
 ```
 #define MAX_NR_MIGOUT 40 
@@ -104,7 +104,7 @@ struct MigrateOutMsg {
 #### 约束和注意事项
 
 * SMAP初始化后才能调用。
-* pidType需要和当前场景匹配。
+* pageType需要和当前场景匹配。
 * HCCS代际远端NUMA最大值为17。
 * UB代际远端NUMA最大值为17。
 * 远端NUMA被禁用时无法配置迁出（调用SmapMigrateBack接口时会默认禁用远端NUMA）。
@@ -124,7 +124,7 @@ struct MigrateOutMsg {
 
 #### 实现方法
 
-<pre class="screen"><p class="p" id="pGroupedMigrateOut">int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType);</p></pre>
+<pre class="screen"><p class="p" id="pGroupedMigrateOut">int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pageType);</p></pre>
 
 #### 参数说明
 
@@ -140,7 +140,7 @@ struct MigrateOutMsg {
 | msg.payload[].groups[].targetCount | int | 1到MAX_GROUP_REMOTE_NUMA的整数。 | 入参 | 当前group的target remote NUMA数量。 |
 | msg.payload[].groups[].targets[].nid | int | 当前机器有效remote NUMA，且未被禁用。 | 入参 | target remote NUMA ID。 |
 | msg.payload[].groups[].targets[].size | uint64\_t | 单位KB，至少为2MB。 | 入参 | 当前target remote NUMA的最大驻留容量quota。 |
-| pidType | int | 1 | 入参 | 进程pid类型，仅支持虚机2M页类型。 |
+| pageType | int | 1 | 入参 | 页面类型，需与当前场景匹配。 |
 
 ```
 #define MAX_NR_GROUPED_MIGOUT MAX_NR_MIGOUT
@@ -185,7 +185,7 @@ struct GroupedMigrateOutMsg {
 
 * SMAP初始化后才能调用。
 * 仅支持2M huge page虚机，不支持4K进程或普通进程。
-* pidType需要和当前2M虚机场景匹配。
+* pageType需要和当前场景匹配。
 * UB代际远端NUMA最大值为21。
 * 远端NUMA被禁用时无法配置为grouped target（调用ubturbo_smap_migrate_back接口时会默认禁用远端NUMA）。
 * group policy不能和普通ubturbo_smap_migrate_out policy混用；已按普通迁出接口管理的PID，不能再配置grouped policy。
@@ -307,14 +307,14 @@ struct MigrateBackMsg {
 
 #### 实现方法
 
-<pre class="screen"><p class="p" id="p3301101481814">int ubturbo_smap_remove(struct RemoveMsg *msg, int pidType);</p></pre>
+<pre class="screen"><p class="p" id="p3301101481814">int ubturbo_smap_remove(struct RemoveMsg *msg, int pageType);</p></pre>
 
 #### 参数说明
 
 | 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
 | --- | --- | --- | --- | --- |
 | msg | struct RemoveMsg\* | * 单次最多移除的虚机/进程数量为40。 | 入参 | 详细如下|
-| pidType | int | {0,1} | 入参 | int配置类型：* 0-进程（4K）* 1-虚机（2M） |
+| pageType | int | {0,1} | 入参 | 页面类型：0=4K页，1=2M页。 |
 
 ```
 #define MAX_NR_REMOVE 40
@@ -342,7 +342,7 @@ struct RemoveMsg {
 #### 约束和注意事项
 
 * SMAP初始化后才能调用。
-* pidType需要和当前场景匹配。
+* pageType需要和当前场景匹配。
 * 当调用SmapMigrateBack接口迁回完所有地址后，需使用SmapRemove接口移除虚机管理，保证后续流程正常。
 
 ### ubturbo_smap_node_enable
@@ -645,7 +645,7 @@ struct EnableNodeMsg {
 
 #### 实现方法
 
-<pre class="screen"><p class="p" id="p7119930419">int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime)</p></pre>
+<pre class="screen"><p class="p" id="p7119930419">int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint64_t maxWaitTime)</p></pre>
 
 #### 参数说明
 
@@ -658,7 +658,7 @@ struct EnableNodeMsg {
 | msg.payload[].destNid | int | 大于等于本地NUMA数量小于10。 | 入参 | 目的NUMA ID。 |
 | msg.payload[].memSize | uint64\_t | 单位为KB，必须为2MB的整数倍 | 入参 | 内存迁移大小 |
 | msg.payload[].migrateMode | MigrateMode | 枚举类型：枚举值为MIG\_RATIO\_MODE = 0， MIG\_MEMSIZE\_MODE = 1 | 入参 | MIG\_RATIO\_MODE表示按照比例迁移，MIG\_MEMSIZE\_MODE表示按照内存大小迁移 |
-| pidType | int | 1 | 入参 | 进程pid类型，1表示虚机类型。 |
+| pageType | int | 1 | 入参 | 页面类型：0=4K页，1=2M页。 |
 | maxWaitTime | uint64\_t | 10s-1min(单位ms) | 入参 | 一次调用最大等待时间。 |
 
 #### 返回值

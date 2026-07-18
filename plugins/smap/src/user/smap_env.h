@@ -45,8 +45,10 @@
 #define GIB (1ULL << 30)
 #define TIB (1ULL << 40)
 
-#define PAGETYPE_NORMAL 0
-#define PAGETYPE_HUGE 1
+typedef enum {
+    PAGETYPE_NORMAL = 0,
+    PAGETYPE_HUGE = 1,
+} PageType;
 
 #define PAGESIZE_4K (4 * KIB)
 #define PAGESIZE_64K (64 * KIB)

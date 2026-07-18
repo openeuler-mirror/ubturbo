@@ -111,10 +111,6 @@ int RunStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]
         return -EINVAL;
     }
 
-    if (!IsHugeMode()) {
-        return SeparateStrategy(process, mlist);
-    }
-
     if (process->groupPolicy.enabled) {
         return GroupedMigrationStrategy(process, mlist);
     }

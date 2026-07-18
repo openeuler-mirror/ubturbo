@@ -356,7 +356,6 @@ TEST_F(MigrationTest, TestInitMigrateMsg)
 {
     struct MigrateMsg mMsg = { .cnt = 1 };
     struct ProcessManager manager = { .nr = { 0, 1 }, .tracking = { .pageSize = 4096 } };
-    MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     ASSERT_EQ(nullptr, mMsg.migList);
     int ret = InitMigrateMsg(&mMsg, &manager);
     EXPECT_EQ(0, ret);

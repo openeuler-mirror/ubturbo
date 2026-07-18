@@ -463,11 +463,12 @@ static int RecoverProcessConfig(char *processBase)
     nrPayload = header->len / CONFIG_PROC_LEN;
     payload = (struct ProcessPayload *)JumpToProcessPayload(processBase);
     for (uint32_t i = 0; i < nrPayload; i++, payload++) {
-        if (payload->type != GetPidType(manager)) {
-            SMAP_LOGGER_WARNING("Pid %d type %d is different from %d.", payload->pid, payload->type,
-                                GetPidType(manager));
+        /* 页类型一致性校验：pid 实际页类型须与 smap 当前模式匹配，否则内核扫描返回 -EINVAL */
+        if (IsPidUsingHugePages(payload->pid) != IsHugeMode()) {
+            SMAP_LOGGER_WARNING("pid %d page type mismatch smap mode, skip recover.", payload->pid);
             continue;
         }
+        /* pidType 与全局 pageType 解耦：按 payload 携带的 per-pid type 恢复，不再做全局一致性过滤 */
         attr = calloc(1, sizeof(ProcessAttr));
         if (!attr) {
             SMAP_LOGGER_ERROR("Malloc for process %d failed.", payload->pid);

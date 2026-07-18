@@ -177,19 +177,19 @@ typedef void (*Logfunc)(int level, const char *str, const char *moduleName);
  * @brief   设置进程迁移到远端NUMA
  *
  * @param msg      [IN] 迁移进程信息，包含迁移进程、远端NUMA和迁移比例
- * @param pidType  [IN] 进程类型，目前支持4KB和2MB进程类型
+ * @param pageType  [IN] 页面类型，目前支持小页和2MB页类型
  * @return int  0：操作成功；非0：操作失败
  */
-int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType);
+int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pageType);
 
 /* *
  * @brief   设置大规格弹性虚机的组级迁移策略
  *
  * @param msg      [IN] 迁移组信息，包含PID、本地NUMA集合、远端NUMA集合、远端quota和本地保留水线
- * @param pidType  [IN] 进程类型，仅支持虚机2M页类型
+ * @param pageType  [IN] 页面类型，仅支持虚机2M页类型
  * @return int  0：操作成功；非0：操作失败
  */
-int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType);
+int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pageType);
 
 /* *
  * @brief   迁移指定地址段的远端NUMA内存
@@ -203,10 +203,10 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg);
  * @brief   移除进程的冷热页迁移
  *
  * @param msg   [IN] 移除的进程信息，包含进程的PID
- * @param pidType  [IN] 进程类型，目前支持4KB和2MB进程类型
+ * @param pageType  [IN] 页面类型，目前支持小页和2MB页类型
  * @return int  0：操作成功；非0：操作失败
  */
-int ubturbo_smap_remove(struct RemoveMsg *msg, int pidType);
+int ubturbo_smap_remove(struct RemoveMsg *msg, int pageType);
 
 /* *
  * @brief   使能NUMA的冷热页迁移
@@ -219,7 +219,7 @@ int ubturbo_smap_node_enable(struct EnableNodeMsg *msg);
 /* *
  * @brief   初始化SMAP模块
  *
- * @param pageType [IN] 页面类型，当前只支持4KB和2MB页
+ * @param pageType [IN] 页面类型，当前只支持小页和2MB页
  * @param extlog   [IN] 日志打印函数
  * @return int  0：操作成功；非0：操作失败
  */
@@ -278,11 +278,11 @@ bool ubturbo_smap_is_running(void);
  * @brief   SMAP同步迁出
  *
  * @param msg         [IN] 迁移进程信息，包含迁移进程、远端NUMA、迁移比例、迁移页面大小和迁移模式
- * @param pidType     [IN] 进程类型，目前支持4KB和2MB进程类型
+ * @param pageType     [IN] 页面类型，目前支持小页和2MB页类型
  * @param maxWaitTime [IN] 一次调用最大等待时间，单位ms
  * @return int  0：操作成功；非0：操作失败
  */
-int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime);
+int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint64_t maxWaitTime);
 
 /* 迁移远端内存相关接口 */
 

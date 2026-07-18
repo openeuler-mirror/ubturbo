@@ -59,6 +59,7 @@ typedef enum {
 
 struct access_pid {
 	pid_t pid;
+	u32 pid_type;
 	u32 numa_nodes;
 	scan_type type;
 	u32 scan_time;

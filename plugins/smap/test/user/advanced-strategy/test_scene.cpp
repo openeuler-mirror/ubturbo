@@ -222,31 +222,31 @@ TEST_F(SceneTest, TestCalcMemInfo)
     EXPECT_EQ(8, process.sceneInfo.pageInfo[0].nrPages);
 }
 
-extern "C" int GetProcessSceneAttr(Scene scene, SceneInfo *info, PidType type);
+extern "C" int GetProcessSceneAttr(Scene scene, SceneInfo *info, PageType pageType);
 TEST_F(SceneTest, TestGetProcessSceneAttr)
 {
     SceneInfo info = { 0 };
     Scene scene = UNSTABLE_SCENE;
-    GetProcessSceneAttr(scene, &info, VM_TYPE);
+    GetProcessSceneAttr(scene, &info, PAGETYPE_HUGE);
     EXPECT_EQ(VM_UNSTABLE_SCAN_CYCLE, info.cycles.scanCycle);
     EXPECT_EQ(UNSTABLE_MIGRATE_CYCLE, info.cycles.migCycle);
 
     scene = HEAVY_STABLE_SCENE;
-    GetProcessSceneAttr(scene, &info, VM_TYPE);
+    GetProcessSceneAttr(scene, &info, PAGETYPE_HUGE);
     EXPECT_EQ(VM_HEAVY_STABLE_SCAN_CYCLE, info.cycles.scanCycle);
     EXPECT_EQ(HEAVY_STABLE_MIGRATE_CYCLE, info.cycles.migCycle);
 
     scene = LIGHT_STABLE_SCENE;
-    GetProcessSceneAttr(scene, &info, VM_TYPE);
+    GetProcessSceneAttr(scene, &info, PAGETYPE_HUGE);
     EXPECT_EQ(VM_LIGHT_STABLE_SCAN_CYCLE, info.cycles.scanCycle);
     EXPECT_EQ(LIGHT_STABLE_MIGRATE_CYCLE, info.cycles.migCycle);
 }
 
-extern "C" int InitSceneInfo(SceneInfo *info, PidType type);
+extern "C" int InitSceneInfo(SceneInfo *info, PageType pageType);
 TEST_F(SceneTest, TestInitSceneInfo)
 {
     SceneInfo info = { 0 };
-    int ret = InitSceneInfo(&info, VM_TYPE);
+    int ret = InitSceneInfo(&info, PAGETYPE_HUGE);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(VM_LIGHT_STABLE_SCAN_CYCLE, info.cycles.scanCycle);
     EXPECT_EQ(LIGHT_STABLE_MIGRATE_CYCLE, info.cycles.migCycle);
@@ -549,7 +549,6 @@ TEST_F(SceneTest, TestSkipMultiProcessRatio)
 }
 
 extern "C" void ConfigRatios(struct ProcessManager *manager);
-extern "C" PidType GetPidType(struct ProcessManager *manager);
 extern "C" void ConfigMultiVmRatioInGroups(struct ProcessManager *manager);
 TEST_F(SceneTest, TestConfigRatiosProcessType)
 {
@@ -557,12 +556,12 @@ TEST_F(SceneTest, TestConfigRatiosProcessType)
     ProcessAttr current = {};
     manager.processes = &current;
     manager.tracking.pageSize = PAGESIZE_4K;
+    manager.nr[VM_TYPE] = 0; /* 无 VM → 走 SkipMultiProcessRatio */
     current.next = NULL;
     current.scanType = NORMAL_SCAN;
     current.strategyAttr.l2RemoteMemRatio[0][0] = 30;
     current.strategyAttr.l3RemoteMemRatio[0][0] = 10;
 
-    MOCKER(GetPidType).stubs().will(returnValue(PROCESS_TYPE));
     MOCKER(SkipMultiProcessRatio).expects(once());
     ConfigRatios(&manager);
 }
@@ -573,9 +572,9 @@ TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemTrue)
     ProcessAttr current = {};
     manager.processes = &current;
     manager.tracking.pageSize = PAGESIZE_4K;
+    manager.nr[VM_TYPE] = 1; /* 存在 VM + 开自适应 → 走 ConfigMultiVmRatioInGroups */
     current.next = NULL;
 
-    MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     MOCKER(GetAdaptMem).stubs().will(returnValue(true));
     MOCKER(ConfigMultiVmRatioInGroups).expects(once());
     ConfigRatios(&manager);
@@ -587,11 +586,11 @@ TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemFalse)
     ProcessAttr current = {};
     manager.processes = &current;
     manager.tracking.pageSize = PAGESIZE_4K;
+    manager.nr[VM_TYPE] = 1; /* 存在 VM 但关自适应 → 回落 SkipMultiProcessRatio */
     current.next = NULL;
     current.strategyAttr.l2RemoteMemRatio[0][0] = 30;
     current.strategyAttr.l3RemoteMemRatio[0][0] = 10;
 
-    MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     MOCKER(GetAdaptMem).stubs().will(returnValue(false));
     MOCKER(SkipMultiProcessRatio).expects(once());
     ConfigRatios(&manager);

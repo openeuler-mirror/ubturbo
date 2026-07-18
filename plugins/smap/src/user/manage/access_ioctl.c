@@ -58,6 +58,7 @@ int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
             accessMsg.payload[i].nTimes = migrationPeriod / payload[i].scanTime;
         }
         accessMsg.payload[i].type = payload[i].type;
+        accessMsg.payload[i].pidType = payload[i].pidType;
     }
     int ret = ioctl(manager->fds.access, SMAP_ACCESS_ADD_PID, &accessMsg);
     free(accessMsg.payload);
