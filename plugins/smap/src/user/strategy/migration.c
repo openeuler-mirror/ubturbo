@@ -992,7 +992,6 @@ static void UpdateAllProcessScanTime(ThreadCtx *ctx)
 
 static void RestoreProcessScanTime(ThreadCtx *ctx)
 {
-    int ret;
     struct ProcessManager *manager = ctx->processManager;
 
     EnvMutexLock(&manager->lock);
