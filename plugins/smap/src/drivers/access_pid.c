@@ -1273,27 +1273,6 @@ int access_walk_pagemap_prepare(struct access_pid *ap)
 	return 0;
 }
 
-int access_walk_pagemap(struct access_pid *ap)
-{
-	int ret;
-	struct pagemapread pm = { 0 };
-	if (!ap) {
-		return -EINVAL;
-	}
-	if (ap->type != NORMAL_SCAN) {
-		return 0;
-	}
-	ret = access_walk_pagemap_prepare(ap);
-	if (ret)
-		return ret;
-	pm.ap = ap;
-	pm.mig_info.pid = ap->pid;
-	pm.mig_type = NORMAL_MIGRATE;
-	walk_pid_pagemap(&pm);
-
-	return 0;
-}
-
 struct access_pid *find_access_pid(pid_t pid)
 {
 	struct access_pid *ap;

@@ -269,7 +269,6 @@ TEST_F(AccessTrackingTest, drivers_work_func)
 
     ap.ntimes = 1;
     ap.type = STATISTIC_SCAN;
-    MOCKER(access_walk_pagemap).stubs();
     drivers_work_func(&ap.scan_work.work);
     EXPECT_EQ(2, ap.cur_times);
     list_del(&adev.list);

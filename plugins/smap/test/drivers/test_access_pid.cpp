@@ -703,50 +703,6 @@ TEST_F(DriversAccessPidTest, InitVmMapping)
     vfree(info.mapping);
 }
 
-TEST_F(DriversAccessPidTest, AccessWalkPagemap)
-{
-    int ret;
-    int len = 1;
-    struct access_pid tmp;
-    struct access_pid *ap;
-    struct access_tracking_dev adev;
-    ap = &tmp;
-    tmp.type = NORMAL_SCAN;
-    adev.node = 0;
-    adev.page_count = 1;
-    list_add(&adev.list, &access_dev);
-    MOCKER(clean_last_ap_data).stubs();
-    MOCKER(init_ap_bm_white_list).stubs().will(returnValue(0));
-    MOCKER(walk_pid_pagemap).stubs().will(ignoreReturnValue());
-    ret = access_walk_pagemap(ap);
-    EXPECT_EQ(0, ret);
-    list_del(&adev.list);
-}
-
-TEST_F(DriversAccessPidTest, AccessWalkPagemapFail)
-{
-    int ret;
-    int len = 1;
-    struct access_pid tmp;
-    struct access_pid *ap;
-    struct access_tracking_dev adev;
-    ap = &tmp;
-    tmp.type = NORMAL_SCAN;
-    adev.node = 0;
-    adev.page_count = 1;
-    list_add(&adev.list, &access_dev);
-    MOCKER(clean_last_ap_data).stubs();
-    MOCKER(init_ap_bm_white_list).stubs().will(returnValue(0)).then(returnValue(-ENOMEM));
-    MOCKER(walk_pid_pagemap).stubs().will(ignoreReturnValue());
-
-    ret = access_walk_pagemap(ap);
-    EXPECT_EQ(0, ret);
-
-    ret = access_walk_pagemap(ap);
-    EXPECT_EQ(-ENOMEM, ret);
-    list_del(&adev.list);
-}
-
 extern "C" int access_walk_pagemap_prepare(struct access_pid *ap);
 TEST_F(DriversAccessPidTest, AccessWalkPagemapPrepareFail)
 {
@@ -1437,12 +1393,6 @@ TEST_F(DriversAccessPidTest, FreeApBmWhiteListNull)
     free_ap_bm_white_list(nullptr);
 }
 
-TEST_F(DriversAccessPidTest, AccessWalkPagemapNull)
-{
-    int ret = access_walk_pagemap(nullptr);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
 TEST_F(DriversAccessPidTest, AccessWalkPagemapPrepareNull)
 {
     int ret = access_walk_pagemap_prepare(nullptr);
@@ -1521,14 +1471,6 @@ TEST_F(DriversAccessPidTest, InitStatisticWindowSuccess)
     EXPECT_NE(nullptr, sliding_windows);
     for (u64 i = 0; i < windows_num; i++) vfree(sliding_windows[i]);
     vfree(sliding_windows);
-}
-
-TEST_F(DriversAccessPidTest, AccessWalkPagemapNotNormalScan)
-{
-    struct access_pid ap;
-    ap.type = HAM_SCAN;
-    int ret = access_walk_pagemap(&ap);
-    EXPECT_EQ(0, ret);
 }
 
 TEST_F(DriversAccessPidTest, AccessAddStatisticPidDurationExceed)

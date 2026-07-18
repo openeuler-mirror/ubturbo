@@ -438,8 +438,25 @@ static void work_func(struct work_struct *work)
 	start_time = ktime_get();
 	scan_work = to_delay_work(work);
 	ap = delay_work_to_ap(scan_work);
-	if (access_pid_cur_last_scanning(ap))
+
+	/*
+	 * 当本轮扫描为最后一轮时，需要重新分配 bitmap 给下一轮使用。
+	 * 必须在 ap_data.lock 写锁保护下执行位图的重分配，
+	 * 否则会与 convert_pos_to_paddr_sorted（持有读锁访问 bitmap）
+	 * 产生 use-after-free 竞态：
+	 *
+	 *   Thread A (migration)             Thread B (scan work)
+	 *   down_read(&ap_data.lock)         access_walk_pagemap_prepare(ap)
+	 *   read ap->paddr_bm[nid]            → vfree(ap->paddr_bm[nid])  ← freed!
+	 *   find_next_bit(paddr_bm)           → ACCESS FREED MEMORY → CRASH
+	 *
+	 * 使用写锁确保 prepare 期间无并发 reader。
+	 */
+	if (access_pid_cur_last_scanning(ap)) {
+		down_write(&ap_data.lock);
 		access_walk_pagemap_prepare(ap);
+		up_write(&ap_data.lock);
+	}
 
 	adev_buffer_down_read();
 	down_read(&ap_data.lock);
