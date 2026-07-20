@@ -698,7 +698,7 @@ extern "C" int IoctlHandler(const void *msg, int pidType, const unsigned long *i
 extern "C" int AddProcessNumaBitMap(struct MigrateOutMsg *msg, uint32_t *nodeBitmap, int pidType);
 extern "C" int AddProcessesToGlobalManager(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap,
                                            bool *hasInvalidPid);
-extern "C" int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType);
+extern "C" int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap);
 TEST_F(InterfaceTest, TestSmapMigrateOut)
 {
     int ret;
@@ -1083,6 +1083,77 @@ static int CheckGroupedAccessAddPidPayload(int len, struct AccessAddPidPayload *
     EXPECT_EQ(NON_EXIST_PID, payload[1].pid);
     EXPECT_EQ((uint32_t)0x22, payload[1].numaNodes);
     return 0;
+}
+
+extern "C" int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap);
+static int CheckTrackingAccessAddPidPayload(int len, struct AccessAddPidPayload *payload)
+{
+    EXPECT_EQ(2, len);
+    EXPECT_EQ(1234, payload[0].pid);
+    EXPECT_EQ((uint32_t)200, payload[0].scanTime);
+    EXPECT_EQ((uint32_t)60, payload[0].duration);
+    EXPECT_EQ(NON_EXIST_PID, payload[1].pid);
+    return 0;
+}
+
+TEST_F(InterfaceTest, TestProcessAddTrackingManageExistingProcess)
+{
+    struct MigrateOutMsg msg = {};
+    ProcessAttr current = {};
+    current.pid = 1234;
+    current.scanTime = 200;
+    current.duration = 60;
+    current.next = nullptr;
+    g_processManager.processes = &current;
+    g_processManager.nrLocalNuma = 4;
+
+    msg.count = 2;
+    msg.payload[0].pid = 1234;
+    msg.payload[0].count = 1;
+    msg.payload[0].inner[0].destNid = 4;
+    msg.payload[1].pid = 5678;
+    MOCKER(PidIsValid).stubs().will(returnValue(true)).then(returnValue(false));
+    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&current)).then(returnValue((ProcessAttr *)nullptr));
+    MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckTrackingAccessAddPidPayload));
+
+    int ret = ProcessAddTrackingManage(&msg, VM_TYPE, nullptr);
+    EXPECT_EQ(0, ret);
+    g_processManager.processes = nullptr;
+}
+
+TEST_F(InterfaceTest, TestProcessAddTrackingManageNewProcess)
+{
+    struct MigrateOutMsg msg = {};
+    msg.count = 0;
+
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
+
+    int ret = ProcessAddTrackingManage(&msg, VM_TYPE, nullptr);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(InterfaceTest, TestProcessAddTrackingManageNewProcessReturnsEbadf)
+{
+    struct MigrateOutMsg msg = {};
+    ProcessAttr current = {};
+    current.pid = 1234;
+    current.next = nullptr;
+    g_processManager.processes = &current;
+    g_processManager.nrLocalNuma = 4;
+
+    msg.count = 1;
+    msg.payload[0].pid = 1234;
+    msg.payload[0].count = 1;
+    msg.payload[0].inner[0].destNid = 4;
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttr *)nullptr));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-EBADF));
+
+    int ret = ProcessAddTrackingManage(&msg, VM_TYPE, nullptr);
+    EXPECT_EQ(-EBADF, ret);
+    g_processManager.processes = nullptr;
 }
 
 TEST_F(InterfaceTest, TestProcessAddGroupedTrackingManageBuildsPayload)
@@ -3608,7 +3679,7 @@ TEST_F(InterfaceTest, TestSmapQueryProcessConfigNormal)
 
 TEST_F(InterfaceTest, TestProcessAddTrackingManageNullMsg)
 {
-    int ret = ProcessAddTrackingManage(nullptr, VM_TYPE);
+    int ret = ProcessAddTrackingManage(nullptr, VM_TYPE, nullptr);
     EXPECT_EQ(-EINVAL, ret);
 }
 
