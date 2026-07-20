@@ -22,7 +22,7 @@
 #define SMAP_MIG_DEVICE "smap_mig_device"
 #define SMAP_MIG_MAGIC 0xB9
 #define SMAP_MIG_MIGRATE _IOW(SMAP_MIG_MAGIC, 0, struct migrate_msg)
-#define SMAP_CHECK_PAGESIZE _IOW(SMAP_MIG_MAGIC, 1, uint32_t)
+#define SMAP_SET_PAGETYPE _IOW(SMAP_MIG_MAGIC, 1, uint32_t)
 #define SMAP_MIG_MIGRATE_NUMA _IOW(SMAP_MIG_MAGIC, 2, struct migrate_numa_msg)
 #define SMAP_MIG_PID_REMOTE_NUMA \
 	_IOW(SMAP_MIG_MAGIC, 3, struct migrate_pid_remote_numa_msg)
@@ -50,7 +50,7 @@ struct pagemapread {
 
 static inline int get_max_pid_cnt(void)
 {
-	return smap_pgsize == HUGE_PAGE ? MAX_2M_PROCESSES_CNT
+	return smap_pgtype == HUGE_PAGE ? MAX_2M_PROCESSES_CNT
 					: MAX_4K_PROCESSES_CNT;
 }
 

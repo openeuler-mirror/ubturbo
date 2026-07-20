@@ -45,10 +45,6 @@ int calc_access_len(struct access_tracking_dev *adev);
 #undef pr_fmt
 #define pr_fmt(fmt) "access-bit: " fmt
 
-unsigned int smap_scene = NORMAL_SCENE;
-module_param(smap_scene, uint, S_IRUGO);
-MODULE_PARM_DESC(smap_scene, "smap use scene: 0 for HCCS, 1 for UB_QEMU");
-
 unsigned int enable_hist = DISABLE_HIST;
 module_param(enable_hist, uint, S_IRUGO);
 MODULE_PARM_DESC(enable_hist, "smap hist disable: 0, smap hist enable: 1");
@@ -487,13 +483,6 @@ static int remote_ram_init(void)
 	if (ret) {
 		pr_err("unable to refresh remote ram info, ret: %d\n", ret);
 		return ret;
-	}
-	if (smap_scene != UB_QEMU_SCENE_ADVANCED) {
-		if (list_empty(&remote_ram_list)) {
-			pr_err("remote NUMA node not detected\n");
-			return -EINVAL;
-		}
-		pr_info("remote NUMA node detected\n");
 	}
 	return 0;
 }

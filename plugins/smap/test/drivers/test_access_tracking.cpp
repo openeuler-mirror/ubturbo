@@ -301,9 +301,6 @@ TEST_F(AccessTrackingTest, access_tracking_init_two)
     MOCKER(drivers_refresh_remote_ram).stubs().will(returnValue(0));
     MOCKER(release_remote_ram).stubs();
     MOCKER(reset_acpi_mem).stubs();
-    drivers_smap_scene = NORMAL_SCENE;
-    int ret = access_tracking_init();
-    EXPECT_EQ(-EINVAL, ret);
 
     struct ram_segment *seg = (struct ram_segment *)malloc(sizeof(struct ram_segment));
     INIT_LIST_HEAD(&seg->node);
@@ -315,7 +312,7 @@ TEST_F(AccessTrackingTest, access_tracking_init_two)
     MOCKER(access_tracking_add).stubs().will(returnValue(0));
     MOCKER(create_scan_workqueue).stubs().will(returnValue(0));
     MOCKER(access_print_acpi_mem).stubs();
-    ret = access_tracking_init();
+    int ret = access_tracking_init();
     EXPECT_EQ(0, ret);
     list_del(&seg->node);
     free(seg);

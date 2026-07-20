@@ -40,37 +40,8 @@
 #undef pr_fmt
 #define pr_fmt(fmt) "SMAP_track_manage: " fmt
 
-int node_modes[SMAP_MAX_NUMNODES] = {
-	[0 ... SMAP_MAX_NUMNODES - 1] = INVALID_DATA_MODE,
-};
-module_param_array(node_modes, int, NULL, S_IRUGO);
-MODULE_PARM_DESC(
-	node_modes,
-	"SMAP data mode selection: SKIP = -1, HIST_MODE = 0, CPI_MODE_AND = 1, "
-	"CPI_MODE_SUM = 2, CPI_MODE_OR = 3, ACCESS_MODE_AND = 4, ACCESS_MODE_SUM = 5, ACCESS_MODE_OR = 6,"
-	"MEBS_MODE = 7, MEBS_MODE_4B = 8, MEBS_MODE_6B = 9, PLDA_HDT_MODE = 10, PLDA_HDT_DECAY_MODE = 11, default skip");
-EXPORT_SYMBOL_GPL(node_modes);
-
-unsigned int smap_pgsize = HUGE_PAGE;
-module_param(smap_pgsize, uint, S_IRUGO);
-MODULE_PARM_DESC(smap_pgsize, "SMAP migration page size: 0 for 4K, 1 for 2M, "
-			      "default 2M");
-EXPORT_SYMBOL_GPL(smap_pgsize);
-
-unsigned int smap_mode = VM_MODE;
-module_param(smap_mode, uint, S_IRUGO);
-MODULE_PARM_DESC(smap_mode, "SMAP migrate mode: 0 for baremetal, 1 for VM, "
-			    "2 for process, default VM");
-EXPORT_SYMBOL_GPL(smap_mode);
-
-unsigned int smap_scene = NORMAL_SCENE;
-module_param(smap_scene, uint, S_IRUGO);
-MODULE_PARM_DESC(smap_scene, "SMAP usage scenarios: 0 for HCCS, 1 for UB_QEMU");
-
-char *qemu_name = "qemu-kvm";
-module_param(qemu_name, charp, S_IRUGO);
-MODULE_PARM_DESC(qemu_name, "qemu_name string to match");
-EXPORT_SYMBOL_GPL(qemu_name);
+unsigned int smap_pgtype = HUGE_PAGE;
+EXPORT_SYMBOL_GPL(smap_pgtype);
 #define MB_INTV 1000
 #define SUBTASK_RETRY_TIME 1000
 #define SUBTASK_SLEEP_TIME 5
@@ -80,7 +51,7 @@ struct delayed_work migrate_back_work;
 
 bool is_smap_pg_huge(void)
 {
-	return smap_pgsize == HUGE_PAGE;
+	return smap_pgtype == HUGE_PAGE;
 }
 EXPORT_SYMBOL(is_smap_pg_huge);
 
@@ -96,35 +67,6 @@ static void resource(void)
 #ifdef HAM_ENABLED
 	ham_exit();
 #endif
-}
-
-static int is_qemu_name_valid(void)
-{
-	if (!qemu_name || strlen(qemu_name) == 0 ||
-	    strlen(qemu_name) > QEMU_NAME_LEN) {
-		pr_err("invalid qemu name\n");
-		return -EINVAL;
-	}
-	return 0;
-}
-
-int is_smap_args_valid(void)
-{
-	int i;
-
-	if (smap_pgsize >= NR_PGSIZE_ARGS) {
-		return -EINVAL;
-	}
-	if (smap_mode >= NR_MODE_ARGS) {
-		return -EINVAL;
-	}
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
-		if (node_modes[i] != INVALID_DATA_MODE &&
-		    is_data_mode_invalid(node_modes[i])) {
-			return -EINVAL;
-		}
-	}
-	return is_qemu_name_valid();
 }
 
 static void migrate_back_work_func(struct work_struct *work)
@@ -196,11 +138,6 @@ static int __init tracking_init(void)
 {
 	int ret = 0;
 
-	ret = is_smap_args_valid();
-	if (ret < 0) {
-		pr_err("invalid module arguments\n");
-		return ret;
-	}
 	ret = smap_process_symbols();
 	if (ret) {
 		pr_err("smap process symbols failed\n");
@@ -212,14 +149,6 @@ static int __init tracking_init(void)
 		return ret;
 	}
 	(void)refresh_remote_ram();
-	if (smap_scene != UB_QEMU_SCENE_ADVANCED) {
-		if (list_empty(&remote_ram_list)) {
-			ret = -EINVAL;
-			pr_err("remote NUMA is not detected\n");
-			goto out_smap_node_sysfs;
-		}
-		pr_info("remote NUMA has been detected\n");
-	}
 	migrate_back_wq = create_workqueue("smap_migrate_back_wq");
 	if (!migrate_back_wq) {
 		pr_err("failed to create migrate back workqueue\n");

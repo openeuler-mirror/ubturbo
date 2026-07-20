@@ -11,10 +11,6 @@
 
 #include "common.h"
 
-#define REMOTE_NUMA_ID 4
-#define REMOTE_PA_START 0x40000000000
-#define REMOTE_PA_END 0x47fffffffff
-
 #define MAX_MEMID_STRLEN 32
 
 struct ram_segment {
