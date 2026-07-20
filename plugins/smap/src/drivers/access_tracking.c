@@ -228,16 +228,22 @@ static void access_tracking_enable(struct device *ldev)
 		return;
 	}
 	up_write(&adev->buffer_lock);
+	adev->enable_on = true;
 	submit_scan_works(adev);
 }
 
 static int access_tracking_disable(struct device *ldev)
 {
 	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
+	int ret;
+
 	if (adev->is_hist)
 		return 0;
 
-	return check_scan_works_status(adev);
+	ret = check_scan_works_status(adev);
+	if (!ret)
+		adev->enable_on = false;
+	return ret;
 }
 
 static int access_tracking_mode_set(struct device *ldev, u8 mode)

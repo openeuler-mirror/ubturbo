@@ -54,16 +54,21 @@ extern "C" void access_tracking_enable(struct device *ldev);
 extern "C" int actc_buffer_reinit(struct access_tracking_dev *adev);
 TEST_F(AccessTrackingTest, access_tracking_enable)
 {
-        struct access_tracking_dev dev;
-        MOCKER(actc_buffer_reinit).stubs().will(ignoreReturnValue());
+        struct access_tracking_dev dev = {};
+        INIT_LIST_HEAD(&access_dev);
+        MOCKER(actc_buffer_reinit).stubs().will(returnValue(0));
         (void)access_tracking_enable(&dev.ldev);
+        EXPECT_EQ(true, dev.enable_on);
 }
 
 extern "C" void access_tracking_disable(struct device *ldev);
 TEST_F(AccessTrackingTest, access_tracking_disable)
 {
-        struct access_tracking_dev dev;
+        struct access_tracking_dev dev = {};
+        INIT_LIST_HEAD(&access_dev);
+        dev.enable_on = true;
         (void)access_tracking_disable(&dev.ldev);
+        EXPECT_EQ(false, dev.enable_on);
 }
 
 TEST_F(AccessTrackingTest, init_actc_data)

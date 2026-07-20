@@ -970,10 +970,17 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 		 * A new pid may be attached during scan period or migrate period,
 		 * For performance reasons,
 		 * set cur_times to zero directly to ensure a complete scan can be performed.
+		 *
+		 * Only submit the scan work when the tracking module is enabled; otherwise
+		 * (disable/migrate window) leave it parked in ap_data.list so that
+		 * submit_scan_works picks it up at the next enable. This avoids a scan
+		 * cycle running concurrently with migrate, whose prepare() reallocates
+		 * paddr_bm while convert_pos_to_paddr_sorted() reads it.
 		 */
 		ap->cur_times = 0;
 		pid_pte_mkold(ap);
-		submit_one_work(ap);
+		if (access_scan_enabled())
+			submit_one_work(ap);
 		list_move_tail(&ap->node, &ap_data.list);
 	}
 	up_write(&ap_data.lock);
