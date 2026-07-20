@@ -172,7 +172,7 @@ static int __kvm_pgtable_walk(struct kvm_pgtable_walk_data *data,
 	int ret = 0;
 
 #ifdef KERNEL_VELINUX
-	if (WARN_ON_ONCE(level < KVM_PGTABLE_FIRST_LEVEL || level > KVM_PGTABLE_LAST_LEVEL))
+	if (WARN_ON_ONCE(level > KVM_PGTABLE_LAST_LEVEL))
 #else
 	if (WARN_ON_ONCE(level >= KVM_PGTABLE_MAX_LEVELS))
 #endif
