@@ -728,10 +728,10 @@ TEST_F(AccessIoctlTestKernel, SmapAccessIoctlThree)
     long ret;
 
     MOCKER(ioctl_walk_pagemap).stubs().will(returnValue(4));
-    ret = smap_access_ioctl(NULL, 0x4008BB04, NULL);
+    ret = smap_access_ioctl(NULL, SMAP_ACCESS_WALK_PAGEMAP, NULL);
     EXPECT_EQ(4, ret);
 
-    ret = smap_access_ioctl(NULL, 0x4324BB05, NULL);
+    ret = smap_access_ioctl(NULL, SMAP_ACCESS_GET_TRACKING + 1, NULL);
     EXPECT_EQ(-ENOTTY, ret);
 }
 

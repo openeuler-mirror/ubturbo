@@ -6,14 +6,29 @@
 #ifndef _LINUX_IO_H
 #define _LINUX_IO_H
 
-#define _IOC_DIRBITS	3
-#define _IOC_SIZEBITS	13
+/* Use aarch64 ioctl layout (same as asm-generic with SIZEBITS=14, DIRBITS=2) */
+#ifndef _IOC_DIRBITS
+#define _IOC_DIRBITS	2
+#endif
+#ifndef _IOC_SIZEBITS
+#define _IOC_SIZEBITS	14
+#endif
+#ifndef _IOC_TYPEBITS
 #define _IOC_TYPEBITS	8
+#endif
+#ifndef _IOC_NRBITS
 #define _IOC_NRBITS	8
+#endif
 
-#define _IOC_WRITE	4U
+#ifndef _IOC_WRITE
+#define _IOC_WRITE	1U
+#endif
+#ifndef _IOC_READ
 #define _IOC_READ	2U
-#define _IOC_NONE	1U
+#endif
+#ifndef _IOC_NONE
+#define _IOC_NONE	0U
+#endif
 
 #define _IOC_NRMASK	((1 << _IOC_NRBITS) - 1)
 #define _IOC_TYPEMASK	((1 << _IOC_TYPEBITS) - 1)
@@ -30,8 +45,12 @@
 	 (((direction) << _IOC_DIRSHIFT) |	((type) << _IOC_TYPESHIFT) |	\
 	  ((number) << _IOC_NRSHIFT) | ((size) << _IOC_SIZESHIFT)))
 
+#ifndef _IOW
 #define _IOW(type, number, size) _IOC(_IOC_WRITE, (type), (number), sizeof(size))
+#endif
+#ifndef _IOR
 #define _IOR(type, number, size) _IOC(_IOC_READ, (type), (number), sizeof(size))
+#endif
 
 void memunmap(void *addr);
 void *memremap(resource_size_t offset, size_t size, unsigned long flags);

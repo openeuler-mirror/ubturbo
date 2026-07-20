@@ -10,6 +10,10 @@
 # define _IOC_SIZEBITS	14
 #endif
 
+#ifndef _IOC_READ
+# define _IOC_READ	2U
+#endif
+
 #ifndef _IOC_WRITE
 # define _IOC_WRITE	1U
 #endif
@@ -31,7 +35,7 @@
 
 #define _IOC_TYPECHECK(t) (sizeof(t))
 #define _IOW(type, nr, size)	_IOC(_IOC_WRITE, (type), (nr), (_IOC_TYPECHECK(size)))
-#define _IOR(type, nr, size)	_IOC(_IOC_WRITE, (type), (nr), (_IOC_TYPECHECK(size)))
+#define _IOR(type, nr, size)	_IOC(_IOC_READ, (type), (nr), (_IOC_TYPECHECK(size)))
 #define _IO(type, nr)		_IOC(_IOC_NONE, (type), (nr), 0)
 #define _IOC_NR(nr)		(((nr) >> _IOC_NRSHIFT) & _IOC_NRMASK)
 #define _IOC_TYPE(nr)		(((nr) >> _IOC_TYPESHIFT) & _IOC_TYPEMASK)
