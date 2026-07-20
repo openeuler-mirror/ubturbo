@@ -647,10 +647,10 @@ static void update_statistic_scan_num(pid_t pid)
 
 static bool memslot_is_mem(struct kvm_memory_slot *memslot)
 {
-	if (memslot->base_gfn < (1 << GB_TO_4K_SHIFT)) {
+	if (memslot->base_gfn < (1 << GB_TO_NORMAL_PAGE_SHIFT)) {
 		return false;
 	}
-	if (memslot->npages <= (1 << HUGE_TO_4K_SHIFT)) {
+	if (memslot->npages <= (1 << HUGE_TO_NORMAL_PAGE_SHIFT)) {
 		return false;
 	}
 	return true;

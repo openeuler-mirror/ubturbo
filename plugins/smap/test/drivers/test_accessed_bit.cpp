@@ -786,7 +786,7 @@ TEST_F(AccessedBitTest, MemslotIsMemBaseGfnTooSmall)
 {
     struct kvm_memory_slot memslot;
     memslot.base_gfn = 0;
-    memslot.npages = (1 << HUGE_TO_4K_SHIFT) + 1;
+    memslot.npages = (1 << HUGE_TO_NORMAL_PAGE_SHIFT) + 1;
     bool ret = memslot_is_mem(&memslot);
     EXPECT_FALSE(ret);
 }
@@ -794,7 +794,7 @@ TEST_F(AccessedBitTest, MemslotIsMemBaseGfnTooSmall)
 TEST_F(AccessedBitTest, MemslotIsMemNpagesTooSmall)
 {
     struct kvm_memory_slot memslot;
-    memslot.base_gfn = (1 << GB_TO_4K_SHIFT) + 1;
+    memslot.base_gfn = (1 << GB_TO_NORMAL_PAGE_SHIFT) + 1;
     memslot.npages = 1;
     bool ret = memslot_is_mem(&memslot);
     EXPECT_FALSE(ret);
@@ -803,8 +803,8 @@ TEST_F(AccessedBitTest, MemslotIsMemNpagesTooSmall)
 TEST_F(AccessedBitTest, MemslotIsMemValidMemslot)
 {
     struct kvm_memory_slot memslot;
-    memslot.base_gfn = (1 << GB_TO_4K_SHIFT) + 1;
-    memslot.npages = (1 << HUGE_TO_4K_SHIFT) + 1;
+    memslot.base_gfn = (1 << GB_TO_NORMAL_PAGE_SHIFT) + 1;
+    memslot.npages = (1 << HUGE_TO_NORMAL_PAGE_SHIFT) + 1;
     bool ret = memslot_is_mem(&memslot);
     EXPECT_TRUE(ret);
 }
