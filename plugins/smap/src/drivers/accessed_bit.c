@@ -88,7 +88,8 @@ static int scan_group_size_set(const char *val, const struct kernel_param *kp)
 		return -EINVAL;
 	}
 
-	pr_info("scan group size changed: %lu -> %lu\n", scan_group_size, new_size);
+	pr_info("scan group size changed: %lu -> %lu\n", scan_group_size,
+		new_size);
 
 	/* Update scan group size */
 	scan_group_size = new_size;

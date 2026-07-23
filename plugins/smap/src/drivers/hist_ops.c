@@ -93,7 +93,8 @@ module_param_cb(hist_4k_scan_mode_param, &hist_4k_scan_mode_ops,
 MODULE_PARM_DESC(hist_4k_scan_mode_param,
 		 "4K scan mode: 0=multi-granularity, 1=seq-loop (default)");
 
-static int hist_scan_duration_per_win_set(const char *val, const struct kernel_param *kp);
+static int hist_scan_duration_per_win_set(const char *val,
+					  const struct kernel_param *kp);
 
 /* Custom parameter operations structure */
 static const struct kernel_param_ops hist_scan_duration_per_win_ops = {
@@ -117,7 +118,8 @@ MODULE_PARM_DESC(hist_scan_duration_per_win,
  * - Validate the value is positive
  * - Update the global scan duration per window
  */
-static int hist_scan_duration_per_win_set(const char *val, const struct kernel_param *kp)
+static int hist_scan_duration_per_win_set(const char *val,
+					  const struct kernel_param *kp)
 {
 	unsigned int new_duration;
 	int ret;
@@ -129,7 +131,8 @@ static int hist_scan_duration_per_win_set(const char *val, const struct kernel_p
 
 	/* Validate parameter range: must be positive */
 	if (new_duration == 0 || new_duration > HIST_THREAD_PERIOD) {
-		pr_err("invalid scan duration per win: %u, must be > 0 and < 512\n", new_duration);
+		pr_err("invalid scan duration per win: %u, must be > 0 and < 512\n",
+		       new_duration);
 		return -EINVAL;
 	}
 
