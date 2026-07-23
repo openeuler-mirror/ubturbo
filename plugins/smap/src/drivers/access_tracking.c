@@ -99,27 +99,6 @@ static void submit_scan_works(struct access_tracking_dev *adev)
 	up_read(&ap_data.lock);
 }
 
-static int check_scan_works_status(struct access_tracking_dev *adev)
-{
-	struct access_pid *ap;
-	struct access_tracking_dev *adev_head = get_first_access_dev();
-	bool all_complete = true;
-	if (adev != adev_head) {
-		return 0;
-	}
-
-	down_read(&ap_data.lock);
-	list_for_each_entry(ap, &ap_data.list, node) {
-		if (!completion_done(&ap->work_done)) {
-			all_complete = false;
-			break;
-		}
-	}
-	up_read(&ap_data.lock);
-
-	return all_complete ? 0 : -EBUSY;
-}
-
 static int create_scan_workqueue(void)
 {
 	struct access_tracking_dev *adev = get_first_access_dev();
@@ -235,15 +214,37 @@ static void access_tracking_enable(struct device *ldev)
 static int access_tracking_disable(struct device *ldev)
 {
 	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
-	int ret;
+	struct access_pid *ap;
+	bool all_complete = true;
 
 	if (adev->is_hist)
 		return 0;
+	if (adev != get_first_access_dev())
+		return 0;
 
-	ret = check_scan_works_status(adev);
-	if (!ret)
+	/*
+	 * 必须在 ap_data.lock 写锁的同一临界区内完成"检查所有扫描任务完成
+	 * 并切换为 disabled"。add_pid 的 move_to_ap_data_list 同样在
+	 * down_write(&ap_data.lock) 下读 enable_on 并提交扫描，二者互斥，
+	 * 才能保证 disable 成功返回后不会再有新扫描任务被提交，避免迁移与
+	 * 扫描并发（prepare 重分配 bitmap 与迁移读侧竞态）。
+	 *
+	 * complete(&ap->work_done) 在 work_func 释放 ap_data.lock 读锁之后才
+	 * 调用，故 completion_done 为真时该 work 已不持读锁，此处持写锁检查
+	 * 不会与在跑的 work 互斥死锁。
+	 */
+	down_write(&ap_data.lock);
+	list_for_each_entry(ap, &ap_data.list, node) {
+		if (!completion_done(&ap->work_done)) {
+			all_complete = false;
+			break;
+		}
+	}
+	if (all_complete)
 		adev->enable_on = false;
-	return ret;
+	up_write(&ap_data.lock);
+
+	return all_complete ? 0 : -EBUSY;
 }
 
 static int access_tracking_mode_set(struct device *ldev, u8 mode)
