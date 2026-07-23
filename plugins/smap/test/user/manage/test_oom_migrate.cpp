@@ -39,145 +39,6 @@ extern "C" FILE *OpenNumaMaps(pid_t pid);
 extern "C" char *fgets(char *__restrict __s, int __n, FILE *__restrict __stream);
 extern "C" int pclose(FILE *stream);
 
-/* ============ CollectVaddrsFromNumaMaps ============ */
-extern "C" int CollectVaddrsFromNumaMaps(pid_t pid, int nrLocalNuma, uint64_t pageSize, uint64_t maxPages,
-                                         uint64_t **outAddrs, int *outCnt);
-
-/* 本地过滤：只收集含 N0=/N1=(本地)的段，按段内本地页总数枚举候选 vaddr */
-TEST_F(OomMigrateTest, TestCollectVaddrsFromNumaMaps_Filter)
-{
-    pid_t pid = 123;
-    static FILE fakeFile;
-    static char line1[] = "70000000 N2=10 kernelpagesize_kB=4\n";          /* 纯远端，无本地页，跳过 */
-    static char line2[] = "80000000 N0=1 N1=3 N2=1 kernelpagesize_kB=4\n"; /* 本地页=1+3=4 */
-    MOCKER(OpenNumaMaps).stubs().will(returnValue(&fakeFile));
-    MOCKER(fgets)
-        .stubs()
-        .will(returnValue(line1))
-        .then(returnValue(line2))
-        .then(returnValue(static_cast<char *>(nullptr)));
-    MOCKER(pclose).stubs().will(returnValue(0));
-    MOCKER(IsHugeMode).stubs().will(returnValue(false));
-
-    uint64_t *addrs = NULL;
-    int cnt = 0;
-    int ret = CollectVaddrsFromNumaMaps(pid, 2, 4096, 100, &addrs, &cnt); /* nrLocalNuma=2 */
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(4, cnt); /* N0=1 + N1=3，多本地节点全部计入 */
-    EXPECT_EQ(0x80000000UL, addrs[0]);
-    EXPECT_EQ(0x80000000UL + 3 * 4096, addrs[3]);
-    free(addrs);
-}
-
-/* 大页模式：IsHugeMode=true，非 huge 段被 IsNumaMapLineHuge 过滤 */
-TEST_F(OomMigrateTest, TestCollectVaddrsFromNumaMaps_HugeFilter)
-{
-    pid_t pid = 123;
-    static FILE fakeFile;
-    static char line1[] = "80000000 N1=3 kernelpagesize_kB=4\n";    /* 非 huge，跳过 */
-    static char line2[] = "90000000 N1=2 kernelpagesize_kB=2048\n"; /* huge */
-    MOCKER(OpenNumaMaps).stubs().will(returnValue(&fakeFile));
-    MOCKER(fgets)
-        .stubs()
-        .will(returnValue(line1))
-        .then(returnValue(line2))
-        .then(returnValue(static_cast<char *>(nullptr)));
-    MOCKER(pclose).stubs().will(returnValue(0));
-    MOCKER(IsHugeMode).stubs().will(returnValue(true));
-
-    uint64_t *addrs = NULL;
-    int cnt = 0;
-    int ret = CollectVaddrsFromNumaMaps(pid, 2, 2048 * 1024, 100, &addrs, &cnt);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(2, cnt);
-    EXPECT_EQ(0x90000000UL, addrs[0]);
-    free(addrs);
-}
-
-/* 多本地节点 count 求和：N0=3 + N1=4 → 枚举 7 个候选 vaddr */
-TEST_F(OomMigrateTest, TestCollectVaddrsFromNumaMaps_MultiLocalSum)
-{
-    pid_t pid = 123;
-    static FILE fakeFile;
-    static char line[] = "00a00000 N0=3 N1=4 kernelpagesize_kB=4\n";
-    MOCKER(OpenNumaMaps).stubs().will(returnValue(&fakeFile));
-    MOCKER(fgets).stubs().will(returnValue(line)).then(returnValue(static_cast<char *>(nullptr)));
-    MOCKER(pclose).stubs().will(returnValue(0));
-    MOCKER(IsHugeMode).stubs().will(returnValue(false));
-
-    uint64_t *addrs = NULL;
-    int cnt = 0;
-    int ret = CollectVaddrsFromNumaMaps(pid, 2, 4096, 100, &addrs, &cnt);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(7, cnt); /* 3 + 4 */
-    EXPECT_EQ(0xa00000UL, addrs[0]);
-    EXPECT_EQ(0xa00000UL + 6 * 4096, addrs[6]);
-    free(addrs);
-}
-
-/* 段内本地页数超过 maxPages：枚举在 maxPages 处截断 */
-TEST_F(OomMigrateTest, TestCollectVaddrsFromNumaMaps_MaxPagesCap)
-{
-    pid_t pid = 123;
-    static FILE fakeFile;
-    static char line[] = "00b00000 N1=100 kernelpagesize_kB=4\n";
-    MOCKER(OpenNumaMaps).stubs().will(returnValue(&fakeFile));
-    MOCKER(fgets).stubs().will(returnValue(line)).then(returnValue(static_cast<char *>(nullptr)));
-    MOCKER(pclose).stubs().will(returnValue(0));
-    MOCKER(IsHugeMode).stubs().will(returnValue(false));
-
-    uint64_t *addrs = NULL;
-    int cnt = 0;
-    int ret = CollectVaddrsFromNumaMaps(pid, 2, 4096, 5, &addrs, &cnt); /* maxPages=5 */
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(5, cnt);
-    free(addrs);
-}
-
-/* 全段无本地页：cnt=0，不迁移 */
-TEST_F(OomMigrateTest, TestCollectVaddrsFromNumaMaps_NoLocal)
-{
-    pid_t pid = 123;
-    static FILE fakeFile;
-    static char line[] = "70000000 N2=10 N3=5 kernelpagesize_kB=4\n"; /* 仅远端 */
-    MOCKER(OpenNumaMaps).stubs().will(returnValue(&fakeFile));
-    MOCKER(fgets).stubs().will(returnValue(line)).then(returnValue(static_cast<char *>(nullptr)));
-    MOCKER(pclose).stubs().will(returnValue(0));
-    MOCKER(IsHugeMode).stubs().will(returnValue(false));
-
-    uint64_t *addrs = NULL;
-    int cnt = 0;
-    int ret = CollectVaddrsFromNumaMaps(pid, 2, 4096, 100, &addrs, &cnt);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(0, cnt);
-    EXPECT_EQ(nullptr, addrs);
-    free(addrs);
-}
-
-/* OpenNumaMaps 失败：返回 -ENODEV */
-TEST_F(OomMigrateTest, TestCollectVaddrsFromNumaMaps_OpenFail)
-{
-    pid_t pid = 123;
-    MOCKER(OpenNumaMaps).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
-    uint64_t *addrs = NULL;
-    int cnt = 0;
-    int ret = CollectVaddrsFromNumaMaps(pid, 2, 4096, 100, &addrs, &cnt);
-    EXPECT_EQ(-ENODEV, ret);
-    EXPECT_EQ(0, cnt);
-}
-
-/* nrLocalNuma <= 0：无本地节点，直接返回 0，不读 numa_maps */
-TEST_F(OomMigrateTest, TestCollectVaddrsFromNumaMaps_ZeroNrLocalNuma)
-{
-    pid_t pid = 123;
-    MOCKER(OpenNumaMaps).expects(never());
-    uint64_t *addrs = NULL;
-    int cnt = 0;
-    int ret = CollectVaddrsFromNumaMaps(pid, 0, 4096, 100, &addrs, &cnt);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(0, cnt);
-}
-
 /* ============ MigratePidFromToL2 ============ */
 extern "C" long SmapMovePages(int pid, unsigned long count, const void **pages, const int *nodes, int *status,
                               int flags);
@@ -185,8 +46,9 @@ extern "C" long SmapMovePages(int pid, unsigned long count, const void **pages, 
 static long MockSmapMovePagesAllOk(int pid, unsigned long count, const void **pages, const int *nodes, int *status,
                                    int flags)
 {
+    /* move_pages(2) 成功时 status[i] = 页面最终所在 nid（=目标 nodes[0]），并非 0 */
     for (unsigned long i = 0; i < count; i++) {
-        status[i] = 0; /* 全部迁移成功 */
+        status[i] = nodes[0];
     }
     return 0;
 }
@@ -195,10 +57,20 @@ static long MockSmapMovePagesPartialFail(int pid, unsigned long count, const voi
                                          int *status, int flags)
 {
     if (count >= 1) {
-        status[0] = 0; /* 成功 */
+        status[0] = nodes[0]; /* 成功：迁达目标节点 */
     }
     for (unsigned long i = 1; i < count; i++) {
         status[i] = -ENOENT; /* 未映射，失败 */
+    }
+    return 0;
+}
+
+/* syscall 整体成功但逐页全失败（-ENOENT）：ok==0，必须返回非 0，不能返回 0 误导调用方。 */
+static long MockSmapMovePagesAllPerPageFail(int pid, unsigned long count, const void **pages, const int *nodes,
+                                             int *status, int flags)
+{
+    for (unsigned long i = 0; i < count; i++) {
+        status[i] = -ENOENT;
     }
     return 0;
 }
@@ -257,14 +129,33 @@ TEST_F(OomMigrateTest, TestMigratePidFromToL2_NoAddrs)
     EXPECT_EQ(100, budget);
 }
 
-/* 预算为 0：直接返回，不读 numa_maps */
+/* 预算为 0：while(*pageBudget>0) 不进循环，无候选，返回 0（非错误）。OpenNumaMaps 仍调、fgets/move_pages 不调 */
 TEST_F(OomMigrateTest, TestMigratePidFromToL2_ZeroBudget)
 {
     pid_t pid = 123;
-    MOCKER(OpenNumaMaps).expects(never());
+    static FILE fakeFile;
+    MOCKER(OpenNumaMaps).stubs().will(returnValue(&fakeFile));
+    MOCKER(fgets).expects(never());
+    MOCKER(pclose).stubs().will(returnValue(0));
+    MOCKER(SmapMovePages).expects(never());
+
     uint64_t budget = 0;
     int ret = MigratePidFromToL2(pid, 2, 2, 4096, &budget);
     EXPECT_EQ(0, ret);
+    EXPECT_EQ(0, budget);
+}
+
+/* OpenNumaMaps 失败：返回 -ENODEV，不调 move_pages */
+TEST_F(OomMigrateTest, TestMigratePidFromToL2_OpenFail)
+{
+    pid_t pid = 123;
+    MOCKER(OpenNumaMaps).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
+    MOCKER(SmapMovePages).expects(never());
+
+    uint64_t budget = 100;
+    int ret = MigratePidFromToL2(pid, 2, 2, 4096, &budget);
+    EXPECT_EQ(-ENODEV, ret);
+    EXPECT_EQ(100, budget);
 }
 
 /* EACCES：全局失败不写 status[]，预算不扣，返回 -EACCES。 */
@@ -290,6 +181,45 @@ TEST_F(OomMigrateTest, TestMigratePidFromToL2_EaccesNoRetry)
     int ret = MigratePidFromToL2(pid, 2, 2, 4096, &budget);
     EXPECT_EQ(-EACCES, ret); /* ok==0，返回 -errno */
     EXPECT_EQ(100, budget);  /* 零成功，预算不扣 */
+}
+
+/* syscall 成功但逐页全 -ENOENT：movedCnt==0，必须返回非 0（-ENOENT），不能返回 0 误导调用方。 */
+TEST_F(OomMigrateTest, TestMigratePidFromToL2_AllPerPageFail)
+{
+    pid_t pid = 123;
+    static FILE fakeFile;
+    static char line[] = "80000000 N1=2 kernelpagesize_kB=4\n";
+    MOCKER(OpenNumaMaps).stubs().will(returnValue(&fakeFile));
+    MOCKER(fgets).stubs().will(returnValue(line)).then(returnValue(static_cast<char *>(nullptr)));
+    MOCKER(pclose).stubs().will(returnValue(0));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(SmapMovePages).stubs().will(invoke(MockSmapMovePagesAllPerPageFail));
+
+    uint64_t budget = 100;
+    int ret = MigratePidFromToL2(pid, 2, 2, 4096, &budget);
+    EXPECT_EQ(-ENOENT, ret); /* 有候选但全逐页失败，返回首个 errno */
+    EXPECT_EQ(100, budget);  /* 零成功，预算不扣 */
+}
+
+/*
+ * 单段本地页数 > MAX_MOVE_PAGES_BATCH：流式跨批迁移（512 + 余量），验证固定批数组边扫边迁。
+ * 段 N1=600，budget=1000：批1 迁 512、批2 迁 88，共 600，预算剩 400。
+ */
+TEST_F(OomMigrateTest, TestMigratePidFromToL2_StreamMultiBatch)
+{
+    pid_t pid = 123;
+    static FILE fakeFile;
+    static char line[] = "80000000 N1=600 kernelpagesize_kB=4\n";
+    MOCKER(OpenNumaMaps).stubs().will(returnValue(&fakeFile));
+    MOCKER(fgets).stubs().will(returnValue(line)).then(returnValue(static_cast<char *>(nullptr)));
+    MOCKER(pclose).stubs().will(returnValue(0));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(SmapMovePages).expects(exactly(2)).will(invoke(MockSmapMovePagesAllOk));
+
+    uint64_t budget = 1000;
+    int ret = MigratePidFromToL2(pid, 2, 2, 4096, &budget);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(400, budget); /* 1000 - 600 = 400 */
 }
 
 /* ============ FindPidMigrateSize ============ */

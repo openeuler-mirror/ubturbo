@@ -10,6 +10,8 @@
  * See the Mulan PSL v2 for more details.
  */
 
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -21,6 +23,18 @@
 #include "manage.h"
 #include "securec.h"
 #include "oom_migrate.h"
+
+#define MAX_MOVE_PAGES_BATCH 512 /* 单次 move_pages(2) 批量上限 */
+#define NUMA_MAPS_LINE_LEN 1024   /* numa_maps 单行缓冲（与 MAX_LINE_LENGTH 等宽） */
+
+/* numa_maps 段级本地过滤的流式游标：跨批次保留当前段内未枚举完的页。 */
+typedef struct {
+    char line[NUMA_MAPS_LINE_LEN];
+    bool hasLine;          /* line[] 持有尚未枚举完毕的段 */
+    unsigned long segStart;
+    uint64_t segLocal;     /* 该段落在本地节点的总页数 */
+    uint64_t segEmitted;   /* 该段已枚举的本地页数 */
+} NumaScanCursor;
 
 /*
  * move_pages(2) 的 mpol flags（内核 uapi 取值，避免依赖 <numaif.h>）。
@@ -35,166 +49,198 @@
 #endif
 #define URGENT_MOVE_PAGES_FLAGS (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL)
 
-/* move_pages(2) 薄封装，UT 拦截此处不触达真实 syscall。 */
-long SmapMovePages(int pid, unsigned long count, const void **pages, const int *nodes, int *status, int flags)
+/* move_pages(2) 薄封装（mockable seam）：UT 经 run_dt.sh strip static 后拦截此处，不触达真实 syscall。 */
+static long SmapMovePages(int pid, unsigned long count, const void **pages, const int *nodes, int *status, int flags)
 {
     return syscall(__NR_move_pages, pid, count, pages, nodes, status, flags);
 }
 
-/*
- * 读 /proc/<pid>/numa_maps，段级本地过滤：取含本地节点页的段并枚举候选 vaddr。
- * numa_maps 只给段内各 node 页数、无页偏移，枚举地址可能含段内非本地页，
- * 由 move_pages 按页粒度处理（已在 L2 的页幂等，未映射页返回 -ENOENT）。
- */
-int CollectVaddrsFromNumaMaps(pid_t pid, int nrLocalNuma, uint64_t pageSize, uint64_t maxPages, uint64_t **outAddrs,
-                              int *outCnt)
+/* 解析一行 numa_maps：取段起始地址，累加本地页数 = Σ N<i>=<count>，i ∈ [0, nrLocalNuma)。 */
+static bool ParseNumaMapLocalCount(const char *line, int nrLocalNuma, unsigned long *segStart, uint64_t *localCount)
 {
-    *outAddrs = NULL;
-    *outCnt = 0;
-    if (nrLocalNuma <= 0) {
-        return 0; /* 无本地节点，无可迁本地页 */
+    if (sscanf_s(line, "%lx", segStart) != 1) {
+        return false; /* 解析段起始地址失败 */
     }
-    if (maxPages == 0 || maxPages > SIZE_MAX / sizeof(uint64_t)) {
-        SMAP_LOGGER_ERROR("invalid maxPages %llu.", (unsigned long long)maxPages);
-        return -EINVAL; /* 申请大小非法，避免 malloc(0) 或整数溢出 */
+    uint64_t total = 0;
+    for (int i = 0; i < nrLocalNuma; i++) {
+        char pattern[NUMA_MAPS_MAX_PATTERN_LEN];
+        if (snprintf_s(pattern, sizeof(pattern), sizeof(pattern) - 1, " N%d=", i) < 0) {
+            continue;
+        }
+        const char *sub = strstr(line, pattern);
+        if (sub == NULL) {
+            continue;
+        }
+        const char *value = sub + strlen(pattern);
+        char *end = NULL;
+        errno = 0;
+        unsigned long c = strtoull(value, &end, 10);
+        if (value == end || errno != 0) {
+            continue; /* 解析 N<i>=<count> 失败，跳过该 node 字段 */
+        }
+        total += c;
     }
+    *localCount = total;
+    return true;
+}
 
+/*
+ * 从已打开的 numa_maps 流中收集一批候选 vaddr（≤ MAX_MOVE_PAGES_BATCH 且 ≤ maxPages）。
+ * 游标 cur 跨调用保留段内位置；fp 到 EOF 或收集满即停。返回 0，*outCnt 为本批收集数（0=无更多候选）。
+ *
+ * 共享页边界：段级过滤无法识别共享页归属，段内混进程共享页可能被一并迁到 L2。
+ * OOM 场景可放宽（首要目标是压低本地水线、避免 kill，允许共享页短暂误迁）；
+ * 水线下降后由上层把 pid 重新加入 SMAP 管理，SMAP 管理态扫描会按 pidType/pageType
+ * 纠正共享页归属。即紧急迁出 = 尽力腾挪、correctness 由后续 SMAP 管理态兜底。
+ */
+static int CollectVaddrsBatch(FILE *fp, int nrLocalNuma, uint64_t pageSize, uint64_t maxPages, NumaScanCursor *cur,
+                              uint64_t *addrs, int *outCnt)
+{
+    *outCnt = 0;
+    int cnt = 0;
+    uint64_t cap = (maxPages > MAX_MOVE_PAGES_BATCH) ? MAX_MOVE_PAGES_BATCH : maxPages;
+    bool huge = IsHugeMode();
+
+    while ((uint64_t)cnt < cap) {
+        /* 先把游标里上一段未枚举完的页吐出 */
+        if (cur->hasLine) {
+            for (; cur->segEmitted < cur->segLocal && (uint64_t)cnt < cap; cur->segEmitted++) {
+                addrs[cnt++] = (uint64_t)(cur->segStart + cur->segEmitted * pageSize);
+            }
+            if (cur->segEmitted >= cur->segLocal) {
+                cur->hasLine = false; /* 本段枚举完，读下一行 */
+            }
+            continue;
+        }
+        char *ret = fgets(cur->line, sizeof(cur->line), fp);
+        if (ret == NULL) {
+            break; /* EOF */
+        }
+        /* 真实 fgets 返回 cur->line 本址；UT mock 下返回预设行串（可能不写缓冲）。统一解析返回值。 */
+        const char *line = ret;
+        if (huge && !IsNumaMapLineHuge((char *)line)) {
+            continue; /* 大页模式只取 huge 段 */
+        }
+        unsigned long segStart = 0;
+        uint64_t localCount = 0;
+        if (!ParseNumaMapLocalCount(line, nrLocalNuma, &segStart, &localCount)) {
+            continue; /* 解析段起始失败 */
+        }
+        if (localCount == 0) {
+            continue; /* 该段无本地页，整段跳过（不误碰纯远端段） */
+        }
+        cur->hasLine = true;
+        cur->segStart = segStart;
+        cur->segLocal = localCount;
+        cur->segEmitted = 0;
+    }
+    *outCnt = cnt;
+    return 0;
+}
+
+/*
+ * 批量迁移一个进程：本地(任意本地节点) -> destNid(L2)，边扫描 numa_maps 边按 MAX_MOVE_PAGES_BATCH 分批迁移。
+ * 固定分配 MAX_MOVE_PAGES_BATCH 的地址/节点/状态数组（不按 pageBudget 整体分配），迁够 pageBudget 即停。
+ * 成功判定：move_pages(2) 成功时 status[i] = 页面最终所在 nid，须 == destNid 才算迁达；
+ * 失败时 status[i] 为负错误码（-ENOENT/-EACCES/-EIO 等），逐页记录首个 errno。
+ */
+static int MigratePidFromToL2(pid_t pid, int nrLocalNuma, int destNid, uint64_t pageSize, uint64_t *pageBudget)
+{
     FILE *fp = OpenNumaMaps(pid);
     if (fp == NULL) {
         SMAP_LOGGER_ERROR("Open pid %d numa_maps failed.", pid);
         return -ENODEV;
     }
 
-    uint64_t *addrs = malloc(sizeof(uint64_t) * maxPages);
-    if (addrs == NULL) {
+    /* 固定大小批数组，边扫描边迁移；不按 pageBudget 整体分配，避免极大值触发 TB 级 malloc。 */
+    uint64_t *addrs = malloc(sizeof(uint64_t) * MAX_MOVE_PAGES_BATCH);
+    int *nodes = malloc(sizeof(int) * MAX_MOVE_PAGES_BATCH);
+    int *status = malloc(sizeof(int) * MAX_MOVE_PAGES_BATCH);
+    if (addrs == NULL || nodes == NULL || status == NULL) {
+        free(addrs);
+        free(nodes);
+        free(status);
         (void)pclose(fp);
-        SMAP_LOGGER_ERROR("malloc vaddrs failed, pid %d.", pid);
+        SMAP_LOGGER_ERROR("malloc batch arrays failed, pid %d.", pid);
         return -ENOMEM;
     }
+    for (int i = 0; i < MAX_MOVE_PAGES_BATCH; i++) {
+        nodes[i] = destNid; /* 全部目标 = L2 */
+    }
 
-    int cnt = 0;
-    char line[MAX_LINE_LENGTH];
-    bool huge = IsHugeMode();
-    while (fgets(line, sizeof(line), fp) != NULL && (uint64_t)cnt < maxPages) {
-        if (huge && !IsNumaMapLineHuge(line)) {
-            continue; /* 大页模式只取 huge 段 */
+    uint64_t movedCnt = 0;
+    uint64_t failedCnt = 0;
+    uint64_t attemptedCnt = 0; /* 实际收集到的候选页数，用于区分"无候选(非错误)"与"全失败(错误)" */
+    int lastErr = 0; /* 保存首个失败 errno（全局 errno 或逐页 -status），避免被后续日志/free 覆写 */
+    NumaScanCursor cur = {0};
+    int ret = 0;
+    while (*pageBudget > 0) {
+        int cnt = 0;
+        int r = CollectVaddrsBatch(fp, nrLocalNuma, pageSize, *pageBudget, &cur, addrs, &cnt);
+        if (r != 0) {
+            ret = r;
+            break;
         }
-        unsigned long segStart = 0;
-        if (sscanf_s(line, "%lx", &segStart) != 1) {
-            continue; /* 解析段起始地址失败 */
+        if (cnt == 0) {
+            break; /* numa_maps 扫完，无更多候选 */
         }
-        /* 段内落在本地节点的总页数 = Σ N<i>=<count>，i ∈ [0, nrLocalNuma) */
-        unsigned long localCount = 0;
-        for (int i = 0; i < nrLocalNuma; i++) {
-            char pattern[NUMA_MAPS_MAX_PATTERN_LEN];
-            if (snprintf_s(pattern, sizeof(pattern), sizeof(pattern) - 1, " N%d=", i) < 0) {
-                continue;
+        attemptedCnt += cnt;
+        /* 复用 addrs 段作为页指针数组：LP64 下 uint64_t 与 void* 等宽，逐项即页虚拟地址。 */
+        const void **pages = (const void **)addrs;
+        SMAP_LOGGER_DEBUG("move_pages in: pid=%d batch=%d destNid=%d nrLocal=%d flags=0x%x", pid, cnt, destNid,
+                          nrLocalNuma, (int)URGENT_MOVE_PAGES_FLAGS);
+        long rc = SmapMovePages(pid, (unsigned long)cnt, pages, nodes, status, URGENT_MOVE_PAGES_FLAGS);
+        if (rc < 0) {
+            /* 全局失败（EACCES/EFAULT/EPERM/ENOMEM）：内核不填 status[]，整批计失败，不读未初始化内存。
+               EACCES/EPERM 多为系统级权限问题，后续批同样会失败，终止本 pid。 */
+            lastErr = errno;
+            failedCnt += cnt;
+            if (errno == EACCES || errno == EPERM) {
+                ret = -lastErr;
+                break;
             }
-            char *sub = strstr(line, pattern);
-            if (sub == NULL) {
-                continue;
+            continue;
+        }
+        /* 成功判定：status[i] == destNid 才代表迁达目标（非 0）。逐页失败保留首个 errno。 */
+        uint64_t batchMoved = 0;
+        for (int i = 0; i < cnt; i++) {
+            int s = status[i];
+            if (s == destNid) {
+                batchMoved++;
+            } else {
+                failedCnt++;
+                if (s < 0 && lastErr == 0) {
+                    lastErr = -s; /* 逐页失败 errno（如 ENOENT/EACCES/EIO），保留首个 */
+                }
             }
-            char *value = sub + strlen(pattern);
-            char *end = NULL;
-            errno = 0;
-            unsigned long c = strtoull(value, &end, 10);
-            if (value == end || errno != 0) {
-                continue; /* 解析 N<i>=<count> 失败，跳过该 node 字段 */
-            }
-            localCount += c;
         }
-        if (localCount == 0) {
-            continue; /* 该段无本地页，整段跳过（不误碰纯远端段） */
-        }
-        for (unsigned long i = 0; i < localCount && (uint64_t)cnt < maxPages; i++) {
-            addrs[cnt] = (uint64_t)(segStart + i * pageSize);
-            cnt++;
-        }
+        movedCnt += batchMoved;
+        *pageBudget -= (batchMoved > *pageBudget) ? *pageBudget : batchMoved; /* 扣减预算 */
     }
     if (pclose(fp)) {
         SMAP_LOGGER_WARNING("Close numa_maps failed, pid=%d.", pid);
     }
-    if (cnt == 0) {
-        free(addrs);
-        addrs = NULL;
-    }
-    *outAddrs = addrs;
-    *outCnt = cnt;
-    return 0;
-}
-
-/*
- * 批量迁移一个进程：本地(任意本地节点) -> destNid(L2)，按 MAX_MOVE_PAGES_BATCH 分批。
- * nodes[] 全填 L2，迁够 pageBudget 即停。
- */
-int MigratePidFromToL2(pid_t pid, int nrLocalNuma, int destNid, uint64_t pageSize, uint64_t *pageBudget)
-{
-    if (pageBudget == NULL || *pageBudget == 0) {
-        return 0;
-    }
-
-    uint64_t *addrs = NULL;
-    int addrCnt = 0;
-    int ret = CollectVaddrsFromNumaMaps(pid, nrLocalNuma, pageSize, *pageBudget, &addrs, &addrCnt);
-    if (ret != 0) {
-        SMAP_LOGGER_ERROR("Collect vaddrs for pid %d failed: %d.", pid, ret);
-        return ret;
-    }
-    if (addrCnt == 0) {
-        free(addrs);
-        return 0;
-    }
-
-    int *nodes = malloc(sizeof(int) * addrCnt);
-    int *status = malloc(sizeof(int) * addrCnt);
-    if (nodes == NULL || status == NULL) {
-        free(addrs);
-        free(nodes);
-        free(status);
-        SMAP_LOGGER_ERROR("malloc nodes/status failed, pid %d.", pid);
-        return -ENOMEM;
-    }
-    for (int i = 0; i < addrCnt; i++) {
-        nodes[i] = destNid; /* 全部目标 = L2 */
-    }
-
-    uint64_t ok = 0;
-    uint64_t fail = 0;
-    int lastErr = 0; /* 保存 move_pages 全局失败 errno，避免被后续日志/free 覆写 */
-    for (int base = 0; base < addrCnt; base += MAX_MOVE_PAGES_BATCH) {
-        int batch = addrCnt - base;
-        if (batch > MAX_MOVE_PAGES_BATCH) {
-            batch = MAX_MOVE_PAGES_BATCH;
-        }
-        /* 复用 addrs 段作为页指针数组：LP64 下 uint64_t 与 void* 等宽，逐项即页虚拟地址。 */
-        const void **pages = (const void **)&addrs[base];
-        SMAP_LOGGER_DEBUG(
-            "move_pages in: pid=%d batch=%d addrCnt=%d destNid=%d nrLocal=%d first=0x%llx last=0x%llx flags=0x%x", pid,
-            batch, addrCnt, destNid, nrLocalNuma, (unsigned long long)addrs[base],
-            (unsigned long long)addrs[base + batch - 1], (int)URGENT_MOVE_PAGES_FLAGS);
-        long rc = SmapMovePages(pid, (unsigned long)batch, pages, &nodes[base], &status[base], URGENT_MOVE_PAGES_FLAGS);
-        if (rc < 0) {
-            /* 全局失败（EACCES/EFAULT/EPERM/ENOMEM）：内核不填 status[]，整批计失败，不读未初始化内存 */
-            lastErr = errno;
-            fail += batch;
-            continue;
-        }
-        for (int i = 0; i < batch; i++) {
-            if (status[base + i] == 0) {
-                ok++;
-            } else {
-                fail++;
-            }
-        }
-    }
-    SMAP_LOGGER_INFO("pid %d local(nrLocal=%d)->L2=%d move_pages moved=%llu failed=%llu.", pid, nrLocalNuma, destNid,
-                     (unsigned long long)ok, (unsigned long long)fail);
-
-    *pageBudget -= (ok > *pageBudget) ? *pageBudget : ok; /* 扣减预算 */
     free(addrs);
     free(nodes);
     free(status);
-    return (ok == 0) ? -lastErr : 0;
+
+    SMAP_LOGGER_INFO("pid %d local(nrLocal=%d)->L2=%d move_pages moved=%llu failed=%llu.", pid, nrLocalNuma, destNid,
+                     (unsigned long long)movedCnt, (unsigned long long)failedCnt);
+
+    if (ret != 0) {
+        return ret;
+    }
+    if (attemptedCnt == 0) {
+        return 0; /* 无候选页，非错误 */
+    }
+    if (movedCnt == 0) {
+        /* 有候选但无一页迁达（逐页全失败或全局失败）：必须返回负错误，不能返回 0 误导调用方。 */
+        if (lastErr == 0) {
+            lastErr = EIO; /* 无可用 errno 时保守报 EIO（如远端节点故障逐页 -EIO） */
+        }
+        return -lastErr;
+    }
+    return 0;
 }
 
 typedef struct {
@@ -246,6 +292,11 @@ void FindPidMigrateSize(uint64_t size)
     for (int i = 0; i < n && pageBudget > 0; i++) {
         int ret = MigratePidFromToL2(snap[i].pid, nrLocalNuma, snap[i].l2, pageSize, &pageBudget);
         if (ret != 0) {
+            if (ret == -EACCES || ret == -EPERM) {
+                /* 系统级权限/能力故障：后续 pid 同样会失败，终止本轮避免无谓 churn。 */
+                SMAP_LOGGER_ERROR("systemic migrate failure (ret=%d) at pid %d, abort urgent pass.", ret, snap[i].pid);
+                break;
+            }
             SMAP_LOGGER_ERROR("migrate pid %d failed: %d, try next.", snap[i].pid, ret);
         }
     }
