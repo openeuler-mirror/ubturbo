@@ -66,9 +66,11 @@ TEST_F(AccessTrackingTest, access_tracking_disable)
 {
         struct access_tracking_dev dev = {};
         INIT_LIST_HEAD(&access_dev);
+        list_add(&dev.list, &access_dev);
         dev.enable_on = true;
         (void)access_tracking_disable(&dev.ldev);
         EXPECT_EQ(false, dev.enable_on);
+        list_del(&dev.list);
 }
 
 TEST_F(AccessTrackingTest, init_actc_data)
