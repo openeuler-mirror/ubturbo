@@ -99,27 +99,6 @@ static void submit_scan_works(struct access_tracking_dev *adev)
 	up_read(&ap_data.lock);
 }
 
-static int check_scan_works_status(struct access_tracking_dev *adev)
-{
-	struct access_pid *ap;
-	struct access_tracking_dev *adev_head = get_first_access_dev();
-	bool all_complete = true;
-	if (adev != adev_head) {
-		return 0;
-	}
-
-	down_read(&ap_data.lock);
-	list_for_each_entry(ap, &ap_data.list, node) {
-		if (!completion_done(&ap->work_done)) {
-			all_complete = false;
-			break;
-		}
-	}
-	up_read(&ap_data.lock);
-
-	return all_complete ? 0 : -EBUSY;
-}
-
 static int create_scan_workqueue(void)
 {
 	struct access_tracking_dev *adev = get_first_access_dev();
@@ -228,16 +207,44 @@ static void access_tracking_enable(struct device *ldev)
 		return;
 	}
 	up_write(&adev->buffer_lock);
+	adev->enable_on = true;
 	submit_scan_works(adev);
 }
 
 static int access_tracking_disable(struct device *ldev)
 {
 	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
+	struct access_pid *ap;
+	bool all_complete = true;
+
 	if (adev->is_hist)
 		return 0;
+	if (adev != get_first_access_dev())
+		return 0;
 
-	return check_scan_works_status(adev);
+	/*
+	 * 必须在 ap_data.lock 写锁的同一临界区内完成"检查所有扫描任务完成
+	 * 并切换为 disabled"。add_pid 的 move_to_ap_data_list 同样在
+	 * down_write(&ap_data.lock) 下读 enable_on 并提交扫描，二者互斥，
+	 * 才能保证 disable 成功返回后不会再有新扫描任务被提交，避免迁移与
+	 * 扫描并发（prepare 重分配 bitmap 与迁移读侧竞态）。
+	 *
+	 * complete(&ap->work_done) 在 work_func 释放 ap_data.lock 读锁之后才
+	 * 调用，故 completion_done 为真时该 work 已不持读锁，此处持写锁检查
+	 * 不会与在跑的 work 互斥死锁。
+	 */
+	down_write(&ap_data.lock);
+	list_for_each_entry(ap, &ap_data.list, node) {
+		if (!completion_done(&ap->work_done)) {
+			all_complete = false;
+			break;
+		}
+	}
+	if (all_complete)
+		adev->enable_on = false;
+	up_write(&ap_data.lock);
+
+	return all_complete ? 0 : -EBUSY;
 }
 
 static int access_tracking_mode_set(struct device *ldev, u8 mode)
@@ -438,8 +445,25 @@ static void work_func(struct work_struct *work)
 	start_time = ktime_get();
 	scan_work = to_delay_work(work);
 	ap = delay_work_to_ap(scan_work);
-	if (access_pid_cur_last_scanning(ap))
+
+	/*
+	 * 当本轮扫描为最后一轮时，需要重新分配 bitmap 给下一轮使用。
+	 * 必须在 ap_data.lock 写锁保护下执行位图的重分配，
+	 * 否则会与 convert_pos_to_paddr_sorted（持有读锁访问 bitmap）
+	 * 产生 use-after-free 竞态：
+	 *
+	 *   Thread A (migration)             Thread B (scan work)
+	 *   down_read(&ap_data.lock)         access_walk_pagemap_prepare(ap)
+	 *   read ap->paddr_bm[nid]            → vfree(ap->paddr_bm[nid])  ← freed!
+	 *   find_next_bit(paddr_bm)           → ACCESS FREED MEMORY → CRASH
+	 *
+	 * 使用写锁确保 prepare 期间无并发 reader。
+	 */
+	if (access_pid_cur_last_scanning(ap)) {
+		down_write(&ap_data.lock);
 		access_walk_pagemap_prepare(ap);
+		up_write(&ap_data.lock);
+	}
 
 	adev_buffer_down_read();
 	down_read(&ap_data.lock);
