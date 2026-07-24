@@ -20,5 +20,7 @@ struct kernel_param {
 
 extern int param_set_uint(const char *val, const struct kernel_param *kp);
 extern int param_get_uint(char *buffer, const struct kernel_param *kp);
+extern int param_set_ulong(const char *val, const struct kernel_param *kp);
+extern int param_get_ulong(char *buffer, const struct kernel_param *kp);
 
 #endif /* _LINUX_MODULE_PARAMS_H */
