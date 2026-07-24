@@ -1507,3 +1507,76 @@ TEST_F(AccessedBitTest, UpdateStatisticScanNumWrapAround)
     EXPECT_EQ(0, info.scan_num);
     list_del(&info.node);
 }
+
+extern "C" int calc_paddr_acidx_acpi(u64 paddr, int *nid, u64 *pa_idx, int page_size);
+extern "C" int drivers_calc_paddr_acidx_iomem(u64 paddr, int *nid, u64 *pa_idx, int page_size);
+
+TEST_F(AccessedBitTest, ProcessScanResultsLocalNidFallbackToSearch)
+{
+    struct access_pid ap;
+    struct scan_result_entry entries[1];
+    entries[0].paddr = 0x1000;
+    entries[0].nid = 0;
+    entries[0].hot = true;
+
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+    struct pte_walk pw;
+    pw.ap = &ap;
+    pw.scan_results = entries;
+    pw.scan_result_cnt = 1;
+
+    MOCKER(calc_paddr_acidx_acpi_known_nid).stubs().will(returnValue(-1));
+    MOCKER(calc_paddr_acidx_acpi).stubs().will(returnValue(0));
+    process_scan_results(&pw);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, ProcessScanResultsRemoteNidFallbackToSearch)
+{
+    struct access_pid ap;
+    struct scan_result_entry entries[1];
+    entries[0].paddr = 0x1000;
+    entries[0].nid = nr_local_numa;
+    entries[0].hot = true;
+
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+    struct pte_walk pw;
+    pw.ap = &ap;
+    pw.scan_results = entries;
+    pw.scan_result_cnt = 1;
+
+    MOCKER(calc_paddr_acidx_iomem_known_nid).stubs().will(returnValue(-1));
+    MOCKER(drivers_calc_paddr_acidx_iomem).stubs().will(returnValue(0));
+    process_scan_results(&pw);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, ProcessScanResultsBothFallbacksFail)
+{
+    struct access_pid ap;
+    struct scan_result_entry entries[1];
+    entries[0].paddr = 0x1000;
+    entries[0].nid = 0;
+    entries[0].hot = true;
+
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+    struct pte_walk pw;
+    pw.ap = &ap;
+    pw.scan_results = entries;
+    pw.scan_result_cnt = 1;
+
+    MOCKER(calc_paddr_acidx_acpi_known_nid).stubs().will(returnValue(-1));
+    MOCKER(calc_paddr_acidx_acpi).stubs().will(returnValue(-1));
+    process_scan_results(&pw);
+    GlobalMockObject::verify();
+}
+

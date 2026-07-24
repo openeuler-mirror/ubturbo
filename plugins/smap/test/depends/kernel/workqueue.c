@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 #include <linux/workqueue.h>
 
 struct workqueue_struct {
@@ -30,4 +32,22 @@ bool queue_delayed_work(struct workqueue_struct *wq,
 				      unsigned long delay)
 {
 	return true;
+}
+
+struct workqueue_attrs *alloc_workqueue_attrs(void)
+{
+    struct workqueue_attrs *attrs = (struct workqueue_attrs *)calloc(1, sizeof(struct workqueue_attrs));
+    if (attrs)
+        cpumask_clear(attrs->cpumask);
+    return attrs;
+}
+
+void free_workqueue_attrs(struct workqueue_attrs *attrs)
+{
+    free(attrs);
+}
+
+int apply_workqueue_attrs(struct workqueue_struct *wq, const struct workqueue_attrs *attrs)
+{
+    return 0;
 }

@@ -1230,6 +1230,43 @@ TEST_F(MigrationTest, TestUpdateMigResultEight)
     EXPECT_EQ(99, attr2.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
 }
 
+extern "C" void UpdateMigrateModeAndScanCpu(void);
+extern "C" void IoctlUpdateUbDmaAvail(uint32_t value);
+extern "C" void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax);
+TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuMigrateModeChanged)
+{
+    MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(true));
+    MOCKER(GetMigrateModeChanged).stubs().will(returnValue(true));
+    MOCKER(GetMigrateModeConfig).stubs().will(returnValue((uint32_t)2));
+    MOCKER(IoctlUpdateUbDmaAvail).stubs().will(ignoreReturnValue());
+    MOCKER(SetMigrateModeChanged).stubs().will(ignoreReturnValue());
+    MOCKER(GetScanCpuEnableConfig).stubs().will(returnValue(false));
+
+    UpdateMigrateModeAndScanCpu();
+}
+
+TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuScanCpuChanged)
+{
+    MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(false));
+    MOCKER(GetScanCpuEnableConfig).stubs().will(returnValue(true));
+    MOCKER(GetScanCpuChanged).stubs().will(returnValue(true));
+    MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)1));
+    MOCKER(GetScanCpuMaxConfig).stubs().will(returnValue((uint32_t)3));
+    MOCKER(IoctlSetScanCpuRange).stubs().will(ignoreReturnValue());
+    MOCKER(SetScanCpuChanged).stubs().will(ignoreReturnValue());
+
+    UpdateMigrateModeAndScanCpu();
+}
+
+TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuNoChange)
+{
+    MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(true));
+    MOCKER(GetMigrateModeChanged).stubs().will(returnValue(false));
+    MOCKER(GetScanCpuEnableConfig).stubs().will(returnValue(false));
+
+    UpdateMigrateModeAndScanCpu();
+}
+
 extern "C" int MigrateRemoteNuma(struct ProcessManager *manager, struct MigrateNumaIoctlMsg *msg);
 TEST_F(MigrationTest, TestMigrateRemoteNumaOne)
 {

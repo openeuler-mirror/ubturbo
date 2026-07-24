@@ -61,6 +61,11 @@ struct UserInfo {
     gid_t gid;
 };
 
+struct SmapScanCpuRange {
+    uint32_t cpuMin;
+    uint32_t cpuMax;
+};
+
 #define SMAP_ACCESS_MAGIC 0xBB
 #define SMAP_ACCESS_ADD_PID _IOW(SMAP_ACCESS_MAGIC, 1, struct AccessAddPidMsg)
 #define SMAP_ACCESS_REMOVE_PID _IOW(SMAP_ACCESS_MAGIC, 2, struct AccessRemovePidMsg)
@@ -70,6 +75,7 @@ struct UserInfo {
 #define SMAP_ACCESS_CREATE_PROCFS _IOW(SMAP_ACCESS_MAGIC, 6, struct UserInfo)
 #define SMAP_ACCESS_GET_NR_LOCAL_NUMA _IOR(SMAP_ACCESS_MAGIC, 7, int)
 #define SMAP_ACCESS_REFRESH_REMOTE_RAM _IO(SMAP_ACCESS_MAGIC, 8)
+#define SMAP_ACCESS_SET_SCAN_CPU _IOW(SMAP_ACCESS_MAGIC, 9, struct SmapScanCpuRange)
 
 int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload);
 int AccessIoctlRemovePid(int len, struct AccessRemovePidPayload *payload);
@@ -78,5 +84,6 @@ int AccessIoctlWalkPagemap(size_t *len);
 int AccessIoctlCreateProcfs(struct UserInfo *ui);
 int AccessRead(size_t len, char *buf);
 void IoctlUpdateUbDmaAvail(uint32_t value);
+void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax);
 
 #endif /* __ACCESS_IOCTL_H__ */

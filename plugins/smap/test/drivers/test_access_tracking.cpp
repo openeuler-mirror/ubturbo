@@ -27,6 +27,9 @@ using namespace std;
 
 extern "C" int init_acpi_mem(void);
 extern "C" struct list_head access_dev;
+extern "C" bool cancel_delayed_work_sync(struct delayed_work *dwork);
+extern "C" bool queue_delayed_work(struct workqueue_struct *wq,
+    struct delayed_work *dwork, unsigned long delay);
 
 class AccessTrackingTest : public ::testing::Test {
 protected:
@@ -338,5 +341,64 @@ TEST_F(AccessTrackingTest, access_tracking_exit)
     MOCKER(release_remote_ram).stubs();
     MOCKER(reset_acpi_mem).stubs();
     access_tracking_exit();
+    list_del(&adev.list);
+}
+
+extern "C" ktime_t calc_time_us(ktime_t start_time);
+TEST_F(AccessTrackingTest, calc_time_us)
+{
+    ktime_t ret = calc_time_us(0);
+    EXPECT_EQ(0, ret);
+
+    GlobalMockObject::verify();
+    ret = calc_time_us(-1000000);
+    EXPECT_EQ(1000000 / 1000, ret);
+}
+
+extern "C" void cancel_ap_scan_work(struct access_pid *ap);
+TEST_F(AccessTrackingTest, cancel_ap_scan_work_null)
+{
+    cancel_ap_scan_work(nullptr);
+}
+
+TEST_F(AccessTrackingTest, cancel_ap_scan_work_no_func)
+{
+    struct access_pid ap = {};
+    ap.scan_work.work.func = nullptr;
+    cancel_ap_scan_work(&ap);
+}
+
+TEST_F(AccessTrackingTest, cancel_ap_scan_work_with_func)
+{
+    struct access_pid ap = {};
+    ap.scan_work.work.func = (void (*)(struct work_struct *))1;
+    MOCKER(cancel_delayed_work_sync).stubs().will(returnValue(true));
+    cancel_ap_scan_work(&ap);
+    GlobalMockObject::verify();
+}
+
+extern "C" int set_scan_cpus(u32 cpu_start, u32 cpu_end);
+TEST_F(AccessTrackingTest, set_scan_cpus_not_openeuler)
+{
+    int ret = set_scan_cpus(0, 4);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" void submit_one_work(struct access_pid *ap);
+TEST_F(AccessTrackingTest, submit_one_work)
+{
+    struct access_tracking_dev adev = {};
+    struct access_pid ap = {};
+    ap.pid = 1;
+    ap.scan_time = 100;
+
+    EXPECT_EQ(true, list_empty(&access_dev));
+    list_add(&adev.list, &access_dev);
+
+    MOCKER(cancel_ap_scan_work).stubs();
+    MOCKER(queue_delayed_work).stubs().will(returnValue(true));
+    submit_one_work(&ap);
+
+    GlobalMockObject::verify();
     list_del(&adev.list);
 }

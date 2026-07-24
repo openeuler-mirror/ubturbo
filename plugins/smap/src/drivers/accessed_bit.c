@@ -1297,30 +1297,13 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 	struct pte_walk *pte_walk = walk->private;
 	pte_t ptent = ptep_get(pte);
 	phys_addr_t paddr = (phys_addr_t)__pte_to_phys(ptent);
-	unsigned long pfn = PHYS_PFN(paddr);
-	struct page *page = NULL;
 	bool is_young = pte_young(ptent);
-	bool is_local = false;
-	u8 nid;
 
 	if (paddr == 0 || is_swap_pte(ptent) || !pte_present(ptent))
 		return 0;
 
 	if (pte_walk->scan_result_cnt >= SCAN_RESULT_CAPACITY)
 		return 0;
-
-	/* 锁内：获取 page 用于 inc_smap_acc_cnt */
-	if (!pfn_valid(pfn))
-		return 0;
-	page = pfn_to_online_page(pfn);
-	if (!page)
-		return 0;
-	nid = page_to_nid(page);
-	is_local = nid < nr_local_numa;
-	if (!is_local && enable_hist && pte_walk->type == NORMAL_SCAN) {
-		is_young = false;
-		goto save_res;
-	}
 
 	/* 64KiB分组优化：NORMAL_SCAN类型，首页young则跳过后续页 */
 	if (pte_walk->type == NORMAL_SCAN) {
@@ -1337,19 +1320,16 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 		if (pte_walk->type == STATISTIC_SCAN)
 			pte_walk->statistic_vaddr[pte_walk->statistic_cnt++] =
 				addr;
-		if (!is_file_or_shared_page(page)) {
 #ifdef KERNEL_VELINUX
-			__ptep_test_and_clear_young(pte);
+		__ptep_test_and_clear_young(pte);
 #else
-			__ptep_test_and_clear_young(NULL, 0, pte);
+		__ptep_test_and_clear_young(NULL, 0, pte);
 #endif
-		}
 		pte_walk->flag = true;
 	}
 
 save_res:
 	pte_walk->scan_results[pte_walk->scan_result_cnt].paddr = paddr;
-	pte_walk->scan_results[pte_walk->scan_result_cnt].nid = nid;
 	pte_walk->scan_results[pte_walk->scan_result_cnt].hot = is_young;
 	pte_walk->scan_result_cnt++;
 
@@ -1360,11 +1340,25 @@ static const struct mm_walk_ops pte_range_ops = {
 	.pte_entry = check_pte_young,
 };
 
+static inline int cal_acidx_and_node_by_paddr(phys_addr_t paddr, int *nid,
+					      u64 *pa_idx, int page_size)
+{
+	int ret;
+
+	ret = calc_paddr_acidx_acpi(paddr, nid, pa_idx, page_size);
+	if (ret) {
+		ret = calc_paddr_acidx_iomem(paddr, nid, pa_idx, page_size);
+	}
+
+	return ret;
+}
+
 static void process_scan_results(struct pte_walk *pte_walk)
 {
 	u64 i, pa_idx;
 	int ret;
 	bool is_last_scan;
+	int nid = 0;
 
 	if (!pte_walk || !pte_walk->ap)
 		return;
@@ -1373,14 +1367,24 @@ static void process_scan_results(struct pte_walk *pte_walk)
 
 	for (i = 0; i < pte_walk->scan_result_cnt; i++) {
 		struct scan_result_entry *entry = &pte_walk->scan_results[i];
-		if (entry->nid < nr_local_numa)
+		if (nid < nr_local_numa) {
 			ret = calc_paddr_acidx_acpi_known_nid(
-				entry->paddr, entry->nid, &pa_idx, PAGE_SIZE);
-		else
+				entry->paddr, nid, &pa_idx, PAGE_SIZE);
+			if (ret) {
+				ret = cal_acidx_and_node_by_paddr(
+					entry->paddr, &nid, &pa_idx, PAGE_SIZE);
+			}
+		} else {
 			ret = calc_paddr_acidx_iomem_known_nid(
-				entry->paddr, entry->nid, &pa_idx, PAGE_SIZE);
+				entry->paddr, nid, &pa_idx, PAGE_SIZE);
+			if (ret) {
+				ret = cal_acidx_and_node_by_paddr(
+					entry->paddr, &nid, &pa_idx, PAGE_SIZE);
+			}
+		}
 		if (ret)
 			continue;
+		entry->nid = nid;
 		if (entry->hot)
 			actc_data_update(entry->nid, pa_idx);
 		if (is_last_scan)

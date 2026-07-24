@@ -1981,26 +1981,18 @@ static bool CheckUbFeatureUbDma(void)
     return false;
 }
 
-static void IoctlSetUbDmaAvail(void)
+static void MigrateAndCpuConfig(void)
 {
-    int fd;
-    unsigned int val = CheckUbFeatureUbDma() ? 1 : 0;
-    int ret;
-
-    fd = open(TIERING_PATH, O_RDWR);
-    if (fd < 0) {
-        SMAP_LOGGER_ERROR("cannot open migrate dev for ub dma config");
-        return;
+    if (GetMigrateModeEnableConfig()) {
+        IoctlUpdateUbDmaAvail(GetMigrateModeConfig());
+    } else {
+        unsigned int val = CheckUbFeatureUbDma() ? 1 : 0;
+        IoctlUpdateUbDmaAvail(val);
     }
 
-    ret = ioctl(fd, SMAP_SET_UB_DMA_AVAIL, &val);
-    close(fd);
-    if (ret < 0) {
-        SMAP_LOGGER_ERROR("ioctl set ub dma avail failed: %d, errno %d", ret, errno);
-        return;
+    if (GetScanCpuEnableConfig()) {
+        IoctlSetScanCpuRange(GetScanCpuMinConfig(), GetScanCpuMaxConfig());
     }
-
-    SMAP_LOGGER_INFO("ioctl set ub dma avail=%u", val);
 }
 
 int ubturbo_smap_start(uint32_t pageType, Logfunc extlog)
@@ -2018,7 +2010,6 @@ int ubturbo_smap_start(uint32_t pageType, Logfunc extlog)
         goto EXIT_ENV;
     }
     SMAP_LOGGER_INFO("Log init success.");
-    IoctlSetUbDmaAvail();
 
     ret = CheckPidtype(pageType);
     if (ret) {
@@ -2038,6 +2029,7 @@ int ubturbo_smap_start(uint32_t pageType, Logfunc extlog)
         SMAP_LOGGER_ERROR("Smap init tracking dev failed, ret = %d.", ret);
         goto EXIT_DEV;
     }
+    MigrateAndCpuConfig();
 
     // No need to remove procfs if subsequent steps fail
     ret = CreateProcfs();

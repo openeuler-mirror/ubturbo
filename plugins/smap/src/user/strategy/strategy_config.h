@@ -45,6 +45,18 @@ bool GetMigrateModeChanged(void);
 
 void SetMigrateModeChanged(bool val);
 
+bool GetMigrateModeEnableConfig(void);
+
+uint32_t GetScanCpuMinConfig(void);
+
+uint32_t GetScanCpuMaxConfig(void);
+
+bool GetScanCpuEnableConfig(void);
+
+bool GetScanCpuChanged(void);
+
+void SetScanCpuChanged(bool val);
+
 uint32_t GetGroupSwapRatioConfig(void);
 
 uint32_t GetGroupSwapMinRemoteFreqConfig(void);

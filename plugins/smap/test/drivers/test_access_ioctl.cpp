@@ -880,3 +880,72 @@ TEST_F(AccessIoctlTestKernel, AccessIoctlInit)
     int ret = access_ioctl_init();
     EXPECT_EQ(ret, 0);
 }
+
+extern "C" long ioctl_set_scan_cpu(void __user *argp);
+extern "C" int set_scan_cpus(u32 cpu_start, u32 cpu_end);
+
+static unsigned long mockCopyFromUserSetScanCpuRange(void *to, const void *from, unsigned long n)
+{
+    struct smap_scan_cpu_range *dst = (struct smap_scan_cpu_range *)to;
+    dst->cpu_min = 0;
+    dst->cpu_max = 1;
+    return 0;
+}
+
+static unsigned long mockCopyFromUserSetScanCpuRangeInvalid(void *to, const void *from, unsigned long n)
+{
+    return n;
+}
+
+static unsigned long mockCopyFromUserSetScanCpuRangeMinOverMax(void *to, const void *from, unsigned long n)
+{
+    struct smap_scan_cpu_range *dst = (struct smap_scan_cpu_range *)to;
+    dst->cpu_min = 5;
+    dst->cpu_max = 3;
+    return 0;
+}
+
+static unsigned long mockCopyFromUserSetScanCpuRangeMaxOverNumCpus(void *to, const void *from, unsigned long n)
+{
+    struct smap_scan_cpu_range *dst = (struct smap_scan_cpu_range *)to;
+    dst->cpu_min = 0;
+    dst->cpu_max = 100;
+    return 0;
+}
+
+TEST_F(AccessIoctlTestKernel, IoctlSetScanCpuCopyFromUserFailed)
+{
+    MOCKER(copy_from_user).stubs().will(invoke(mockCopyFromUserSetScanCpuRangeInvalid));
+    long ret = ioctl_set_scan_cpu(nullptr);
+    EXPECT_EQ(-EFAULT, ret);
+}
+
+TEST_F(AccessIoctlTestKernel, IoctlSetScanCpuMinOverMax)
+{
+    MOCKER(copy_from_user).stubs().will(invoke(mockCopyFromUserSetScanCpuRangeMinOverMax));
+    long ret = ioctl_set_scan_cpu(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(AccessIoctlTestKernel, IoctlSetScanCpuMaxOverNumCpus)
+{
+    MOCKER(copy_from_user).stubs().will(invoke(mockCopyFromUserSetScanCpuRangeMaxOverNumCpus));
+    long ret = ioctl_set_scan_cpu(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(AccessIoctlTestKernel, IoctlSetScanCpuSetScanCpusFailed)
+{
+    MOCKER(copy_from_user).stubs().will(invoke(mockCopyFromUserSetScanCpuRange));
+    MOCKER(set_scan_cpus).stubs().will(returnValue(-EINVAL));
+    long ret = ioctl_set_scan_cpu(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(AccessIoctlTestKernel, IoctlSetScanCpuSuccess)
+{
+    MOCKER(copy_from_user).stubs().will(invoke(mockCopyFromUserSetScanCpuRange));
+    MOCKER(set_scan_cpus).stubs().will(returnValue(0));
+    long ret = ioctl_set_scan_cpu(nullptr);
+    EXPECT_EQ(0, ret);
+}

@@ -20,6 +20,7 @@
 #include <linux/mmzone.h>
 #include <linux/ktime.h>
 #include <linux/spinlock.h>
+#include <linux/cpumask.h>
 #include <linux/smp.h>
 
 #include "check.h"
@@ -69,6 +70,45 @@ void cancel_ap_scan_work(struct access_pid *ap)
 	if (ap && ap->scan_work.work.func) {
 		cancel_delayed_work_sync(&ap->scan_work);
 	}
+}
+
+int set_scan_cpus(u32 cpu_start, u32 cpu_end)
+{
+#ifdef KERNEL_OPENEULER
+	u32 cpu_index;
+	struct workqueue_attrs *attrs;
+	struct access_tracking_dev *adev;
+
+	attrs = alloc_workqueue_attrs();
+	if (!attrs)
+		return -ENOMEM;
+
+	cpumask_clear(attrs->cpumask);
+	for (cpu_index = cpu_start; cpu_index <= cpu_end; cpu_index++) {
+		if (!cpu_online(cpu_index)) {
+			pr_err("cpu %d is not online, cannot be used for scan\n",
+			       cpu_index);
+			free_workqueue_attrs(attrs);
+			return -EINVAL;
+		}
+		cpumask_set_cpu(cpu_index, attrs->cpumask);
+	}
+
+	adev = get_first_access_dev();
+	if (adev && adev->scanq) {
+		if (apply_workqueue_attrs(adev->scanq, attrs)) {
+			pr_err("failed to apply workqueue attrs for scan cpu range\n");
+			free_workqueue_attrs(attrs);
+			return -EINVAL;
+		}
+	}
+
+	free_workqueue_attrs(attrs);
+#else
+	pr_warn("set scan cpus is not supported on this kernel version\n");
+#endif
+
+	return 0;
 }
 
 void submit_one_work(struct access_pid *ap)

@@ -81,6 +81,19 @@ TEST_F(AccessIoctlTest, TestAccessIoctlWalkPagemap)
     EXPECT_EQ(-EBADF, ret);
 }
 
+extern "C" void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax);
+TEST_F(AccessIoctlTest, TestIoctlSetScanCpuRangeSuccess)
+{
+    MOCKER((int (*)(int, unsigned long, void *))ioctl).stubs().will(returnValue(0));
+    IoctlSetScanCpuRange(1, 3);
+}
+
+TEST_F(AccessIoctlTest, TestIoctlSetScanCpuRangeFailed)
+{
+    MOCKER((int (*)(int, unsigned long, void *))ioctl).stubs().will(returnValue(-1));
+    IoctlSetScanCpuRange(1, 3);
+}
+
 extern "C" ssize_t read(int fd, void *buf, size_t count);
 TEST_F(AccessIoctlTest, TestAccessReadAllInOneTime)
 {
