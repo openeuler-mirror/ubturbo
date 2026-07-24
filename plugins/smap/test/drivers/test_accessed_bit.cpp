@@ -1040,8 +1040,8 @@ TEST_F(AccessedBitTest, HamActcDataAddSuccess)
     struct ham_tracking_info info;
     u64 paddr1;
     u64 paddr2;
-    actc_t freq1 = 0;
-    actc_t freq2 = 0;
+    u16 freq1 = 0;
+    u16 freq2 = 0;
     info.pid = 1;
     info.l1_node = 0;
     info.l2_node = -1;

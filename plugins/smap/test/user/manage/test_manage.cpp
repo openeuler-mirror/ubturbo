@@ -965,8 +965,8 @@ TEST_F(ManageTest, TestCalcActcStats)
     CalcActcStats(&attr);
     EXPECT_EQ((uint64_t)0, attr.scanAttr.actCount[1].pageNum);
     EXPECT_EQ((uint64_t)3, attr.scanAttr.actCount[4].pageNum);
-    EXPECT_EQ((uint16_t)10, attr.scanAttr.actCount[4].freqMax);
-    EXPECT_EQ((uint16_t)0, attr.scanAttr.actCount[4].freqMin);
+    EXPECT_EQ((uint8_t)10, attr.scanAttr.actCount[4].freqMax);
+    EXPECT_EQ((uint8_t)0, attr.scanAttr.actCount[4].freqMin);
     EXPECT_EQ((uint64_t)2, attr.scanAttr.actCount[4].freqNum);
     EXPECT_EQ((uint64_t)13, attr.scanAttr.actCount[4].freqSum);
     EXPECT_EQ((uint32_t)1, attr.scanAttr.actCount[4].freqZero);

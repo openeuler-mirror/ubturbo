@@ -795,6 +795,16 @@ TEST_F(PeriodConfigTest, PeriodConfigReviewTest)
     g_tmpStrategyConfig.migratePeriod = 1000;
     ret = StrategyConfigReview();
     EXPECT_EQ(0, ret);
+
+    /* actc_t 为 u8(上限 255): 迁移周期不得超过扫描周期的 255 倍 */
+    g_tmpStrategyConfig.scanPeriod = 200;
+    g_tmpStrategyConfig.migratePeriod = MAX_SCAN_TIMES_PER_MIGRATE * 200; /* 51000, 边界合法 */
+    ret = StrategyConfigReview();
+    EXPECT_EQ(0, ret);
+
+    g_tmpStrategyConfig.migratePeriod = MAX_SCAN_TIMES_PER_MIGRATE * 200 + 1; /* 51001, 超限 */
+    ret = StrategyConfigReview();
+    EXPECT_EQ(-1, ret);
 }
 
 extern "C" void PeriodConifgReset(void);

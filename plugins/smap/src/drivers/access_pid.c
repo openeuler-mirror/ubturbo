@@ -288,7 +288,9 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 		/* 填充prior - 从priors获取 */
 		if (ap->info.vm_size && ap->info.priors) {
 			if ((mapping_offset + len_cnt) < ap->info.vm_size) {
-				flags |= ACTC_PRIOR_SET(ap->info.priors[mapping_offset + len_cnt]);
+				flags |= ACTC_PRIOR_SET(
+					ap->info.priors[mapping_offset +
+							len_cnt]);
 			}
 		} else {
 			flags |= ACTC_PRIOR_SET(0);
@@ -296,7 +298,7 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 
 		/* 填充is_white_list */
 		if (ap->white_list_bm[nid] &&
-			test_bit(acidx, ap->white_list_bm[nid])) {
+		    test_bit(acidx, ap->white_list_bm[nid])) {
 			flags |= ACTC_WHITE_LIST_BIT;
 		}
 
@@ -578,7 +580,7 @@ static int init_ham_pid_memory(struct ham_tracking_info *info,
 		pr_err("unable to allocate memory for HAM access pid physical address array\n");
 		return -ENOMEM;
 	}
-	info->freq[level] = vzalloc(info->len[level] * sizeof(actc_t));
+	info->freq[level] = vzalloc(info->len[level] * sizeof(u16));
 	if (!info->freq[level]) {
 		vfree(info->paddr[level]);
 		pr_err("unable to allocate memory for HAM access pid frequency array\n");

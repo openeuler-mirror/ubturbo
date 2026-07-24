@@ -185,10 +185,10 @@ static int get_pid_from_tracking_file(const struct file *file)
 static inline void clear_tracking_info(struct ham_tracking_info *info)
 {
 	memset(info->paddr[L1], 0, sizeof(u64) * info->len[L1]);
-	memset(info->freq[L1], 0, sizeof(actc_t) * info->len[L1]);
+	memset(info->freq[L1], 0, sizeof(u16) * info->len[L1]);
 	if (info->paddr[L2]) {
 		memset(info->paddr[L2], 0, sizeof(u64) * info->len[L2]);
-		memset(info->freq[L2], 0, sizeof(actc_t) * info->len[L2]);
+		memset(info->freq[L2], 0, sizeof(u16) * info->len[L2]);
 	}
 }
 

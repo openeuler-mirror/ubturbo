@@ -543,7 +543,7 @@ static uint64_t CollectPagesFromNode(ProcessAttr *process, int nid, uint64_t use
     }
 
     uint64_t limit = MIN(usedPages, actcLen - offset);
-    uint32_t buckets[FREQ_BUCKETS_SIZE] = {0};
+    uint32_t buckets[FREQ_BUCKETS_SIZE] = { 0 };
 
     // 统计频率分布
     for (uint64_t j = 0; j < actcLen; j++) {

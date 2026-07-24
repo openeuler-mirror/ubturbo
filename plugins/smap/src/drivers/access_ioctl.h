@@ -7,8 +7,8 @@
 #ifndef _SRC_ACCESS_IOCTL_H
 #define _SRC_ACCESS_IOCTL_H
 
-#include <linux/types.h>
 #include <linux/proc_fs.h>
+#include <linux/types.h>
 
 #include "check.h"
 #include "drv_common.h"
@@ -23,14 +23,14 @@
 #define SMAP_PROC_ROOT "smap"
 
 struct actc_data {
-	actc_t freq;       /* 访问频次 */
-	u8 flags;  /* 位域:bit0=白名单页, bit1=已选中, bits2-7=优先级 */
+	actc_t freq; /* 访问频次 */
+	u8 flags; /* 位域:bit0=白名单页, bit1=已选中, bits2-7=优先级 */
 } __attribute__((packed));
 
-#define ACTC_WHITE_LIST_BIT  BIT(0)
-#define ACTC_SELECT_BIT      BIT(1)
-#define ACTC_PRIOR_GET(f)    (((f) >> 2) & 0x3F)
-#define ACTC_PRIOR_SET(p)    (((p) & 0x3F) << 2)
+#define ACTC_WHITE_LIST_BIT BIT(0)
+#define ACTC_SELECT_BIT BIT(1)
+#define ACTC_PRIOR_GET(f) (((f) >> 2) & 0x3F)
+#define ACTC_PRIOR_SET(p) (((p)&0x3F) << 2)
 
 typedef enum {
 	NO_SCAN = -1,
@@ -66,7 +66,7 @@ struct access_remove_pid_msg {
 struct tracking_info_payload {
 	pid_t pid;
 	u32 length;
-	actc_t *data;
+	u16 *data; /* DFX 统计扫描频次，保留原始 u16 真值，不压缩 */
 };
 
 struct access_pid_freq_msg {

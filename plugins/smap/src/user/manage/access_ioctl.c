@@ -20,6 +20,7 @@
 #include "device.h"
 #include "access_ioctl.h"
 #include "smap_ioctl.h"
+#include "strategy/strategy_config.h"
 
 int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
 {
@@ -52,10 +53,21 @@ int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
         }
         accessMsg.payload[i].scanTime = payload[i].scanTime;
         accessMsg.payload[i].duration = payload[i].duration;
+        /* actc_t 频次为 u8(上限 255): 单迁移周期扫描次数 nTimes 须 <= MAX_SCAN_TIMES_PER_MIGRATE,
+         * 否则频次在 u8 处回绕丢真值。大迁移周期下兜底调大 scanTime, 并建议用户调大配置 scanPeriod。 */
+        if (payload[i].type != STATISTIC_SCAN &&
+            migrationPeriod / accessMsg.payload[i].scanTime > MAX_SCAN_TIMES_PER_MIGRATE) {
+            uint32_t adjusted = (migrationPeriod + MAX_SCAN_TIMES_PER_MIGRATE - 1) / MAX_SCAN_TIMES_PER_MIGRATE;
+            SMAP_LOGGER_ERROR("pid %d scanTime %u too small for migPeriod %u, adjust to %u to keep nTimes<=%d; "
+                              "suggest increasing config scanPeriod.",
+                              payload[i].pid, accessMsg.payload[i].scanTime, migrationPeriod, adjusted,
+                              MAX_SCAN_TIMES_PER_MIGRATE);
+            accessMsg.payload[i].scanTime = adjusted;
+        }
         if (payload[i].type == STATISTIC_SCAN) {
             accessMsg.payload[i].nTimes = payload[i].duration * MS_PER_SEC / payload[i].scanTime;
         } else {
-            accessMsg.payload[i].nTimes = migrationPeriod / payload[i].scanTime;
+            accessMsg.payload[i].nTimes = migrationPeriod / accessMsg.payload[i].scanTime;
         }
         accessMsg.payload[i].type = payload[i].type;
     }

@@ -1267,6 +1267,27 @@ TEST_F(DriversAccessPidTest, FillActcDataByBitmapWithDev)
     free(adev.access_bit_actc_data);
 }
 
+TEST_F(DriversAccessPidTest, CompressFreqSqrt)
+{
+    /* 边界: 0/1 不变, 完全平方数取 floor sqrt, 65535 -> 255 */
+    EXPECT_EQ((actc_t)0, compress_freq(0));
+    EXPECT_EQ((actc_t)1, compress_freq(1));
+    EXPECT_EQ((actc_t)1, compress_freq(3));
+    EXPECT_EQ((actc_t)2, compress_freq(4));
+    EXPECT_EQ((actc_t)2, compress_freq(8));
+    EXPECT_EQ((actc_t)3, compress_freq(9));
+    EXPECT_EQ((actc_t)3, compress_freq(15));
+    EXPECT_EQ((actc_t)4, compress_freq(16));
+    EXPECT_EQ((actc_t)16, compress_freq(256));
+    EXPECT_EQ((actc_t)25, compress_freq(625));
+    EXPECT_EQ((actc_t)255, compress_freq(65025));
+    EXPECT_EQ((actc_t)255, compress_freq(65535));
+    /* 单调: compress_freq(x) <= compress_freq(x+1) (抽样) */
+    for (u32 x = 0; x < 65535; x += 257) {
+        EXPECT_LE(compress_freq((u16)x), compress_freq((u16)(x + 1)));
+    }
+}
+
 extern "C" ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
                                   loff_t *ppos);
 extern "C" void *kvmalloc(size_t size, gfp_t flags);

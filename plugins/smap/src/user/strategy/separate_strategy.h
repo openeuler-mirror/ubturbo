@@ -39,5 +39,5 @@ typedef struct {
 int SeparateStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]);
 int SeparateStrategyMultiNumaVm(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]);
 void FindThreshold(const SelectionMode mode, uint64_t nrMig, const uint32_t *buckets, int *thresholdFreq,
-                          uint32_t *takeAtThreshold);
+                   uint32_t *takeAtThreshold);
 #endif /* __SEPARATE_STRATEGY_H__ */

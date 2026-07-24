@@ -340,7 +340,7 @@ static inline bool is_intersect(struct addr_seg *seg1, struct addr_seg *seg2,
 	return true;
 }
 
-static void calc_4k_scan_hot_wins(struct segs_info *info, actc_t *buf,
+static void calc_4k_scan_hot_wins(struct segs_info *info, u16 *buf,
 				  struct segs_info *win_info)
 {
 	u32 seg_pages = 0, win_cnt = 0;
@@ -354,9 +354,9 @@ static void calc_4k_scan_hot_wins(struct segs_info *info, actc_t *buf,
 			u64 max_val = 0, nr = shift / SIZE_2M;
 			u64 offset = (start - info->segs[i].start) >>
 				     HIST_ADDR_SHIFT_2M;
-			actc_t *buf_ptr = &buf[seg_pages + offset];
+			u16 *buf_ptr = &buf[seg_pages + offset];
 			while (nr--) {
-				max_val = max_t(actc_t, max_val, *buf_ptr++);
+				max_val = max_t(u16, max_val, *buf_ptr++);
 			}
 			if (win_cnt >= win_info->cnt) {
 				pr_err("out-of-bounds when calc wins.[nr_wins:%u]\n",
@@ -509,8 +509,7 @@ static int filter_4k_scan_hot_wins(struct segs_info *win_info,
 }
 
 static int generate_aligned_4k_scan_wins_info(struct segs_info *win_info,
-					      struct segs_info *info,
-					      actc_t *buf)
+					      struct segs_info *info, u16 *buf)
 {
 	struct addr_seg *wins_4k;
 	struct smap_hist_dev *dev = &g_smap_hist_dev;
@@ -581,10 +580,10 @@ static void do_actc_update(struct access_tracking_dev *hdev, u64 seg_offset,
 	down_read(&hdev->buffer_lock);
 	for (j = 0; j < inter_pages; j++) {
 		u32 idx = seg_offset + j;
-		u32 sum =
-			hdev->access_bit_actc_data[idx] + freq[hist_offset + j];
-		hdev->access_bit_actc_data[idx] = (sum < U16_MAX) ? sum
-								  : U16_MAX;
+		/* 硬件扫描: u16 频次开根号压缩成 u8 后累加进 access_bit_actc_data(actc_t) */
+		u32 sum = hdev->access_bit_actc_data[idx] +
+			  compress_freq(freq[hist_offset + j]);
+		hdev->access_bit_actc_data[idx] = (sum < U8_MAX) ? sum : U8_MAX;
 	}
 	up_read(&hdev->buffer_lock);
 }
@@ -666,14 +665,14 @@ static void update_actc_direct(struct segs_info *rmem_info,
 }
 
 static void copy_actc_to_buf(struct segs_info *info, struct addr_seg *seg,
-			     actc_t *dst_buf, u16 *freq, u32 buf_len,
+			     u16 *dst_buf, u16 *freq, u32 buf_len,
 			     enum ub_hist_sts_size sts_size)
 {
 	u32 shift = (sts_size == STS_SIZE_2M) ? HIST_ADDR_SHIFT_2M
 					      : HIST_ADDR_SHIFT_4K;
 	u64 inter_start, inter_end, inter_pages, j;
 	u64 seg_offset, hist_offset, seg_pages = 0;
-	actc_t *dst;
+	u16 *dst;
 	unsigned int i;
 	for (i = 0; i < info->cnt; i++) {
 		if (is_intersect(&info->segs[i], seg, &inter_start,
@@ -814,7 +813,7 @@ static int get_hist_results(uint64_t ba_tag,
 
 static int smap_hist_read_paral(struct segs_info *win_info,
 				struct segs_info *rmem_info,
-				enum ub_hist_sts_size sts_size, actc_t *buf,
+				enum ub_hist_sts_size sts_size, u16 *buf,
 				u32 scan_time, u32 buf_len, bool direct_update)
 {
 	int ret = 0, i, ba_cnt;
@@ -940,7 +939,7 @@ static u32 get_2m_scan_wins_per_ba(struct segs_info *win_info)
 }
 
 static int do_hist_scan_sliding(struct segs_info *info, bool do_multi_gran,
-				actc_t *buf, u32 buf_len,
+				u16 *buf, u32 buf_len,
 				enum ub_hist_sts_size sts_size,
 				bool direct_update)
 {
@@ -996,7 +995,7 @@ static int hist_scan_sliding(struct segs_info *info, u32 scan_time_total,
 			      dev->scan_mode == HIST_4K_SCAN_MULTI_GRAN);
 	bool do_4k_seq_loop =
 		(pgsize == SIZE_4K && dev->scan_mode == HIST_4K_SCAN_SEQ_LOOP);
-	actc_t *tmpbuffer = NULL;
+	u16 *tmpbuffer = NULL;
 
 	if (!addr_seg_is_valid(info)) {
 		pr_err("invalid address segment passed to sliding scan\n");
@@ -1009,7 +1008,7 @@ static int hist_scan_sliding(struct segs_info *info, u32 scan_time_total,
 
 	if (do_multi_gran) {
 		/* 4K mode: allocate tmpbuffer for 2M scan results */
-		tmpbuffer = vzalloc(dev->pgcount * sizeof(actc_t));
+		tmpbuffer = vzalloc(dev->pgcount * sizeof(u16));
 		if (!tmpbuffer)
 			return -ENOMEM;
 	}

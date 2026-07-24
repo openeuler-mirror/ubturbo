@@ -1790,7 +1790,7 @@ static void CalcActcStats(ProcessAttr *attr)
         }
 
         count->freqMax = 0;
-        count->freqMin = UINT16_MAX;
+        count->freqMin = UINT8_MAX;
         count->freqNum = 0;
         count->freqSum = 0;
         count->remoteHotNum = 0;

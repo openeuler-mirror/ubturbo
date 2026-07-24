@@ -93,10 +93,10 @@ void SeparateStrategyinit(ActcData actcData1[2], ActcData actcData2[4], ProcessA
     actcData2[3].freq = 1;
 
     process->scanAttr.actCount[0].freqNum = 50;
-    process->scanAttr.actCount[0].freqMax = 500;
+    process->scanAttr.actCount[0].freqMax = 100;
 
     process->scanAttr.actCount[4].freqNum = 100;
-    process->scanAttr.actCount[4].freqMax = 1000;
+    process->scanAttr.actCount[4].freqMax = 200;
 }
 
 TEST_F(SeparateStrategyTest, TestPeriodConfig)
@@ -192,8 +192,8 @@ void BuildActcData(int nid, const uint16_t data[], int size, ScanAttribute *scan
     for (int i = 0; i < size; i++) {
         uint16_t freq = data[i];
         actcData[i].freq = freq;
-        scanAttribute->actCount[nid].freqMax = std::max(scanAttribute->actCount[nid].freqMax, freq);
-        scanAttribute->actCount[nid].freqMin = std::min(scanAttribute->actCount[nid].freqMin, freq);
+        scanAttribute->actCount[nid].freqMax = std::max(scanAttribute->actCount[nid].freqMax, (actc_t)freq);
+        scanAttribute->actCount[nid].freqMin = std::min(scanAttribute->actCount[nid].freqMin, (actc_t)freq);
         if (freq == 0) {
             scanAttribute->actCount[nid].freqZero++;
         } else {
