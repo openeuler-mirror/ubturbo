@@ -1407,6 +1407,7 @@ void ubturbo_smap_urgent_migrate_out(uint64_t size);
 
 * SMAP初始化后才能调用。
 * 在OOM场景下由上层组件调用。
+* 紧急迁出按 numa\_maps 段级过滤收集候选页，无法识别共享页归属，段内共享页可能被一并迁到远端；OOM 场景首要目标是压低本地水线、避免 kill，允许共享页短暂误迁。水线下降后，调用方应把相关 pid 重新加入 SMAP 管理，SMAP 管理态扫描会按 pidType/pageType 纠正共享页归属。
 
 ## 附注 NOTES
 
