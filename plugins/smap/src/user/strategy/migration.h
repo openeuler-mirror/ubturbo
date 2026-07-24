@@ -14,7 +14,6 @@
 
 #include "smap_env.h"
 #include "manage/manage.h"
-#include "manage/thread.h"
 
 #define DEFAULT_FROM_NODE (-1)
 #define DEFAULT_TO_NODE (-1)
@@ -33,7 +32,7 @@ void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager);
 
 int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager);
 
-int ScanMigrateWork(ThreadCtx *ctx);
+int ScanMigrateWork(struct ProcessManager *manager);
 
 int MigrateRemoteNuma(struct ProcessManager *manager, struct MigrateNumaIoctlMsg *msg);
 

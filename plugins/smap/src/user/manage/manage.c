@@ -389,9 +389,8 @@ static int ApplyManagedLocalObservation(ProcessAttr *attr, const ManagedLocalObs
 
 static uint32_t GetManagedLocalRefreshPeriodMs(void)
 {
-    ThreadCtx *ctx = g_processManager.threadCtx[0];
-    if (ctx && ctx->period != 0) {
-        return ctx->period;
+    if (g_processManager.migPeriod != 0) {
+        return g_processManager.migPeriod;
     }
     return DEFAULT_MIGRATE_PERIOD;
 }
@@ -573,9 +572,6 @@ int ProcessManagerInit(uint32_t pageType)
     g_processManager.fds.migrate = DEFAULT_FD;
     g_processManager.fds.access = DEFAULT_FD;
     g_processManager.fds.lock = DEFAULT_FD;
-    for (i = 0; i < MAX_THREADS; i++) {
-        g_processManager.threadCtx[i] = NULL;
-    }
     g_processManager.processes = NULL;
     g_processManager.ubBwMonitor.ubBwThreshold = GetUbBwThresholdConfig();
     g_processManager.ubBwMonitor.currentFluxRet = -ENODATA;
@@ -2411,11 +2407,12 @@ static void CalcActcStats(ProcessAttr *attr)
         ActcData *actc = attr->scanAttr.actcData[nid];
         ActCount *count = &attr->scanAttr.actCount[nid];
 
-        memset(count->freqBuckets, 0, sizeof(count->freqBuckets));
-        memset(attr->scanAttr.selectedBuckets[nid], 0, sizeof(attr->scanAttr.selectedBuckets[nid]));
+        (void)memset_s(count->freqBuckets, sizeof(count->freqBuckets), 0, sizeof(count->freqBuckets));
+        (void)memset_s(attr->scanAttr.selectedBuckets[nid], sizeof(attr->scanAttr.selectedBuckets[nid]), 0,
+                       sizeof(attr->scanAttr.selectedBuckets[nid]));
 
         if (actcLen == 0 || !actc) {
-            memset(count, 0, sizeof(*count));
+            (void)memset_s(count, sizeof(*count), 0, sizeof(*count));
             continue;
         }
 

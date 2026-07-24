@@ -437,19 +437,24 @@ extern "C" int CleanStrategyAttribute(struct ProcessManager *manager);
 TEST_F(MigrationTest, TestPerformMigrationPreparationOK)
 {
     int ret;
-    ThreadCtx *ctx = (ThreadCtx *)malloc(sizeof(ThreadCtx));
-    ctx->processManager = (ProcessManager *)malloc(sizeof(ProcessManager));
-    ctx->processManager->processes = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    ctx->processManager->processes->next = NULL;
+    ProcessManager *manager = (ProcessManager *)malloc(sizeof(ProcessManager));
+    if (!manager) {
+        return;
+    }
+    manager->processes = (ProcessAttr *)malloc(sizeof(ProcessAttr));
+    if (!manager->processes) {
+        free(manager);
+        return;
+    }
+    manager->processes->next = NULL;
 
     MOCKER(BuildAllPidData).stubs().will(returnValue(0));
     MOCKER(CleanStrategyAttribute).stubs().will(returnValue(0));
-    ret = PerformMigrationPreparation(ctx->processManager);
+    ret = PerformMigrationPreparation(manager);
     EXPECT_EQ(0, ret);
 
-    free(ctx->processManager->processes);
-    free(ctx->processManager);
-    free(ctx);
+    free(manager->processes);
+    free(manager);
 }
 
 TEST_F(MigrationTest, TestPerformMigrationPreparationEmptyProcesses)
@@ -475,17 +480,16 @@ TEST_F(MigrationTest, TestPerformMigrationPreparationBuildError)
     EXPECT_EQ(-ENOMEM, ret);
 }
 
-extern "C" int ScanMigrateWork(ThreadCtx *ctx);
+extern "C" int ScanMigrateWork(struct ProcessManager *manager);
 extern "C" int PerformMigration(struct ProcessManager *manager);
-extern "C" int HandleScene(ThreadCtx *ctx);
+extern "C" int HandleScene(struct ProcessManager *manager);
 extern "C" void UpdateScene(struct ProcessManager *manager);
-extern "C" void UpdatePeriodFromConfig(ThreadCtx *ctx);
+extern "C" void UpdatePeriodFromConfig(struct ProcessManager *manager);
 TEST_F(MigrationTest, TestScanMigrateWorkFileConfOn)
 {
     int ret;
-    ProcessAttr process = {.pid = 1025};
-    struct ProcessManager manager = {.processes = &process};
-    ThreadCtx ctx = {.processManager = &manager};
+    ProcessAttr process = { .pid = 1025 };
+    struct ProcessManager manager = { .processes = &process };
 
     MOCKER(DisableTracking).stubs().will(returnValue(0));
     MOCKER(StrategyConfigRead).stubs().will(ignoreReturnValue());
@@ -499,16 +503,15 @@ TEST_F(MigrationTest, TestScanMigrateWorkFileConfOn)
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(UpdatePeriodFromConfig).stubs().will(ignoreReturnValue());
     MOCKER(PerformMigration).stubs().will(returnValue(0));
-    ret = ScanMigrateWork(&ctx);
+    ret = ScanMigrateWork(&manager);
     EXPECT_EQ(0, ret);
 }
 
 TEST_F(MigrationTest, TestScanMigrateWorkFileConfOff)
 {
     int ret;
-    ProcessAttr process = {.pid = 1025};
-    struct ProcessManager manager = {.processes = &process};
-    ThreadCtx ctx = {.processManager = &manager};
+    ProcessAttr process = { .pid = 1025 };
+    struct ProcessManager manager = { .processes = &process };
 
     MOCKER(DisableTracking).stubs().will(returnValue(0));
     MOCKER(StrategyConfigRead).stubs().will(ignoreReturnValue());
@@ -520,33 +523,31 @@ TEST_F(MigrationTest, TestScanMigrateWorkFileConfOff)
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(PerformMigration).stubs().will(returnValue(0));
-    ret = ScanMigrateWork(&ctx);
+    ret = ScanMigrateWork(&manager);
     EXPECT_EQ(0, ret);
 }
 
 TEST_F(MigrationTest, TestScanMigrateWorkOne)
 {
     int ret;
-    ProcessAttr process = {.pid = 1025};
-    struct ProcessManager manager = {.processes = &process};
-    ThreadCtx ctx = {.processManager = &manager};
+    ProcessAttr process = { .pid = 1025 };
+    struct ProcessManager manager = { .processes = &process };
 
     MOCKER(DisableTracking).stubs().will(returnValue(-1));
-    ret = ScanMigrateWork(&ctx);
+    ret = ScanMigrateWork(&manager);
     EXPECT_EQ(-1, ret);
 }
 
 TEST_F(MigrationTest, TestScanMigrateWorkTwo)
 {
     int ret;
-    ProcessAttr process = {.pid = 1025};
-    struct ProcessManager manager = {.processes = &process};
-    ThreadCtx ctx = {.processManager = &manager};
+    ProcessAttr process = { .pid = 1025 };
+    struct ProcessManager manager = { .processes = &process };
 
     MOCKER(DisableTracking).stubs().will(returnValue(0));
     MOCKER(CheckAndRemoveInvalidProcess).stubs();
     MOCKER(PerformMigrationPreparation).stubs().will(returnValue(-1));
-    ret = ScanMigrateWork(&ctx);
+    ret = ScanMigrateWork(&manager);
     EXPECT_EQ(-1, ret);
 }
 
@@ -1223,14 +1224,12 @@ TEST_F(MigrationTest, TestUpdateScene)
     EXPECT_EQ(current.sceneInfo.currScene, HEAVY_STABLE_SCENE);
 }
 
-extern "C" int HandleScene(ThreadCtx *ctx);
+extern "C" int HandleScene(struct ProcessManager *manager);
 TEST_F(MigrationTest, TestHandleScene)
 {
     struct ProcessManager manager = {0};
     ProcessAttr current = {};
-    ThreadCtx ctx = {};
     manager.processes = &current;
-    ctx.processManager = &manager;
     current.next = nullptr;
     current.sceneInfo.currScene = UNSTABLE_SCENE;
 
@@ -1238,19 +1237,17 @@ TEST_F(MigrationTest, TestHandleScene)
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(UpdateScanTime).stubs().will(returnValue(0));
 
-    int ret = HandleScene(&ctx);
+    int ret = HandleScene(&manager);
     EXPECT_EQ(0, ret);
 }
 
 extern "C" uint32_t GetScanPeriodConfig(void);
-extern "C" void UpdateAllProcessScanTime(ThreadCtx *ctx);
+extern "C" void UpdateAllProcessScanTime(struct ProcessManager *manager);
 TEST_F(MigrationTest, TestUpdateAllProcessScanTime)
 {
     struct ProcessManager manager = {0};
     ProcessAttr current = {};
-    ThreadCtx ctx = {};
     manager.processes = &current;
-    ctx.processManager = &manager;
     current.next = nullptr;
     current.sceneInfo.currScene = UNSTABLE_SCENE;
 
@@ -1259,17 +1256,15 @@ TEST_F(MigrationTest, TestUpdateAllProcessScanTime)
     MOCKER(UpdateScanTime).stubs().will(returnValue(0));
     MOCKER(GetScanPeriodConfig).stubs().will(returnValue(0));
 
-    UpdateAllProcessScanTime(&ctx);
+    UpdateAllProcessScanTime(&manager);
 }
 
-extern "C" int HandleScene(ThreadCtx *ctx);
+extern "C" int HandleScene(struct ProcessManager *manager);
 TEST_F(MigrationTest, TestHandleSceneFirstScanNoPages)
 {
     struct ProcessManager manager = {0};
     ProcessAttr current = {};
-    ThreadCtx ctx = {};
     manager.processes = &current;
-    ctx.processManager = &manager;
     current.next = nullptr;
     current.isFirstScan = true;
     current.walkPage.nrPage = 0;
@@ -1278,7 +1273,7 @@ TEST_F(MigrationTest, TestHandleSceneFirstScanNoPages)
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
 
-    int ret = HandleScene(&ctx);
+    int ret = HandleScene(&manager);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(DEFAULT_SCAN_PERIOD, current.scanTime);
 }
@@ -1287,9 +1282,7 @@ TEST_F(MigrationTest, TestHandleSceneFirstScanWithPages)
 {
     struct ProcessManager manager = {0};
     ProcessAttr current = {};
-    ThreadCtx ctx = {};
     manager.processes = &current;
-    ctx.processManager = &manager;
     current.next = nullptr;
     current.isFirstScan = true;
     current.walkPage.nrPage = 1;
@@ -1299,7 +1292,7 @@ TEST_F(MigrationTest, TestHandleSceneFirstScanWithPages)
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(UpdateScanTime).stubs().will(returnValue(0));
 
-    int ret = HandleScene(&ctx);
+    int ret = HandleScene(&manager);
     EXPECT_EQ(0, ret);
     EXPECT_FALSE(current.isFirstScan);
 }
@@ -1308,9 +1301,7 @@ TEST_F(MigrationTest, TestHandleSceneFirstScanUpdateScanTimeFail)
 {
     struct ProcessManager manager = {0};
     ProcessAttr current = {};
-    ThreadCtx ctx = {};
     manager.processes = &current;
-    ctx.processManager = &manager;
     current.next = nullptr;
     current.isFirstScan = true;
     current.walkPage.nrPage = 1;
@@ -1320,7 +1311,7 @@ TEST_F(MigrationTest, TestHandleSceneFirstScanUpdateScanTimeFail)
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(UpdateScanTime).stubs().will(returnValue(-1));
 
-    int ret = HandleScene(&ctx);
+    int ret = HandleScene(&manager);
     EXPECT_EQ(0, ret);
     EXPECT_TRUE(current.isFirstScan);
 }
@@ -1329,9 +1320,7 @@ TEST_F(MigrationTest, TestUpdateAllProcessScanTimeFirstScanSkip)
 {
     struct ProcessManager manager = {0};
     ProcessAttr current = {};
-    ThreadCtx ctx = {};
     manager.processes = &current;
-    ctx.processManager = &manager;
     current.next = nullptr;
     current.isFirstScan = true;
     current.scanType = NORMAL_SCAN;
@@ -1340,22 +1329,20 @@ TEST_F(MigrationTest, TestUpdateAllProcessScanTimeFirstScanSkip)
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(UpdateScanTime).expects(never());
 
-    UpdateAllProcessScanTime(&ctx);
+    UpdateAllProcessScanTime(&manager);
 }
 
 extern "C" bool GetFileConfSwitchConfig(void);
 extern "C" bool GetMigratePeriodChanged(void);
 extern "C" uint32_t GetMigratePeriodConfig(void);
 extern "C" bool GetScanPeriodChanged(void);
-extern "C" void UpdatePeriodFromConfig(ThreadCtx *ctx);
+extern "C" void UpdatePeriodFromConfig(struct ProcessManager *manager);
 extern "C" void IoctlUpdateUbDmaAvail(uint32_t value);
 extern "C" uint32_t GetMigrateModeConfig(void);
 TEST_F(MigrationTest, TestUodatePeriodFromConfig)
 {
-    struct ProcessManager manager = {0};
-    ThreadCtx ctx = {};
-    ctx.processManager = &manager;
-    ctx.period = 500;
+    struct ProcessManager manager = { 0 };
+    manager.migPeriod = 500;
     MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(true));
     MOCKER(GetScanPeriodChanged).stubs().will(returnValue(false));
     MOCKER(GetMigratePeriodChanged).stubs().will(returnValue(true));
@@ -1365,18 +1352,16 @@ TEST_F(MigrationTest, TestUodatePeriodFromConfig)
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
 
-    UpdatePeriodFromConfig(&ctx);
-    EXPECT_EQ(1000, ctx.period);
+    UpdatePeriodFromConfig(&manager);
+    EXPECT_EQ(1000, manager.migPeriod);
 }
 
 TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanNoPages)
 {
     struct ProcessManager manager = {0};
     ProcessAttr current = {};
-    ThreadCtx ctx = {};
     manager.processes = &current;
-    ctx.processManager = &manager;
-    ctx.period = 500;
+    manager.migPeriod = 500;
     current.next = nullptr;
     current.isFirstScan = true;
     current.walkPage.nrPage = 0;
@@ -1390,7 +1375,7 @@ TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanNoPages)
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
 
-    UpdatePeriodFromConfig(&ctx);
+    UpdatePeriodFromConfig(&manager);
     EXPECT_EQ(DEFAULT_SCAN_PERIOD, current.scanTime);
 }
 
@@ -1398,10 +1383,8 @@ TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanWithPages)
 {
     struct ProcessManager manager = {0};
     ProcessAttr current = {};
-    ThreadCtx ctx = {};
     manager.processes = &current;
-    ctx.processManager = &manager;
-    ctx.period = 500;
+    manager.migPeriod = 500;
     current.next = nullptr;
     current.isFirstScan = true;
     current.walkPage.nrPage = 1;

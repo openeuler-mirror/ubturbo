@@ -1633,11 +1633,10 @@ static inline void HandleHighScan(ProcessAttr *current)
     }
 }
 
-static int HandleScene(ThreadCtx *ctx)
+static int HandleScene(struct ProcessManager *manager)
 {
     int ret = 0;
     Scene worstScene = LIGHT_STABLE_SCENE, scene;
-    struct ProcessManager *manager = ctx->processManager;
     PidType type = GetPidType(manager);
     EnvMutexLock(&manager->lock);
     ProcessAttr *current = manager->processes;
@@ -1669,15 +1668,14 @@ static int HandleScene(ThreadCtx *ctx)
         manager->sceneInfo.currScene = worstScene;
         GetProcessSceneAttr(worstScene, &manager->sceneInfo, type);
         SceneCycle *cycles = &manager->sceneInfo.cycles;
-        ctx->period = cycles->migCycle;
+        manager->migPeriod = cycles->migCycle;
     }
     return ret;
 }
 
-static void UpdateAllProcessScanTime(ThreadCtx *ctx)
+static void UpdateAllProcessScanTime(struct ProcessManager *manager)
 {
     int ret;
-    struct ProcessManager *manager = ctx->processManager;
 
     EnvMutexLock(&manager->lock);
     for (ProcessAttr *current = manager->processes; current; current = current->next) {
@@ -1694,10 +1692,8 @@ static void UpdateAllProcessScanTime(ThreadCtx *ctx)
     EnvMutexUnlock(&manager->lock);
 }
 
-static void RestoreProcessScanTime(ThreadCtx *ctx)
+static void RestoreProcessScanTime(struct ProcessManager *manager)
 {
-    struct ProcessManager *manager = ctx->processManager;
-
     EnvMutexLock(&manager->lock);
     for (ProcessAttr *current = manager->processes; current; current = current->next) {
         if (current->isFirstScan) {
@@ -1714,23 +1710,23 @@ static void RestoreProcessScanTime(ThreadCtx *ctx)
     EnvMutexUnlock(&manager->lock);
 }
 
-static void UpdatePeriodFromConfig(ThreadCtx *ctx)
+static void UpdatePeriodFromConfig(struct ProcessManager *manager)
 {
     if (!GetFileConfSwitchConfig()) {
         return;
     }
 
-    RestoreProcessScanTime(ctx);
+    RestoreProcessScanTime(manager);
     if (GetMigratePeriodChanged()) {
         SMAP_LOGGER_INFO("Start update migrate period time from config to %u.", GetMigratePeriodConfig());
-        ctx->period = GetMigratePeriodConfig();
+        manager->migPeriod = GetMigratePeriodConfig();
         SetMigratePeriodChanged(false);
     }
 
     // 为了计算ntimes需要先更新迁移周期
     if (GetScanPeriodChanged()) {
         SMAP_LOGGER_INFO("Start update scan period time from config\n");
-        UpdateAllProcessScanTime(ctx);
+        UpdateAllProcessScanTime(manager);
         SetScanPeriodChanged(false);
     }
 }
@@ -1770,11 +1766,9 @@ static bool SkipCycleIfNoProcess(struct ProcessManager *manager, int *ret)
 }
 
 // 管理线程函数
-int ScanMigrateWork(ThreadCtx *ctx)
+int ScanMigrateWork(struct ProcessManager *manager)
 {
     int ret = 0;
-    struct ProcessManager *manager = ctx->processManager;
-
     if (SkipCycleIfNoProcess(manager, &ret)) {
         return ret;
     }
@@ -1810,9 +1804,9 @@ int ScanMigrateWork(ThreadCtx *ctx)
     MigrationUpdateMigrateModeAndScanCpu();
     if (GetFileConfSwitchConfig()) {
         SMAP_LOGGER_DEBUG("Updating period from config.");
-        UpdatePeriodFromConfig(ctx);
+        UpdatePeriodFromConfig(manager);
     } else {
-        ret = HandleScene(ctx);
+        ret = HandleScene(manager);
         if (ret) {
             SMAP_LOGGER_ERROR("Handle scene failed! ret:%d.", ret);
             goto out;
@@ -1824,7 +1818,7 @@ int ScanMigrateWork(ThreadCtx *ctx)
     SMAP_LOGGER_INFO("Migration result: %d.", ret);
     // 迁移结束后：仅在开启带宽限制时配置ub_watch开启统计（下周期查询时得到纯业务带宽）
     if (IsBwMonitorEnabled(manager)) {
-        ConfigUbWatch(ctx->period);
+        ConfigUbWatch(manager->migPeriod);
     }
 out:
     RefreshRemoteRam(manager);

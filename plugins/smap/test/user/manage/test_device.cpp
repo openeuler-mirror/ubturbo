@@ -51,9 +51,7 @@ int OpenAndFlockFd(int fd);
 }
 TEST_F(DeviceTest, TestIInitTrackingDevOne)
 {
-    struct ProcessManager pm = {
-        .nrThread = 0
-    };
+    struct ProcessManager pm = { 0 };
     int ret;
 
     MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(-1));
@@ -63,9 +61,7 @@ TEST_F(DeviceTest, TestIInitTrackingDevOne)
 
 TEST_F(DeviceTest, TestIInitTrackingDevTwo)
 {
-    struct ProcessManager pm = {
-        .nrThread = 0
-    };
+    struct ProcessManager pm = { 0 };
     int ret;
 
     MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
@@ -90,9 +86,7 @@ extern "C" int ConfigureTrackingDevices(struct ProcessManager *manager);
 TEST_F(DeviceTest, TestIInitTrackingDevThree)
 {
     int ret;
-    struct ProcessManager pm = {
-        .nrThread = 0
-    };
+    struct ProcessManager pm = { 0 };
 
     MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
         .stubs()
@@ -109,9 +103,7 @@ TEST_F(DeviceTest, TestIInitTrackingDevThree)
 extern "C" int SendCmdToAllNodes(int fds[], unsigned long cmd, int arg);
 TEST_F(DeviceTest, TestEnableTracking)
 {
-    struct ProcessManager pm = {
-        .nrThread = 0
-    };
+    struct ProcessManager pm = { 0 };
     int ret;
 
     MOCKER(SendCmdToAllNodes).stubs().will(returnValue(0));
@@ -121,9 +113,7 @@ TEST_F(DeviceTest, TestEnableTracking)
 
 TEST_F(DeviceTest, TestDisableTracking)
 {
-    struct ProcessManager pm = {
-        .nrThread = 0
-    };
+    struct ProcessManager pm = { 0 };
     int ret;
 
     MOCKER(SendCmdToAllNodes).stubs().will(returnValue(0));

@@ -14,20 +14,8 @@
 
 #include "smap_env.h"
 
-struct ThreadContext {
-    EnvAtomic stop;
-    struct ProcessManager *processManager;
-    uint32_t period;
-    pthread_t thread;
-    int (*workFunc)(struct ThreadContext *priv);
-};
+int InitScanMigrateThread(struct ProcessManager *manager, uint32_t period);
 
-typedef struct ThreadContext ThreadCtx;
-
-typedef int (*WorkFunc)(ThreadCtx *priv);
-
-int InitThread(struct ProcessManager *manager, uint32_t period, WorkFunc workFunc);
-
-int DestroyAllThread(struct ProcessManager *manager);
+int DestroyScanMigrateThread(struct ProcessManager *manager);
 
 #endif /* __THREAD_H__ */

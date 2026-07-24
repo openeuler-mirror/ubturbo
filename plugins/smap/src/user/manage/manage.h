@@ -32,7 +32,6 @@
 #define MAX_4K_PROCESSES_CNT 300
 #define MAX_2M_PROCESSES_CNT 100
 #define MAX_PAIR_TARGET_COUNT (MAX_4K_PROCESSES_CNT * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM)
-#define MAX_THREADS 10
 #define MAX_RES_LEN 4
 #define PAGE_SHIFT 12
 #define PAGE_SIZE (1UL << PAGE_SHIFT)
@@ -506,11 +505,12 @@ struct ProcessManager {
     ProcessAttr *processes;
     SceneInfo sceneInfo;
     uint16_t nr[TYPE_MAX];
-    uint16_t nrThread; // 线程数量
     uint16_t nrLocalNuma; // local numa数量
     DevFds fds;
     TrackingAttr tracking; // 反向扫描参数
-    void *threadCtx[MAX_THREADS]; // 管理的线程上下文
+    uint32_t migPeriod; // 迁移周期，运行时动态调整
+    EnvAtomic scanMigrateStop; // 扫描迁移线程停止标志
+    pthread_t scanMigrateThread; // 扫描迁移线程
     struct RemoteNumaInfo remoteNumaInfo; // 借用远端内存数量
     EnvMutex lock;
     EnvMutex threadLock;

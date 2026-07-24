@@ -221,9 +221,9 @@ TEST_F(InterfaceTest, TestIsLocalNidValid)
 
 extern "C" void EnvMutexLock(EnvMutex *mutex);
 extern "C" void EnvMutexUnlock(EnvMutex *mutex);
-extern "C" int ScanMigrateWork(ThreadCtx *ctx);
+extern "C" int ScanMigrateWork(struct ProcessManager *manager);
 extern "C" int InitAllThreads(struct ProcessManager *manager);
-extern "C" int InitThread(struct ProcessManager *manager, uint32_t period, WorkFunc workFunc);
+extern "C" int InitScanMigrateThread(struct ProcessManager *manager, uint32_t period);
 TEST_F(InterfaceTest, TestIsRatioValidTwo)
 {
     int ratio = 101;
@@ -245,8 +245,8 @@ TEST_F(InterfaceTest, TestInitAllThreads)
 
     EnvMutexInit(&pm.threadLock);
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
-    MOCKER(InitThread).stubs().will(returnValue(-EPERM));
-    MOCKER(DestroyAllThread).expects(once()).will(returnValue(0));
+    MOCKER(InitScanMigrateThread).stubs().will(returnValue(-EPERM));
+    MOCKER(DestroyScanMigrateThread).expects(once()).will(returnValue(0));
     ret = InitAllThreads(&pm);
     EXPECT_EQ(-EPERM, ret);
 }
@@ -261,7 +261,7 @@ TEST_F(InterfaceTest, TestInitAllThreadsHugeMode)
     EnvMutexInit(&pm.threadLock);
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
-    MOCKER(InitThread).stubs().will(returnValue(0));
+    MOCKER(InitScanMigrateThread).stubs().will(returnValue(0));
     ret = InitAllThreads(&pm);
     EXPECT_EQ(0, ret);
 }
@@ -274,7 +274,7 @@ TEST_F(InterfaceTest, TestInitAllThreadsProcessMode)
     EnvMutexInit(&pm.threadLock);
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
-    MOCKER(InitThread).stubs().will(returnValue(0));
+    MOCKER(InitScanMigrateThread).stubs().will(returnValue(0));
     ret = InitAllThreads(&pm);
     EXPECT_EQ(0, ret);
 }
@@ -1824,7 +1824,7 @@ TEST_F(InterfaceTest, TestSmapStop)
     int ret;
     EnvAtomicSet(&g_status, 1);
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(DestroyAllThread).stubs().will(ignoreReturnValue());
+    MOCKER(DestroyScanMigrateThread).stubs().will(ignoreReturnValue());
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(RemoveAllManagedProcess).stubs().will(ignoreReturnValue());
@@ -1839,7 +1839,7 @@ TEST_F(InterfaceTest, TestSmapStopOne)
     int ret;
     EnvAtomicSet(&g_status, 1);
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(DestroyAllThread).stubs().will(ignoreReturnValue());
+    MOCKER(DestroyScanMigrateThread).stubs().will(ignoreReturnValue());
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(RemoveAllManagedProcess).stubs().will(ignoreReturnValue());

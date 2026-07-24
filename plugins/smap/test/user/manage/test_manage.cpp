@@ -10,7 +10,6 @@
 
 #include "manage/access_ioctl.h"
 #include "manage/manage.h"
-#include "manage/smap_config.h"
 #include "manage/thread.h"
 #include "securec.h"
 #include "strategy/strategy_config.h"
@@ -742,7 +741,7 @@ TEST_F(ManageTest, TestProcessManagerInitTwo)
     int ret = 0;
     uint32_t pageType = PAGETYPE_HUGE;
     MOCKER(EnvMutexInit).stubs().will(returnValue(0));
-    g_processManager.threadCtx[0] = (void *)&period;
+    EnvAtomicSet(&g_processManager.scanMigrateStop, 1);
     g_processManager.processes = (ProcessAttr *)&period;
     ret = ProcessManagerInit(pageType);
     EXPECT_EQ(0, ret);
