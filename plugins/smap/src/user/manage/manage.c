@@ -100,6 +100,71 @@ int GetNrLocalNuma(void)
     return g_processManager.nrLocalNuma;
 }
 
+void InitProcessTargetConfig(ProcessTargetConfig *config)
+{
+    if (!config) {
+        return;
+    }
+
+    *config = (ProcessTargetConfig){ 0 };
+}
+
+void ClearProcessTargetConfig(ProcessTargetConfig *config)
+{
+    InitProcessTargetConfig(config);
+}
+
+int CopyProcessTargetConfig(ProcessTargetConfig *dest,
+                            const ProcessTargetConfig *src)
+{
+    if (!dest || !src || src->count > REMOTE_NUMA_NUM ||
+        (src->migrateMode != MIG_RATIO_MODE &&
+         src->migrateMode != MIG_MEMSIZE_MODE)) {
+        return -EINVAL;
+    }
+
+    *dest = *src;
+    return 0;
+}
+
+const ProcessRemoteTarget *FindProcessRemoteTarget(
+    const ProcessTargetConfig *config, int remoteNid)
+{
+    if (!config || config->count > REMOTE_NUMA_NUM) {
+        return NULL;
+    }
+
+    for (uint32_t i = 0; i < config->count; i++) {
+        if (config->targets[i].remoteNid == remoteNid) {
+            return &config->targets[i];
+        }
+    }
+    return NULL;
+}
+
+int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex)
+{
+    if (!remoteIndex || nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM ||
+        remoteNid < nrLocalNuma || remoteNid - nrLocalNuma >= REMOTE_NUMA_NUM) {
+        return -EINVAL;
+    }
+
+    *remoteIndex = remoteNid - nrLocalNuma;
+    return 0;
+}
+
+void InitProcessMigrationTargetState(ProcessAttr *attr)
+{
+    if (!attr) {
+        return;
+    }
+
+    InitProcessTargetConfig(&attr->targetConfig);
+    InitProcessTargetConfig(&attr->pendingTargetConfig);
+    attr->pendingTargetConfigValid = false;
+    attr->managedLocalState = (ManagedLocalState){ 0 };
+}
+
 /*
  * Validate that nid belongs to the configured remote NUMA id range. This is a
  * range check only; callers that require online-node validation should do that
@@ -823,6 +888,7 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
         SMAP_LOGGER_ERROR("Alloc memory for process failed.");
         return -ENOMEM;
     }
+    InitProcessMigrationTargetState(attr);
 
     ret = SetProcessLocalNuma(param->pid, &attr->numaAttr.numaNodes, type == VM_TYPE);
     if (ret) {
@@ -1199,6 +1265,7 @@ int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigration
         SMAP_LOGGER_ERROR("Alloc memory for grouped process failed.");
         return -ENOMEM;
     }
+    InitProcessMigrationTargetState(attr);
     attr->numaAttr.numaNodes = nodeBitmap;
     ret = VMPreprocess(pid, attr);
     if (ret) {

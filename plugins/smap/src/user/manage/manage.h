@@ -228,13 +228,66 @@ typedef struct {
     uint32_t numaNodes; // numa bitmap: 0-unused, 1-used
 } NumaAttribute;
 
+/*
+ * User-requested aggregate target for one remote NUMA node. The process-level
+ * migrate mode determines whether ratio or memSizeKB is effective.
+ */
 typedef struct {
-    double initRemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 接口设置的内存比例
-    uint64_t memSize[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 仅密度场景：迁移内存大小,单位为KB
+    int remoteNid;
+    uint32_t ratio;
+    uint64_t memSizeKB;
+} ProcessRemoteTarget;
+
+/*
+ * Source of truth for a process's normal migrate-out request. Pair-level
+ * runtime matrices must not be used to reconstruct this configuration.
+ */
+typedef struct {
+    MigrateMode migrateMode;
+    uint32_t count;
+    ProcessRemoteTarget targets[REMOTE_NUMA_NUM];
+} ProcessTargetConfig;
+
+typedef struct {
+    uint32_t managedLocalMask;
+    uint32_t observedLocalMask;
+    uint32_t residentLocalMask;
+    uint32_t accountLocalMask[REMOTE_NUMA_NUM];
+} ManagedLocalState;
+
+/* Runtime-only target after an aggregate remote target is split by local. */
+typedef struct {
+    pid_t pid;
+    int localNid;
+    int remoteNid;
+    uint32_t requestedPages;
+    uint32_t targetPages;
+} PairTarget;
+
+/* Runtime-only migration decision for one local-to-remote pair. */
+typedef struct {
+    pid_t pid;
+    int localNid;
+    int remoteNid;
+    int remoteIndex;
+    uint32_t targetPages;
+    uint32_t actualPages;
+    uint32_t demotePages;
+    uint32_t promotePages;
+    uint32_t swapPages;
+} PairPlan;
+
+typedef struct {
+    /*
+     * Pair-level compatibility fields generated from ProcessTargetConfig.
+     * They are runtime state, not the source of the user-requested target.
+     */
+    double initRemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
+    uint64_t memSize[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
     uint32_t allocRemoteNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 根据账本计算的，各本地numa对应的远端page的数量
     uint32_t nrPagesPerLocalNuma[LOCAL_NUMA_NUM]; // 根据账本计算的，各本地numa可支配的内存
-    double l2RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 水线场景，分配远端内存后设置的内存比例
-    double l3RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 水线场景：自适应调整后的远端内存占比
+    double l2RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
+    double l3RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
     uint32_t nrMigratePages[MAX_NODES][MAX_NODES]; // 水线场景：消减后的迁移量；密度场景：接口设置的比例
     uint32_t remoteNrPagesAfterMigrate[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 迁移后记录账本
     MigrateDirection dir[MAX_NODES]; // 算法决策各numa的迁出的方向 demote/promote/swap
@@ -276,6 +329,10 @@ struct ProcessAttribute {
         int nid;
         uint64_t memSize; // 迁移内存大小,单位为KB
     } migrateParam[REMOTE_NUMA_NUM];
+    ProcessTargetConfig targetConfig;
+    ProcessTargetConfig pendingTargetConfig;
+    bool pendingTargetConfigValid;
+    ManagedLocalState managedLocalState;
     SeparateParam separateParam;
     NumaAttribute numaAttr;
     WalkPage walkPage;
@@ -417,6 +474,15 @@ int GetNrLocalNuma(void);
 
 /* Range-check a remote NUMA id against the manager's local/remote layout. */
 bool IsRemoteNidValid(int nid);
+
+void InitProcessTargetConfig(ProcessTargetConfig *config);
+void ClearProcessTargetConfig(ProcessTargetConfig *config);
+int CopyProcessTargetConfig(ProcessTargetConfig *dest,
+                            const ProcessTargetConfig *src);
+const ProcessRemoteTarget *FindProcessRemoteTarget(
+    const ProcessTargetConfig *config, int remoteNid);
+int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex);
+void InitProcessMigrationTargetState(ProcessAttr *attr);
 
 int ProcessManagerInit(uint32_t pageType);
 

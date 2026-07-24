@@ -474,6 +474,7 @@ static int RecoverProcessConfig(char *processBase)
             errFlag = true;
             break;
         }
+        InitProcessMigrationTargetState(attr);
         AssignProcessAttr(attr, payload);
         SMAP_LOGGER_INFO("ProcessPayload %d, type %hu, numaNodes %#x, state %hu, scan type %hu, scan time %u.",
                          payload->pid, payload->type, payload->numaNodes, payload->state, payload->scanType,

@@ -624,6 +624,7 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfig)
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
+    MOCKER(InitProcessMigrationTargetState).expects(exactly(nrProcess));
     ret = RecoverProcessConfig((char *)&header);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(nrProcess, manager.nr[VM_TYPE]);

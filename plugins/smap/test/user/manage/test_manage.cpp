@@ -54,6 +54,118 @@ TEST_F(ManageTest, TestRemoteNumaInfoInit)
     EXPECT_EQ(0, g_processManager.remoteNumaInfo.usedInfo[0].size);
 }
 
+TEST_F(ManageTest, TestInitAndClearProcessTargetConfig)
+{
+    ProcessTargetConfig config = {};
+    config.migrateMode = MIG_MEMSIZE_MODE;
+    config.count = 1;
+    config.targets[0].remoteNid = 4;
+    config.targets[0].ratio = 50;
+    config.targets[0].memSizeKB = 2048;
+
+    InitProcessTargetConfig(&config);
+    EXPECT_EQ(MIG_RATIO_MODE, config.migrateMode);
+    EXPECT_EQ(0U, config.count);
+    EXPECT_EQ(0, config.targets[0].remoteNid);
+    EXPECT_EQ(0U, config.targets[0].ratio);
+    EXPECT_EQ(0U, config.targets[0].memSizeKB);
+
+    config.count = 1;
+    config.targets[0].remoteNid = 5;
+    ClearProcessTargetConfig(&config);
+    EXPECT_EQ(0U, config.count);
+    EXPECT_EQ(0, config.targets[0].remoteNid);
+
+    InitProcessTargetConfig(nullptr);
+    ClearProcessTargetConfig(nullptr);
+}
+
+TEST_F(ManageTest, TestCopyProcessTargetConfig)
+{
+    ProcessTargetConfig source = {};
+    source.migrateMode = MIG_MEMSIZE_MODE;
+    source.count = 2;
+    source.targets[0] = {4, 0, 2048};
+    source.targets[1] = {5, 0, 4096};
+    ProcessTargetConfig dest = {};
+
+    EXPECT_EQ(0, CopyProcessTargetConfig(&dest, &source));
+    EXPECT_EQ(MIG_MEMSIZE_MODE, dest.migrateMode);
+    EXPECT_EQ(2U, dest.count);
+    EXPECT_EQ(4, dest.targets[0].remoteNid);
+    EXPECT_EQ(2048U, dest.targets[0].memSizeKB);
+    EXPECT_EQ(5, dest.targets[1].remoteNid);
+    EXPECT_EQ(4096U, dest.targets[1].memSizeKB);
+
+    source.targets[0].memSizeKB = 8192;
+    EXPECT_EQ(2048U, dest.targets[0].memSizeKB);
+
+    EXPECT_EQ(-EINVAL, CopyProcessTargetConfig(nullptr, &source));
+    EXPECT_EQ(-EINVAL, CopyProcessTargetConfig(&dest, nullptr));
+
+    source.count = REMOTE_NUMA_NUM + 1;
+    EXPECT_EQ(-EINVAL, CopyProcessTargetConfig(&dest, &source));
+    source.count = 0;
+    source.migrateMode = static_cast<MigrateMode>(-1);
+    EXPECT_EQ(-EINVAL, CopyProcessTargetConfig(&dest, &source));
+}
+
+TEST_F(ManageTest, TestFindProcessRemoteTarget)
+{
+    ProcessTargetConfig config = {};
+    config.count = 2;
+    config.targets[0] = {4, 25, 0};
+    config.targets[1] = {7, 50, 0};
+
+    const ProcessRemoteTarget *target = FindProcessRemoteTarget(&config, 7);
+    ASSERT_NE(nullptr, target);
+    EXPECT_EQ(50U, target->ratio);
+    EXPECT_EQ(nullptr, FindProcessRemoteTarget(&config, 6));
+    EXPECT_EQ(nullptr, FindProcessRemoteTarget(nullptr, 7));
+
+    config.count = REMOTE_NUMA_NUM + 1;
+    EXPECT_EQ(nullptr, FindProcessRemoteTarget(&config, 7));
+}
+
+TEST_F(ManageTest, TestRemoteNidToIndex)
+{
+    int remoteIndex = -1;
+
+    EXPECT_EQ(0, RemoteNidToIndex(4, 4, &remoteIndex));
+    EXPECT_EQ(0, remoteIndex);
+    EXPECT_EQ(0, RemoteNidToIndex(21, 4, &remoteIndex));
+    EXPECT_EQ(REMOTE_NUMA_NUM - 1, remoteIndex);
+
+    remoteIndex = 9;
+    EXPECT_EQ(-EINVAL, RemoteNidToIndex(3, 4, &remoteIndex));
+    EXPECT_EQ(9, remoteIndex);
+    EXPECT_EQ(-EINVAL, RemoteNidToIndex(22, 4, &remoteIndex));
+    EXPECT_EQ(-EINVAL, RemoteNidToIndex(4, 0, &remoteIndex));
+    EXPECT_EQ(-EINVAL, RemoteNidToIndex(4, LOCAL_NUMA_NUM + 1, &remoteIndex));
+    EXPECT_EQ(-EINVAL, RemoteNidToIndex(4, 4, nullptr));
+}
+
+TEST_F(ManageTest, TestInitProcessMigrationTargetState)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.targetConfig.count = 1;
+    attr.pendingTargetConfig.count = 1;
+    attr.pendingTargetConfigValid = true;
+    attr.managedLocalState.managedLocalMask = 0xf;
+    attr.managedLocalState.accountLocalMask[0] = 0x1;
+
+    InitProcessMigrationTargetState(&attr);
+    EXPECT_EQ(123, attr.pid);
+    EXPECT_EQ(0U, attr.targetConfig.count);
+    EXPECT_EQ(0U, attr.pendingTargetConfig.count);
+    EXPECT_FALSE(attr.pendingTargetConfigValid);
+    EXPECT_EQ(0U, attr.managedLocalState.managedLocalMask);
+    EXPECT_EQ(0U, attr.managedLocalState.accountLocalMask[0]);
+
+    InitProcessMigrationTargetState(nullptr);
+}
+
 extern "C" errno_t memset_s(void *dest, size_t destMax, int c, size_t count);
 extern "C" int ProcessManagerInit(uint32_t pageType);
 extern "C" int EnvMutexInit(EnvMutex *mutex);
