@@ -25,15 +25,15 @@
 #include "oom_migrate.h"
 
 #define MAX_MOVE_PAGES_BATCH 512 /* 单次 move_pages(2) 批量上限 */
-#define NUMA_MAPS_LINE_LEN 1024   /* numa_maps 单行缓冲（与 MAX_LINE_LENGTH 等宽） */
+#define NUMA_MAPS_LINE_LEN 1024 /* numa_maps 单行缓冲（与 MAX_LINE_LENGTH 等宽） */
 
 /* numa_maps 段级本地过滤的流式游标：跨批次保留当前段内未枚举完的页。 */
 typedef struct {
     char line[NUMA_MAPS_LINE_LEN];
-    bool hasLine;          /* line[] 持有尚未枚举完毕的段 */
+    bool hasLine; /* line[] 持有尚未枚举完毕的段 */
     unsigned long segStart;
-    uint64_t segLocal;     /* 该段落在本地节点的总页数 */
-    uint64_t segEmitted;   /* 该段已枚举的本地页数 */
+    uint64_t segLocal; /* 该段落在本地节点的总页数 */
+    uint64_t segEmitted; /* 该段已枚举的本地页数 */
 } NumaScanCursor;
 
 /*
@@ -74,9 +74,9 @@ static bool ParseNumaMapLocalCount(const char *line, int nrLocalNuma, unsigned l
         const char *value = sub + strlen(pattern);
         char *end = NULL;
         errno = 0;
-        unsigned long c = strtoull(value, &end, 10);
-        if (value == end || errno != 0) {
-            continue; /* 解析 N<i>=<count> 失败，跳过该 node 字段 */
+        uint64_t c = strtoull(value, &end, 10);
+        if (value == end || errno == ERANGE || c == UINT64_MAX) {
+            continue; /* 无转换或溢出，跳过该 node 字段 */
         }
         total += c;
     }
@@ -172,7 +172,7 @@ static int MigratePidFromToL2(pid_t pid, int nrLocalNuma, int destNid, uint64_t 
     uint64_t failedCnt = 0;
     uint64_t attemptedCnt = 0; /* 实际收集到的候选页数，用于区分"无候选(非错误)"与"全失败(错误)" */
     int lastErr = 0; /* 保存首个失败 errno（全局 errno 或逐页 -status），避免被后续日志/free 覆写 */
-    NumaScanCursor cur = {0};
+    NumaScanCursor cur = { 0 };
     int ret = 0;
     while (*pageBudget > 0) {
         int cnt = 0;
