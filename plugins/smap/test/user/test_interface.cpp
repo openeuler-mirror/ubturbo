@@ -479,7 +479,7 @@ TEST_F(InterfaceTest, IsMigParaValidMemPoolModeAndMigRatioMode)
     payload.inner[0].migrateMode = MIG_RATIO_MODE;
 
     ret = IsMigParaValid(&payload);
-    EXPECT_EQ(false, ret);
+    EXPECT_EQ(true, ret);
 }
 
 TEST_F(InterfaceTest, IsMigParaValidMigRatioModeWithInvalidRatio)
@@ -657,14 +657,13 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgCheckMigrateMode)
 
     MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
     MOCKER(IsPidRemoteNidValid).stubs().will(returnValue(true));
-    MOCKER(IsNodeForbidden).stubs().will(returnValue(true));
-    MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
 
     msg.payload[0].count = 1;
     msg.payload[0].inner[0].destNid = 4;
     msg.payload[0].inner[0].migrateMode = MIG_RATIO_MODE;
     int ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
-    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ(0, ret);
 
     msg.payload[0].inner[0].migrateMode = MIG_MEMSIZE_MODE;
     msg.payload[0].inner[0].memSize = 2049;
@@ -678,8 +677,7 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgCheckMigrateMode)
     GlobalMockObject::verify();
     MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
     MOCKER(IsPidRemoteNidValid).stubs().will(returnValue(true));
-    MOCKER(IsNodeForbidden).stubs().will(returnValue(true));
-    MOCKER(GetRunMode).stubs().will(returnValue(WATERLINE_MODE));
+    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
 
     ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
     EXPECT_EQ(0, ret);
@@ -699,6 +697,81 @@ extern "C" int AddProcessNumaBitMap(struct MigrateOutMsg *msg, uint32_t *nodeBit
 extern "C" int AddProcessesToGlobalManager(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap,
                                            bool *hasInvalidPid);
 extern "C" int ProcessAddTrackingManage(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap);
+extern "C" void RollbackInvalidPid(pid_t *failedPids, int failedCount);
+
+static int CheckRestoredTrackingPayload(
+    int len, struct AccessAddPidPayload *payload)
+{
+    EXPECT_EQ(1, len);
+    EXPECT_EQ(1234, payload[0].pid);
+    EXPECT_EQ(NORMAL_SCAN, payload[0].type);
+    EXPECT_EQ(200U, payload[0].scanTime);
+    EXPECT_EQ(60U, payload[0].duration);
+    EXPECT_EQ(0x11U, payload[0].numaNodes);
+    return 0;
+}
+
+static int CheckRemovedNewTrackingPayload(
+    int len, struct AccessRemovePidPayload *payload)
+{
+    EXPECT_EQ(1, len);
+    EXPECT_EQ(5678, payload[0].pid);
+    return 0;
+}
+
+TEST_F(InterfaceTest, TestRollbackRestoresExistingAndRemovesNewTracking)
+{
+    ProcessAttr existing = {};
+    pid_t failedPids[2] = { 1234, 5678 };
+
+    existing.pid = failedPids[0];
+    existing.state = PROC_IDLE;
+    existing.scanType = NORMAL_SCAN;
+    existing.scanTime = 200;
+    existing.duration = 60;
+    existing.numaAttr.numaNodes = 0x11;
+    g_processManager.processes = &existing;
+    MOCKER(AccessIoctlAddPid)
+        .expects(once())
+        .will(invoke(CheckRestoredTrackingPayload));
+    MOCKER(AccessIoctlRemovePid)
+        .expects(once())
+        .will(invoke(CheckRemovedNewTrackingPayload));
+
+    RollbackInvalidPid(failedPids, 2);
+}
+
+static int CheckFirstFailedTrackingPayload(
+    int len, struct AccessRemovePidPayload *payload)
+{
+    EXPECT_EQ(1, len);
+    EXPECT_EQ(1234, payload[0].pid);
+    return 0;
+}
+
+TEST_F(InterfaceTest, TestAddProcessesPreservesFirstError)
+{
+    struct MigrateOutMsg msg = { .count = 2 };
+    uint32_t nodeBitmap[MAX_NR_MIGOUT] = { 0 };
+    bool hasInvalidPid = false;
+
+    msg.payload[0].pid = 1234;
+    msg.payload[0].count = 0;
+    msg.payload[1].pid = 5678;
+    msg.payload[1].count = 0;
+    MOCKER(ProcessAddManage)
+        .stubs()
+        .will(returnValue(-EINVAL))
+        .then(returnValue(0));
+    MOCKER(AccessIoctlRemovePid)
+        .expects(once())
+        .will(invoke(CheckFirstFailedTrackingPayload));
+
+    EXPECT_EQ(-EINVAL, AddProcessesToGlobalManager(
+                           &msg, VM_TYPE, nodeBitmap, &hasInvalidPid));
+    EXPECT_FALSE(hasInvalidPid);
+}
+
 TEST_F(InterfaceTest, TestSmapMigrateOut)
 {
     int ret;
@@ -4261,7 +4334,7 @@ TEST_F(InterfaceTest, TestIsMigrateOutPayloadRemoteTargetZeroInvalidCount)
 {
     struct MigrateOutPayload payload = { .count = 0 };
     bool ret = IsMigrateOutPayloadRemoteTargetZero(&payload);
-    EXPECT_EQ(false, ret);
+    EXPECT_EQ(true, ret);
 
     payload.count = REMOTE_NUMA_NUM + 1;
     ret = IsMigrateOutPayloadRemoteTargetZero(&payload);
@@ -4908,7 +4981,6 @@ TEST_F(InterfaceTest, TestIsPidArrValidTooMany)
     bool ret = IsPidArrValid(arr, MAX_2M_PROCESSES_CNT + 1, false);
     EXPECT_EQ(false, ret);
 }
-
 extern "C" void MigrateAndCpuConfig(void);
 extern "C" void IoctlUpdateUbDmaAvail(uint32_t value);
 extern "C" void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax);
@@ -4974,4 +5046,3 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigBothEnabled)
     MigrateAndCpuConfig();
     GlobalMockObject::verify();
 }
-

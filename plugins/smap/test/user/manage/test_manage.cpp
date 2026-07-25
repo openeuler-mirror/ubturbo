@@ -18,6 +18,7 @@ using namespace std;
 
 static cpu_set_t g_fake_cpu_mask;
 extern "C" struct ProcessManager g_processManager;
+extern "C" uint32_t g_pageSizeNormal;
 extern "C" uint32_t g_pageSizeHuge;
 extern "C" RunMode g_runMode;
 extern "C" void RemoteNumaInfoInit();
@@ -152,6 +153,7 @@ TEST_F(ManageTest, TestInitProcessMigrationTargetState)
     attr.targetConfig.count = 1;
     attr.pendingTargetConfig.count = 1;
     attr.pendingTargetConfigValid = true;
+    attr.pendingTargetNumaNodes = 0x31;
     attr.managedLocalState.managedLocalMask = 0xf;
     attr.managedLocalState.accountLocalMask[0] = 0x1;
 
@@ -160,10 +162,117 @@ TEST_F(ManageTest, TestInitProcessMigrationTargetState)
     EXPECT_EQ(0U, attr.targetConfig.count);
     EXPECT_EQ(0U, attr.pendingTargetConfig.count);
     EXPECT_FALSE(attr.pendingTargetConfigValid);
+    EXPECT_EQ(0U, attr.pendingTargetNumaNodes);
     EXPECT_EQ(0U, attr.managedLocalState.managedLocalMask);
     EXPECT_EQ(0U, attr.managedLocalState.accountLocalMask[0]);
 
     InitProcessMigrationTargetState(nullptr);
+}
+
+TEST_F(ManageTest, TestConfigureMigrationTargetsStagesWhileMigrating)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.state = PROC_MIGRATE;
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = {4, 25, 0};
+    attr.migrateMode = MIG_RATIO_MODE;
+    attr.remoteNumaCnt = 1;
+    attr.strategyAttr.initRemoteMemRatio[0][0] = 25;
+    attr.numaAttr.numaNodes = 0x11;
+
+    ProcessTargetConfig config = {};
+    config.migrateMode = MIG_MEMSIZE_MODE;
+    config.count = 1;
+    config.targets[0] = {5, 0, 4096};
+    g_processManager.nrLocalNuma = 4;
+
+    int ret = ConfigureMigrationTargets(&attr, &config);
+    EXPECT_EQ(0, ret);
+    EXPECT_TRUE(attr.pendingTargetConfigValid);
+    EXPECT_EQ(4, attr.targetConfig.targets[0].remoteNid);
+    EXPECT_EQ(MIG_RATIO_MODE, attr.migrateMode);
+    EXPECT_EQ(25, attr.strategyAttr.initRemoteMemRatio[0][0]);
+    EXPECT_EQ(5, attr.pendingTargetConfig.targets[0].remoteNid);
+    EXPECT_EQ(0x31U, attr.pendingTargetNumaNodes);
+}
+
+static int FillEmptyNumaPages(pid_t pid,
+                              uint64_t numaPages[MAX_NODES],
+                              bool onlyHuge)
+{
+    (void)pid;
+    (void)onlyHuge;
+    memset(numaPages, 0, sizeof(uint64_t) * MAX_NODES);
+    return 0;
+}
+
+TEST_F(ManageTest, TestApplyPendingMigrationTargets)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.state = PROC_MIGRATE;
+    attr.numaAttr.numaNodes = 0x1;
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = {4, 25, 0};
+    attr.pendingTargetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.pendingTargetConfig.count = 1;
+    attr.pendingTargetConfig.targets[0] = {5, 0, 4096};
+    attr.pendingTargetConfigValid = true;
+    attr.pendingTargetNumaNodes = 0x21;
+
+    g_processManager.nrLocalNuma = 4;
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    MOCKER(GetPidNumaPagesFromNumaMaps)
+        .expects(once())
+        .will(invoke(FillEmptyNumaPages));
+    MOCKER(AccessIoctlAddPid).expects(once()).will(returnValue(0));
+    MOCKER(SyncAllProcessConfig).expects(once()).will(returnValue(0));
+
+    int ret = ApplyPendingMigrationTargets(&attr);
+    EXPECT_EQ(0, ret);
+    EXPECT_FALSE(attr.pendingTargetConfigValid);
+    EXPECT_EQ(0U, attr.pendingTargetConfig.count);
+    EXPECT_EQ(MIG_MEMSIZE_MODE, attr.targetConfig.migrateMode);
+    EXPECT_EQ(5, attr.targetConfig.targets[0].remoteNid);
+    EXPECT_EQ(MIG_MEMSIZE_MODE, attr.migrateMode);
+    EXPECT_EQ(1, attr.remoteNumaCnt);
+    EXPECT_EQ(0x21U, attr.numaAttr.numaNodes);
+    EXPECT_EQ(0U, attr.pendingTargetNumaNodes);
+}
+
+TEST_F(ManageTest, TestPendingTrackingFailureKeepsActiveTarget)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.numaAttr.numaNodes = 0x11;
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = {4, 25, 0};
+    attr.pendingTargetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.pendingTargetConfig.count = 1;
+    attr.pendingTargetConfig.targets[0] = {5, 30, 0};
+    attr.pendingTargetConfigValid = true;
+    attr.pendingTargetNumaNodes = 0x31;
+    g_processManager.nrLocalNuma = 4;
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    MOCKER(GetPidNumaPagesFromNumaMaps)
+        .expects(once())
+        .will(invoke(FillEmptyNumaPages));
+    MOCKER(AccessIoctlAddPid).expects(once()).will(returnValue(-EIO));
+
+    EXPECT_EQ(-EIO, ApplyPendingMigrationTargets(&attr));
+    EXPECT_TRUE(attr.pendingTargetConfigValid);
+    EXPECT_EQ(4, attr.targetConfig.targets[0].remoteNid);
+    EXPECT_EQ(5, attr.pendingTargetConfig.targets[0].remoteNid);
+    EXPECT_EQ(0x11U, attr.numaAttr.numaNodes);
+    EXPECT_EQ(0x31U, attr.pendingTargetNumaNodes);
 }
 
 extern "C" errno_t memset_s(void *dest, size_t destMax, int c, size_t count);
@@ -474,11 +583,12 @@ TEST_F(ManageTest, TestVMProcessParseMmapTypeFailed)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" void SetProcessConfig(ProcessAttr *attr, ProcessParam *param);
+extern "C" int SetProcessConfig(ProcessAttr *attr, ProcessParam *param);
 TEST_F(ManageTest, TestSetProcessConfig)
 {
     g_processManager.nrLocalNuma = 4;
-    ProcessAttr attr;
+    ProcessAttr attr = {};
+    attr.state = PROC_IDLE;
     ProcessParam param = {
         .pid = 1,
         .count = 1,
@@ -486,8 +596,14 @@ TEST_F(ManageTest, TestSetProcessConfig)
     param.numaParam[0].nid = 4;
     param.numaParam[0].ratio = 50;
     attr.numaAttr.numaNodes = 1;
-    SetProcessConfig(&attr, &param);
+    MOCKER(GetPidNumaPagesFromNumaMaps)
+        .expects(once())
+        .will(invoke(FillEmptyNumaPages));
+    int ret = SetProcessConfig(&attr, &param);
+    EXPECT_EQ(0, ret);
     EXPECT_EQ(attr.pid, 1);
+    EXPECT_EQ(1U, attr.targetConfig.count);
+    EXPECT_EQ(4, attr.targetConfig.targets[0].remoteNid);
     EXPECT_EQ(attr.strategyAttr.initRemoteMemRatio[0][0], 50);
     EXPECT_EQ(attr.numaAttr.numaNodes, 17);
 }
@@ -1919,7 +2035,8 @@ static int MockGetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NOD
     return 0;
 }
 
-extern "C" void SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma);
+extern "C" int SetSingleRemoteNumaConfig(
+    ProcessAttr *attr, ProcessParam *param, int nrLocalNuma);
 extern "C" void MigratePagesToRemote(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES],
                                      uint64_t pagesToMigrate);
 extern "C" void RecallPagesFromRemote(ProcessAttr *attr, int l2Index, uint64_t pagesToRecall);
@@ -2964,5 +3081,5 @@ TEST_F(ManageTest, TestIsZeroRemoteTargetConfigZeroCount)
 {
     ProcessParam param = {.count = 0};
     bool ret = IsZeroRemoteTargetConfig(&param);
-    EXPECT_EQ(false, ret);
+    EXPECT_EQ(true, ret);
 }

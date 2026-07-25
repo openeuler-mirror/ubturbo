@@ -332,6 +332,7 @@ struct ProcessAttribute {
     ProcessTargetConfig targetConfig;
     ProcessTargetConfig pendingTargetConfig;
     bool pendingTargetConfigValid;
+    uint32_t pendingTargetNumaNodes;
     ManagedLocalState managedLocalState;
     SeparateParam separateParam;
     NumaAttribute numaAttr;
@@ -466,6 +467,8 @@ typedef struct {
         uint64_t memSize;
         MigrateMode migrateMode;
     } numaParam[REMOTE_NUMA_NUM];
+    bool targetConfigValid;
+    ProcessTargetConfig targetConfig;
 } ProcessParam;
 
 void DebugProcessAttr(struct ProcessManager *manager);
@@ -477,10 +480,8 @@ bool IsRemoteNidValid(int nid);
 
 void InitProcessTargetConfig(ProcessTargetConfig *config);
 void ClearProcessTargetConfig(ProcessTargetConfig *config);
-int CopyProcessTargetConfig(ProcessTargetConfig *dest,
-                            const ProcessTargetConfig *src);
-const ProcessRemoteTarget *FindProcessRemoteTarget(
-    const ProcessTargetConfig *config, int remoteNid);
+int CopyProcessTargetConfig(ProcessTargetConfig *dest, const ProcessTargetConfig *src);
+const ProcessRemoteTarget *FindProcessRemoteTarget(const ProcessTargetConfig *config, int remoteNid);
 int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex);
 void InitProcessMigrationTargetState(ProcessAttr *attr);
 
@@ -512,6 +513,8 @@ int SetProcessLocalNuma(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag);
 int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
 
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap);
+int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config);
+int ApplyPendingMigrationTargets(ProcessAttr *attr);
 int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
 int ProcessSetPendingGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
 int ApplyPendingGroupedPolicy(ProcessAttr *attr);

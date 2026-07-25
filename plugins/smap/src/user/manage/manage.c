@@ -114,12 +114,10 @@ void ClearProcessTargetConfig(ProcessTargetConfig *config)
     InitProcessTargetConfig(config);
 }
 
-int CopyProcessTargetConfig(ProcessTargetConfig *dest,
-                            const ProcessTargetConfig *src)
+int CopyProcessTargetConfig(ProcessTargetConfig *dest, const ProcessTargetConfig *src)
 {
     if (!dest || !src || src->count > REMOTE_NUMA_NUM ||
-        (src->migrateMode != MIG_RATIO_MODE &&
-         src->migrateMode != MIG_MEMSIZE_MODE)) {
+        (src->migrateMode != MIG_RATIO_MODE && src->migrateMode != MIG_MEMSIZE_MODE)) {
         return -EINVAL;
     }
 
@@ -127,8 +125,42 @@ int CopyProcessTargetConfig(ProcessTargetConfig *dest,
     return 0;
 }
 
-const ProcessRemoteTarget *FindProcessRemoteTarget(
-    const ProcessTargetConfig *config, int remoteNid)
+static int ValidateProcessTargetConfig(const ProcessTargetConfig *config)
+{
+    ProcessTargetConfig copy;
+    if (CopyProcessTargetConfig(&copy, config)) {
+        return -EINVAL;
+    }
+
+    uint64_t totalRatio = 0;
+    uint64_t pageSizeKB = (IsHugeMode() ? PAGESIZE_2M : PAGESIZE_4K) / KIB;
+    for (uint32_t i = 0; i < copy.count; i++) {
+        for (uint32_t j = i + 1; j < copy.count; j++) {
+            if (copy.targets[i].remoteNid == copy.targets[j].remoteNid) {
+                return -EINVAL;
+            }
+        }
+
+        if (copy.migrateMode == MIG_RATIO_MODE) {
+            if (copy.targets[i].ratio > HUNDRED) {
+                return -EINVAL;
+            }
+            totalRatio += copy.targets[i].ratio;
+            continue;
+        }
+
+        if (copy.targets[i].memSizeKB % pageSizeKB != 0 || copy.targets[i].memSizeKB / pageSizeKB > UINT32_MAX) {
+            return -EINVAL;
+        }
+    }
+
+    if (copy.migrateMode == MIG_RATIO_MODE && totalRatio > HUNDRED) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+const ProcessRemoteTarget *FindProcessRemoteTarget(const ProcessTargetConfig *config, int remoteNid)
 {
     if (!config || config->count > REMOTE_NUMA_NUM) {
         return NULL;
@@ -144,8 +176,8 @@ const ProcessRemoteTarget *FindProcessRemoteTarget(
 
 int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex)
 {
-    if (!remoteIndex || nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM ||
-        remoteNid < nrLocalNuma || remoteNid - nrLocalNuma >= REMOTE_NUMA_NUM) {
+    if (!remoteIndex || nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM || remoteNid < nrLocalNuma ||
+        remoteNid - nrLocalNuma >= REMOTE_NUMA_NUM) {
         return -EINVAL;
     }
 
@@ -162,6 +194,7 @@ void InitProcessMigrationTargetState(ProcessAttr *attr)
     InitProcessTargetConfig(&attr->targetConfig);
     InitProcessTargetConfig(&attr->pendingTargetConfig);
     attr->pendingTargetConfigValid = false;
+    attr->pendingTargetNumaNodes = 0;
     attr->managedLocalState = (ManagedLocalState){ 0 };
 }
 
@@ -517,22 +550,46 @@ int VMPreprocess(pid_t pid, ProcessAttr *attr)
     return 0;
 }
 
-/* Set basic process attributes from param */
+static int BuildProcessTargetConfigFromParam(const ProcessParam *param, ProcessTargetConfig *config)
+{
+    if (!param || !config || param->count < 0 || param->count > REMOTE_NUMA_NUM) {
+        return -EINVAL;
+    }
+
+    if (param->targetConfigValid) {
+        if (ValidateProcessTargetConfig(&param->targetConfig)) {
+            return -EINVAL;
+        }
+        return CopyProcessTargetConfig(config, &param->targetConfig);
+    }
+
+    InitProcessTargetConfig(config);
+    if (param->count == 0 || (param->count == 1 && param->numaParam[0].nid == DEFAULT_L2_NODE)) {
+        return 0;
+    }
+
+    config->migrateMode = param->numaParam[0].migrateMode;
+    for (int i = 0; i < param->count; i++) {
+        if (param->numaParam[i].migrateMode != config->migrateMode ||
+            FindProcessRemoteTarget(config, param->numaParam[i].nid)) {
+            return -EINVAL;
+        }
+        ProcessRemoteTarget *target = &config->targets[config->count++];
+        target->remoteNid = param->numaParam[i].nid;
+        target->ratio = param->numaParam[i].ratio;
+        target->memSizeKB = param->numaParam[i].memSize;
+    }
+    return ValidateProcessTargetConfig(config);
+}
+
+/* Set process attributes that are independent of its migration target. */
 static void SetBasicProcessConfig(ProcessAttr *attr, ProcessParam *param)
 {
     attr->pid = param->pid;
     attr->duration = param->duration;
     attr->scanType = param->scanType;
-    attr->migrateMode = param->numaParam[0].migrateMode;
-    attr->remoteNumaCnt = param->count;
     attr->isFirstScan = true;
     attr->enableSwap = true;
-
-    int localRatio = HUNDRED;
-    for (int i = 0; i < param->count; i++) {
-        localRatio -= param->numaParam[i].ratio;
-    }
-    attr->initLocalMemRatio = localRatio;
 
     if (time(&attr->scanStart) == (time_t)-1) {
         SMAP_LOGGER_ERROR("get time error");
@@ -718,14 +775,14 @@ static void RecallPagesFromRemote(ProcessAttr *attr, int l2Index, uint64_t pages
 }
 
 /* Handle single remote NUMA scenario: single local+single remote, or multi-local+single remote */
-static void SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
+static int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
 {
     int remoteNid = param->numaParam[0].nid;
 
     /* Validate remote NUMA node */
     if (remoteNid < nrLocalNuma || remoteNid >= nrLocalNuma + REMOTE_NUMA_NUM) {
         SMAP_LOGGER_WARNING("Invalid remote numa %d for pid %d, nrLocalNuma: %d.", remoteNid, attr->pid, nrLocalNuma);
-        return;
+        return -EINVAL;
     }
 
     int l2Index = remoteNid - nrLocalNuma;
@@ -735,7 +792,7 @@ static void SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, in
     int ret = GetPidNumaPagesFromNumaMaps(attr->pid, pagesPerNuma, false);
     if (ret) {
         SMAP_LOGGER_ERROR("Failed to get page count for process %d, ret: %d.", attr->pid, ret);
-        return;
+        return ret;
     }
 
     /* Calculate target pages and pages already on remote NUMA */
@@ -754,81 +811,240 @@ static void SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, in
 
     attr->migrateParam[0].memSize = param->numaParam[0].memSize;
     attr->migrateParam[0].nid = remoteNid;
-    SetAttrL2(attr, remoteNid);
+    /*
+     * Keep omitted remotes in the scan scope until their existing pages have
+     * converged to the new full-replacement target of zero.
+     */
+    AddAttrL2(attr, remoteNid);
+    return 0;
 }
 
-/* Update migration-related config for existing process (ratio/memSize only) */
-static void UpdateProcessMigrateConfig(ProcessAttr *attr, ProcessParam *param)
+static void ClearCompatibleProcessTargets(ProcessAttr *attr)
+{
+    for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
+        attr->migrateParam[i].nid = DEFAULT_L2_NODE;
+        attr->migrateParam[i].memSize = 0;
+        for (int j = 0; j < LOCAL_NUMA_NUM; j++) {
+            attr->strategyAttr.initRemoteMemRatio[j][i] = 0;
+            attr->strategyAttr.memSize[j][i] = 0;
+            attr->strategyAttr.allocRemoteNrPages[j][i] = 0;
+            attr->strategyAttr.l2RemoteMemRatio[j][i] = 0;
+            attr->strategyAttr.l3RemoteMemRatio[j][i] = 0;
+        }
+    }
+    for (int i = 0; i < MAX_NODES; i++) {
+        for (int j = 0; j < MAX_NODES; j++) {
+            attr->strategyAttr.nrMigratePages[i][j] = 0;
+        }
+    }
+}
+
+static void TargetConfigToProcessParam(const ProcessAttr *attr, const ProcessTargetConfig *config, ProcessParam *param)
+{
+    *param = (ProcessParam){
+        .pid = attr->pid,
+        .scanType = attr->scanType,
+        .count = config->count,
+    };
+    for (uint32_t i = 0; i < config->count; i++) {
+        param->numaParam[i].nid = config->targets[i].remoteNid;
+        param->numaParam[i].ratio = config->targets[i].ratio;
+        param->numaParam[i].memSize = config->targets[i].memSizeKB;
+        param->numaParam[i].migrateMode = config->migrateMode;
+    }
+}
+
+/* Generate compatibility runtime fields from the requested target. */
+static int UpdateProcessMigrateConfig(ProcessAttr *attr, const ProcessTargetConfig *config)
 {
     int nrLocalNuma = GetNrLocalNuma();
     int localNumaCnt = GetL1Count(attr->numaAttr.numaNodes);
     bool isVm = GetPidType(&g_processManager) == VM_TYPE;
+    ProcessParam param;
 
-    attr->migrateMode = param->numaParam[0].migrateMode;
-    attr->remoteNumaCnt = param->count;
-    attr->scanType = param->scanType;
-
+    attr->migrateMode = config->migrateMode;
+    attr->remoteNumaCnt = config->count;
     int localRatio = HUNDRED;
-    for (int i = 0; i < param->count; i++) {
-        localRatio -= param->numaParam[i].ratio;
+    if (config->migrateMode == MIG_RATIO_MODE) {
+        for (uint32_t i = 0; i < config->count; i++) {
+            localRatio -= config->targets[i].ratio;
+        }
     }
     attr->initLocalMemRatio = localRatio;
-
-    if (isVm && (param->count > 1 || localNumaCnt > 1)) {
-        SetMultiNumaVmConfig(attr, param, nrLocalNuma);
-    } else {
-        SetSingleRemoteNumaConfig(attr, param, nrLocalNuma);
+    ClearCompatibleProcessTargets(attr);
+    if (config->count == 0) {
+        return 0;
     }
+
+    TargetConfigToProcessParam(attr, config, &param);
+    if (isVm && (config->count > 1 || localNumaCnt > 1)) {
+        SetMultiNumaVmConfig(attr, &param, nrLocalNuma);
+        return 0;
+    }
+    return SetSingleRemoteNumaConfig(attr, &param, nrLocalNuma);
 }
 
-static void SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
+static bool IsZeroProcessTargetConfig(const ProcessTargetConfig *config)
 {
-    SetBasicProcessConfig(attr, param);
-
-    int nrLocalNuma = GetNrLocalNuma();
-    int localNumaCnt = GetL1Count(attr->numaAttr.numaNodes);
-    bool isVm = GetPidType(&g_processManager) == VM_TYPE;
-    /* Scenario dispatch:
-     * - Multi-NUMA VM: VM with multiple local or multiple remote NUMAs
-     * - Single remote NUMA: VM/container with single remote NUMA
-     */
-    if (isVm && (param->count > 1 || localNumaCnt > 1)) {
-        SetMultiNumaVmConfig(attr, param, nrLocalNuma);
-    } else {
-        SetSingleRemoteNumaConfig(attr, param, nrLocalNuma);
-    }
-}
-
-static bool IsZeroRemoteTargetConfig(ProcessParam *param)
-{
-    if (!param || param->count <= 0) {
+    if (!config) {
         return false;
     }
+    if (config->count == 0) {
+        return true;
+    }
 
-    for (int i = 0; i < param->count; i++) {
-        if (param->numaParam[i].migrateMode == MIG_MEMSIZE_MODE) {
-            if (param->numaParam[i].memSize != 0) {
+    for (uint32_t i = 0; i < config->count; i++) {
+        if (config->migrateMode == MIG_MEMSIZE_MODE) {
+            if (config->targets[i].memSizeKB != 0) {
                 return false;
             }
             continue;
         }
-        if (param->numaParam[i].ratio != 0) {
+        if (config->targets[i].ratio != 0) {
             return false;
         }
     }
     return true;
 }
 
-static void UpdateAutoRemoveRemoteEmptyFlag(ProcessAttr *attr, ProcessParam *param)
+static void UpdateAutoRemoveRemoteEmptyFlag(ProcessAttr *attr, const ProcessTargetConfig *config)
 {
     if (!attr || attr->groupPolicy.enabled) {
         return;
     }
+    if (attr->scanType != NORMAL_SCAN) {
+        attr->autoRemoveWhenRemoteEmpty = false;
+        return;
+    }
 
-    attr->autoRemoveWhenRemoteEmpty = IsZeroRemoteTargetConfig(param);
+    attr->autoRemoveWhenRemoteEmpty = IsZeroProcessTargetConfig(config);
     if (attr->autoRemoveWhenRemoteEmpty) {
         SMAP_LOGGER_INFO("Pid %d will be auto removed after all remote pages migrate back.", attr->pid);
     }
+}
+
+static int PrepareProcessTargetCandidate(ProcessAttr *candidate, const ProcessTargetConfig *config)
+{
+    ProcessTargetConfig targetConfig;
+    int ret = CopyProcessTargetConfig(&targetConfig, config);
+    if (ret) {
+        return ret;
+    }
+
+    candidate->targetConfig = targetConfig;
+    ret = UpdateProcessMigrateConfig(candidate, &targetConfig);
+    if (ret) {
+        return ret;
+    }
+    UpdateAutoRemoveRemoteEmptyFlag(candidate, &targetConfig);
+    return 0;
+}
+
+static void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *candidate)
+{
+    attr->targetConfig = candidate->targetConfig;
+    attr->migrateMode = candidate->migrateMode;
+    attr->remoteNumaCnt = candidate->remoteNumaCnt;
+    attr->initLocalMemRatio = candidate->initLocalMemRatio;
+    attr->autoRemoveWhenRemoteEmpty = candidate->autoRemoveWhenRemoteEmpty;
+    attr->numaAttr = candidate->numaAttr;
+    attr->strategyAttr = candidate->strategyAttr;
+    for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
+        attr->migrateParam[i] = candidate->migrateParam[i];
+    }
+}
+
+static int ApplyProcessTargetConfig(ProcessAttr *attr, const ProcessTargetConfig *config)
+{
+    ProcessAttr candidate = *attr;
+    int ret = PrepareProcessTargetCandidate(&candidate, config);
+    if (ret) {
+        return ret;
+    }
+    PublishProcessTargetCandidate(attr, &candidate);
+    return 0;
+}
+
+int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config)
+{
+    ProcessTargetConfig targetConfig;
+    if (!attr || ValidateProcessTargetConfig(config) || CopyProcessTargetConfig(&targetConfig, config)) {
+        return -EINVAL;
+    }
+
+    if (attr->state == PROC_MIGRATE) {
+        attr->pendingTargetConfig = targetConfig;
+        attr->pendingTargetConfigValid = true;
+        attr->pendingTargetNumaNodes = attr->numaAttr.numaNodes;
+        for (uint32_t i = 0; i < targetConfig.count; i++) {
+            AddL2ByNid(&attr->pendingTargetNumaNodes, targetConfig.targets[i].remoteNid);
+        }
+        SMAP_LOGGER_INFO("Save pending migration target for pid %d.", attr->pid);
+        return 0;
+    }
+
+    return ApplyProcessTargetConfig(attr, &targetConfig);
+}
+
+int ApplyPendingMigrationTargets(ProcessAttr *attr)
+{
+    if (!attr || !attr->pendingTargetConfigValid) {
+        return 0;
+    }
+
+    ProcessTargetConfig config = attr->pendingTargetConfig;
+    ProcessAttr candidate = *attr;
+    candidate.numaAttr.numaNodes = attr->pendingTargetNumaNodes;
+    int ret = PrepareProcessTargetCandidate(&candidate, &config);
+    if (ret) {
+        return ret;
+    }
+
+    struct AccessAddPidPayload payload = {
+        .type = NORMAL_SCAN,
+        .pid = attr->pid,
+        .scanTime = attr->scanTime,
+        .duration = attr->duration,
+        .numaNodes = attr->pendingTargetNumaNodes,
+    };
+    ret = AccessIoctlAddPid(1, &payload);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Update pending pid %d tracking failed: %d.", attr->pid, ret);
+        return ret;
+    }
+
+    PublishProcessTargetCandidate(attr, &candidate);
+
+    ClearProcessTargetConfig(&attr->pendingTargetConfig);
+    attr->pendingTargetConfigValid = false;
+    attr->pendingTargetNumaNodes = 0;
+    ret = SyncAllProcessConfig();
+    if (ret) {
+        SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", attr->pid, ret);
+    }
+    SMAP_LOGGER_INFO("Apply pending migration target for pid %d.", attr->pid);
+    return 0;
+}
+
+static bool IsZeroRemoteTargetConfig(ProcessParam *param)
+{
+    ProcessTargetConfig config;
+    if (BuildProcessTargetConfigFromParam(param, &config)) {
+        return false;
+    }
+    return IsZeroProcessTargetConfig(&config);
+}
+
+static int SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
+{
+    ProcessTargetConfig config;
+    int ret = BuildProcessTargetConfigFromParam(param, &config);
+    if (ret) {
+        return ret;
+    }
+
+    SetBasicProcessConfig(attr, param);
+    return ConfigureMigrationTargets(attr, &config);
 }
 
 static void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeBitmap,
@@ -910,7 +1126,12 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
     }
 
     attr->type = type;
-    SetProcessConfig(attr, param);
+    ret = SetProcessConfig(attr, param);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Set process %d config failed: %d.", param->pid, ret);
+        free(attr);
+        return ret;
+    }
     attr->scanTime = DEFAULT_SCAN_PERIOD;
     LinkedListAdd(&g_processManager.processes, &attr);
     SMAP_LOGGER_INFO("Set pid %d scan cycle to %ums.", attr->pid, attr->scanTime);
@@ -1201,15 +1422,32 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
 {
     ProcessAttr *current = g_processManager.processes;
     PidType type = GetPidType(&g_processManager);
-    int ret = CheckPid(param->pid);
+    ProcessTargetConfig config;
+    int ret = BuildProcessTargetConfigFromParam(param, &config);
+    if (ret) {
+        SMAP_LOGGER_ERROR("pid %d target config invalid: %d.", param ? param->pid : -1, ret);
+        return ret;
+    }
+
+    ret = CheckPid(param->pid);
     if (ret) {
         SMAP_LOGGER_ERROR("pid %d check failed: %d.", param->pid, ret);
         return ret;
     }
     current = GetProcessAttrLocked(param->pid);
     if (current) {
-        UpdateProcessMigrateConfig(current, param);
-        UpdateAutoRemoveRemoteEmptyFlag(current, param);
+        ret = ConfigureMigrationTargets(current, &config);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Configure pid %d target failed: %d.", current->pid, ret);
+            return ret;
+        }
+        if (current->pendingTargetConfigValid) {
+            if (nodeBitmap) {
+                current->pendingTargetNumaNodes = *nodeBitmap;
+            }
+            SMAP_LOGGER_INFO("Stage pid %d migration target update.", current->pid);
+            return 0;
+        }
         SMAP_LOGGER_INFO("Update pid %d migrate config, migrateMode: %d, remoteNumaCnt: %d.", current->pid,
                          current->migrateMode, current->remoteNumaCnt);
         ret = SyncAllProcessConfig();
