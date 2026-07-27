@@ -482,6 +482,31 @@ static long ioctl_get_nr_local_numa(void __user *argp)
 	return 0;
 }
 
+static long ioctl_set_scan_cpu(void __user *argp)
+{
+	struct smap_scan_cpu_range range;
+
+	if (copy_from_user(&range, argp, sizeof(range))) {
+		pr_err("copy_from_user smap_scan_cpu_range failed\n");
+		return -EFAULT;
+	}
+
+	if (range.cpu_min > range.cpu_max ||
+	    range.cpu_max >= num_possible_cpus()) {
+		pr_err("invalid scan cpu range: %d-%d\n", range.cpu_min,
+		       range.cpu_max);
+		return -EINVAL;
+	}
+
+	if (set_scan_cpus(range.cpu_min, range.cpu_max)) {
+		pr_err("failed to set scan cpu range: %d-%d\n", range.cpu_min,
+		       range.cpu_max);
+		return -EINVAL;
+	}
+	pr_info("set scan cpu range: %d-%d\n", range.cpu_min, range.cpu_max);
+	return 0;
+}
+
 static long smap_access_ioctl(struct file *file, unsigned int cmd,
 			      unsigned long arg)
 {
@@ -512,6 +537,8 @@ static long smap_access_ioctl(struct file *file, unsigned int cmd,
 		if (!rc)
 			hist_set_iomem();
 		return rc;
+	case SMAP_ACCESS_SET_SCAN_CPU:
+		return ioctl_set_scan_cpu(argp);
 	default:
 		rc = -ENOTTY;
 	}

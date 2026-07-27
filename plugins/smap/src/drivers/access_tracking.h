@@ -79,6 +79,7 @@ static inline int get_page_size(struct access_tracking_dev *adev)
 }
 
 void cancel_ap_scan_work(struct access_pid *ap);
+int set_scan_cpus(u32 cpu_start, u32 cpu_end);
 bool is_access_hugepage(void);
 void submit_one_work(struct access_pid *ap);
 ktime_t calc_time_us(ktime_t start_time);

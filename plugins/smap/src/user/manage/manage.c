@@ -126,7 +126,7 @@ int ProcessManagerInit(uint32_t pageType)
     }
     ret = GenerateStrategyConfigFile(STRATEGY_CONFIG_PATH);
     if (ret != 0) {
-        SMAP_LOGGER_ERROR("Generat period config file failed, ret is %d.", ret);
+        SMAP_LOGGER_ERROR("Generate strategy config file failed, ret is %d.", ret);
     }
     StrategyConfigRead(STRATEGY_CONFIG_PATH);
     int size = sysconf(_SC_PAGESIZE);

@@ -77,6 +77,11 @@ struct user_info {
 	gid_t gid;
 };
 
+struct smap_scan_cpu_range {
+	u32 cpu_min;
+	u32 cpu_max;
+};
+
 extern kuid_t procfs_kuid;
 extern kgid_t procfs_kgid;
 extern struct proc_dir_entry *smap_procfs_root;
@@ -93,6 +98,8 @@ extern struct proc_dir_entry *smap_procfs_root;
 #define SMAP_ACCESS_CREATE_PROCFS _IOW(SMAP_ACCESS_MAGIC, 6, struct user_info)
 #define SMAP_ACCESS_GET_NR_LOCAL_NUMA _IOR(SMAP_ACCESS_MAGIC, 7, int)
 #define SMAP_ACCESS_REFRESH_REMOTE_RAM _IO(SMAP_ACCESS_MAGIC, 8)
+#define SMAP_ACCESS_SET_SCAN_CPU \
+	_IOW(SMAP_ACCESS_MAGIC, 9, struct smap_scan_cpu_range)
 
 void access_ioctl_exit(void);
 int access_ioctl_init(void);

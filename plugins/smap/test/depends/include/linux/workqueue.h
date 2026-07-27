@@ -9,7 +9,7 @@
 #include <linux/atomic/atomic-long.h>
 #include <linux/timer.h>
 #include <linux/completion.h>
-
+#include <linux/cpumask.h>
 enum {
     __WQ_ORDERED_EXPLICIT = 1 << 19,
     __WQ_LEGACY = 1 << 18,
@@ -57,6 +57,16 @@ static inline bool schedule_work(struct work_struct *work)
 }
 
 struct workqueue_struct *alloc_workqueue(const char *fmt, unsigned int flags, int max_active, ...);
+
+struct workqueue_attrs {
+    cpumask_var_t cpumask;
+    int nice;
+    int no_numa;
+};
+
+struct workqueue_attrs *alloc_workqueue_attrs(void);
+void free_workqueue_attrs(struct workqueue_attrs *attrs);
+int apply_workqueue_attrs(struct workqueue_struct *wq, const struct workqueue_attrs *attrs);
 
 struct timer_list;
 struct delayed_work {

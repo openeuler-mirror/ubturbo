@@ -158,8 +158,8 @@ int AccessRead(size_t len, char *buf)
 void IoctlUpdateUbDmaAvail(uint32_t value)
 {
     struct ProcessManager *manager = GetProcessManager();
-
     uint32_t val = value;
+
     int ret = ioctl(manager->fds.migrate, SMAP_SET_UB_DMA_AVAIL, &val);
     if (ret < 0) {
         SMAP_LOGGER_ERROR("ioctl update ub dma avail failed: %d, errno %d", ret, errno);
@@ -167,4 +167,18 @@ void IoctlUpdateUbDmaAvail(uint32_t value)
     }
 
     SMAP_LOGGER_INFO("ioctl update ub dma avail: %u", val);
+}
+
+void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    struct SmapScanCpuRange range = { cpuMin, cpuMax };
+
+    int ret = ioctl(manager->fds.access, SMAP_ACCESS_SET_SCAN_CPU, &range);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("ioctl set scan cpu range failed: %d, errno %d.", ret, errno);
+        return;
+    }
+
+    SMAP_LOGGER_INFO("ioctl set scan cpu range=%u-%u", cpuMin, cpuMax);
 }

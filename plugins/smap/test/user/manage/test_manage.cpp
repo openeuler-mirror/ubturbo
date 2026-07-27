@@ -1005,13 +1005,10 @@ TEST_F(ManageTest, TestGetNumaNodesForPid)
 {
     int pid = 1234;
     int node = 0;
-    MOCKER(sched_getaffinity).stubs().will(returnValue(-1));
+    MOCKER(sched_getaffinity).stubs().will(returnValue(-1)).then(returnValue(0));
+    MOCKER(access).stubs().will(returnValue(-1)).then(returnValue(0));
     int ret = GetNumaNodesForPid(pid, &node);
     EXPECT_EQ(ret, -EINVAL);
-
-    GlobalMockObject::verify();
-    MOCKER(sched_getaffinity).stubs().will(returnValue(0));
-    MOCKER(GetNodeFromCpu).stubs().will(returnValue(-EINVAL)).then(returnValue(0));
     ret = GetNumaNodesForPid(pid, &node);
     EXPECT_EQ(ret, 0);
 }
