@@ -1828,7 +1828,9 @@ static void CalNrPagesPerLocalNuma(ProcessAttr *attr)
     StrategyAttribute *sa = &attr->strategyAttr;
 
     for (int i = 0; i < GetNrLocalNuma(); i++) {
-        uint32_t nrLocal = attr->walkPage.nrPages[i];
+        uint64_t whiteNum = attr->scanAttr.actCount[i].whiteNum;
+        /* 饱和减法：扫描失败或总页数为0时旧 whiteNum 可能残留，防止下溢成数十亿可迁页 */
+        uint32_t nrLocal = attr->walkPage.nrPages[i] > whiteNum ? (uint32_t)(attr->walkPage.nrPages[i] - whiteNum) : 0;
         uint32_t nrRemote = 0;
 
         for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
@@ -1836,8 +1838,9 @@ static void CalNrPagesPerLocalNuma(ProcessAttr *attr)
         }
         sa->nrPagesPerLocalNuma[i] = nrLocal + nrRemote;
 
-        SMAP_LOGGER_DEBUG("[cal_local_total] pid=%d, local_node=%d total_pages=%u local_pages=%u remote_pages=%u",
-                          attr->pid, i, sa->nrPagesPerLocalNuma[i], nrLocal, nrRemote);
+        SMAP_LOGGER_DEBUG(
+            "[cal_local_total] pid=%d, local_node=%d total_pages=%u local_pages=%u white=%llu remote_pages=%u",
+            attr->pid, i, sa->nrPagesPerLocalNuma[i], nrLocal, whiteNum, nrRemote);
     }
 }
 

@@ -398,9 +398,9 @@ static void FindThreshold(const SelectionMode mode, uint64_t nrMig, const uint32
     }
 }
 
-static void CollectPages(const SelectionMode mode, uint64_t offset, uint64_t actcLen, ActcData *currentData,
-                         struct MigList *currMlist, uint64_t nrMig, int thresholdFreq, uint32_t takeAtThreshold,
-                         uint32_t *selectedBuckets)
+static size_t CollectPages(const SelectionMode mode, uint64_t offset, uint64_t actcLen, ActcData *currentData,
+                           struct MigList *currMlist, uint64_t nrMig, int thresholdFreq, uint32_t takeAtThreshold,
+                           uint32_t *selectedBuckets)
 {
     int nrLocalNuma = GetNrLocalNuma();
     uint32_t tmp = takeAtThreshold;
@@ -434,6 +434,7 @@ static void CollectPages(const SelectionMode mode, uint64_t offset, uint64_t act
             }
         }
     }
+    return collected_count;
 }
 
 static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
@@ -478,7 +479,9 @@ static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_
     int thresholdFreq;
     uint32_t takeAtThreshold;
     FindThreshold(mode, nrMig, remainBuckets, &thresholdFreq, &takeAtThreshold);
-    CollectPages(mode, offset, n, currentData, currentMig, nrMig, thresholdFreq, takeAtThreshold, selectedBuckets);
+    size_t collected =
+        CollectPages(mode, offset, n, currentData, currentMig, nrMig, thresholdFreq, takeAtThreshold, selectedBuckets);
+    currentMig->nr = collected;
     return 0;
 }
 

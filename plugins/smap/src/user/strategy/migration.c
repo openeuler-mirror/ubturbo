@@ -732,7 +732,10 @@ static void NumaSwapMemPool(ProcessAttr *current)
             StrategyAttribute *sa = &current->strategyAttr;
             int l2Node = GetNrLocalNuma() + j;
             uint32_t targetNum = KBToPage(sa->memSize[i][j]);
-            uint32_t localNum = current->walkPage.nrPages[i];
+            uint64_t whiteNum = current->scanAttr.actCount[i].whiteNum;
+            /* 饱和减法：旧 whiteNum 残留时防止 localNum 下溢成超大值 */
+            uint32_t localNum =
+                current->walkPage.nrPages[i] > whiteNum ? (uint32_t)(current->walkPage.nrPages[i] - whiteNum) : 0;
             uint32_t remoteNum = sa->remoteNrPagesAfterMigrate[i][j];
             uint32_t migNum;
 
