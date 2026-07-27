@@ -466,6 +466,8 @@ numactl -C 70-101 -m 1 sysbench --db-driver=mysql --mysql-host=[mysql_host] --my
 
 ### 配置文件说明
 
+在安装rpm的时候会删除原有的配置文件，如有配置需要重新配置
+
 初始配置文件内容如下：
 
 ```shell
