@@ -1863,9 +1863,7 @@ static void MigrateAndCpuConfig(void)
         IoctlUpdateUbDmaAvail(mode);
     }
 
-    if (GetScanCpuEnableConfig()) {
-        IoctlSetScanCpuRange(GetScanCpuMinConfig(), GetScanCpuMaxConfig());
-    }
+    IoctlSetScanCpuRange(GetScanCpuMinConfig(), GetScanCpuMaxConfig());
 }
 
 int ubturbo_smap_start(uint32_t pageType, Logfunc extlog)

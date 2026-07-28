@@ -54,8 +54,6 @@ uint32_t GetScanCpuMinConfig(void);
 
 uint32_t GetScanCpuMaxConfig(void);
 
-bool GetScanCpuEnableConfig(void);
-
 bool GetScanCpuChanged(void);
 
 void SetScanCpuChanged(bool val);

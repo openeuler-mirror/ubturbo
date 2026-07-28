@@ -1745,12 +1745,10 @@ static void MigrationUpdateMigrateModeAndScanCpu(void)
         }
     }
 
-    if (GetScanCpuEnableConfig()) {
-        if (GetScanCpuChanged()) {
-            IoctlSetScanCpuRange(GetScanCpuMinConfig(), GetScanCpuMaxConfig());
-            SMAP_LOGGER_INFO("Start update scan cpu (%u-%u).", GetScanCpuMinConfig(), GetScanCpuMaxConfig());
-            SetScanCpuChanged(false);
-        }
+    if (GetScanCpuChanged()) {
+        IoctlSetScanCpuRange(GetScanCpuMinConfig(), GetScanCpuMaxConfig());
+        SMAP_LOGGER_INFO("Start update scan cpu (%u-%u).", GetScanCpuMinConfig(), GetScanCpuMaxConfig());
+        SetScanCpuChanged(false);
     }
 }
 
