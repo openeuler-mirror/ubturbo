@@ -460,37 +460,6 @@ TEST_F(DriversAccessPidTest, AccessAddPid)
     EXPECT_EQ(0, ret);
 }
 
-/*
- * 扫描模块未 enable（disable/migrate 期间）时，add_pid 不应立即提交扫描任务，
- * pid 仅入 ap_data.list 等下次 enable 由 submit_scan_works 拉起。
- */
-int ap_data_len();
-TEST_F(DriversAccessPidTest, AccessAddPidScanDisabledNoSubmit)
-{
-    int ret;
-    struct access_pid ap;
-    struct access_pid *tmp;
-    struct access_tracking_dev adev = {};
-    struct access_add_pid_payload payload = {0};
-
-    ap.pid = 1;
-    tmp = &ap;
-
-    INIT_LIST_HEAD(&ap_data.list);
-    INIT_LIST_HEAD(&access_dev);
-    adev.enable_on = false;
-    list_add(&adev.list, &access_dev);
-
-    MOCKER(init_access_pid).stubs().with(&payload, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
-    MOCKER(submit_one_work).expects(never());
-    ret = access_add_pid(1, &payload);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(1, ap_data_len());
-
-    GlobalMockObject::verify();
-    list_del(&adev.list);
-}
-
 /* 扫描模块已 enable 时，add_pid 立即提交扫描任务。 */
 TEST_F(DriversAccessPidTest, AccessAddPidScanEnabledSubmits)
 {

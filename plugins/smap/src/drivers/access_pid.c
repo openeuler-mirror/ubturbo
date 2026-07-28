@@ -979,8 +979,7 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 		 */
 		ap->cur_times = 0;
 		pid_pte_mkold(ap);
-		if (access_scan_enabled())
-			submit_one_work(ap);
+		submit_one_work(ap);
 		list_move_tail(&ap->node, &ap_data.list);
 	}
 	up_write(&ap_data.lock);
