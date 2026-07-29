@@ -351,6 +351,18 @@ struct ProcessAttribute {
 };
 typedef struct ProcessAttribute ProcessAttr;
 
+/*
+ * A prepared process update that is published only after access tracking has
+ * accepted prepared->numaAttr.numaNodes. The prepared ProcessAttr is the
+ * candidate introduced by the target-configuration transaction.
+ */
+typedef struct {
+    ProcessAttr *active;
+    ProcessAttr *prepared;
+    bool isNew;
+    bool isPending;
+} ProcessManageCandidate;
+
 typedef struct {
     uint16_t nrSegment;
     uint32_t nrPages;
@@ -484,7 +496,6 @@ int CopyProcessTargetConfig(ProcessTargetConfig *dest, const ProcessTargetConfig
 const ProcessRemoteTarget *FindProcessRemoteTarget(const ProcessTargetConfig *config, int remoteNid);
 int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex);
 void InitProcessMigrationTargetState(ProcessAttr *attr);
-
 int ProcessManagerInit(uint32_t pageType);
 
 int DestroyProcessManager(void);
@@ -512,6 +523,9 @@ int VMPreprocess(pid_t pid, ProcessAttr *attr);
 int SetProcessLocalNuma(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag);
 int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
 
+int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate);
+void DiscardProcessManageCandidate(ProcessManageCandidate *candidate);
+void PublishProcessManageCandidate(ProcessManageCandidate *candidate);
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap);
 int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config);
 int ApplyPendingMigrationTargets(ProcessAttr *attr);

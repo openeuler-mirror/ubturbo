@@ -9,12 +9,14 @@
 #include "mockcpp/mokc.h"
 
 #include "manage/access_ioctl.h"
-#include "manage/smap_config.h"
 #include "manage/manage.h"
-#include "strategy/strategy_config.h"
+#include "manage/smap_config.h"
 #include "securec.h"
+#include "strategy/strategy_config.h"
 
 using namespace std;
+
+#define BIT(i) (1U << (i))
 
 static cpu_set_t g_fake_cpu_mask;
 extern "C" struct ProcessManager g_processManager;
@@ -22,6 +24,24 @@ extern "C" uint32_t g_pageSizeNormal;
 extern "C" uint32_t g_pageSizeHuge;
 extern "C" RunMode g_runMode;
 extern "C" void RemoteNumaInfoInit();
+extern "C" int GetNodeFromCpu(int cpu);
+extern "C" int RefreshManagedLocalState(ProcessAttr *attr, bool fullReplacement);
+extern "C" uint32_t BuildManagedTrackingNodes(const ProcessAttr *attr);
+extern "C" int RefreshManagedLocalTrackingScope(ProcessAttr *attr);
+extern "C" int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
+extern "C" int GetProcessNumaMapsObservation(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
+                                             uint64_t numaPages[MAX_NODES]);
+extern "C" int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate);
+extern "C" void DiscardProcessManageCandidate(ProcessManageCandidate *candidate);
+extern "C" void PublishProcessManageCandidate(ProcessManageCandidate *candidate);
+
+static int AddAffinityLocalForTest(pid_t pid, uint32_t *nodeBitmap);
+static int AddCandidateResidentForTest(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
+                                       uint64_t numaPages[MAX_NODES]);
+static int AddEmptyCandidateResidentForTest(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
+                                            uint64_t numaPages[MAX_NODES]);
+static int AddUnexpectedRemoteResidentForTest(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
+                                              uint64_t numaPages[MAX_NODES]);
 
 static int fake_sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t *mask)
 {
@@ -169,6 +189,141 @@ TEST_F(ManageTest, TestInitProcessMigrationTargetState)
     InitProcessMigrationTargetState(nullptr);
 }
 
+TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicExpansion)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.numaAttr.numaNodes = BIT(0) | BIT(1);
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
+    g_processManager.nrLocalNuma = 4;
+    CPU_ZERO(&g_fake_cpu_mask);
+    CPU_SET(1, &g_fake_cpu_mask);
+    MOCKER(sched_getaffinity)
+        .expects(once())
+        .will(invoke(fake_sched_getaffinity));
+    MOCKER(GetNodeFromCpu).expects(once()).will(returnValue(2));
+
+    EXPECT_EQ(0, RefreshManagedLocalState(&attr, false));
+    EXPECT_EQ(BIT(2), attr.managedLocalState.observedLocalMask);
+    EXPECT_EQ(BIT(0) | BIT(1) | BIT(2),
+              attr.managedLocalState.managedLocalMask);
+}
+
+TEST_F(ManageTest, TestRefreshManagedLocalStateFullReplacementShrinks)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.numaAttr.numaNodes = BIT(0) | BIT(1);
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
+    g_processManager.nrLocalNuma = 4;
+    CPU_ZERO(&g_fake_cpu_mask);
+    CPU_SET(1, &g_fake_cpu_mask);
+    MOCKER(sched_getaffinity)
+        .expects(once())
+        .will(invoke(fake_sched_getaffinity));
+    MOCKER(GetNodeFromCpu).expects(once()).will(returnValue(0));
+
+    EXPECT_EQ(0, RefreshManagedLocalState(&attr, true));
+    EXPECT_EQ(BIT(0), attr.managedLocalState.observedLocalMask);
+    EXPECT_EQ(BIT(0), attr.managedLocalState.managedLocalMask);
+}
+
+TEST_F(ManageTest, TestRefreshManagedLocalStateKeepsAccountLocal)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.managedLocalState.managedLocalMask = BIT(1);
+    attr.strategyAttr.remoteNrPagesAfterMigrate[3][2] = 10;
+    g_processManager.nrLocalNuma = 4;
+    CPU_ZERO(&g_fake_cpu_mask);
+    CPU_SET(1, &g_fake_cpu_mask);
+    MOCKER(sched_getaffinity)
+        .expects(once())
+        .will(invoke(fake_sched_getaffinity));
+    MOCKER(GetNodeFromCpu).expects(once()).will(returnValue(0));
+
+    EXPECT_EQ(0, RefreshManagedLocalState(&attr, true));
+    EXPECT_EQ(BIT(3), attr.managedLocalState.accountLocalMask[2]);
+    EXPECT_EQ(BIT(0) | BIT(3), attr.managedLocalState.managedLocalMask);
+}
+
+TEST_F(ManageTest, TestBuildManagedTrackingNodes)
+{
+    ProcessAttr attr = {};
+    g_processManager.nrLocalNuma = 4;
+    attr.numaAttr.numaNodes = BIT(1) | BIT(4);
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(2);
+    attr.managedLocalState.accountLocalMask[2] = BIT(2);
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = {5, 25, 0};
+
+    EXPECT_EQ(BIT(0) | BIT(2) | BIT(4) | BIT(5) | BIT(6),
+              BuildManagedTrackingNodes(&attr));
+    EXPECT_EQ(0U, BuildManagedTrackingNodes(nullptr));
+}
+
+static int RefreshPeriodicManagedLocalCandidate(ProcessAttr *attr,
+                                                bool fullReplacement)
+{
+    EXPECT_FALSE(fullReplacement);
+    attr->managedLocalState.managedLocalMask = BIT(0) | BIT(2);
+    attr->managedLocalState.observedLocalMask = BIT(2);
+    attr->managedLocalState.residentLocalMask = BIT(2);
+    return 0;
+}
+
+static int CheckManagedTrackingPayload(int len,
+                                       struct AccessAddPidPayload *payload)
+{
+    EXPECT_EQ(1, len);
+    EXPECT_EQ(123, payload[0].pid);
+    EXPECT_EQ(100U, payload[0].scanTime);
+    EXPECT_EQ(NORMAL_SCAN, payload[0].type);
+    EXPECT_EQ(BIT(0) | BIT(2) | BIT(4), payload[0].numaNodes);
+    return 0;
+}
+
+TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopePublishesAfterTracking)
+{
+    ProcessAttr attr = {};
+    g_processManager.nrLocalNuma = 4;
+    attr.pid = 123;
+    attr.scanType = NORMAL_SCAN;
+    attr.scanTime = 100;
+    attr.numaAttr.numaNodes = BIT(0) | BIT(4);
+    attr.managedLocalState.managedLocalMask = BIT(0);
+
+    MOCKER(RefreshManagedLocalState)
+        .expects(once())
+        .will(invoke(RefreshPeriodicManagedLocalCandidate));
+    MOCKER(AccessIoctlAddPid)
+        .expects(once())
+        .will(invoke(CheckManagedTrackingPayload));
+
+    EXPECT_EQ(0, RefreshManagedLocalTrackingScope(&attr));
+    EXPECT_EQ(BIT(0) | BIT(2), attr.managedLocalState.managedLocalMask);
+    EXPECT_EQ(BIT(0) | BIT(2) | BIT(4), attr.numaAttr.numaNodes);
+}
+
+TEST_F(ManageTest, TestRefreshManagedLocalTrackingFailureKeepsActiveState)
+{
+    ProcessAttr attr = {};
+    g_processManager.nrLocalNuma = 4;
+    attr.pid = 123;
+    attr.scanType = NORMAL_SCAN;
+    attr.scanTime = 100;
+    attr.numaAttr.numaNodes = BIT(0) | BIT(4);
+    attr.managedLocalState.managedLocalMask = BIT(0);
+
+    MOCKER(RefreshManagedLocalState).expects(once()).will(invoke(RefreshPeriodicManagedLocalCandidate));
+    MOCKER(AccessIoctlAddPid).expects(once()).will(returnValue(-EIO));
+
+    EXPECT_EQ(-EIO, RefreshManagedLocalTrackingScope(&attr));
+    EXPECT_EQ(BIT(0), attr.managedLocalState.managedLocalMask);
+    EXPECT_EQ(BIT(0) | BIT(4), attr.numaAttr.numaNodes);
+}
+
 TEST_F(ManageTest, TestConfigureMigrationTargetsStagesWhileMigrating)
 {
     ProcessAttr attr = {};
@@ -181,12 +336,15 @@ TEST_F(ManageTest, TestConfigureMigrationTargetsStagesWhileMigrating)
     attr.remoteNumaCnt = 1;
     attr.strategyAttr.initRemoteMemRatio[0][0] = 25;
     attr.numaAttr.numaNodes = 0x11;
+    attr.managedLocalState.managedLocalMask = 0x1;
 
     ProcessTargetConfig config = {};
     config.migrateMode = MIG_MEMSIZE_MODE;
     config.count = 1;
     config.targets[0] = {5, 0, 4096};
     g_processManager.nrLocalNuma = 4;
+    MOCKER(SetLocalNumaByCpu).expects(never());
+    MOCKER(GetProcessNumaMapsObservation).expects(never());
 
     int ret = ConfigureMigrationTargets(&attr, &config);
     EXPECT_EQ(0, ret);
@@ -194,18 +352,9 @@ TEST_F(ManageTest, TestConfigureMigrationTargetsStagesWhileMigrating)
     EXPECT_EQ(4, attr.targetConfig.targets[0].remoteNid);
     EXPECT_EQ(MIG_RATIO_MODE, attr.migrateMode);
     EXPECT_EQ(25, attr.strategyAttr.initRemoteMemRatio[0][0]);
+    EXPECT_EQ(0x1U, attr.managedLocalState.managedLocalMask);
     EXPECT_EQ(5, attr.pendingTargetConfig.targets[0].remoteNid);
     EXPECT_EQ(0x31U, attr.pendingTargetNumaNodes);
-}
-
-static int FillEmptyNumaPages(pid_t pid,
-                              uint64_t numaPages[MAX_NODES],
-                              bool onlyHuge)
-{
-    (void)pid;
-    (void)onlyHuge;
-    memset(numaPages, 0, sizeof(uint64_t) * MAX_NODES);
-    return 0;
 }
 
 TEST_F(ManageTest, TestApplyPendingMigrationTargets)
@@ -227,9 +376,9 @@ TEST_F(ManageTest, TestApplyPendingMigrationTargets)
     g_pageSizeNormal = PAGESIZE_4K;
     g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.tracking.pageSize = PAGESIZE_4K;
-    MOCKER(GetPidNumaPagesFromNumaMaps)
-        .expects(once())
-        .will(invoke(FillEmptyNumaPages));
+    MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddEmptyCandidateResidentForTest));
+    MOCKER(GetPidNumaPagesFromNumaMaps).expects(never());
     MOCKER(AccessIoctlAddPid).expects(once()).will(returnValue(0));
     MOCKER(SyncAllProcessConfig).expects(once()).will(returnValue(0));
 
@@ -262,9 +411,9 @@ TEST_F(ManageTest, TestPendingTrackingFailureKeepsActiveTarget)
     g_pageSizeNormal = PAGESIZE_4K;
     g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.tracking.pageSize = PAGESIZE_4K;
-    MOCKER(GetPidNumaPagesFromNumaMaps)
-        .expects(once())
-        .will(invoke(FillEmptyNumaPages));
+    MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddEmptyCandidateResidentForTest));
+    MOCKER(GetPidNumaPagesFromNumaMaps).expects(never());
     MOCKER(AccessIoctlAddPid).expects(once()).will(returnValue(-EIO));
 
     EXPECT_EQ(-EIO, ApplyPendingMigrationTargets(&attr));
@@ -636,7 +785,6 @@ TEST_F(ManageTest, TestIsNumaMapLineHuge)
 }
 
 extern "C" void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag);
-#define BIT(i) (1U << (i))
 TEST_F(ManageTest, TestSetLocalByNumaMaps)
 {
     char line[] = "00100000 N0=1 N2=3 kernelpagesize_kB=2048";
@@ -647,7 +795,6 @@ TEST_F(ManageTest, TestSetLocalByNumaMaps)
 
 extern "C" int SetProcessLocalNuma(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag);
 extern "C" int sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t *mask);
-extern "C" int GetNodeFromCpu(int cpu);
 TEST_F(ManageTest, TestSetProcessLocalNuma)
 {
     int pid = 1;
@@ -662,6 +809,174 @@ TEST_F(ManageTest, TestSetProcessLocalNuma)
     EXPECT_EQ(nodeBitmap, BIT(1) | BIT(2));
 }
 
+static int AddAffinityLocalForTest(pid_t pid, uint32_t *nodeBitmap)
+{
+    (void)pid;
+    *nodeBitmap |= BIT(0);
+    return 0;
+}
+
+static int AddCandidateResidentForTest(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
+                                       uint64_t numaPages[MAX_NODES])
+{
+    (void)pid;
+    EXPECT_FALSE(hugeFlag);
+    *residentLocalMask |= BIT(2);
+    numaPages[2] = 10;
+    return 0;
+}
+
+static int AddEmptyCandidateResidentForTest(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
+                                            uint64_t numaPages[MAX_NODES])
+{
+    (void)pid;
+    (void)hugeFlag;
+    (void)residentLocalMask;
+    (void)numaPages;
+    return 0;
+}
+
+static int AddUnexpectedRemoteResidentForTest(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
+                                              uint64_t numaPages[MAX_NODES])
+{
+    (void)pid;
+    (void)hugeFlag;
+    *residentLocalMask |= BIT(0);
+    numaPages[0] = 10;
+    numaPages[5] = 1;
+    return 0;
+}
+
+static ProcessParam InitCandidateTest(ProcessAttr *active, int nrLocalNuma = 4)
+{
+    active->pid = 123;
+    active->type = PROCESS_TYPE;
+    g_processManager.processes = active;
+    g_processManager.nrLocalNuma = nrLocalNuma;
+    return ProcessParam{
+        .pid = active->pid,
+        .scanType = NORMAL_SCAN,
+        .count = 0,
+    };
+}
+
+TEST_F(ManageTest, TestSetProcessLocalNumaRejectsUnavailableObservations)
+{
+    uint32_t nodeBitmap = 0;
+    MOCKER(SetLocalNumaByCpu).expects(once()).will(returnValue(-EIO));
+    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(returnValue(-EINVAL));
+
+    EXPECT_EQ(-EIO, SetProcessLocalNuma(123, &nodeBitmap, false));
+    EXPECT_EQ(0U, nodeBitmap);
+}
+
+TEST_F(ManageTest, TestPrepareProcessManageCandidateSamplesOnce)
+{
+    ProcessAttr active = {};
+    ProcessParam param = InitCandidateTest(&active);
+    ProcessManageCandidate candidate = {};
+
+    MOCKER(CheckPid).expects(once()).will(returnValue(0));
+    MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddCandidateResidentForTest));
+    MOCKER(GetPidNumaPagesFromNumaMaps).expects(never());
+    MOCKER(SyncAllProcessConfig).expects(once()).will(returnValue(0));
+
+    ASSERT_EQ(0, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
+    ASSERT_NE(nullptr, candidate.prepared);
+    EXPECT_EQ(0U, active.managedLocalState.managedLocalMask);
+    EXPECT_EQ(BIT(0) | BIT(2), candidate.prepared->managedLocalState.managedLocalMask);
+    EXPECT_EQ(BIT(0) | BIT(2), candidate.prepared->numaAttr.numaNodes);
+
+    PublishProcessManageCandidate(&candidate);
+    EXPECT_EQ(BIT(0) | BIT(2), active.managedLocalState.managedLocalMask);
+    EXPECT_EQ(nullptr, candidate.prepared);
+}
+
+TEST_F(ManageTest, TestPrepareProcessManageCandidateAffinityFailureUsesResident)
+{
+    ProcessAttr active = {};
+    ProcessParam param = InitCandidateTest(&active);
+    ProcessManageCandidate candidate = {};
+
+    MOCKER(CheckPid).expects(once()).will(returnValue(0));
+    MOCKER(SetLocalNumaByCpu).expects(once()).will(returnValue(-EIO));
+    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddCandidateResidentForTest));
+
+    ASSERT_EQ(0, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
+    ASSERT_NE(nullptr, candidate.prepared);
+    EXPECT_EQ(BIT(2), candidate.prepared->managedLocalState.managedLocalMask);
+    EXPECT_EQ(BIT(2), candidate.prepared->numaAttr.numaNodes);
+    DiscardProcessManageCandidate(&candidate);
+}
+
+TEST_F(ManageTest, TestPrepareProcessManageCandidateResidentFailureUsesAffinity)
+{
+    ProcessAttr active = {};
+    ProcessParam param = InitCandidateTest(&active);
+    ProcessManageCandidate candidate = {};
+
+    MOCKER(CheckPid).expects(once()).will(returnValue(0));
+    MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(returnValue(-EIO));
+
+    ASSERT_EQ(0, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
+    ASSERT_NE(nullptr, candidate.prepared);
+    EXPECT_EQ(BIT(0), candidate.prepared->managedLocalState.managedLocalMask);
+    EXPECT_EQ(BIT(0), candidate.prepared->numaAttr.numaNodes);
+    DiscardProcessManageCandidate(&candidate);
+}
+
+TEST_F(ManageTest, TestPrepareProcessManageCandidateEmptyObservationUsesAllLocal)
+{
+    ProcessAttr active = {};
+    ProcessParam param = InitCandidateTest(&active, 3);
+    ProcessManageCandidate candidate = {};
+
+    MOCKER(CheckPid).expects(once()).will(returnValue(0));
+    MOCKER(SetLocalNumaByCpu).expects(once()).will(returnValue(0));
+    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddEmptyCandidateResidentForTest));
+
+    ASSERT_EQ(0, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
+    ASSERT_NE(nullptr, candidate.prepared);
+    EXPECT_EQ(0x7U, candidate.prepared->managedLocalState.managedLocalMask);
+    EXPECT_EQ(0x7U, candidate.prepared->numaAttr.numaNodes);
+    DiscardProcessManageCandidate(&candidate);
+}
+
+TEST_F(ManageTest, TestPrepareProcessManageCandidateRejectsNoObservation)
+{
+    ProcessAttr active = {};
+    ProcessParam param = InitCandidateTest(&active);
+    active.numaAttr.numaNodes = BIT(0);
+    ProcessManageCandidate candidate = {};
+
+    MOCKER(CheckPid).expects(once()).will(returnValue(0));
+    MOCKER(SetLocalNumaByCpu).expects(once()).will(returnValue(-EIO));
+    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(returnValue(-EINVAL));
+
+    EXPECT_EQ(-EIO, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
+    EXPECT_EQ(nullptr, candidate.prepared);
+    EXPECT_EQ(BIT(0), active.numaAttr.numaNodes);
+}
+
+TEST_F(ManageTest, TestPrepareProcessManageCandidateRejectsUnexpectedRemote)
+{
+    ProcessAttr active = {};
+    ProcessParam param = InitCandidateTest(&active);
+    param.count = 1;
+    param.numaParam[0].nid = 4;
+    param.numaParam[0].migrateMode = MIG_RATIO_MODE;
+    ProcessManageCandidate candidate = {};
+
+    MOCKER(CheckPid).expects(once()).will(returnValue(0));
+    MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddUnexpectedRemoteResidentForTest));
+
+    EXPECT_EQ(-EINVAL, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
+    EXPECT_EQ(nullptr, candidate.prepared);
+}
+
 extern "C" int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap);
 extern "C" int IsQemuTask(pid_t pid);
 TEST_F(ManageTest, TestProcessAddManageResetPidConfig)
@@ -669,13 +984,14 @@ TEST_F(ManageTest, TestProcessAddManageResetPidConfig)
     int ret;
     pid_t pid = 123;
     uint32_t localNodeBitmap = 1;
-    ProcessAttr mockProcess;
+    ProcessAttr mockProcess = {};
     mockProcess.pid = pid;
     mockProcess.duration = 100;
     mockProcess.scanTime = 50;
     mockProcess.numaAttr.numaNodes = 31;
 
     g_processManager.processes = &mockProcess;
+    g_processManager.nrLocalNuma = 4;
     ProcessParam param = {
         .pid = pid,
         .scanTime = 100,
@@ -688,6 +1004,8 @@ TEST_F(ManageTest, TestProcessAddManageResetPidConfig)
     MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     MOCKER(CheckPid).stubs().will(returnValue(0));
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&mockProcess));
+    MOCKER(SetLocalNumaByCpu).stubs().will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).stubs().will(invoke(AddEmptyCandidateResidentForTest));
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
     ret = ProcessAddManage(&param, &localNodeBitmap);
     EXPECT_EQ(0, ret);
@@ -715,6 +1033,7 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     param.numaParam[0].ratio = 50;
     g_processManager.processes = nullptr;
     g_processManager.nr[VM_TYPE] = 0;
+    g_processManager.nrLocalNuma = 4;
     MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     MOCKER(CheckPid).stubs().will(returnValue(0));
     MOCKER(VMPreprocess).stubs().will(returnValue(0));
@@ -722,8 +1041,8 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
-    MOCKER(sched_getaffinity).stubs().will(returnValue(0));
-    MOCKER(GetNodeFromCpu).stubs().will(returnValue(4));
+    MOCKER(SetLocalNumaByCpu).stubs().will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).stubs().will(invoke(AddEmptyCandidateResidentForTest));
 
     ret = ProcessAddManage(&param, nullptr);
     EXPECT_EQ(0, ret);
@@ -732,7 +1051,7 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     EXPECT_EQ(DEFAULT_SCAN_PERIOD, g_processManager.processes->scanTime); // 首次扫描使用DEFAULT_SCAN_PERIOD
     EXPECT_EQ(param.duration, g_processManager.processes->duration);
     EXPECT_EQ(50, g_processManager.processes->initLocalMemRatio);
-    EXPECT_EQ(0x10, g_processManager.processes->numaAttr.numaNodes);
+    EXPECT_EQ(0x11, g_processManager.processes->numaAttr.numaNodes);
 
     // when scanType is HAM_SCAN/STATISTIC_SCAN, state should be set to PROC_MOVE
     // when nodeBitmap is not null, local numanodes should be updated
@@ -744,10 +1063,12 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
     EXPECT_NE(nullptr, g_processManager.processes);
-    EXPECT_EQ(DEFAULT_SCAN_PERIOD, g_processManager.processes->scanTime); // 首次扫描使用DEFAULT_SCAN_PERIOD
+    EXPECT_EQ(DEFAULT_SCAN_PERIOD,
+	      g_processManager.processes
+		      ->scanTime); // 首次扫描使用DEFAULT_SCAN_PERIOD
     EXPECT_EQ(param.duration, g_processManager.processes->duration);
     EXPECT_EQ(50, g_processManager.processes->initLocalMemRatio);
-    EXPECT_EQ(0x10, g_processManager.processes->numaAttr.numaNodes);
+    EXPECT_EQ(0x11, g_processManager.processes->numaAttr.numaNodes);
     EXPECT_EQ(PROC_MOVE, g_processManager.processes->state);
 }
 
@@ -2025,18 +2346,11 @@ static uint64_t KBToPages(uint64_t kb, uint32_t pageSize)
     return kb * KIB / pageSize;
 }
 
-// Global array for mocking GetPidNumaPagesFromNumaMaps
+// Global NUMA page snapshot for single-remote configuration tests.
 static uint64_t g_testPagesPerNuma[MAX_NODES] = { 0 };
 
-// Static mock function for GetPidNumaPagesFromNumaMaps
-static int MockGetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge)
-{
-    memcpy(numaPages, g_testPagesPerNuma, sizeof(g_testPagesPerNuma));
-    return 0;
-}
-
-extern "C" int SetSingleRemoteNumaConfig(
-    ProcessAttr *attr, ProcessParam *param, int nrLocalNuma);
+extern "C" int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma,
+                                         const uint64_t pagesPerNuma[MAX_NODES]);
 extern "C" void MigratePagesToRemote(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES],
                                      uint64_t pagesToMigrate);
 extern "C" void RecallPagesFromRemote(ProcessAttr *attr, int l2Index, uint64_t pagesToRecall);
@@ -2053,24 +2367,23 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_FirstMigration)
 
     ProcessAttr attr = {};
     attr.pid = 1234;
-    attr.numaAttr.numaNodes = 0b00000001;  // L1: NUMA 0
+    attr.numaAttr.numaNodes = 0b00000001; // L1: NUMA 0
 
     ProcessParam param = {};
     param.count = 1;
-    param.numaParam[0].nid = 4;  // Remote NUMA 4 (l2Index = 0)
-    param.numaParam[0].memSize = 2 * GIB / KIB;  // 2GB in KB
+    param.numaParam[0].nid = 4;                 // Remote NUMA 4 (l2Index = 0)
+    param.numaParam[0].memSize = 2 * GIB / KIB; // 2GB in KB
     param.numaParam[0].ratio = 50;
 
     memset(g_testPagesPerNuma, 0, sizeof(g_testPagesPerNuma));
-    g_testPagesPerNuma[0] = KBToPages(3 * GIB / KIB, PAGESIZE_4K);  // Local NUMA 0 has 3GB (in pages)
-    g_testPagesPerNuma[4] = 0;  // Remote NUMA has 0 pages
+    g_testPagesPerNuma[0] = KBToPages(3 * GIB / KIB, PAGESIZE_4K); // Local NUMA 0 has 3GB (in pages)
+    g_testPagesPerNuma[4] = 0;                                     // Remote NUMA has 0 pages
 
-    MOCKER(GetPidNumaPagesFromNumaMaps).stubs().will(invoke(MockGetPidNumaPagesFromNumaMaps));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(InAttrL1).stubs().will(returnValue(true));
 
-    SetSingleRemoteNumaConfig(&attr, &param, 4);
+    SetSingleRemoteNumaConfig(&attr, &param, 4, g_testPagesPerNuma);
 
     // First migration: 2GB target, 0 existing -> should allocate 2GB
     uint64_t expectedPages = KBToPages(2 * GIB / KIB, PAGESIZE_4K);
@@ -2093,7 +2406,7 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_IncreaseMigration)
 
     ProcessAttr attr = {};
     attr.pid = 1234;
-    attr.numaAttr.numaNodes = 0b00000001;  // L1: NUMA 0
+    attr.numaAttr.numaNodes = 0b00000001; // L1: NUMA 0
 
     // Simulate existing migration: remote already has 2GB
     uint64_t existingPages = KBToPages(2 * GIB / KIB, PAGESIZE_4K);
@@ -2101,20 +2414,19 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_IncreaseMigration)
 
     ProcessParam param = {};
     param.count = 1;
-    param.numaParam[0].nid = 4;  // Remote NUMA 4 (l2Index = 0)
-    param.numaParam[0].memSize = 3 * GIB / KIB;  // New target: 3GB in KB
+    param.numaParam[0].nid = 4;                 // Remote NUMA 4 (l2Index = 0)
+    param.numaParam[0].memSize = 3 * GIB / KIB; // New target: 3GB in KB
     param.numaParam[0].ratio = 50;
 
     memset(g_testPagesPerNuma, 0, sizeof(g_testPagesPerNuma));
-    g_testPagesPerNuma[0] = KBToPages(1 * GIB / KIB, PAGESIZE_4K);  // Local NUMA 0 now has 1GB
-    g_testPagesPerNuma[4] = existingPages;  // Remote NUMA has 2GB (already migrated)
+    g_testPagesPerNuma[0] = KBToPages(1 * GIB / KIB, PAGESIZE_4K); // Local NUMA 0 now has 1GB
+    g_testPagesPerNuma[4] = existingPages;                         // Remote NUMA has 2GB (already migrated)
 
-    MOCKER(GetPidNumaPagesFromNumaMaps).stubs().will(invoke(MockGetPidNumaPagesFromNumaMaps));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(InAttrL1).stubs().will(returnValue(true));
 
-    SetSingleRemoteNumaConfig(&attr, &param, 4);
+    SetSingleRemoteNumaConfig(&attr, &param, 4, g_testPagesPerNuma);
 
     // Increase: 3GB target - 2GB existing = 1GB to add
     // Local NUMA 0 has 1GB, so can add 1GB
@@ -2137,7 +2449,7 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_NoChange)
 
     ProcessAttr attr = {};
     attr.pid = 1234;
-    attr.numaAttr.numaNodes = 0b00000001;  // L1: NUMA 0
+    attr.numaAttr.numaNodes = 0b00000001; // L1: NUMA 0
 
     // Simulate existing migration: remote already has 2GB
     uint64_t existingPages = KBToPages(2 * GIB / KIB, PAGESIZE_4K);
@@ -2145,20 +2457,19 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_NoChange)
 
     ProcessParam param = {};
     param.count = 1;
-    param.numaParam[0].nid = 4;  // Remote NUMA 4 (l2Index = 0)
-    param.numaParam[0].memSize = 2 * GIB / KIB;  // New target: 2GB in KB (same as existing)
+    param.numaParam[0].nid = 4;                 // Remote NUMA 4 (l2Index = 0)
+    param.numaParam[0].memSize = 2 * GIB / KIB; // New target: 2GB in KB (same as existing)
     param.numaParam[0].ratio = 50;
 
     memset(g_testPagesPerNuma, 0, sizeof(g_testPagesPerNuma));
-    g_testPagesPerNuma[0] = KBToPages(1 * GIB / KIB, PAGESIZE_4K);  // Local NUMA 0 has 1GB
-    g_testPagesPerNuma[4] = existingPages;  // Remote NUMA has 2GB
+    g_testPagesPerNuma[0] = KBToPages(1 * GIB / KIB, PAGESIZE_4K); // Local NUMA 0 has 1GB
+    g_testPagesPerNuma[4] = existingPages;                         // Remote NUMA has 2GB
 
-    MOCKER(GetPidNumaPagesFromNumaMaps).stubs().will(invoke(MockGetPidNumaPagesFromNumaMaps));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(InAttrL1).stubs().will(returnValue(true));
 
-    SetSingleRemoteNumaConfig(&attr, &param, 4);
+    SetSingleRemoteNumaConfig(&attr, &param, 4, g_testPagesPerNuma);
 
     // No change: memSize should remain the same
     uint64_t expectedMemSize = existingPages * (PAGESIZE_4K / KIB);
@@ -2179,7 +2490,7 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_DecreaseMigration)
 
     ProcessAttr attr = {};
     attr.pid = 1234;
-    attr.numaAttr.numaNodes = 0b00000001;  // L1: NUMA 0
+    attr.numaAttr.numaNodes = 0b00000001; // L1: NUMA 0
 
     // Simulate existing migration: remote already has 2GB
     uint64_t existingPages = KBToPages(2 * GIB / KIB, PAGESIZE_4K);
@@ -2187,20 +2498,19 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_DecreaseMigration)
 
     ProcessParam param = {};
     param.count = 1;
-    param.numaParam[0].nid = 4;  // Remote NUMA 4 (l2Index = 0)
-    param.numaParam[0].memSize = 1 * GIB / KIB;  // New target: 1GB in KB (less than existing 2GB)
+    param.numaParam[0].nid = 4;                 // Remote NUMA 4 (l2Index = 0)
+    param.numaParam[0].memSize = 1 * GIB / KIB; // New target: 1GB in KB (less than existing 2GB)
     param.numaParam[0].ratio = 25;
 
     memset(g_testPagesPerNuma, 0, sizeof(g_testPagesPerNuma));
-    g_testPagesPerNuma[0] = KBToPages(1 * GIB / KIB, PAGESIZE_4K);  // Local NUMA 0 has 1GB
-    g_testPagesPerNuma[4] = existingPages;  // Remote NUMA has 2GB
+    g_testPagesPerNuma[0] = KBToPages(1 * GIB / KIB, PAGESIZE_4K); // Local NUMA 0 has 1GB
+    g_testPagesPerNuma[4] = existingPages;                         // Remote NUMA has 2GB
 
-    MOCKER(GetPidNumaPagesFromNumaMaps).stubs().will(invoke(MockGetPidNumaPagesFromNumaMaps));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(InAttrL1).stubs().will(returnValue(true));
 
-    SetSingleRemoteNumaConfig(&attr, &param, 4);
+    SetSingleRemoteNumaConfig(&attr, &param, 4, g_testPagesPerNuma);
 
     // Decrease: 2GB existing - 1GB target = 1GB to recall
     // memSize should decrease from 2GB to 1GB
@@ -2223,15 +2533,15 @@ TEST_F(ManageTest, TestRecallPagesFromRemote_MultiLocalNuma)
 
     ProcessAttr attr = {};
     attr.pid = 1234;
-    attr.numaAttr.numaNodes = 0b00000011;  // L1: NUMA 0 and NUMA 1
+    attr.numaAttr.numaNodes = 0b00000011; // L1: NUMA 0 and NUMA 1
 
     // Setup existing allocation: NUMA0->2GB, NUMA1->1GB on remote
     uint64_t pagesNuma0 = KBToPages(2 * GIB / KIB, PAGESIZE_4K);
     uint64_t pagesNuma1 = KBToPages(1 * GIB / KIB, PAGESIZE_4K);
-    attr.strategyAttr.memSize[0][0] = pagesNuma0 * (PAGESIZE_4K / KIB);  // NUMA0: 2GB
-    attr.strategyAttr.memSize[1][0] = pagesNuma1 * (PAGESIZE_4K / KIB);  // NUMA1: 1GB
+    attr.strategyAttr.memSize[0][0] = pagesNuma0 * (PAGESIZE_4K / KIB); // NUMA0: 2GB
+    attr.strategyAttr.memSize[1][0] = pagesNuma1 * (PAGESIZE_4K / KIB); // NUMA1: 1GB
 
-    uint64_t pagesPerNuma[MAX_NODES] = { 0 };
+    uint64_t pagesPerNuma[MAX_NODES] = {0};
     pagesPerNuma[0] = KBToPages(1 * GIB / KIB, PAGESIZE_4K);
     pagesPerNuma[1] = KBToPages(1 * GIB / KIB, PAGESIZE_4K);
 
@@ -2819,8 +3129,8 @@ TEST_F(ManageTest, TestAddProcessNormal)
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
-    MOCKER(sched_getaffinity).stubs().will(returnValue(0));
-    MOCKER(GetNodeFromCpu).stubs().will(returnValue(4));
+    MOCKER(SetLocalNumaByCpu).stubs().will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).stubs().will(invoke(AddEmptyCandidateResidentForTest));
     int ret = AddProcess(&param, VM_TYPE, nullptr);
     EXPECT_EQ(0, ret);
     EXPECT_NE(nullptr, g_processManager.processes);
@@ -2828,7 +3138,6 @@ TEST_F(ManageTest, TestAddProcessNormal)
     g_processManager.processes = nullptr;
 }
 
-extern "C" int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
 TEST_F(ManageTest, TestSetLocalNumaByCpu)
 {
     g_processManager.nrLocalNuma = 4;
@@ -2962,7 +3271,6 @@ TEST_F(ManageTest, TestIsMemoryLowNormal2)
     EXPECT_EQ(false, ret);
 }
 
-extern "C" int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
 TEST_F(ManageTest, TestSetLocalNumaByCpuAffinityFailed)
 {
     MOCKER(sched_getaffinity).stubs().will(returnValue(-1));

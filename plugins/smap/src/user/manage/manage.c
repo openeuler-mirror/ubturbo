@@ -51,6 +51,15 @@ EnvAtomic g_forbiddenNodes[MAX_NODES];
 RunMode g_runMode;
 
 uint8_t g_criticalErrNodes[REMOTE_NUMA_BITS];
+typedef struct {
+    uint32_t affinityLocalMask;
+    uint32_t residentLocalMask;
+    uint64_t numaPages[MAX_NODES];
+    bool affinityValid;
+    bool residentValid;
+} ManagedLocalObservation;
+
+static int CollectProcessCandidateObservation(pid_t pid, bool hugeFlag, ManagedLocalObservation *observation);
 
 RunMode GetRunMode(void)
 {
@@ -200,6 +209,155 @@ void InitProcessMigrationTargetState(ProcessAttr *attr)
     attr->pendingTargetConfigValid = false;
     attr->pendingTargetNumaNodes = 0;
     attr->managedLocalState = (ManagedLocalState){ 0 };
+}
+
+static uint32_t BuildAllLocalNumaMask(void)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    if (nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM) {
+        return 0;
+    }
+    return (1U << nrLocalNuma) - 1U;
+}
+
+static uint32_t BuildResidentLocalMask(const ProcessAttr *attr)
+{
+    if (!attr) {
+        return 0;
+    }
+
+    uint32_t residentLocalMask = 0;
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int localNid = 0; localNid < nrLocalNuma && localNid < LOCAL_NUMA_NUM;
+         localNid++) {
+        if (attr->walkPage.nrPages[localNid] != 0) {
+            AddL1(&residentLocalMask, localNid);
+        }
+    }
+    return residentLocalMask;
+}
+
+static uint32_t BuildAccountLocalMask(const ProcessAttr *attr, int remoteIndex)
+{
+    if (!attr || remoteIndex < 0 || remoteIndex >= REMOTE_NUMA_NUM) {
+        return 0;
+    }
+
+    uint32_t accountLocalMask = 0;
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int localNid = 0; localNid < nrLocalNuma && localNid < LOCAL_NUMA_NUM; localNid++) {
+        if (attr->strategyAttr.remoteNrPagesAfterMigrate[localNid][remoteIndex] != 0) {
+            AddL1(&accountLocalMask, localNid);
+        }
+    }
+    return accountLocalMask;
+}
+
+static int ApplyManagedLocalObservation(ProcessAttr *attr, const ManagedLocalObservation *observation,
+                                        bool fullReplacement)
+{
+    if (!attr || !observation || (!observation->affinityValid && !observation->residentValid)) {
+        return -EINVAL;
+    }
+
+    uint32_t allLocalMask = BuildAllLocalNumaMask();
+    if (allLocalMask == 0) {
+        SMAP_LOGGER_ERROR("Invalid local NUMA layout for pid %d.", attr->pid);
+        return -EINVAL;
+    }
+
+    ManagedLocalState state = attr->managedLocalState;
+    state.residentLocalMask = observation->residentValid ? observation->residentLocalMask & allLocalMask : 0;
+    uint32_t affinityLocalMask = observation->affinityValid ? observation->affinityLocalMask & allLocalMask : 0;
+    state.observedLocalMask = affinityLocalMask | state.residentLocalMask;
+    if (state.observedLocalMask == 0) {
+        state.observedLocalMask = allLocalMask;
+    }
+
+    uint32_t allAccountLocalMask = 0;
+    for (int remoteIndex = 0; remoteIndex < REMOTE_NUMA_NUM; remoteIndex++) {
+        state.accountLocalMask[remoteIndex] = BuildAccountLocalMask(attr, remoteIndex);
+        allAccountLocalMask |= state.accountLocalMask[remoteIndex];
+    }
+
+    uint32_t managedLocalMask = state.observedLocalMask | allAccountLocalMask;
+    if (!fullReplacement) {
+        managedLocalMask |= attr->managedLocalState.managedLocalMask;
+    }
+    state.managedLocalMask = managedLocalMask & allLocalMask;
+    attr->managedLocalState = state;
+
+    SMAP_LOGGER_DEBUG("Refresh pid %d local state: managed=%#x observed=%#x "
+                      "resident=%#x account=%#x full=%d.",
+                      attr->pid, state.managedLocalMask, state.observedLocalMask, state.residentLocalMask,
+                      allAccountLocalMask, fullReplacement);
+    return 0;
+}
+
+static int RefreshManagedLocalState(ProcessAttr *attr, bool fullReplacement)
+{
+    if (!attr) {
+        return -EINVAL;
+    }
+
+    ManagedLocalObservation observation = {
+        .residentLocalMask = BuildResidentLocalMask(attr),
+        /*
+         * RefreshManagedLocalState is called only after a page snapshot has
+         * been filled. An empty resident mask is therefore a valid
+         * observation, not an unavailable data source.
+         */
+        .residentValid = true,
+    };
+    int ret = SetLocalNumaByCpu(attr->pid, &observation.affinityLocalMask);
+    if (ret) {
+        SMAP_LOGGER_WARNING("Refresh pid %d affinity local NUMA failed: %d.", attr->pid, ret);
+    } else {
+        observation.affinityValid = true;
+    }
+
+    return ApplyManagedLocalObservation(attr, &observation, fullReplacement);
+}
+
+static uint32_t BuildManagedTrackingNodes(const ProcessAttr *attr)
+{
+    if (!attr) {
+        return 0;
+    }
+
+    uint32_t allLocalMask = BuildAllLocalNumaMask();
+    if (allLocalMask == 0) {
+        return 0;
+    }
+
+    /*
+     * Keep existing remote bits until Pair account reconciliation can prove
+     * that no resident pages remain on an omitted remote.
+     */
+    uint32_t localBitmapMask = (1U << LOCAL_NUMA_BITS) - 1U;
+    uint32_t numaNodes = attr->numaAttr.numaNodes & ~localBitmapMask;
+    numaNodes |= attr->managedLocalState.managedLocalMask & allLocalMask;
+
+    uint32_t targetCount = attr->targetConfig.count;
+    if (targetCount > REMOTE_NUMA_NUM) {
+        SMAP_LOGGER_WARNING("Pid %d target count %u exceeds limit.", attr->pid,
+                            targetCount);
+        targetCount = REMOTE_NUMA_NUM;
+    }
+    for (uint32_t i = 0; i < targetCount; i++) {
+        int remoteIndex;
+        int remoteNid = attr->targetConfig.targets[i].remoteNid;
+        if (RemoteNidToIndex(remoteNid, GetNrLocalNuma(), &remoteIndex) == 0) {
+            AddL2ByNid(&numaNodes, remoteNid);
+        }
+    }
+    for (int remoteIndex = 0; remoteIndex < REMOTE_NUMA_NUM; remoteIndex++) {
+        if (attr->managedLocalState.accountLocalMask[remoteIndex] == 0) {
+            continue;
+        }
+        AddL2ByNid(&numaNodes, GetNrLocalNuma() + remoteIndex);
+    }
+    return numaNodes;
 }
 
 /*
@@ -811,8 +969,13 @@ static void RecallPagesFromRemote(ProcessAttr *attr, int l2Index, uint64_t pages
 }
 
 /* Handle single remote NUMA scenario: single local+single remote, or multi-local+single remote */
-static int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
+static int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma,
+                                     const uint64_t pagesPerNuma[MAX_NODES])
 {
+    if (!pagesPerNuma) {
+        return -EINVAL;
+    }
+
     int remoteNid = param->numaParam[0].nid;
 
     /* Validate remote NUMA node */
@@ -822,14 +985,6 @@ static int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int
     }
 
     int l2Index = remoteNid - nrLocalNuma;
-
-    /* Get page distribution across NUMA nodes */
-    uint64_t pagesPerNuma[MAX_NODES] = { 0 };
-    int ret = GetPidNumaPagesFromNumaMaps(attr->pid, pagesPerNuma, false);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Failed to get page count for process %d, ret: %d.", attr->pid, ret);
-        return ret;
-    }
 
     /* Calculate target pages and pages already on remote NUMA */
     uint64_t targetPages = IsHugeMode() ? KBToHugePage(param->numaParam[0].memSize) :
@@ -891,7 +1046,8 @@ static void TargetConfigToProcessParam(const ProcessAttr *attr, const ProcessTar
 }
 
 /* Generate compatibility runtime fields from the requested target. */
-static int UpdateProcessMigrateConfig(ProcessAttr *attr, const ProcessTargetConfig *config)
+static int UpdateProcessMigrateConfig(ProcessAttr *attr, const ProcessTargetConfig *config,
+                                      const ManagedLocalObservation *observation)
 {
     int nrLocalNuma = GetNrLocalNuma();
     int localNumaCnt = GetL1Count(attr->numaAttr.numaNodes);
@@ -917,7 +1073,11 @@ static int UpdateProcessMigrateConfig(ProcessAttr *attr, const ProcessTargetConf
         SetMultiNumaVmConfig(attr, &param, nrLocalNuma);
         return 0;
     }
-    return SetSingleRemoteNumaConfig(attr, &param, nrLocalNuma);
+    if (!observation || !observation->residentValid) {
+        SMAP_LOGGER_ERROR("Pid %d page residency is unavailable.", attr->pid);
+        return -EINVAL;
+    }
+    return SetSingleRemoteNumaConfig(attr, &param, nrLocalNuma, observation->numaPages);
 }
 
 static bool IsZeroProcessTargetConfig(const ProcessTargetConfig *config)
@@ -959,16 +1119,45 @@ static void UpdateAutoRemoveRemoteEmptyFlag(ProcessAttr *attr, const ProcessTarg
     }
 }
 
-static int PrepareProcessTargetCandidate(ProcessAttr *candidate, const ProcessTargetConfig *config)
+static int ValidateCandidateRemoteResidency(ProcessAttr *candidate, const ProcessTargetConfig *config,
+                                            const ManagedLocalObservation *observation)
+{
+    if (!candidate || !config || !observation || !observation->residentValid) {
+        return 0;
+    }
+
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int remoteNid = nrLocalNuma; remoteNid < nrLocalNuma + REMOTE_NUMA_NUM; remoteNid++) {
+        if (observation->numaPages[remoteNid] == 0 || FindProcessRemoteTarget(config, remoteNid) ||
+            InAttrL2(candidate, remoteNid)) {
+            continue;
+        }
+        SMAP_LOGGER_ERROR("Pid %d has unmanaged remote node %d resident pages.", candidate->pid, remoteNid);
+        return -EINVAL;
+    }
+    return 0;
+}
+
+static int PrepareProcessTargetCandidate(ProcessAttr *candidate, const ProcessTargetConfig *config,
+                                         const ManagedLocalObservation *observation)
 {
     ProcessTargetConfig targetConfig;
     int ret = CopyProcessTargetConfig(&targetConfig, config);
     if (ret) {
         return ret;
     }
+    ret = ValidateCandidateRemoteResidency(candidate, &targetConfig, observation);
+    if (ret) {
+        return ret;
+    }
 
     candidate->targetConfig = targetConfig;
-    ret = UpdateProcessMigrateConfig(candidate, &targetConfig);
+    ret = ApplyManagedLocalObservation(candidate, observation, true);
+    if (ret) {
+        return ret;
+    }
+    candidate->numaAttr.numaNodes = BuildManagedTrackingNodes(candidate);
+    ret = UpdateProcessMigrateConfig(candidate, &targetConfig, observation);
     if (ret) {
         return ret;
     }
@@ -984,6 +1173,7 @@ static void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *
     attr->initLocalMemRatio = candidate->initLocalMemRatio;
     attr->autoRemoveWhenRemoteEmpty = candidate->autoRemoveWhenRemoteEmpty;
     attr->numaAttr = candidate->numaAttr;
+    attr->managedLocalState = candidate->managedLocalState;
     attr->strategyAttr = candidate->strategyAttr;
     for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
         attr->migrateParam[i] = candidate->migrateParam[i];
@@ -992,12 +1182,41 @@ static void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *
 
 static int ApplyProcessTargetConfig(ProcessAttr *attr, const ProcessTargetConfig *config)
 {
+    ManagedLocalObservation observation;
+    int ret = CollectProcessCandidateObservation(attr->pid, attr->type == VM_TYPE, &observation);
+    if (ret) {
+        return ret;
+    }
+
     ProcessAttr candidate = *attr;
-    int ret = PrepareProcessTargetCandidate(&candidate, config);
+    ret = PrepareProcessTargetCandidate(&candidate, config, &observation);
     if (ret) {
         return ret;
     }
     PublishProcessTargetCandidate(attr, &candidate);
+    return 0;
+}
+
+static int StagePendingMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config)
+{
+    ProcessTargetConfig targetConfig;
+    if (!attr || ValidateProcessTargetConfig(config) || CopyProcessTargetConfig(&targetConfig, config)) {
+        return -EINVAL;
+    }
+
+    ProcessAttr trackingCandidate = *attr;
+    trackingCandidate.targetConfig = targetConfig;
+    if (trackingCandidate.managedLocalState.managedLocalMask == 0) {
+        uint32_t allLocalMask = BuildAllLocalNumaMask();
+        trackingCandidate.managedLocalState.managedLocalMask = attr->numaAttr.numaNodes & allLocalMask;
+        if (trackingCandidate.managedLocalState.managedLocalMask == 0) {
+            trackingCandidate.managedLocalState.managedLocalMask = allLocalMask;
+        }
+    }
+    attr->pendingTargetConfig = targetConfig;
+    attr->pendingTargetConfigValid = true;
+    attr->pendingTargetNumaNodes = BuildManagedTrackingNodes(&trackingCandidate);
+    SMAP_LOGGER_INFO("Save pending migration target for pid %d.", attr->pid);
     return 0;
 }
 
@@ -1009,14 +1228,7 @@ int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *conf
     }
 
     if (attr->state == PROC_MIGRATE) {
-        attr->pendingTargetConfig = targetConfig;
-        attr->pendingTargetConfigValid = true;
-        attr->pendingTargetNumaNodes = attr->numaAttr.numaNodes;
-        for (uint32_t i = 0; i < targetConfig.count; i++) {
-            AddL2ByNid(&attr->pendingTargetNumaNodes, targetConfig.targets[i].remoteNid);
-        }
-        SMAP_LOGGER_INFO("Save pending migration target for pid %d.", attr->pid);
-        return 0;
+        return StagePendingMigrationTargets(attr, &targetConfig);
     }
 
     return ApplyProcessTargetConfig(attr, &targetConfig);
@@ -1029,9 +1241,14 @@ int ApplyPendingMigrationTargets(ProcessAttr *attr)
     }
 
     ProcessTargetConfig config = attr->pendingTargetConfig;
+    ManagedLocalObservation observation;
+    int ret = CollectProcessCandidateObservation(attr->pid, attr->type == VM_TYPE, &observation);
+    if (ret) {
+        return ret;
+    }
+
     ProcessAttr candidate = *attr;
-    candidate.numaAttr.numaNodes = attr->pendingTargetNumaNodes;
-    int ret = PrepareProcessTargetCandidate(&candidate, &config);
+    ret = PrepareProcessTargetCandidate(&candidate, &config, &observation);
     if (ret) {
         return ret;
     }
@@ -1041,7 +1258,7 @@ int ApplyPendingMigrationTargets(ProcessAttr *attr)
         .pid = attr->pid,
         .scanTime = attr->scanTime,
         .duration = attr->duration,
-        .numaNodes = attr->pendingTargetNumaNodes,
+        .numaNodes = candidate.numaAttr.numaNodes,
     };
     ret = AccessIoctlAddPid(1, &payload);
     if (ret) {
@@ -1130,6 +1347,7 @@ static void ResetGroupedPolicyRuntime(GroupMigrationPolicy *policy)
 int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
 {
     int ret;
+    (void)nodeBitmap;
     if (g_processManager.nr[type] >= GetCurrentMaxNrPid()) {
         SMAP_LOGGER_ERROR("nr of pid is out of limit.");
         return -EINVAL;
@@ -1141,13 +1359,7 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
         return -ENOMEM;
     }
     InitProcessMigrationTargetState(attr);
-
-    ret = SetProcessLocalNuma(param->pid, &attr->numaAttr.numaNodes, type == VM_TYPE);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Query pid %d memory usage failed: %d.", param->pid, ret);
-        free(attr);
-        return ret;
-    }
+    attr->type = type;
 
     if (param->scanType == NORMAL_SCAN) {
         ret = VMPreprocess(param->pid, attr);
@@ -1161,7 +1373,6 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
         SMAP_LOGGER_INFO("Set pid %d state to %d.", param->pid, PROC_MOVE);
     }
 
-    attr->type = type;
     ret = SetProcessConfig(attr, param);
     if (ret) {
         SMAP_LOGGER_ERROR("Set process %d config failed: %d.", param->pid, ret);
@@ -1181,6 +1392,118 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
                      attr->migrateMode);
 
     return 0;
+}
+
+void DiscardProcessManageCandidate(ProcessManageCandidate *candidate)
+{
+    if (!candidate) {
+        return;
+    }
+
+    free(candidate->prepared);
+    *candidate = (ProcessManageCandidate){ 0 };
+}
+
+int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate)
+{
+    if (!param || !candidate) {
+        return -EINVAL;
+    }
+    *candidate = (ProcessManageCandidate){ 0 };
+
+    ProcessTargetConfig config;
+    int ret = BuildProcessTargetConfigFromParam(param, &config);
+    if (ret) {
+        return ret;
+    }
+    ret = CheckPid(param->pid);
+    if (ret) {
+        return ret;
+    }
+
+    ProcessAttr *active = GetProcessAttrLocked(param->pid);
+    ProcessAttr *prepared = NULL;
+    if (active) {
+        prepared = malloc(sizeof(ProcessAttr));
+        if (!prepared) {
+            return -ENOMEM;
+        }
+        *prepared = *active;
+    } else {
+        if (g_processManager.nr[type] >= GetCurrentMaxNrPid()) {
+            SMAP_LOGGER_ERROR("nr of pid is out of limit.");
+            return -EINVAL;
+        }
+        prepared = calloc(1, sizeof(ProcessAttr));
+        if (!prepared) {
+            return -ENOMEM;
+        }
+        InitProcessMigrationTargetState(prepared);
+        prepared->pid = param->pid;
+        prepared->type = type;
+        if (param->scanType == NORMAL_SCAN) {
+            ret = VMPreprocess(param->pid, prepared);
+            if (ret) {
+                free(prepared);
+                return ret;
+            }
+        } else if (param->scanType == HAM_SCAN || param->scanType == STATISTIC_SCAN) {
+            prepared->state = PROC_MOVE;
+        }
+        SetBasicProcessConfig(prepared, param);
+    }
+
+    candidate->active = active;
+    candidate->prepared = prepared;
+    candidate->isNew = active == NULL;
+    candidate->isPending = active && active->state == PROC_MIGRATE;
+    ret = ConfigureMigrationTargets(prepared, &config);
+    if (ret) {
+        DiscardProcessManageCandidate(candidate);
+        return ret;
+    }
+    if (candidate->isNew) {
+        prepared->scanTime = DEFAULT_SCAN_PERIOD;
+    }
+    return 0;
+}
+
+void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
+{
+    if (!candidate || !candidate->prepared) {
+        return;
+    }
+
+    ProcessAttr *prepared = candidate->prepared;
+    if (candidate->isPending) {
+        candidate->active->pendingTargetConfig =
+            prepared->pendingTargetConfig;
+        candidate->active->pendingTargetConfigValid =
+            prepared->pendingTargetConfigValid;
+        candidate->active->pendingTargetNumaNodes =
+            prepared->pendingTargetNumaNodes;
+        SMAP_LOGGER_INFO("Stage pid %d migration target update.",
+                         prepared->pid);
+        DiscardProcessManageCandidate(candidate);
+        return;
+    }
+
+    if (candidate->isNew) {
+        LinkedListAdd(&g_processManager.processes, &prepared);
+        g_processManager.nr[prepared->type]++;
+        candidate->prepared = NULL;
+        SMAP_LOGGER_INFO("Add pid %d to list done.", prepared->pid);
+    } else {
+        PublishProcessTargetCandidate(candidate->active, prepared);
+        SMAP_LOGGER_INFO("Update pid %d migrate config.", prepared->pid);
+    }
+
+    int ret = SyncAllProcessConfig();
+    if (ret) {
+        SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.",
+                            prepared->pid, ret);
+    }
+    DiscardProcessManageCandidate(candidate);
 }
 
 int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap)
@@ -1409,49 +1732,86 @@ static void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag)
     }
 }
 
-static int SetLocalNumaByNumaMaps(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag)
+static int GetProcessNumaMapsObservation(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
+                                         uint64_t numaPages[MAX_NODES])
 {
-    FILE *fp;
-    char line[MAX_LINE_LENGTH];
-
-    SMAP_LOGGER_INFO("Before open numa_maps");
-    fp = OpenNumaMaps(pid);
-    if (!fp) {
-        SMAP_LOGGER_ERROR("SetLocalNumaByNumaMaps open numa maps failed.");
+    if (!residentLocalMask || !numaPages) {
         return -EINVAL;
     }
 
-    while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
-        SetLocalByNumaMaps(line, nodeBitmap, hugeFlag);
+    FILE *fp = OpenNumaMaps(pid);
+    if (!fp) {
+        return -EINVAL;
     }
-    SMAP_LOGGER_INFO("After fgets numa_maps");
 
+    char line[MAX_LINE_LENGTH];
+    int ret = 0;
+    while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
+        ret = AddNumaPagesFromLine(line, numaPages);
+        if (ret) {
+            break;
+        }
+        SetLocalByNumaMaps(line, residentLocalMask, hugeFlag);
+    }
     if (pclose(fp)) {
-        SMAP_LOGGER_ERROR("SetLocalNumaByNumaMaps close numa maps failed.");
+        SMAP_LOGGER_WARNING("Close numa maps failed, pid=%d.", pid);
+    }
+    return ret;
+}
+
+static int CollectProcessCandidateObservation(pid_t pid, bool hugeFlag, ManagedLocalObservation *observation)
+{
+    if (!observation) {
+        return -EINVAL;
+    }
+
+    *observation = (ManagedLocalObservation){ 0 };
+    int affinityRet = SetLocalNumaByCpu(pid, &observation->affinityLocalMask);
+    if (affinityRet) {
+        SMAP_LOGGER_WARNING("Set pid %d local numa by cpu failed: %d.", pid, affinityRet);
+    } else {
+        observation->affinityValid = true;
+    }
+
+    int residentRet =
+        GetProcessNumaMapsObservation(pid, hugeFlag, &observation->residentLocalMask, observation->numaPages);
+    if (residentRet) {
+        SMAP_LOGGER_WARNING("Observe pid %d numa maps failed: %d.", pid, residentRet);
+    } else {
+        observation->residentValid = true;
+    }
+
+    if (!observation->affinityValid && !observation->residentValid) {
+        return affinityRet ? affinityRet : residentRet;
     }
     return 0;
 }
 
 int SetProcessLocalNuma(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag)
 {
-    int ret1, ret2;
-
-    ret1 = SetLocalNumaByCpu(pid, nodeBitmap);
-    if (ret1) {
-        SMAP_LOGGER_WARNING("Set pid %d local numa by cpu failed: %d.", pid, ret1);
-    }
-    SMAP_LOGGER_INFO("pid %d node bitmap after set local numa by cpu: %#x.", pid, *nodeBitmap);
-    if (hugeFlag) {
-        ret2 = SetLocalNumaByNumaMaps(pid, nodeBitmap, hugeFlag);
-        if (ret2) {
-            SMAP_LOGGER_WARNING("Set pid %d local numa by numa maps failed: %d.", pid, ret2);
-        }
-        SMAP_LOGGER_INFO("pid %d node bitmap after set local numa by numa maps: %#x.", pid, *nodeBitmap);
-    } else {
-        return ret1;
+    if (!nodeBitmap) {
+        return -EINVAL;
     }
 
-    return ret1 & ret2;
+    ManagedLocalObservation observation;
+    int ret = CollectProcessCandidateObservation(pid, hugeFlag, &observation);
+    if (ret) {
+        return ret;
+    }
+
+    uint32_t allLocalMask = BuildAllLocalNumaMask();
+    if (allLocalMask == 0) {
+        return -EINVAL;
+    }
+    uint32_t observedLocalMask =
+        (observation.affinityValid ? observation.affinityLocalMask : 0) |
+        (observation.residentValid ? observation.residentLocalMask : 0);
+    observedLocalMask &= allLocalMask;
+    if (observedLocalMask == 0) {
+        observedLocalMask = allLocalMask;
+    }
+    *nodeBitmap |= observedLocalMask;
+    return 0;
 }
 
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
@@ -2574,6 +2934,36 @@ static int BuildAndFillBitmapBuf(size_t *len, char **buf)
     return 0;
 }
 
+static int RefreshManagedLocalTrackingScope(ProcessAttr *attr)
+{
+    ProcessAttr candidate = *attr;
+    int ret = RefreshManagedLocalState(&candidate, false);
+    if (ret) {
+        return ret;
+    }
+
+    candidate.numaAttr.numaNodes = BuildManagedTrackingNodes(&candidate);
+    if (candidate.numaAttr.numaNodes != attr->numaAttr.numaNodes) {
+        struct AccessAddPidPayload payload = {
+            .type = attr->scanType,
+            .pid = attr->pid,
+            .scanTime = attr->scanTime,
+            .duration = attr->duration,
+            .numaNodes = candidate.numaAttr.numaNodes,
+        };
+        ret = AccessIoctlAddPid(1, &payload);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Refresh pid %d managed tracking failed: %d.",
+                              attr->pid, ret);
+            return ret;
+        }
+    }
+
+    attr->managedLocalState = candidate.managedLocalState;
+    attr->numaAttr.numaNodes = candidate.numaAttr.numaNodes;
+    return 0;
+}
+
 int BuildAllPidData(void)
 {
     int ret, failedCount = 0;
@@ -2597,13 +2987,25 @@ int BuildAllPidData(void)
         }
         ProcessAttr *current = GetProcessAttrLocked(pmb.pid);
         if (current && current->scanType == NORMAL_SCAN) {
-            SMAP_LOGGER_INFO("Pid %d, numaNodes %#x, nrLocalNuma %u.", current->pid, current->numaAttr.numaNodes,
+            SMAP_LOGGER_INFO("Pid %d, numaNodes %#x, nrLocalNuma %u.",
+                             current->pid, current->numaAttr.numaNodes,
                              g_processManager.nrLocalNuma);
             SetPidNrPages(current, pmb.nrPages, MAX_NODES);
             ret = FillPidData(current, &pmb);
             if (ret) {
-                SMAP_LOGGER_ERROR("Fill pid %d actc data failed.", current->pid);
+                SMAP_LOGGER_ERROR("Fill pid %d actc data failed.",
+                                  current->pid);
                 failedCount++;
+                continue;
+            }
+            if (!current->groupPolicy.enabled) {
+                ret = RefreshManagedLocalTrackingScope(current);
+                if (ret) {
+                    SMAP_LOGGER_ERROR(
+                        "Refresh pid %d managed local state failed: %d.",
+                        current->pid, ret);
+                    failedCount++;
+                }
             }
         }
     }
