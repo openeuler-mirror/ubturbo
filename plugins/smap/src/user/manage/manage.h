@@ -574,6 +574,9 @@ FILE *OpenNumaMaps(pid_t pid);
 int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge);
 int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[MAX_NODES]);
 
+void UpdateRemoteNumaCriticalErr(void);
+bool IsRemoteNumaCriticalErr(int nid);
+
 static inline uint64_t KBToHugePageCeil(uint64_t memSize)
 {
     int pageSizeKB = GetHugePageSize() / KIB;

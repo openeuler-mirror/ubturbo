@@ -2854,3 +2854,57 @@ TEST_F(ManageTest, TestIsZeroRemoteTargetConfigZeroCount)
     bool ret = IsZeroRemoteTargetConfig(&param);
     EXPECT_EQ(false, ret);
 }
+
+extern "C" uint8_t g_criticalErrNodes[REMOTE_NUMA_BITS];
+extern "C" void UpdateRemoteNumaCriticalErr(void);
+extern "C" bool IsRemoteNumaCriticalErr(int nid);
+
+TEST_F(ManageTest, TestIsRemoteNumaCriticalErrNidBelowLocal)
+{
+    g_processManager.nrLocalNuma = 4;
+    bool ret = IsRemoteNumaCriticalErr(2);
+    EXPECT_FALSE(ret);
+}
+
+TEST_F(ManageTest, TestIsRemoteNumaCriticalErrNidOutOfRange)
+{
+    g_processManager.nrLocalNuma = 4;
+    bool ret = IsRemoteNumaCriticalErr(4 + REMOTE_NUMA_BITS);
+    EXPECT_FALSE(ret);
+}
+
+TEST_F(ManageTest, TestIsRemoteNumaCriticalErrNotCritical)
+{
+    g_processManager.nrLocalNuma = 4;
+    g_criticalErrNodes[0] = 0;
+    bool ret = IsRemoteNumaCriticalErr(4);
+    EXPECT_FALSE(ret);
+}
+
+TEST_F(ManageTest, TestIsRemoteNumaCriticalErrIsCritical)
+{
+    g_processManager.nrLocalNuma = 4;
+    g_criticalErrNodes[0] = 1;
+    bool ret = IsRemoteNumaCriticalErr(4);
+    EXPECT_TRUE(ret);
+    g_criticalErrNodes[0] = 0;
+}
+
+TEST_F(ManageTest, TestUpdateRemoteNumaCriticalErr)
+{
+    g_processManager.nrLocalNuma = 4;
+    memset(g_criticalErrNodes, 0, sizeof(g_criticalErrNodes));
+    UpdateRemoteNumaCriticalErr();
+    UpdateRemoteNumaCriticalErr();
+    UpdateRemoteNumaCriticalErr();
+}
+
+TEST_F(ManageTest, TestProcessManagerInitCriticalErrNodesFailed)
+{
+    uint32_t pageType = PAGETYPE_NORMAL;
+    int ret;
+    MOCKER(memset_s).stubs().will(returnValue(EOK)).then(returnValue(1));
+    ret = ProcessManagerInit(pageType);
+    EXPECT_EQ(-1, ret);
+    GlobalMockObject::verify();
+}

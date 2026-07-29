@@ -1468,3 +1468,67 @@ TEST_F(MigrationTest, TestPostMigrationSkipsEmptyCompEntryAndFreezes)
     EXPECT_TRUE(current.groupSwapFrozen);
     EXPECT_EQ(PROC_IDLE, current.state);
 }
+
+TEST_F(MigrationTest, TestBuildMigrationMsgL2NodeCriticalErr)
+{
+    int ret;
+    uint64_t pages;
+    ProcessAttr process = {};
+    process.numaAttr.numaNodes = 0b00010001;
+    struct MigrateMsg mMsg;
+    ActcData actc = {};
+    process.scanAttr.actcData[0] = &actc;
+
+    g_processManager.nrLocalNuma = 4;
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+
+    MOCKER(CheckActcDataValid).stubs().will(returnValue(0));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(IsRemoteNumaCriticalErr).stubs().will(returnValue(true));
+    ret = BuildMigrationMsg(&process, &mMsg, &pages);
+    EXPECT_EQ(-ENODEV, ret);
+    GlobalMockObject::verify();
+}
+
+TEST_F(MigrationTest, TestBuildMigrationMsgL2NodeNotCriticalNotForbidden)
+{
+    int ret;
+    uint64_t pages;
+    ProcessAttr process = {};
+    process.numaAttr.numaNodes = 0b00010001;
+    struct MigrateMsg mMsg;
+    ActcData actc = {};
+    process.scanAttr.actcData[0] = &actc;
+
+    g_processManager.nrLocalNuma = 4;
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+
+    MOCKER(CheckActcDataValid).stubs().will(returnValue(0));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(IsRemoteNumaCriticalErr).stubs().will(returnValue(false));
+    MOCKER(RunStrategy).stubs().will(returnValue(-ENOENT));
+    ret = BuildMigrationMsg(&process, &mMsg, &pages);
+    EXPECT_EQ(-ENOENT, ret);
+}
+
+TEST_F(MigrationTest, TestScanMigrateWorkCallsUpdateRemoteNumaCriticalErr)
+{
+    int ret;
+    ProcessAttr process = { .pid = 1025 };
+    struct ProcessManager manager = { .processes = &process };
+    ThreadCtx ctx = { .processManager = &manager };
+
+    MOCKER(DisableTracking).stubs().will(returnValue(0));
+    MOCKER(StrategyConfigRead).stubs().will(ignoreReturnValue());
+    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
+    MOCKER(CheckAndRemoveInvalidProcess).stubs();
+    MOCKER(PerformMigrationPreparation).stubs().will(returnValue(0));
+    MOCKER(UpdateScene).stubs();
+    MOCKER(HandleScene).stubs().will(returnValue(0));
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(UpdateRemoteNumaCriticalErr).stubs();
+    MOCKER(PerformMigration).stubs().will(returnValue(0));
+    ret = ScanMigrateWork(&ctx);
+    EXPECT_EQ(0, ret);
+}

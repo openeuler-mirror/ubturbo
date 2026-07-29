@@ -37,6 +37,8 @@
 
 #define MAX_GROUP_TARGET_ENTRY (MAX_MIGRATION_GROUP_NUM * MAX_GROUP_REMOTE_NUMA)
 
+#define UPDATE_CRITICAL_ERR_COUNT 5
+
 static struct ProcessManager g_processManager;
 
 static char g_mmapTypeName[][MMAP_TYPE_STRING_LEN] = { "mmap_private", "mmap_shared" };
@@ -47,6 +49,8 @@ uint32_t g_pageSizeHuge;
 
 EnvAtomic g_forbiddenNodes[MAX_NODES];
 RunMode g_runMode;
+
+uint8_t g_criticalErrNodes[REMOTE_NUMA_BITS];
 
 RunMode GetRunMode(void)
 {
@@ -116,12 +120,44 @@ bool IsRemoteNidValid(int nid)
     return nid >= manager->nrLocalNuma && nid < (REMOTE_NUMA_BITS + manager->nrLocalNuma);
 }
 
+void UpdateRemoteNumaCriticalErr(void)
+{
+    static uint8_t count = 0;
+    if (count < UPDATE_CRITICAL_ERR_COUNT) {
+        count++;
+        return;
+    }
+
+    int nrLocalNuma = GetNrLocalNuma();
+    int maxNid = nrLocalNuma + REMOTE_NUMA_BITS;
+    for (int nid = nrLocalNuma; nid < maxNid; nid++) {
+        g_criticalErrNodes[nid - nrLocalNuma] = IsNumaCriticalErr(nid) ? 1 : 0;
+        SMAP_LOGGER_DEBUG("Update remote numa critical error: nid=%d, critical=%d.", nid,
+                          g_criticalErrNodes[nid - nrLocalNuma]);
+    }
+    count = 0;
+}
+
+bool IsRemoteNumaCriticalErr(int nid)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    if (nid < nrLocalNuma || nid >= (nrLocalNuma + REMOTE_NUMA_BITS)) {
+        return false;
+    }
+    return g_criticalErrNodes[nid - nrLocalNuma] == 1;
+}
+
 int ProcessManagerInit(uint32_t pageType)
 {
     int i;
     int ret = memset_s(&g_processManager, sizeof(struct ProcessManager), 0, sizeof(struct ProcessManager));
     if (ret != EOK) {
         SMAP_LOGGER_ERROR("Clear process manager memory failed: %d.", ret);
+        return -ret;
+    }
+    ret = memset_s(g_criticalErrNodes, sizeof(g_criticalErrNodes), 0, sizeof(g_criticalErrNodes));
+    if (ret != EOK) {
+        SMAP_LOGGER_ERROR("Clear critical error nodes memory failed: %d.", ret);
         return -ret;
     }
     ret = GenerateStrategyConfigFile(STRATEGY_CONFIG_PATH);

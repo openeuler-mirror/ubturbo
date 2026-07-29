@@ -29,6 +29,8 @@
 
 #define DISABLE_TRACKING_RETRY_DELAY_US 50000
 
+#define SYS_NODE_CRITICAL_ERR_LEN 60
+
 typedef enum {
     PGSIZE_FOUR_KB = 0,
     PGSIZE_TWO_MB = 9,
@@ -90,6 +92,34 @@ int DisableTracking(struct ProcessManager *manager)
         usleep(DISABLE_TRACKING_RETRY_DELAY_US);
     }
     return ret;
+}
+
+bool IsNumaCriticalErr(int nid)
+{
+    char path[SYS_NODE_CRITICAL_ERR_LEN] = { 0 };
+
+    int ret = snprintf_s(path, sizeof(path), sizeof(path) - 1, "%s/node%d/critical_err", SYS_NODE_PATH, nid);
+    if (ret == -1) {
+        SMAP_LOGGER_ERROR("Failed to build node%d critical_err path.", nid);
+        return false;
+    }
+
+    FILE *file = fopen(path, "r");
+    if (!file) {
+        SMAP_LOGGER_DEBUG("Not find node%d critical_err file, assume available.", nid);
+        return false;
+    }
+
+    int c = fgetc(file);
+    if (fclose(file) != 0) {
+        SMAP_LOGGER_WARNING("Failed to close node%d critical_err file: %d.", nid, errno);
+    }
+    if (c == EOF) {
+        SMAP_LOGGER_DEBUG("Node%d critical_err file empty, assume available.", nid);
+        return false;
+    }
+
+    return c == '1';
 }
 
 int RefreshRemoteRam(struct ProcessManager *manager)

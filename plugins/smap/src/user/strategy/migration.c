@@ -112,10 +112,21 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
     if (ret) {
         return ret;
     }
-    int l2Node = GetAttrL2(process);
-    if (IsNodeForbidden(l2Node)) {
-        SMAP_LOGGER_INFO("L2 node%d is forbiddened, pid %d stops migrate out.", l2Node, process->pid);
-        return -EPERM;
+    uint32_t nodes = process->numaAttr.numaNodes;
+    int offset = LOCAL_NUMA_BITS - GetNrLocalNuma();
+    for (int i = LOCAL_NUMA_BITS; i < MAX_NODES; i++) {
+        if (!(nodes & (1U << i))) {
+            continue;
+        }
+        int nid = i - offset;
+        if (IsNodeForbidden(nid)) {
+            SMAP_LOGGER_INFO("L2 node%d is forbiddened, pid %d stops migrate out.", nid, process->pid);
+            return -EPERM;
+        }
+        if (IsRemoteNumaCriticalErr(nid)) {
+            SMAP_LOGGER_WARNING("L2 node%d is critical error, pid %d stops migrate out.", nid, process->pid);
+            return -ENODEV;
+        }
     }
     if (!migratePage) {
         SMAP_LOGGER_ERROR("migratePage is null.");
@@ -1096,6 +1107,7 @@ int ScanMigrateWork(ThreadCtx *ctx)
         }
         SMAP_LOGGER_DEBUG("Handle scene done.");
     }
+    UpdateRemoteNumaCriticalErr();
     ret = PerformMigration(manager);
     SMAP_LOGGER_INFO("Migration result: %d.", ret);
 out:
