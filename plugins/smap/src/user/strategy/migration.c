@@ -175,6 +175,18 @@ static uint64_t GetMigListSuccessPages(const struct MigList *list)
     return success - list->failedIsolatedNr;
 }
 
+static void RefreshPairAccountMask(ProcessAttr *process, int localNid, int remoteIndex)
+{
+    uint32_t localBit = 1U << localNid;
+    if (process->strategyAttr.remoteNrPagesAfterMigrate[localNid][remoteIndex] > 0) {
+        process->managedLocalState.accountLocalMask[remoteIndex] |= localBit;
+    } else {
+        process->managedLocalState.accountLocalMask[remoteIndex] &= ~localBit;
+    }
+    process->managedLocalState.managedLocalMask |=
+        process->managedLocalState.accountLocalMask[remoteIndex];
+}
+
 void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager)
 {
     ProcessAttr *current;
@@ -196,22 +208,49 @@ void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager)
             continue;
         }
 
-        if (toNid >= manager->nrLocalNuma) {
-            toNid = mMsg->migList[i].to - manager->nrLocalNuma;
-            current->strategyAttr.remoteNrPagesAfterMigrate[fromNid][toNid] += successMigCount;
-        } else {
-            fromNid = mMsg->migList[i].from - manager->nrLocalNuma;
-            if (successMigCount > current->strategyAttr.remoteNrPagesAfterMigrate[toNid][fromNid]) {
-                current->strategyAttr.remoteNrPagesAfterMigrate[toNid][fromNid] = 0;
-                SMAP_LOGGER_DEBUG("Mig Pages Num Exception: pid %d from %d to %d nr %llu pages", current->pid,
-                                  mMsg->migList[i].from, mMsg->migList[i].to, successMigCount);
-                continue;
+        bool fromLocal = fromNid >= 0 && fromNid < manager->nrLocalNuma;
+        bool toLocal = toNid >= 0 && toNid < manager->nrLocalNuma;
+        int remoteNidEnd = manager->nrLocalNuma + REMOTE_NUMA_NUM;
+        bool fromRemote = fromNid >= manager->nrLocalNuma && fromNid < remoteNidEnd;
+        bool toRemote = toNid >= manager->nrLocalNuma && toNid < remoteNidEnd;
+        if (fromLocal && toRemote) {
+            int remoteIndex = toNid - manager->nrLocalNuma;
+            uint32_t *account =
+                &current->strategyAttr.remoteNrPagesAfterMigrate[fromNid][remoteIndex];
+            if (successMigCount > UINT32_MAX - *account) {
+                SMAP_LOGGER_WARNING("Pid %d Pair account overflow after demote from %d to %d "
+                                    "by %llu pages; saturating.",
+                                    current->pid, fromNid, toNid, successMigCount);
+                *account = UINT32_MAX;
+            } else {
+                *account += successMigCount;
             }
-            current->strategyAttr.remoteNrPagesAfterMigrate[toNid][fromNid] -= successMigCount;
+            RefreshPairAccountMask(current, fromNid, remoteIndex);
+        } else if (fromRemote && toLocal) {
+            int remoteIndex = fromNid - manager->nrLocalNuma;
+            uint32_t *account =
+                &current->strategyAttr.remoteNrPagesAfterMigrate[toNid][remoteIndex];
+            if (successMigCount > *account) {
+                SMAP_LOGGER_WARNING("Pid %d Pair account has only %u pages while promote "
+                                    "from %d to %d succeeded for %llu pages; clearing account.",
+                                    current->pid, *account, fromNid, toNid,
+                                    successMigCount);
+                *account = 0;
+            } else {
+                *account -= successMigCount;
+            }
+            RefreshPairAccountMask(current, toNid, remoteIndex);
+        } else {
+            SMAP_LOGGER_DEBUG("Skip non-Pair migration result for pid %d from %d to %d.",
+                              current->pid, fromNid, toNid);
+            continue;
         }
-        SMAP_LOGGER_INFO("pid %d from %d to %d nr %llu failed_mig_nr %llu success_mig_nr %llu.", mMsg->migList[i].pid,
-                         mMsg->migList[i].from, mMsg->migList[i].to, mMsg->migList[i].nr, mMsg->migList[i].failedMigNr,
-                         successMigCount);
+        SMAP_LOGGER_INFO("pid %d from %d to %d nr %llu failed_mig_nr %llu "
+                         "failed_isolated_nr %llu success_mig_nr %llu.",
+                         mMsg->migList[i].pid, mMsg->migList[i].from,
+                         mMsg->migList[i].to, mMsg->migList[i].nr,
+                         mMsg->migList[i].failedMigNr,
+                         mMsg->migList[i].failedIsolatedNr, successMigCount);
     }
 }
 

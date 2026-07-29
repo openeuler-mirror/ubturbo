@@ -11,6 +11,7 @@
 #include "manage/access_ioctl.h"
 #include "manage/manage.h"
 #include "manage/smap_config.h"
+#include "manage/thread.h"
 #include "securec.h"
 #include "strategy/strategy_config.h"
 
@@ -34,6 +35,25 @@ extern "C" int GetProcessNumaMapsObservation(pid_t pid, bool hugeFlag, uint32_t 
 extern "C" int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate);
 extern "C" void DiscardProcessManageCandidate(ProcessManageCandidate *candidate);
 extern "C" void PublishProcessManageCandidate(ProcessManageCandidate *candidate);
+
+class ScopedMigrationPeriod {
+public:
+    explicit ScopedMigrationPeriod(uint32_t period)
+        : previous_(g_processManager.threadCtx[0]), context_()
+    {
+        context_.period = period;
+        g_processManager.threadCtx[0] = &context_;
+    }
+
+    ~ScopedMigrationPeriod()
+    {
+        g_processManager.threadCtx[0] = previous_;
+    }
+
+private:
+    void *previous_;
+    ThreadCtx context_;
+};
 
 static int AddAffinityLocalForTest(pid_t pid, uint32_t *nodeBitmap);
 static int AddCandidateResidentForTest(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
@@ -209,6 +229,90 @@ TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicExpansion)
               attr.managedLocalState.managedLocalMask);
 }
 
+TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicUsesCachedAffinity)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.managedLocalState.managedLocalMask = BIT(0);
+    attr.managedLocalState.affinityLocalMask = BIT(1);
+    attr.managedLocalState.affinityValid = true;
+    attr.managedLocalState.affinitySampled = true;
+    attr.walkPage.nrPages[2] = 10;
+    g_processManager.nrLocalNuma = 4;
+    ScopedMigrationPeriod refreshPeriod(DEFAULT_MIGRATE_PERIOD);
+    MOCKER(SetLocalNumaByCpu).expects(never());
+
+    EXPECT_EQ(0, RefreshManagedLocalState(&attr, false));
+    EXPECT_EQ(BIT(1), attr.managedLocalState.affinityLocalMask);
+    EXPECT_EQ(BIT(1) | BIT(2), attr.managedLocalState.observedLocalMask);
+    EXPECT_EQ(BIT(0) | BIT(1) | BIT(2), attr.managedLocalState.managedLocalMask);
+    EXPECT_EQ(DEFAULT_MIGRATE_PERIOD, attr.managedLocalState.affinityRefreshElapsedMs);
+}
+
+TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicRefreshesDueAffinity)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.managedLocalState.managedLocalMask = BIT(0);
+    attr.managedLocalState.affinityLocalMask = BIT(0);
+    attr.managedLocalState.affinityRefreshElapsedMs =
+        MANAGED_LOCAL_AFFINITY_REFRESH_INTERVAL_MS - DEFAULT_MIGRATE_PERIOD;
+    attr.managedLocalState.affinityValid = true;
+    attr.managedLocalState.affinitySampled = true;
+    g_processManager.nrLocalNuma = 4;
+    ScopedMigrationPeriod refreshPeriod(DEFAULT_MIGRATE_PERIOD);
+    CPU_ZERO(&g_fake_cpu_mask);
+    CPU_SET(1, &g_fake_cpu_mask);
+    MOCKER(sched_getaffinity)
+        .expects(once())
+        .will(invoke(fake_sched_getaffinity));
+    MOCKER(GetNodeFromCpu).expects(once()).will(returnValue(3));
+
+    EXPECT_EQ(0, RefreshManagedLocalState(&attr, false));
+    EXPECT_EQ(BIT(3), attr.managedLocalState.affinityLocalMask);
+    EXPECT_EQ(BIT(3), attr.managedLocalState.observedLocalMask);
+    EXPECT_EQ(0U, attr.managedLocalState.affinityRefreshElapsedMs);
+}
+
+TEST_F(ManageTest, TestRefreshManagedLocalStateAffinityFailureKeepsCache)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.managedLocalState.managedLocalMask = BIT(1);
+    attr.managedLocalState.affinityLocalMask = BIT(1);
+    attr.managedLocalState.affinityRefreshElapsedMs = MANAGED_LOCAL_AFFINITY_REFRESH_INTERVAL_MS;
+    attr.managedLocalState.affinityValid = true;
+    attr.managedLocalState.affinitySampled = true;
+    g_processManager.nrLocalNuma = 4;
+    ScopedMigrationPeriod refreshPeriod(DEFAULT_MIGRATE_PERIOD);
+    MOCKER(sched_getaffinity).expects(once()).will(returnValue(-1));
+
+    EXPECT_EQ(0, RefreshManagedLocalState(&attr, false));
+    EXPECT_EQ(BIT(1), attr.managedLocalState.affinityLocalMask);
+    EXPECT_EQ(BIT(1), attr.managedLocalState.observedLocalMask);
+    EXPECT_EQ(BIT(1), attr.managedLocalState.managedLocalMask);
+    EXPECT_EQ(0U, attr.managedLocalState.affinityRefreshElapsedMs);
+}
+
+TEST_F(ManageTest, TestRefreshManagedLocalStateAffinityFailureBacksOff)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.walkPage.nrPages[2] = 10;
+    g_processManager.nrLocalNuma = 4;
+    ScopedMigrationPeriod refreshPeriod(DEFAULT_MIGRATE_PERIOD);
+    MOCKER(sched_getaffinity).expects(once()).will(returnValue(-1));
+
+    EXPECT_EQ(0, RefreshManagedLocalState(&attr, false));
+    EXPECT_TRUE(attr.managedLocalState.affinitySampled);
+    EXPECT_FALSE(attr.managedLocalState.affinityValid);
+    EXPECT_EQ(BIT(2), attr.managedLocalState.observedLocalMask);
+
+    EXPECT_EQ(0, RefreshManagedLocalState(&attr, false));
+    EXPECT_EQ(BIT(2), attr.managedLocalState.observedLocalMask);
+    EXPECT_EQ(DEFAULT_MIGRATE_PERIOD, attr.managedLocalState.affinityRefreshElapsedMs);
+}
+
 TEST_F(ManageTest, TestRefreshManagedLocalStateFullReplacementShrinks)
 {
     ProcessAttr attr = {};
@@ -273,6 +377,14 @@ static int RefreshPeriodicManagedLocalCandidate(ProcessAttr *attr,
     return 0;
 }
 
+static int RefreshUnchangedManagedLocalCandidate(ProcessAttr *attr, bool fullReplacement)
+{
+    EXPECT_FALSE(fullReplacement);
+    attr->managedLocalState.managedLocalMask = BIT(0);
+    attr->managedLocalState.residentLocalMask = BIT(0);
+    return 0;
+}
+
 static int CheckManagedTrackingPayload(int len,
                                        struct AccessAddPidPayload *payload)
 {
@@ -321,6 +433,24 @@ TEST_F(ManageTest, TestRefreshManagedLocalTrackingFailureKeepsActiveState)
 
     EXPECT_EQ(-EIO, RefreshManagedLocalTrackingScope(&attr));
     EXPECT_EQ(BIT(0), attr.managedLocalState.managedLocalMask);
+    EXPECT_EQ(BIT(0) | BIT(4), attr.numaAttr.numaNodes);
+}
+
+TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopeSkipsUnchangedBitmap)
+{
+    ProcessAttr attr = {};
+    g_processManager.nrLocalNuma = 4;
+    attr.pid = 123;
+    attr.scanType = NORMAL_SCAN;
+    attr.scanTime = 100;
+    attr.numaAttr.numaNodes = BIT(0) | BIT(4);
+    attr.managedLocalState.managedLocalMask = BIT(0);
+
+    MOCKER(RefreshManagedLocalState).expects(once()).will(invoke(RefreshUnchangedManagedLocalCandidate));
+    MOCKER(AccessIoctlAddPid).expects(never());
+
+    EXPECT_EQ(0, RefreshManagedLocalTrackingScope(&attr));
+    EXPECT_EQ(BIT(0), attr.managedLocalState.residentLocalMask);
     EXPECT_EQ(BIT(0) | BIT(4), attr.numaAttr.numaNodes);
 }
 
@@ -745,9 +875,12 @@ TEST_F(ManageTest, TestSetProcessConfig)
     param.numaParam[0].nid = 4;
     param.numaParam[0].ratio = 50;
     attr.numaAttr.numaNodes = 1;
-    MOCKER(GetPidNumaPagesFromNumaMaps)
+    MOCKER(SetLocalNumaByCpu)
         .expects(once())
-        .will(invoke(FillEmptyNumaPages));
+        .will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation)
+        .expects(once())
+        .will(invoke(AddEmptyCandidateResidentForTest));
     int ret = SetProcessConfig(&attr, &param);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(attr.pid, 1);
@@ -2854,9 +2987,9 @@ TEST_F(ManageTest, TestAllocBorrowPagesForMemsizeHugePage)
     EXPECT_EQ((uint64_t)2048, attr.strategyAttr.memSize[0][0]);
 }
 
-extern "C" void CalibrateMigratePages(ProcessAttr *attr);
+extern "C" void CalibratePairAccount(ProcessAttr *attr);
 
-TEST_F(ManageTest, TestCalibrateMigratePagesNoChange)
+TEST_F(ManageTest, TestCalibratePairAccountNoChange)
 {
     g_processManager.nrLocalNuma = 4;
 
@@ -2866,14 +2999,14 @@ TEST_F(ManageTest, TestCalibrateMigratePagesNoChange)
     attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 50;
     attr.walkPage.nrPages[4] = 150;  // remotePages(150) == wp->nrPages[4](150), skip
 
-    CalibrateMigratePages(&attr);
+    CalibratePairAccount(&attr);
 
     // No change: values stay as-is
     EXPECT_EQ((uint32_t)100, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
     EXPECT_EQ((uint32_t)50, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
 }
 
-TEST_F(ManageTest, TestCalibrateMigratePagesSingleLocal)
+TEST_F(ManageTest, TestCalibratePairAccountSingleLocal)
 {
     g_processManager.nrLocalNuma = 4;
 
@@ -2882,13 +3015,13 @@ TEST_F(ManageTest, TestCalibrateMigratePagesSingleLocal)
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
     attr.walkPage.nrPages[4] = 50;  // actual pages dropped from 100 to 50
 
-    CalibrateMigratePages(&attr);
+    CalibratePairAccount(&attr);
 
     // arrLen=1, last(only) gets nrLeft=50
     EXPECT_EQ((uint32_t)50, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
 }
 
-TEST_F(ManageTest, TestCalibrateMigratePagesMultiLocal)
+TEST_F(ManageTest, TestCalibratePairAccountMultiLocal)
 {
     g_processManager.nrLocalNuma = 4;
 
@@ -2899,7 +3032,7 @@ TEST_F(ManageTest, TestCalibrateMigratePagesMultiLocal)
     attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 100;
     attr.walkPage.nrPages[4] = 150;  // actual dropped from 200 to 150
 
-    CalibrateMigratePages(&attr);
+    CalibratePairAccount(&attr);
 
     // remotePages=200, arr=[0,1], nrLeft=150
     // i=0: ratio=100/200=0.5, nrChunk=150*0.5=75, nrLeft=75
@@ -2908,7 +3041,7 @@ TEST_F(ManageTest, TestCalibrateMigratePagesMultiLocal)
     EXPECT_EQ((uint32_t)75, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
 }
 
-TEST_F(ManageTest, TestCalibrateMigratePagesSkipZeroEntries)
+TEST_F(ManageTest, TestCalibratePairAccountSkipZeroEntries)
 {
     g_processManager.nrLocalNuma = 4;
 
@@ -2920,7 +3053,7 @@ TEST_F(ManageTest, TestCalibrateMigratePagesSkipZeroEntries)
     attr.strategyAttr.remoteNrPagesAfterMigrate[2][0] = 100;
     attr.walkPage.nrPages[4] = 300;  // actual increased from 200 to 300
 
-    CalibrateMigratePages(&attr);
+    CalibratePairAccount(&attr);
 
     // remotePages=200, arr=[1,2], nrLeft=300
     // i=0 (arr[0]=1): ratio=100/200=0.5, nrChunk=300*0.5=150, nrLeft=150
@@ -2930,7 +3063,7 @@ TEST_F(ManageTest, TestCalibrateMigratePagesSkipZeroEntries)
     EXPECT_EQ((uint32_t)150, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
 }
 
-TEST_F(ManageTest, TestCalibrateMigratePagesMultiRemote)
+TEST_F(ManageTest, TestCalibratePairAccountMultiRemote)
 {
     g_processManager.nrLocalNuma = 4;
 
@@ -2943,7 +3076,7 @@ TEST_F(ManageTest, TestCalibrateMigratePagesMultiRemote)
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][1] = 200;
     attr.walkPage.nrPages[5] = 100;  // l2Index=1, remote=5
 
-    CalibrateMigratePages(&attr);
+    CalibratePairAccount(&attr);
 
     // l2Index=0: unchanged (remotePages==actual)
     EXPECT_EQ((uint32_t)100, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
@@ -2951,7 +3084,7 @@ TEST_F(ManageTest, TestCalibrateMigratePagesMultiRemote)
     EXPECT_EQ((uint32_t)100, attr.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
 }
 
-TEST_F(ManageTest, TestCalibrateMigratePagesToZero)
+TEST_F(ManageTest, TestCalibratePairAccountToZero)
 {
     g_processManager.nrLocalNuma = 4;
 
@@ -2961,7 +3094,7 @@ TEST_F(ManageTest, TestCalibrateMigratePagesToZero)
     attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 50;
     attr.walkPage.nrPages[4] = 0;  // all pages gone from remote NUMA 4
 
-    CalibrateMigratePages(&attr);
+    CalibratePairAccount(&attr);
 
     // remotePages=150, arr=[0,1], nrLeft=0
     // i=0: ratio=100/150≈0.667, nrChunk=0*0.667=0, nrLeft=0
@@ -2970,7 +3103,7 @@ TEST_F(ManageTest, TestCalibrateMigratePagesToZero)
     EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
 }
 
-TEST_F(ManageTest, TestCalibrateMigratePagesThreeLocals)
+TEST_F(ManageTest, TestCalibratePairAccountThreeLocals)
 {
     g_processManager.nrLocalNuma = 4;
 
@@ -2982,7 +3115,7 @@ TEST_F(ManageTest, TestCalibrateMigratePagesThreeLocals)
     attr.strategyAttr.remoteNrPagesAfterMigrate[2][0] = 60;   // 60%
     attr.walkPage.nrPages[4] = 200;  // actual doubled from 100 to 200
 
-    CalibrateMigratePages(&attr);
+    CalibratePairAccount(&attr);
 
     // remotePages=100, arr=[0,1,2], nrLeft=200
     // i=0 (arr[0]=0): ratio=10/100=0.1, nrChunk=200*0.1=20, nrLeft=180
@@ -2991,6 +3124,114 @@ TEST_F(ManageTest, TestCalibrateMigratePagesThreeLocals)
     EXPECT_EQ((uint32_t)20, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
     EXPECT_EQ((uint32_t)60, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
     EXPECT_EQ((uint32_t)120, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
+}
+
+TEST_F(ManageTest, TestCalibratePairAccountStableRemainderOrder)
+{
+    g_processManager.nrLocalNuma = 4;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 1;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 1;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[2][0] = 1;
+    attr.walkPage.nrPages[4] = 2;
+
+    CalibratePairAccount(&attr);
+
+    EXPECT_EQ((uint32_t)1, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ((uint32_t)1, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
+    EXPECT_EQ((uint32_t)2,
+              attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] +
+                  attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] +
+                  attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
+}
+
+TEST_F(ManageTest, TestCalibratePairAccountRebuildsByManagedResidentPages)
+{
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.remoteNumaInfo.privateSize[0][0] = 0;
+    g_processManager.remoteNumaInfo.privateSize[1][0] = 0;
+    g_processManager.remoteNumaInfo.privateSize[2][0] = 0;
+    g_processManager.remoteNumaInfo.sharedSize[0] = 0;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1) | BIT(2);
+    attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
+    attr.walkPage.nrPages[0] = 1;
+    attr.walkPage.nrPages[1] = 2;
+    attr.walkPage.nrPages[4] = 5;
+
+    CalibratePairAccount(&attr);
+
+    EXPECT_EQ((uint32_t)2, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ((uint32_t)3, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
+    EXPECT_EQ(BIT(0) | BIT(1), attr.managedLocalState.accountLocalMask[0]);
+}
+
+TEST_F(ManageTest, TestCalibratePairAccountEvenlyRebuildsWithoutLocalPages)
+{
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.remoteNumaInfo.privateSize[0][0] = 0;
+    g_processManager.remoteNumaInfo.privateSize[2][0] = 0;
+    g_processManager.remoteNumaInfo.sharedSize[0] = 0;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(2);
+    attr.walkPage.nrPages[4] = 5;
+
+    CalibratePairAccount(&attr);
+
+    EXPECT_EQ((uint32_t)3, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+    EXPECT_EQ((uint32_t)2, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
+    EXPECT_EQ((uint32_t)5,
+              attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] +
+                  attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] +
+                  attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
+}
+
+TEST_F(ManageTest, TestCalibratePairAccountKeepsActualPagesAfterCapacityRemoved)
+{
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.remoteNumaInfo.privateSize[3][0] = 0;
+    g_processManager.remoteNumaInfo.sharedSize[0] = 0;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.managedLocalState.managedLocalMask = BIT(3);
+    attr.walkPage.nrPages[4] = 7;
+
+    CalibratePairAccount(&attr);
+
+    EXPECT_EQ((uint32_t)7, attr.strategyAttr.remoteNrPagesAfterMigrate[3][0]);
+    EXPECT_EQ(BIT(3), attr.managedLocalState.accountLocalMask[0]);
+}
+
+TEST_F(ManageTest, TestCalibratePairAccountUsesEligibleCapacityPair)
+{
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.remoteNumaInfo.privateSize[0][0] = 0;
+    g_processManager.remoteNumaInfo.privateSize[1][0] = 128;
+    g_processManager.remoteNumaInfo.privateSize[2][0] = 0;
+    g_processManager.remoteNumaInfo.sharedSize[0] = 0;
+
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1) | BIT(2);
+    attr.walkPage.nrPages[4] = 6;
+
+    CalibratePairAccount(&attr);
+
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ((uint32_t)6, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
+    EXPECT_EQ(BIT(1), attr.managedLocalState.accountLocalMask[0]);
+    g_processManager.remoteNumaInfo.privateSize[1][0] = 0;
 }
 
 extern "C" void SetRunMode(RunMode runMode);

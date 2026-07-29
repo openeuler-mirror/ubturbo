@@ -22,6 +22,7 @@ using namespace std;
 
 #define TEST_SMAP_MIG_MAGIC 0xB9
 #define TEST_SMAP_MIG_MIGRATE _IOW(TEST_SMAP_MIG_MAGIC, 0, struct MigrateMsg)
+#define BIT(i) (1U << (i))
 
 extern "C" struct ProcessManager g_processManager;
 
@@ -926,6 +927,8 @@ TEST_F(MigrationTest, TestUpdateMigResultLocalToRemote)
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(170, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ(1U, attr.managedLocalState.accountLocalMask[0]);
+    free(mMsg.migList);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultSubtractsIsolatedFailure)
@@ -955,6 +958,62 @@ TEST_F(MigrationTest, TestUpdateMigResultSubtractsIsolatedFailure)
     free(mMsg.migList);
 }
 
+TEST_F(MigrationTest, TestUpdateMigResultPromoteSubtractsOnlySuccessfulPages)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[2][1] = 100;
+
+    struct MigrateMsg mMsg = {};
+    mMsg.cnt = 1;
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
+    mMsg.migList[0].pid = 123;
+    mMsg.migList[0].from = 5;
+    mMsg.migList[0].to = 2;
+    mMsg.migList[0].nr = 80;
+    mMsg.migList[0].failedMigNr = 10;
+    mMsg.migList[0].failedIsolatedNr = 20;
+    mMsg.migList[0].successToUser = true;
+
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 4;
+    manager.processes = &attr;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+
+    UpdateMigResult(&mMsg, &manager);
+
+    EXPECT_EQ((uint32_t)50, attr.strategyAttr.remoteNrPagesAfterMigrate[2][1]);
+    EXPECT_EQ(BIT(2), attr.managedLocalState.accountLocalMask[1]);
+    free(mMsg.migList);
+}
+
+TEST_F(MigrationTest, TestUpdateMigResultUpdatesExactDemotePair)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+
+    struct MigrateMsg mMsg = {};
+    mMsg.cnt = 1;
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
+    mMsg.migList[0].pid = 123;
+    mMsg.migList[0].from = 2;
+    mMsg.migList[0].to = 5;
+    mMsg.migList[0].nr = 10;
+    mMsg.migList[0].successToUser = true;
+
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 4;
+    manager.processes = &attr;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+
+    UpdateMigResult(&mMsg, &manager);
+
+    EXPECT_EQ((uint32_t)10, attr.strategyAttr.remoteNrPagesAfterMigrate[2][1]);
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
+    EXPECT_EQ(BIT(2), attr.managedLocalState.accountLocalMask[1]);
+    free(mMsg.migList);
+}
+
 TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalUnexpectedMigCount)
 {
     ProcessAttr attr = {};
@@ -979,6 +1038,8 @@ TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalUnexpectedMigCount)
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ(0U, attr.managedLocalState.accountLocalMask[0]);
+    free(mMsg.migList);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalExpectedMigCount)
@@ -1359,6 +1420,23 @@ TEST_F(MigrationTest, TestPreMigrationTwo)
 }
 
 extern "C" void PostMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg);
+static bool g_migrationResultSettled;
+
+static void MarkMigrationResultSettled(struct MigrateMsg *mMsg,
+                                       struct ProcessManager *manager)
+{
+    (void)mMsg;
+    (void)manager;
+    g_migrationResultSettled = true;
+}
+
+static int CheckPendingAppliedAfterResult(ProcessAttr *attr)
+{
+    (void)attr;
+    EXPECT_TRUE(g_migrationResultSettled);
+    return 0;
+}
+
 TEST_F(MigrationTest, TestPostMigration)
 {
     struct ProcessManager manager = {};
@@ -1375,6 +1453,29 @@ TEST_F(MigrationTest, TestPostMigration)
     PostMigration(&manager, &mMsg);
     EXPECT_EQ(PROC_IDLE, current.state);
     free(mMsg.migList);
+}
+
+TEST_F(MigrationTest, TestPostMigrationSettlesResultBeforePendingTarget)
+{
+    struct ProcessManager manager = {};
+    ProcessAttr current = {};
+    struct MigrateMsg mMsg = {};
+    manager.processes = &current;
+    current.pid = 1;
+    current.state = PROC_MIGRATE;
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
+    EnvMutexInit(&manager.lock);
+    g_migrationResultSettled = false;
+
+    MOCKER(UpdateMigResult).expects(once()).will(invoke(MarkMigrationResultSettled));
+    MOCKER(ApplyPendingMigrationTargets)
+        .expects(once())
+        .will(invoke(CheckPendingAppliedAfterResult));
+
+    PostMigration(&manager, &mMsg);
+
+    EXPECT_TRUE(g_migrationResultSettled);
+    EXPECT_EQ(PROC_IDLE, current.state);
 }
 
 TEST_F(MigrationTest, TestPostMigrationTwo)

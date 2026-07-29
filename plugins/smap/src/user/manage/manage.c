@@ -56,6 +56,7 @@ typedef struct {
     uint32_t residentLocalMask;
     uint64_t numaPages[MAX_NODES];
     bool affinityValid;
+    bool affinitySampled;
     bool residentValid;
 } ManagedLocalObservation;
 
@@ -268,8 +269,15 @@ static int ApplyManagedLocalObservation(ProcessAttr *attr, const ManagedLocalObs
 
     ManagedLocalState state = attr->managedLocalState;
     state.residentLocalMask = observation->residentValid ? observation->residentLocalMask & allLocalMask : 0;
-    uint32_t affinityLocalMask = observation->affinityValid ? observation->affinityLocalMask & allLocalMask : 0;
-    state.observedLocalMask = affinityLocalMask | state.residentLocalMask;
+    if (observation->affinitySampled) {
+        state.affinityRefreshElapsedMs = 0;
+        state.affinitySampled = true;
+    }
+    if (observation->affinityValid) {
+        state.affinityLocalMask = observation->affinityLocalMask & allLocalMask;
+        state.affinityValid = true;
+    }
+    state.observedLocalMask = (state.affinityValid ? state.affinityLocalMask : 0) | state.residentLocalMask;
     if (state.observedLocalMask == 0) {
         state.observedLocalMask = allLocalMask;
     }
@@ -294,6 +302,27 @@ static int ApplyManagedLocalObservation(ProcessAttr *attr, const ManagedLocalObs
     return 0;
 }
 
+static uint32_t GetManagedLocalRefreshPeriodMs(void)
+{
+    ThreadCtx *ctx = g_processManager.threadCtx[0];
+    if (ctx && ctx->period != 0) {
+        return ctx->period;
+    }
+    return DEFAULT_MIGRATE_PERIOD;
+}
+
+static void AdvanceManagedLocalAffinityRefresh(ProcessAttr *attr)
+{
+    uint32_t elapsed = attr->managedLocalState.affinityRefreshElapsedMs;
+    uint32_t period = GetManagedLocalRefreshPeriodMs();
+    if (elapsed >= MANAGED_LOCAL_AFFINITY_REFRESH_INTERVAL_MS ||
+        period >= MANAGED_LOCAL_AFFINITY_REFRESH_INTERVAL_MS - elapsed) {
+        attr->managedLocalState.affinityRefreshElapsedMs = MANAGED_LOCAL_AFFINITY_REFRESH_INTERVAL_MS;
+        return;
+    }
+    attr->managedLocalState.affinityRefreshElapsedMs = elapsed + period;
+}
+
 static int RefreshManagedLocalState(ProcessAttr *attr, bool fullReplacement)
 {
     if (!attr) {
@@ -309,10 +338,28 @@ static int RefreshManagedLocalState(ProcessAttr *attr, bool fullReplacement)
          */
         .residentValid = true,
     };
-    int ret = SetLocalNumaByCpu(attr->pid, &observation.affinityLocalMask);
-    if (ret) {
-        SMAP_LOGGER_WARNING("Refresh pid %d affinity local NUMA failed: %d.", attr->pid, ret);
-    } else {
+
+    if (!fullReplacement) {
+        AdvanceManagedLocalAffinityRefresh(attr);
+    }
+    bool refreshAffinity = fullReplacement || !attr->managedLocalState.affinitySampled ||
+                           attr->managedLocalState.affinityRefreshElapsedMs >=
+                               MANAGED_LOCAL_AFFINITY_REFRESH_INTERVAL_MS;
+    if (refreshAffinity) {
+        int ret = SetLocalNumaByCpu(attr->pid, &observation.affinityLocalMask);
+        observation.affinitySampled = true;
+        /*
+         * Reset the elapsed time on both success and failure. A failed
+         * sample keeps the last valid affinity mask and is retried after
+         * the normal interval instead of on every migration cycle.
+         */
+        if (ret) {
+            SMAP_LOGGER_WARNING("Refresh pid %d affinity local NUMA failed: %d.", attr->pid, ret);
+        } else {
+            observation.affinityValid = true;
+        }
+    } else if (attr->managedLocalState.affinityValid) {
+        observation.affinityLocalMask = attr->managedLocalState.affinityLocalMask;
         observation.affinityValid = true;
     }
 
@@ -1767,6 +1814,7 @@ static int CollectProcessCandidateObservation(pid_t pid, bool hugeFlag, ManagedL
 
     *observation = (ManagedLocalObservation){ 0 };
     int affinityRet = SetLocalNumaByCpu(pid, &observation->affinityLocalMask);
+    observation->affinitySampled = true;
     if (affinityRet) {
         SMAP_LOGGER_WARNING("Set pid %d local numa by cpu failed: %d.", pid, affinityRet);
     } else {
@@ -2196,53 +2244,159 @@ static void CalcActcStats(ProcessAttr *attr)
     }
 }
 
-/**
- * CalibrateMigratePages - 根据最新统计的远端页面数量校准迁移量
- */
-static void CalibrateMigratePages(ProcessAttr *attr)
+static uint32_t BuildPairCapacityLocalMask(const ProcessAttr *attr, int remoteIndex)
 {
-    StrategyAttribute *sa = &attr->strategyAttr;
-    WalkPage *wp = &attr->walkPage;
+    uint32_t capacityLocalMask = 0;
+    uint32_t managedLocalMask = attr->managedLocalState.managedLocalMask;
+    struct RemoteNumaInfo *numaInfo = &g_processManager.remoteNumaInfo;
     int nrLocalNuma = GetNrLocalNuma();
 
-    for (int l2Index = 0; l2Index < REMOTE_NUMA_NUM; l2Index++) {
-        uint64_t remotePages = 0;
-        uint32_t arr[LOCAL_NUMA_NUM] = { 0 };
-        int arrLen = 0;
-        int local;
-        int remote = l2Index + nrLocalNuma;
-
-        for (local = 0; local < LOCAL_NUMA_NUM; local++) {
-            uint32_t nrMig = sa->remoteNrPagesAfterMigrate[local][l2Index];
-            if (nrMig) {
-                remotePages += nrMig;
-                arr[arrLen++] = local;
-                SMAP_LOGGER_INFO("[nr_mig] pid=%d local=%d remote=%d pages=%u", attr->pid, local, remote, nrMig);
-            }
-        }
-
-        if (remotePages == wp->nrPages[remote]) {
-            continue;
-        }
-
-        double ratio;
-        uint32_t nrLeft = wp->nrPages[remote];
-        uint32_t nrChunk;
-
-        for (int i = 0; i < arrLen; i++) {
-            local = arr[i];
-            if (i == arrLen - 1) {
-                sa->remoteNrPagesAfterMigrate[local][l2Index] = nrLeft;
-                SMAP_LOGGER_INFO("[cali_mig] pid=%d local=%d remote=%d pages=%u", attr->pid, local, remote, nrLeft);
-            } else {
-                ratio = (double)sa->remoteNrPagesAfterMigrate[local][l2Index] / remotePages;
-                nrChunk = wp->nrPages[remote] * ratio;
-                sa->remoteNrPagesAfterMigrate[local][l2Index] = nrChunk;
-                nrLeft -= nrChunk;
-                SMAP_LOGGER_INFO("[cali_mig] pid=%d local=%d remote=%d pages=%u", attr->pid, local, remote, nrChunk);
-            }
+    EnvMutexLock(&numaInfo->lock);
+    for (int local = 0; local < nrLocalNuma && local < LOCAL_NUMA_NUM; local++) {
+        if (numaInfo->privateSize[local][remoteIndex] > 0) {
+            AddL1(&capacityLocalMask, local);
         }
     }
+    if (numaInfo->sharedSize[remoteIndex] > 0) {
+        capacityLocalMask |= managedLocalMask;
+    }
+    EnvMutexUnlock(&numaInfo->lock);
+    return capacityLocalMask;
+}
+
+static void DistributePairAccount(ProcessAttr *attr, int remoteIndex, uint32_t localMask,
+                                  const uint32_t weights[LOCAL_NUMA_NUM], uint64_t weightTotal,
+                                  uint32_t actualRemotePages)
+{
+    StrategyAttribute *sa = &attr->strategyAttr;
+    int nrLocalNuma = GetNrLocalNuma();
+    uint64_t allocated = 0;
+
+    for (int local = 0; local < nrLocalNuma && local < LOCAL_NUMA_NUM; local++) {
+        sa->remoteNrPagesAfterMigrate[local][remoteIndex] = 0;
+        if (!InL1(localMask, local)) {
+            continue;
+        }
+        uint32_t pages = (uint64_t)actualRemotePages * weights[local] / weightTotal;
+        sa->remoteNrPagesAfterMigrate[local][remoteIndex] = pages;
+        allocated += pages;
+    }
+
+    uint32_t remainder = actualRemotePages - allocated;
+    for (int local = 0; local < nrLocalNuma && local < LOCAL_NUMA_NUM && remainder > 0; local++) {
+        if (!InL1(localMask, local) || weights[local] == 0) {
+            continue;
+        }
+        sa->remoteNrPagesAfterMigrate[local][remoteIndex]++;
+        remainder--;
+    }
+}
+
+static void RebuildPairAccount(ProcessAttr *attr, int remoteIndex, uint32_t actualRemotePages)
+{
+    uint32_t allLocalMask = BuildAllLocalNumaMask();
+    uint32_t managedLocalMask = attr->managedLocalState.managedLocalMask & allLocalMask;
+    uint32_t capacityLocalMask = BuildPairCapacityLocalMask(attr, remoteIndex);
+    uint32_t rebuildLocalMask = managedLocalMask &
+                                (capacityLocalMask | attr->managedLocalState.residentLocalMask);
+
+    if (rebuildLocalMask == 0) {
+        rebuildLocalMask = managedLocalMask;
+    }
+    if (rebuildLocalMask == 0) {
+        rebuildLocalMask = allLocalMask;
+        SMAP_LOGGER_WARNING("Pid %d remote %d has %u resident pages but no managed local; "
+                            "rebuilding account on all online local nodes.",
+                            attr->pid, remoteIndex + GetNrLocalNuma(), actualRemotePages);
+    }
+
+    uint32_t weights[LOCAL_NUMA_NUM] = { 0 };
+    uint64_t weightTotal = 0;
+    int localCount = 0;
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int local = 0; local < nrLocalNuma && local < LOCAL_NUMA_NUM; local++) {
+        if (!InL1(rebuildLocalMask, local)) {
+            continue;
+        }
+        weights[local] = attr->walkPage.nrPages[local];
+        weightTotal += weights[local];
+        localCount++;
+    }
+
+    if (weightTotal == 0) {
+        for (int local = 0; local < nrLocalNuma && local < LOCAL_NUMA_NUM; local++) {
+            if (InL1(rebuildLocalMask, local)) {
+                weights[local] = 1;
+            }
+        }
+        weightTotal = localCount;
+    }
+
+    DistributePairAccount(attr, remoteIndex, rebuildLocalMask, weights, weightTotal,
+                          actualRemotePages);
+}
+
+/*
+ * Reconcile the explanatory Pair account with one consistent page snapshot.
+ * The caller must hold g_processManager.lock.
+ */
+void CalibratePairAccount(ProcessAttr *attr)
+{
+    if (!attr) {
+        return;
+    }
+
+    StrategyAttribute *sa = &attr->strategyAttr;
+    int nrLocalNuma = GetNrLocalNuma();
+    if (nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM) {
+        SMAP_LOGGER_ERROR("Cannot calibrate pid %d Pair account with %d local NUMA nodes.",
+                          attr->pid, nrLocalNuma);
+        return;
+    }
+
+    for (int remoteIndex = 0; remoteIndex < REMOTE_NUMA_NUM; remoteIndex++) {
+        int remoteNid = nrLocalNuma + remoteIndex;
+        if (remoteNid >= MAX_NODES) {
+            break;
+        }
+
+        uint64_t accountTotal = 0;
+        uint32_t accountLocalMask = 0;
+        uint32_t weights[LOCAL_NUMA_NUM] = { 0 };
+        for (int local = 0; local < nrLocalNuma; local++) {
+            uint32_t pages = sa->remoteNrPagesAfterMigrate[local][remoteIndex];
+            weights[local] = pages;
+            accountTotal += pages;
+            if (pages > 0) {
+                AddL1(&accountLocalMask, local);
+            }
+        }
+        for (int local = nrLocalNuma; local < LOCAL_NUMA_NUM; local++) {
+            sa->remoteNrPagesAfterMigrate[local][remoteIndex] = 0;
+        }
+
+        uint32_t actualRemotePages = attr->walkPage.nrPages[remoteNid];
+        if (accountTotal != actualRemotePages) {
+            if (actualRemotePages == 0) {
+                for (int local = 0; local < nrLocalNuma; local++) {
+                    sa->remoteNrPagesAfterMigrate[local][remoteIndex] = 0;
+                }
+            } else if (accountTotal > 0) {
+                DistributePairAccount(attr, remoteIndex, accountLocalMask, weights,
+                                      accountTotal, actualRemotePages);
+            } else {
+                RebuildPairAccount(attr, remoteIndex, actualRemotePages);
+            }
+            SMAP_LOGGER_INFO("Calibrated pid %d remote %d Pair account from %llu to %u pages.",
+                             attr->pid, remoteNid, accountTotal, actualRemotePages);
+        }
+
+        attr->managedLocalState.accountLocalMask[remoteIndex] =
+            BuildAccountLocalMask(attr, remoteIndex);
+        attr->managedLocalState.managedLocalMask |=
+            attr->managedLocalState.accountLocalMask[remoteIndex];
+    }
+    attr->managedLocalState.managedLocalMask &= BuildAllLocalNumaMask();
 }
 
 /**
@@ -2355,10 +2509,6 @@ static int FillPidData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
     }
 
     CalcActcStats(attr);
-
-    if (GetRunMode() == WATERLINE_MODE) {
-        CalibrateMigratePages(attr);
-    }
 
     return 0;
 }
@@ -3005,6 +3155,9 @@ int BuildAllPidData(void)
                         "Refresh pid %d managed local state failed: %d.",
                         current->pid, ret);
                     failedCount++;
+                }
+                if (GetRunMode() == WATERLINE_MODE) {
+                    CalibratePairAccount(current);
                 }
             }
         }

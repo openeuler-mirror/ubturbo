@@ -73,6 +73,8 @@
 #define MAX_CHECK_ALREADY_FORBIDDEN_TIME 100
 #define WAIT_CHECK_ALREADY_FORBIDDEN_PERIOD 200
 
+#define MANAGED_LOCAL_AFFINITY_REFRESH_INTERVAL_MS 30000U
+
 #define WAIT_PROC_STATE_PERIOD 100
 #define WAIT_PROC_STATE_MAX_RETRY 300
 #define MAX_NR_MIGRATE_NUMA_RANGE 50
@@ -252,7 +254,11 @@ typedef struct {
     uint32_t managedLocalMask;
     uint32_t observedLocalMask;
     uint32_t residentLocalMask;
+    uint32_t affinityLocalMask;
+    uint32_t affinityRefreshElapsedMs;
     uint32_t accountLocalMask[REMOTE_NUMA_NUM];
+    bool affinityValid;
+    bool affinitySampled;
 } ManagedLocalState;
 
 /* Runtime-only target after an aggregate remote target is split by local. */
@@ -540,6 +546,7 @@ void RemoveManagedProcess(int nr, pid_t *pidArr);
 int MigrateMemoryBack(pid_t pid, int srcNid, int desNid, uint64_t paStart, uint64_t paEnd);
 
 int BuildAllPidData(void);
+void CalibratePairAccount(ProcessAttr *attr);
 
 int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size);
 
