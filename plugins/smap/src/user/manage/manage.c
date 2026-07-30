@@ -619,23 +619,20 @@ int IsQemuTask(pid_t pid)
         SMAP_LOGGER_ERROR("Failed to open file, errno is %d.", errno);
         return -EINVAL;
     }
-    if (fgets(comm, sizeof(comm), file)) {
-        SMAP_LOGGER_DEBUG("Skip the first line of comm file.");
-    }
-    if (fgets(comm, sizeof(comm), file)) {
-        SMAP_LOGGER_INFO("After fgets comm file");
-        pclose(file);
+    bool foundLine = false;
+    while (fgets(comm, sizeof(comm), file)) {
+        foundLine = true;
         if ((strncmp(comm, VM_NAME_STR, PID_NAME_LEN) == 0) ||
             (strncmp(comm, VM_KVM_NAME_STR, PID_KVM_NAME_LEN) == 0)) {
-            ret = VM_TYPE;
-        } else {
-            ret = PROCESS_TYPE;
+            pclose(file);
+            return VM_TYPE;
         }
-        return ret;
     }
     SMAP_LOGGER_ERROR("Error occur in fgets comm file");
-
     (void)pclose(file);
+    if (foundLine) {
+        return PROCESS_TYPE;
+    }
     return -1;
 }
 

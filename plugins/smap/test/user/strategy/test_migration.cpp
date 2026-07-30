@@ -485,6 +485,16 @@ extern "C" int PerformMigration(struct ProcessManager *manager);
 extern "C" int HandleScene(struct ProcessManager *manager);
 extern "C" void UpdateScene(struct ProcessManager *manager);
 extern "C" void UpdatePeriodFromConfig(struct ProcessManager *manager);
+extern "C" int CollectNodeFreeSnapshot(bool hugePage, int nrLocalNuma, PairPlanContext *context);
+extern "C" int BuildPairPlans(const PairPlan inputs[], size_t inputCnt, PairPlanContext *context,
+                              PairPidBudget pidBudgets[], size_t budgetCnt, PairPlan plans[],
+                              size_t planMaxCnt, size_t *planCnt);
+extern "C" int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCnt,
+                                  PairPlanContext *context, PairPidBudget budgets[],
+                                  size_t budgetCnt);
+extern "C" int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt);
+extern "C" int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt);
+extern "C" int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt);
 TEST_F(MigrationTest, TestScanMigrateWorkFileConfOn)
 {
     int ret;
