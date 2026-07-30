@@ -1650,67 +1650,6 @@ static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 	return ret;
 }
 
-static int pte_pure_clear(pte_t *pte, unsigned long addr, unsigned long next,
-			  struct mm_walk *walk)
-{
-	struct pte_walk *pte_walk = walk->private;
-
-	if (is_swap_pte(*pte)) {
-		return 0;
-	}
-
-	if (pte_young(*pte)) {
-		pte_walk->flag = true;
-#ifdef KERNEL_VELINUX
-		__ptep_test_and_clear_young(pte);
-#else
-		__ptep_test_and_clear_young(NULL, 0, pte);
-#endif
-	}
-
-	return 0;
-}
-
-int pid_pte_mkold(struct access_pid *ap)
-{
-	int ret;
-	struct mm_struct *mm;
-	struct pte_walk pte_walk = {
-		.flag = false,
-	};
-
-	struct mm_walk_ops pte_tmp_ops = {
-		.pte_entry = pte_pure_clear,
-	};
-
-	mm = get_mm_by_pid(ap->pid);
-	if (IS_ERR(mm) || !mm || !mmget_not_zero(mm)) {
-		pr_err("bad mm of pid: %d\n", ap->pid);
-		return -EINVAL;
-	}
-
-	ret = mmap_read_lock_killable(mm);
-	if (ret) {
-		pr_err("unable to get mmap read lock, ret: %d\n", ret);
-		mmput(mm);
-		return ret;
-	}
-	ret = walk_page_range(mm, 0UL, ~0UL, &pte_tmp_ops, &pte_walk);
-	if (ret) {
-		pr_err("failed to walk page range, ret: %d\n", ret);
-		mmap_read_unlock(mm);
-		mmput(mm);
-		return ret;
-	}
-	mmap_read_unlock(mm);
-	if (pte_walk.flag) {
-		smap_flush_tlb_mm(mm);
-	}
-	mmput(mm);
-	pr_info("PTEs of pid %d are cleaned\n", ap->pid);
-	return 0;
-}
-
 int scan_accessed_bit_forward_vm(struct access_pid *ap, int page_size)
 {
 	if (page_size == g_pagesize_huge) {
