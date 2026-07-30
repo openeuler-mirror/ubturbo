@@ -3521,6 +3521,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsShrinksExistingPairs)
     PairRequestContext context = {};
     context.nrLocalNuma = 2;
     context.pageSizeKB = 4;
+    context.capacityLocalMask[0] = BIT(0) | BIT(1);
     PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
 
     ASSERT_EQ(0, result.ret);
@@ -3576,7 +3577,8 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsNoCapacityKeepsRequest)
     ASSERT_EQ(0, result.ret);
     EXPECT_EQ(50U, result.summary.requestedRemotePages[0]);
     EXPECT_EQ(50U, result.summary.effectiveRemotePages[0]);
-    EXPECT_EQ(20U, result.RemoteTotal(1));
+    EXPECT_EQ(0U, result.RemoteTotal(1));
+    EXPECT_EQ(50U, result.summary.unassignedRequestedPages[0]);
 }
 
 TEST_F(ManageTest, TestBuildPairRequestedTargetsNewLocalKeepsAccount)
@@ -3637,6 +3639,342 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsSkipsEmptyLocal)
     ASSERT_EQ(0, result.ret);
     EXPECT_EQ(20U, result.Find(0, 2));
     EXPECT_EQ(0U, result.Find(1, 2));
+}
+
+struct AllPairTargetResult {
+    int ret;
+    PairTarget targets[32];
+    size_t targetCnt;
+
+    uint32_t Requested(pid_t pid, int localNid, int remoteNid) const
+    {
+        for (size_t i = 0; i < targetCnt; i++) {
+            if (targets[i].pid == pid && targets[i].localNid == localNid && targets[i].remoteNid == remoteNid) {
+                return targets[i].requestedPages;
+            }
+        }
+        return 0;
+    }
+
+    uint32_t Target(pid_t pid, int localNid, int remoteNid) const
+    {
+        for (size_t i = 0; i < targetCnt; i++) {
+            if (targets[i].pid == pid && targets[i].localNid == localNid && targets[i].remoteNid == remoteNid) {
+                return targets[i].targetPages;
+            }
+        }
+        return 0;
+    }
+};
+
+static void InitPairTargetManager(ProcessManager *manager, int nrLocalNuma)
+{
+    *manager = {};
+    manager->nrLocalNuma = nrLocalNuma;
+    manager->tracking.pageSize = PAGESIZE_4K;
+    EnvMutexInit(&manager->lock);
+    EnvMutexInit(&manager->remoteNumaInfo.lock);
+}
+
+static void DestroyPairTargetManager(ProcessManager *manager)
+{
+    EnvMutexDestroy(&manager->remoteNumaInfo.lock);
+    EnvMutexDestroy(&manager->lock);
+}
+
+static void InitRatioPairProcess(ProcessAttr *attr, pid_t pid, int nrLocalNuma, uint32_t local0Pages,
+                                 uint32_t local1Pages, uint32_t ratio)
+{
+    *attr = {};
+    attr->pid = pid;
+    attr->scanType = NORMAL_SCAN;
+    attr->targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr->targetConfig.count = 1;
+    attr->targetConfig.targets[0] = {nrLocalNuma, ratio, 0};
+    attr->walkPage.nrPages[0] = local0Pages;
+    attr->walkPage.nrPages[1] = local1Pages;
+    if (local0Pages > 0) {
+        attr->managedLocalState.managedLocalMask |= BIT(0);
+        attr->managedLocalState.residentLocalMask |= BIT(0);
+    }
+    if (nrLocalNuma > 1 && local1Pages > 0) {
+        attr->managedLocalState.managedLocalMask |= BIT(1);
+        attr->managedLocalState.residentLocalMask |= BIT(1);
+    }
+}
+
+static AllPairTargetResult RunBuildAllPairTargets(ProcessManager *manager)
+{
+    AllPairTargetResult result = {};
+    result.ret = BuildAllPairTargets(manager, result.targets, sizeof(result.targets) / sizeof(result.targets[0]),
+                                     &result.targetCnt);
+    return result;
+}
+
+TEST_F(ManageTest, TestBuildAllPairTargetsPrivateFairAndStable)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+    manager.remoteNumaInfo.privateSize[0][0] = 1;
+
+    ProcessAttr lowPid;
+    ProcessAttr middlePid;
+    ProcessAttr highPid;
+    InitRatioPairProcess(&lowPid, 100, 1, 800, 0, 50);
+    InitRatioPairProcess(&middlePid, 200, 1, 800, 0, 50);
+    InitRatioPairProcess(&highPid, 300, 1, 800, 0, 50);
+    highPid.next = &lowPid;
+    lowPid.next = &middlePid;
+    manager.processes = &highPid;
+
+    AllPairTargetResult first = RunBuildAllPairTargets(&manager);
+    EXPECT_EQ(0, first.ret);
+    ASSERT_EQ(3U, first.targetCnt);
+    EXPECT_EQ(100, first.targets[0].pid);
+    EXPECT_EQ(200, first.targets[1].pid);
+    EXPECT_EQ(300, first.targets[2].pid);
+    EXPECT_EQ(400U, first.Requested(100, 0, 1));
+    EXPECT_EQ(86U, first.Target(100, 0, 1));
+    EXPECT_EQ(85U, first.Target(200, 0, 1));
+    EXPECT_EQ(85U, first.Target(300, 0, 1));
+
+    middlePid.next = &highPid;
+    highPid.next = &lowPid;
+    lowPid.next = nullptr;
+    manager.processes = &middlePid;
+    AllPairTargetResult second = RunBuildAllPairTargets(&manager);
+    EXPECT_EQ(first.Target(100, 0, 1), second.Target(100, 0, 1));
+    EXPECT_EQ(first.Target(200, 0, 1), second.Target(200, 0, 1));
+    EXPECT_EQ(first.Target(300, 0, 1), second.Target(300, 0, 1));
+    EXPECT_EQ(0U, manager.remoteNumaInfo.usedInfo[0].used);
+    EXPECT_EQ(0U, manager.remoteNumaInfo.privateUsedInfo[0][0].used);
+    EXPECT_EQ(256U, manager.remoteNumaInfo.usedInfo[0].size);
+    EXPECT_TRUE(manager.remoteNumaInfo.usedInfo[0].ifUsedFreshed);
+
+    manager.processes = nullptr;
+    DestroyPairTargetManager(&manager);
+}
+
+TEST_F(ManageTest, TestBuildAllPairTargetsSharedAcrossLocalsAndPids)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 2);
+    manager.remoteNumaInfo.sharedSize[0] = 2;
+
+    ProcessAttr firstPid;
+    ProcessAttr secondPid;
+    InitRatioPairProcess(&firstPid, 100, 2, 400, 400, 50);
+    InitRatioPairProcess(&secondPid, 200, 2, 400, 400, 50);
+    secondPid.next = &firstPid;
+    manager.processes = &secondPid;
+
+    AllPairTargetResult result = RunBuildAllPairTargets(&manager);
+    EXPECT_EQ(0, result.ret);
+    ASSERT_EQ(4U, result.targetCnt);
+    EXPECT_EQ(200U, result.Requested(100, 0, 2));
+    EXPECT_EQ(200U, result.Requested(100, 1, 2));
+    EXPECT_EQ(128U, result.Target(100, 0, 2));
+    EXPECT_EQ(128U, result.Target(100, 1, 2));
+    EXPECT_EQ(128U, result.Target(200, 0, 2));
+    EXPECT_EQ(128U, result.Target(200, 1, 2));
+    EXPECT_EQ(0U, manager.remoteNumaInfo.usedInfo[0].used);
+    EXPECT_EQ(0U, manager.remoteNumaInfo.privateUsedInfo[0][0].used);
+
+    manager.processes = nullptr;
+    DestroyPairTargetManager(&manager);
+}
+
+TEST_F(ManageTest, TestBuildAllPairTargetsNoModePriority)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+    manager.remoteNumaInfo.sharedSize[0] = 2;
+
+    ProcessAttr ratioPid;
+    ProcessAttr memsizePid;
+    InitRatioPairProcess(&ratioPid, 100, 1, 800, 0, 50);
+    InitRatioPairProcess(&memsizePid, 200, 1, 800, 0, 0);
+    memsizePid.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    memsizePid.targetConfig.targets[0].ratio = 0;
+    memsizePid.targetConfig.targets[0].memSizeKB = 1600;
+    memsizePid.next = &ratioPid;
+    manager.processes = &memsizePid;
+
+    AllPairTargetResult result = RunBuildAllPairTargets(&manager);
+    EXPECT_EQ(0, result.ret);
+    EXPECT_EQ(400U, result.Requested(100, 0, 1));
+    EXPECT_EQ(400U, result.Requested(200, 0, 1));
+    EXPECT_EQ(256U, result.Target(100, 0, 1));
+    EXPECT_EQ(256U, result.Target(200, 0, 1));
+
+    manager.processes = nullptr;
+    DestroyPairTargetManager(&manager);
+}
+
+TEST_F(ManageTest, TestBuildAllPairTargetsPrivateThenShared)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+    manager.remoteNumaInfo.privateSize[0][0] = 1;
+    manager.remoteNumaInfo.sharedSize[0] = 1;
+
+    ProcessAttr firstPid;
+    ProcessAttr secondPid;
+    InitRatioPairProcess(&firstPid, 100, 1, 800, 0, 50);
+    InitRatioPairProcess(&secondPid, 200, 1, 800, 0, 50);
+    secondPid.next = &firstPid;
+    manager.processes = &secondPid;
+
+    AllPairTargetResult result = RunBuildAllPairTargets(&manager);
+    EXPECT_EQ(0, result.ret);
+    EXPECT_EQ(256U, result.Target(100, 0, 1));
+    EXPECT_EQ(256U, result.Target(200, 0, 1));
+    EXPECT_EQ(0U, manager.remoteNumaInfo.privateUsedInfo[0][0].used);
+    EXPECT_EQ(0U, manager.remoteNumaInfo.usedInfo[0].used);
+    EXPECT_EQ(512U, manager.remoteNumaInfo.usedInfo[0].size);
+
+    manager.processes = nullptr;
+    DestroyPairTargetManager(&manager);
+}
+
+TEST_F(ManageTest, TestBuildAllPairTargetsKeepsResidentBaseline)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+    manager.remoteNumaInfo.privateSize[0][0] = 1;
+
+    ProcessAttr residentPid;
+    ProcessAttr newPid;
+    InitRatioPairProcess(&residentPid, 100, 1, 500, 0, 50);
+    residentPid.walkPage.nrPages[1] = 300;
+    residentPid.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 300;
+    residentPid.managedLocalState.accountLocalMask[0] = BIT(0);
+    InitRatioPairProcess(&newPid, 200, 1, 800, 0, 50);
+    newPid.next = &residentPid;
+    manager.processes = &newPid;
+
+    AllPairTargetResult result = RunBuildAllPairTargets(&manager);
+    EXPECT_EQ(0, result.ret);
+    EXPECT_EQ(400U, result.Requested(100, 0, 1));
+    EXPECT_EQ(256U, result.Target(100, 0, 1));
+    EXPECT_EQ(0U, result.Target(200, 0, 1));
+    EXPECT_EQ(300U, manager.remoteNumaInfo.usedInfo[0].used);
+    EXPECT_EQ(300U, manager.remoteNumaInfo.privateUsedInfo[0][0].used);
+    EXPECT_EQ(256U, manager.remoteNumaInfo.usedInfo[0].size);
+
+    manager.processes = nullptr;
+    DestroyPairTargetManager(&manager);
+}
+
+TEST_F(ManageTest, TestBuildAllPairTargetsCapacityRecovery)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+
+    ProcessAttr attr;
+    InitRatioPairProcess(&attr, 100, 1, 80, 0, 50);
+    attr.walkPage.nrPages[1] = 20;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 20;
+    attr.managedLocalState.accountLocalMask[0] = BIT(0);
+    manager.processes = &attr;
+
+    AllPairTargetResult noCapacity = RunBuildAllPairTargets(&manager);
+    EXPECT_EQ(0, noCapacity.ret);
+    EXPECT_EQ(0U, noCapacity.Requested(100, 0, 1));
+    EXPECT_EQ(0U, noCapacity.Target(100, 0, 1));
+    EXPECT_EQ(20U, manager.remoteNumaInfo.usedInfo[0].used);
+    EXPECT_EQ(0U, manager.remoteNumaInfo.usedInfo[0].size);
+
+    manager.remoteNumaInfo.privateSize[0][0] = 1;
+    AllPairTargetResult restored = RunBuildAllPairTargets(&manager);
+    EXPECT_EQ(0, restored.ret);
+    EXPECT_EQ(50U, restored.Requested(100, 0, 1));
+    EXPECT_EQ(50U, restored.Target(100, 0, 1));
+    EXPECT_EQ(20U, manager.remoteNumaInfo.usedInfo[0].used);
+    EXPECT_EQ(256U, manager.remoteNumaInfo.usedInfo[0].size);
+
+    manager.processes = nullptr;
+    DestroyPairTargetManager(&manager);
+}
+
+TEST_F(ManageTest, TestBuildAllPairTargetsReroutesRequestFromIneligibleAccount)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 2);
+    manager.remoteNumaInfo.privateSize[0][0] = 2;
+
+    ProcessAttr attr;
+    InitRatioPairProcess(&attr, 100, 2, 800, 0, 50);
+    attr.managedLocalState.managedLocalMask |= BIT(1);
+    attr.managedLocalState.accountLocalMask[0] = BIT(1);
+    attr.walkPage.nrPages[2] = 200;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 200;
+    manager.processes = &attr;
+
+    AllPairTargetResult result = RunBuildAllPairTargets(&manager);
+
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(500U, result.Requested(100, 0, 2));
+    EXPECT_EQ(500U, result.Target(100, 0, 2));
+    EXPECT_EQ(0U, result.Requested(100, 1, 2));
+    EXPECT_EQ(0U, result.Target(100, 1, 2));
+    EXPECT_EQ(200U, manager.remoteNumaInfo.usedInfo[0].used);
+    EXPECT_EQ(200U, manager.remoteNumaInfo.privateUsedInfo[1][0].used);
+
+    manager.processes = nullptr;
+    DestroyPairTargetManager(&manager);
+}
+
+TEST_F(ManageTest, TestBuildAllPairTargetsCapacityShrinkAndRestore)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+
+    ProcessAttr attr;
+    InitRatioPairProcess(&attr, 100, 1, 800, 0, 50);
+    manager.processes = &attr;
+
+    manager.remoteNumaInfo.privateSize[0][0] = 2;
+    AllPairTargetResult full = RunBuildAllPairTargets(&manager);
+    EXPECT_EQ(400U, full.Requested(100, 0, 1));
+    EXPECT_EQ(400U, full.Target(100, 0, 1));
+
+    manager.remoteNumaInfo.privateSize[0][0] = 1;
+    AllPairTargetResult shrunk = RunBuildAllPairTargets(&manager);
+    EXPECT_EQ(400U, shrunk.Requested(100, 0, 1));
+    EXPECT_EQ(256U, shrunk.Target(100, 0, 1));
+
+    manager.remoteNumaInfo.privateSize[0][0] = 2;
+    AllPairTargetResult restored = RunBuildAllPairTargets(&manager);
+    EXPECT_EQ(400U, restored.Requested(100, 0, 1));
+    EXPECT_EQ(400U, restored.Target(100, 0, 1));
+
+    manager.processes = nullptr;
+    DestroyPairTargetManager(&manager);
+}
+
+TEST_F(ManageTest, TestBuildAllPairTargetsFailureDoesNotPublishUsage)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+    manager.remoteNumaInfo.privateSize[0][0] = 1;
+    manager.remoteNumaInfo.usedInfo[0].used = 7;
+    manager.remoteNumaInfo.privateUsedInfo[0][0].used = 5;
+
+    ProcessAttr attr;
+    InitRatioPairProcess(&attr, 100, 1, 800, 0, 50);
+    manager.processes = &attr;
+
+    PairTarget target = {};
+    size_t targetCnt = 1;
+    int ret = BuildAllPairTargets(&manager, &target, 0, &targetCnt);
+    EXPECT_EQ(-ENOSPC, ret);
+    EXPECT_EQ(0U, targetCnt);
+    EXPECT_EQ(7U, manager.remoteNumaInfo.usedInfo[0].used);
+    EXPECT_EQ(5U, manager.remoteNumaInfo.privateUsedInfo[0][0].used);
+
+    manager.processes = nullptr;
+    DestroyPairTargetManager(&manager);
 }
 
 extern "C" void SetRunMode(RunMode runMode);

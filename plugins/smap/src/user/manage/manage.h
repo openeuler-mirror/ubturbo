@@ -33,6 +33,7 @@
 #endif
 #define MAX_4K_PROCESSES_CNT 300
 #define MAX_2M_PROCESSES_CNT 100
+#define MAX_PAIR_TARGET_COUNT (MAX_4K_PROCESSES_CNT * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM)
 #define MAX_THREADS 10
 #define MAX_RES_LEN 4
 #define PAGE_SHIFT 12
@@ -261,7 +262,7 @@ typedef struct {
     bool affinitySampled;
 } ManagedLocalState;
 
-/* Runtime-only target after an aggregate remote target is split by local. */
+/* Runtime-only assigned request and capacity-clipped target for one Pair. */
 typedef struct {
     pid_t pid;
     int localNid;
@@ -283,8 +284,16 @@ typedef struct {
 
 typedef struct {
     uint64_t managedTotalPages;
+    /* Original aggregate request derived from ProcessTargetConfig. */
     uint64_t requestedRemotePages[REMOTE_NUMA_NUM];
+    /* Aggregate request limited only by the process's managed pages. */
     uint64_t effectiveRemotePages[REMOTE_NUMA_NUM];
+    /*
+     * Portion of effectiveRemotePages that cannot currently be assigned to
+     * any eligible local -> remote Pair. The aggregate request remains in
+     * ProcessTargetConfig and can be assigned when Pair eligibility returns.
+     */
+    uint64_t unassignedRequestedPages[REMOTE_NUMA_NUM];
 } PairRequestSummary;
 
 /* Runtime-only migration decision for one local-to-remote pair. */
@@ -566,6 +575,7 @@ int BuildAllPidData(void);
 void CalibratePairAccount(ProcessAttr *attr);
 int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext *context, PairTarget targets[],
                               size_t targetCap, size_t *targetCnt, PairRequestSummary *summary);
+int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], size_t targetCap, size_t *targetCnt);
 
 int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size);
 
