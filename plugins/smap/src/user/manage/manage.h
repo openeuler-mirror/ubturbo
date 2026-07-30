@@ -270,6 +270,23 @@ typedef struct {
     uint32_t targetPages;
 } PairTarget;
 
+/*
+ * Explicit, immutable inputs used while deriving Pair requested targets.
+ * capacityLocalMask only identifies eligible pairs; it does not reserve or
+ * consume any private/shared capacity.
+ */
+typedef struct {
+    int nrLocalNuma;
+    uint64_t pageSizeKB;
+    uint32_t capacityLocalMask[REMOTE_NUMA_NUM];
+} PairRequestContext;
+
+typedef struct {
+    uint64_t managedTotalPages;
+    uint64_t requestedRemotePages[REMOTE_NUMA_NUM];
+    uint64_t effectiveRemotePages[REMOTE_NUMA_NUM];
+} PairRequestSummary;
+
 /* Runtime-only migration decision for one local-to-remote pair. */
 typedef struct {
     pid_t pid;
@@ -547,6 +564,8 @@ int MigrateMemoryBack(pid_t pid, int srcNid, int desNid, uint64_t paStart, uint6
 
 int BuildAllPidData(void);
 void CalibratePairAccount(ProcessAttr *attr);
+int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext *context, PairTarget targets[],
+                              size_t targetCap, size_t *targetCnt, PairRequestSummary *summary);
 
 int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size);
 

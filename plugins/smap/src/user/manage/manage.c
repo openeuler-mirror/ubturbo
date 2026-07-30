@@ -2399,6 +2399,411 @@ void CalibratePairAccount(ProcessAttr *attr)
     attr->managedLocalState.managedLocalMask &= BuildAllLocalNumaMask();
 }
 
+static uint64_t PairRequestMulDiv(uint64_t value, uint64_t weight, uint64_t total)
+{
+    if (total == 0) {
+        return 0;
+    }
+    return (uint64_t)(((unsigned __int128)value * weight) / total);
+}
+
+static void DistributePairRequestPages(uint64_t pages, const uint64_t weights[], int count, uint64_t allocation[])
+{
+    uint64_t weightTotal = 0;
+    for (int i = 0; i < count; i++) {
+        weightTotal += weights[i];
+    }
+    pages = MIN(pages, weightTotal);
+
+    uint64_t allocated = 0;
+    for (int i = 0; i < count; i++) {
+        allocation[i] = PairRequestMulDiv(pages, weights[i], weightTotal);
+        allocated += allocation[i];
+    }
+    for (int i = 0; i < count && allocated < pages; i++) {
+        if (allocation[i] >= weights[i]) {
+            continue;
+        }
+        allocation[i]++;
+        allocated++;
+    }
+}
+
+static int ValidatePairRequestInput(const ProcessAttr *attr, const PairRequestContext *context)
+{
+    if (!attr || !context || context->nrLocalNuma <= 0 || context->nrLocalNuma > LOCAL_NUMA_NUM ||
+        context->pageSizeKB == 0 || context->nrLocalNuma + REMOTE_NUMA_NUM > MAX_NODES) {
+        return -EINVAL;
+    }
+
+    const ProcessTargetConfig *config = &attr->targetConfig;
+    if (config->count > REMOTE_NUMA_NUM ||
+        (config->migrateMode != MIG_RATIO_MODE && config->migrateMode != MIG_MEMSIZE_MODE)) {
+        return -EINVAL;
+    }
+
+    bool remoteSeen[REMOTE_NUMA_NUM] = { false };
+    uint64_t totalRatio = 0;
+    for (uint32_t i = 0; i < config->count; i++) {
+        int remoteIndex;
+        if (RemoteNidToIndex(config->targets[i].remoteNid, context->nrLocalNuma, &remoteIndex) ||
+            remoteSeen[remoteIndex]) {
+            return -EINVAL;
+        }
+        remoteSeen[remoteIndex] = true;
+
+        if (config->migrateMode == MIG_RATIO_MODE) {
+            if (config->targets[i].ratio > HUNDRED) {
+                return -EINVAL;
+            }
+            totalRatio += config->targets[i].ratio;
+            continue;
+        }
+
+        if (config->targets[i].memSizeKB % context->pageSizeKB != 0 ||
+            config->targets[i].memSizeKB / context->pageSizeKB > UINT32_MAX) {
+            return -EINVAL;
+        }
+    }
+
+    if (config->migrateMode == MIG_RATIO_MODE && totalRatio > HUNDRED) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+static uint64_t BuildManagedTotalPages(const ProcessAttr *attr, int nrLocalNuma)
+{
+    uint64_t managedTotalPages = 0;
+    uint32_t managedLocalMask = attr->managedLocalState.managedLocalMask;
+
+    for (int local = 0; local < nrLocalNuma; local++) {
+        if (InL1(managedLocalMask, local)) {
+            managedTotalPages += attr->walkPage.nrPages[local];
+        }
+    }
+    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+        managedTotalPages += attr->walkPage.nrPages[nrLocalNuma + remote];
+    }
+    return managedTotalPages;
+}
+
+static void BuildRequestedRemotePages(const ProcessAttr *attr, const PairRequestContext *context,
+                                      PairRequestSummary *summary)
+{
+    const ProcessTargetConfig *config = &attr->targetConfig;
+
+    for (uint32_t i = 0; i < config->count; i++) {
+        int remoteIndex;
+        (void)RemoteNidToIndex(config->targets[i].remoteNid, context->nrLocalNuma, &remoteIndex);
+        if (config->migrateMode == MIG_RATIO_MODE) {
+            summary->requestedRemotePages[remoteIndex] =
+                PairRequestMulDiv(summary->managedTotalPages, config->targets[i].ratio, HUNDRED);
+        } else {
+            summary->requestedRemotePages[remoteIndex] = config->targets[i].memSizeKB / context->pageSizeKB;
+        }
+    }
+}
+
+static void BuildEffectiveRemotePages(const ProcessAttr *attr, const PairRequestContext *context,
+                                      PairRequestSummary *summary)
+{
+    uint64_t remainingDemand[REMOTE_NUMA_NUM] = { 0 };
+    uint64_t baselineTotal = 0;
+    uint64_t demandTotal = 0;
+
+    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+        int remoteNid = context->nrLocalNuma + remote;
+        uint64_t actualPages = attr->walkPage.nrPages[remoteNid];
+        uint64_t requestedPages = summary->requestedRemotePages[remote];
+        uint64_t baseline = MIN(actualPages, requestedPages);
+
+        summary->effectiveRemotePages[remote] = baseline;
+        remainingDemand[remote] = requestedPages - baseline;
+        baselineTotal += baseline;
+        demandTotal += remainingDemand[remote];
+    }
+
+    uint64_t availablePages = summary->managedTotalPages > baselineTotal ? summary->managedTotalPages - baselineTotal :
+                                                                           0;
+    uint64_t pagesToAllocate = MIN(availablePages, demandTotal);
+    uint64_t allocation[REMOTE_NUMA_NUM] = { 0 };
+    DistributePairRequestPages(pagesToAllocate, remainingDemand, REMOTE_NUMA_NUM, allocation);
+    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+        summary->effectiveRemotePages[remote] += allocation[remote];
+    }
+}
+
+static void PreservePairAccounts(const ProcessAttr *attr, const PairRequestContext *context,
+                                 const PairRequestSummary *summary,
+                                 uint64_t pairRequests[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM])
+{
+    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+        uint64_t accountTotal = 0;
+        uint64_t accounts[LOCAL_NUMA_NUM] = { 0 };
+        for (int local = 0; local < context->nrLocalNuma; local++) {
+            accounts[local] = attr->strategyAttr.remoteNrPagesAfterMigrate[local][remote];
+            accountTotal += accounts[local];
+        }
+
+        uint64_t target = summary->effectiveRemotePages[remote];
+        if (accountTotal <= target) {
+            for (int local = 0; local < context->nrLocalNuma; local++) {
+                pairRequests[local][remote] = attr->strategyAttr.remoteNrPagesAfterMigrate[local][remote];
+            }
+            continue;
+        }
+
+        uint64_t allocation[LOCAL_NUMA_NUM] = { 0 };
+        DistributePairRequestPages(target, accounts, context->nrLocalNuma, allocation);
+        for (int local = 0; local < context->nrLocalNuma; local++) {
+            pairRequests[local][remote] = allocation[local];
+        }
+    }
+}
+
+static void BuildLocalRemainingPages(const ProcessAttr *attr, const PairRequestContext *context,
+                                     uint64_t pairRequests[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
+                                     uint64_t remainingPages[LOCAL_NUMA_NUM])
+{
+    for (int local = 0; local < context->nrLocalNuma; local++) {
+        uint64_t allocatablePages = attr->walkPage.nrPages[local];
+        uint64_t requestedPages = 0;
+
+        for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+            allocatablePages += attr->strategyAttr.remoteNrPagesAfterMigrate[local][remote];
+            requestedPages += pairRequests[local][remote];
+        }
+        remainingPages[local] = allocatablePages > requestedPages ? allocatablePages - requestedPages : 0;
+    }
+}
+
+static uint32_t BuildActivePairMask(const ProcessAttr *attr, const PairRequestContext *context, int remote)
+{
+    uint32_t allLocalMask = (1U << context->nrLocalNuma) - 1U;
+
+    return attr->managedLocalState.managedLocalMask & attr->managedLocalState.residentLocalMask &
+           context->capacityLocalMask[remote] & allLocalMask;
+}
+
+static void AllocateRemotePairRequest(const ProcessAttr *attr, const PairRequestContext *context, int remote,
+                                      uint64_t requestedPages, uint64_t pairRequests[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
+                                      uint64_t remainingPages[LOCAL_NUMA_NUM])
+{
+    uint64_t currentPages = 0;
+    uint64_t weights[LOCAL_NUMA_NUM] = { 0 };
+    uint32_t activeMask = BuildActivePairMask(attr, context, remote);
+
+    for (int local = 0; local < context->nrLocalNuma; local++) {
+        currentPages += pairRequests[local][remote];
+        if (!InL1(activeMask, local) || attr->walkPage.nrPages[local] == 0 ||
+            pairRequests[local][remote] >= UINT32_MAX) {
+            continue;
+        }
+
+        uint64_t pairRoom = UINT32_MAX - pairRequests[local][remote];
+        weights[local] = MIN(remainingPages[local], pairRoom);
+    }
+
+    if (currentPages >= requestedPages) {
+        return;
+    }
+
+    uint64_t allocation[LOCAL_NUMA_NUM] = { 0 };
+    DistributePairRequestPages(requestedPages - currentPages, weights, context->nrLocalNuma, allocation);
+    for (int local = 0; local < context->nrLocalNuma; local++) {
+        pairRequests[local][remote] += allocation[local];
+        remainingPages[local] -= allocation[local];
+    }
+}
+
+enum {
+    PAIR_FLOW_SOURCE = 0,
+    PAIR_FLOW_LOCAL_BASE = 1,
+    PAIR_FLOW_REMOTE_BASE = PAIR_FLOW_LOCAL_BASE + LOCAL_NUMA_NUM,
+    PAIR_FLOW_SINK = PAIR_FLOW_REMOTE_BASE + REMOTE_NUMA_NUM,
+    PAIR_FLOW_NODE_COUNT,
+};
+
+static bool FindPairRequestAugmentingPath(uint64_t residual[PAIR_FLOW_NODE_COUNT][PAIR_FLOW_NODE_COUNT],
+                                          int parent[PAIR_FLOW_NODE_COUNT])
+{
+    bool visited[PAIR_FLOW_NODE_COUNT] = { false };
+    int queue[PAIR_FLOW_NODE_COUNT] = { 0 };
+    int head = 0;
+    int tail = 0;
+
+    parent[PAIR_FLOW_SOURCE] = -1;
+    visited[PAIR_FLOW_SOURCE] = true;
+    queue[tail++] = PAIR_FLOW_SOURCE;
+    while (head < tail) {
+        int current = queue[head++];
+        for (int next = 0; next < PAIR_FLOW_NODE_COUNT; next++) {
+            if (visited[next] || residual[current][next] == 0) {
+                continue;
+            }
+            parent[next] = current;
+            visited[next] = true;
+            if (next == PAIR_FLOW_SINK) {
+                return true;
+            }
+            queue[tail++] = next;
+        }
+    }
+    return false;
+}
+
+static void CompletePairRequestFlow(uint64_t residual[PAIR_FLOW_NODE_COUNT][PAIR_FLOW_NODE_COUNT])
+{
+    int parent[PAIR_FLOW_NODE_COUNT] = { 0 };
+
+    while (FindPairRequestAugmentingPath(residual, parent)) {
+        uint64_t augment = UINT64_MAX;
+        for (int node = PAIR_FLOW_SINK; node != PAIR_FLOW_SOURCE; node = parent[node]) {
+            augment = MIN(augment, residual[parent[node]][node]);
+        }
+        for (int node = PAIR_FLOW_SINK; node != PAIR_FLOW_SOURCE; node = parent[node]) {
+            int previous = parent[node];
+            residual[previous][node] -= augment;
+            residual[node][previous] += augment;
+        }
+    }
+}
+
+static int CompletePairRequestAllocation(const ProcessAttr *attr, const PairRequestContext *context,
+                                         const PairRequestSummary *summary,
+                                         uint64_t baseline[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
+                                         uint64_t pairRequests[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
+                                         uint64_t remainingPages[LOCAL_NUMA_NUM])
+{
+    uint64_t residual[PAIR_FLOW_NODE_COUNT][PAIR_FLOW_NODE_COUNT] = { 0 };
+    uint64_t remoteFlow[REMOTE_NUMA_NUM] = { 0 };
+
+    for (int local = 0; local < context->nrLocalNuma; local++) {
+        uint64_t localFlow = 0;
+        int localNode = PAIR_FLOW_LOCAL_BASE + local;
+        for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+            if (pairRequests[local][remote] < baseline[local][remote]) {
+                return -ERANGE;
+            }
+            uint64_t flow = pairRequests[local][remote] - baseline[local][remote];
+            uint32_t activeMask = BuildActivePairMask(attr, context, remote);
+            bool active = InL1(activeMask, local) && attr->walkPage.nrPages[local] > 0 &&
+                          baseline[local][remote] < UINT32_MAX;
+            if (flow > 0 && !active) {
+                return -ERANGE;
+            }
+            if (!active) {
+                continue;
+            }
+            int remoteNode = PAIR_FLOW_REMOTE_BASE + remote;
+            residual[localNode][remoteNode] = UINT32_MAX - pairRequests[local][remote];
+            residual[remoteNode][localNode] = flow;
+            localFlow += flow;
+            remoteFlow[remote] += flow;
+        }
+        residual[PAIR_FLOW_SOURCE][localNode] = remainingPages[local];
+        residual[localNode][PAIR_FLOW_SOURCE] = localFlow;
+    }
+
+    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+        uint64_t currentPages = 0;
+        for (int local = 0; local < context->nrLocalNuma; local++) {
+            currentPages += pairRequests[local][remote];
+        }
+        if (currentPages > summary->effectiveRemotePages[remote]) {
+            return -ERANGE;
+        }
+        int remoteNode = PAIR_FLOW_REMOTE_BASE + remote;
+        residual[remoteNode][PAIR_FLOW_SINK] = summary->effectiveRemotePages[remote] - currentPages;
+        residual[PAIR_FLOW_SINK][remoteNode] = remoteFlow[remote];
+    }
+
+    CompletePairRequestFlow(residual);
+
+    for (int local = 0; local < context->nrLocalNuma; local++) {
+        int localNode = PAIR_FLOW_LOCAL_BASE + local;
+        for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+            int remoteNode = PAIR_FLOW_REMOTE_BASE + remote;
+            pairRequests[local][remote] = baseline[local][remote] + residual[remoteNode][localNode];
+        }
+    }
+    return 0;
+}
+
+/*
+ * Derive per-Pair requested targets from one calibrated page/account snapshot.
+ * This function performs no I/O, locking, or global capacity consumption.
+ */
+int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext *context, PairTarget targets[],
+                              size_t targetCap, size_t *targetCnt, PairRequestSummary *summary)
+{
+    if (!targets || !targetCnt || !summary) {
+        return -EINVAL;
+    }
+    *targetCnt = 0;
+
+    int ret = ValidatePairRequestInput(attr, context);
+    if (ret) {
+        return ret;
+    }
+
+    PairRequestSummary result = { 0 };
+    result.managedTotalPages = BuildManagedTotalPages(attr, context->nrLocalNuma);
+    BuildRequestedRemotePages(attr, context, &result);
+    BuildEffectiveRemotePages(attr, context, &result);
+
+    uint64_t pairRequests[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    PreservePairAccounts(attr, context, &result, pairRequests);
+    uint64_t baseline[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    memcpy(baseline, pairRequests, sizeof(baseline));
+
+    uint64_t remainingPages[LOCAL_NUMA_NUM] = { 0 };
+    BuildLocalRemainingPages(attr, context, pairRequests, remainingPages);
+    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+        AllocateRemotePairRequest(attr, context, remote, result.effectiveRemotePages[remote], pairRequests,
+                                  remainingPages);
+    }
+    ret = CompletePairRequestAllocation(attr, context, &result, baseline, pairRequests, remainingPages);
+    if (ret) {
+        return ret;
+    }
+
+    size_t requiredCount = 0;
+    for (int local = 0; local < context->nrLocalNuma; local++) {
+        for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+            uint32_t account = attr->strategyAttr.remoteNrPagesAfterMigrate[local][remote];
+            if (account > 0 || pairRequests[local][remote] > 0) {
+                requiredCount++;
+            }
+        }
+    }
+    if (requiredCount > targetCap) {
+        return -ENOSPC;
+    }
+
+    size_t count = 0;
+    for (int local = 0; local < context->nrLocalNuma; local++) {
+        for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+            uint32_t account = attr->strategyAttr.remoteNrPagesAfterMigrate[local][remote];
+            if (account == 0 && pairRequests[local][remote] == 0) {
+                continue;
+            }
+            targets[count++] = (PairTarget){
+                .pid = attr->pid,
+                .localNid = local,
+                .remoteNid = context->nrLocalNuma + remote,
+                .requestedPages = (uint32_t)pairRequests[local][remote],
+                .targetPages = 0,
+            };
+        }
+    }
+
+    *summary = result;
+    *targetCnt = count;
+    return 0;
+}
+
 /**
  * DistributeActcData - 将读取的数据分配到各node的actcData
  * @attr: ProcessAttr结构体指针

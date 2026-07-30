@@ -3234,6 +3234,411 @@ TEST_F(ManageTest, TestCalibratePairAccountUsesEligibleCapacityPair)
     g_processManager.remoteNumaInfo.privateSize[1][0] = 0;
 }
 
+struct PairRequestResult {
+    int ret;
+    PairTarget targets[LOCAL_NUMA_NUM * REMOTE_NUMA_NUM];
+    PairRequestSummary summary;
+    size_t targetCnt;
+
+    uint32_t Find(int localNid, int remoteNid) const
+    {
+        for (size_t i = 0; i < targetCnt; i++) {
+            if (targets[i].localNid == localNid && targets[i].remoteNid == remoteNid) {
+                return targets[i].requestedPages;
+            }
+        }
+        return 0;
+    }
+
+    uint64_t RemoteTotal(int remoteNid) const
+    {
+        uint64_t total = 0;
+        for (size_t i = 0; i < targetCnt; i++) {
+            if (targets[i].remoteNid == remoteNid) {
+                total += targets[i].requestedPages;
+            }
+        }
+        return total;
+    }
+
+    uint64_t LocalTotal(int localNid) const
+    {
+        uint64_t total = 0;
+        for (size_t i = 0; i < targetCnt; i++) {
+            if (targets[i].localNid == localNid) {
+                total += targets[i].requestedPages;
+            }
+        }
+        return total;
+    }
+};
+
+static PairRequestResult RunBuildPairRequestedTargets(const ProcessAttr &attr, const PairRequestContext &context)
+{
+    PairRequestResult result = {};
+    result.ret = BuildPairRequestedTargets(&attr, &context, result.targets, LOCAL_NUMA_NUM * REMOTE_NUMA_NUM,
+                                           &result.targetCnt, &result.summary);
+    return result;
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsRatioOneByOne)
+{
+    ProcessAttr attr = {};
+    attr.pid = 100;
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = { 1, 50, 0 };
+    attr.managedLocalState.managedLocalMask = BIT(0);
+    attr.managedLocalState.residentLocalMask = BIT(0);
+    attr.managedLocalState.accountLocalMask[0] = BIT(0);
+    attr.walkPage.nrPages[0] = 80;
+    attr.walkPage.nrPages[1] = 20;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 20;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 1;
+    context.pageSizeKB = 4;
+    context.capacityLocalMask[0] = BIT(0);
+    PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(100U, result.summary.managedTotalPages);
+    EXPECT_EQ(50U, result.summary.requestedRemotePages[0]);
+    EXPECT_EQ(50U, result.summary.effectiveRemotePages[0]);
+    ASSERT_EQ(1U, result.targetCnt);
+    EXPECT_EQ(100, result.targets[0].pid);
+    EXPECT_EQ(0, result.targets[0].localNid);
+    EXPECT_EQ(1, result.targets[0].remoteNid);
+    EXPECT_EQ(50U, result.targets[0].requestedPages);
+    EXPECT_EQ(0U, result.targets[0].targetPages);
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsMemsizeOneByOne)
+{
+    ProcessAttr attr = {};
+    attr.pid = 107;
+    attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = { 1, 0, 160 };
+    attr.managedLocalState.managedLocalMask = BIT(0);
+    attr.managedLocalState.residentLocalMask = BIT(0);
+    attr.managedLocalState.accountLocalMask[0] = BIT(0);
+    attr.walkPage.nrPages[0] = 80;
+    attr.walkPage.nrPages[1] = 20;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 20;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 1;
+    context.pageSizeKB = 4;
+    context.capacityLocalMask[0] = BIT(0);
+    PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(40U, result.summary.requestedRemotePages[0]);
+    EXPECT_EQ(40U, result.summary.effectiveRemotePages[0]);
+    EXPECT_EQ(40U, result.Find(0, 1));
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsMemsizeTwoByOne)
+{
+    ProcessAttr attr = {};
+    attr.pid = 101;
+    attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = { 2, 0, 320 };
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.accountLocalMask[0] = BIT(0) | BIT(1);
+    attr.walkPage.nrPages[0] = 40;
+    attr.walkPage.nrPages[1] = 60;
+    attr.walkPage.nrPages[2] = 30;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 10;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 20;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 2;
+    context.pageSizeKB = 4;
+    context.capacityLocalMask[0] = BIT(0) | BIT(1);
+    PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(130U, result.summary.managedTotalPages);
+    EXPECT_EQ(80U, result.summary.requestedRemotePages[0]);
+    EXPECT_EQ(80U, result.summary.effectiveRemotePages[0]);
+    EXPECT_EQ(30U, result.Find(0, 2));
+    EXPECT_EQ(50U, result.Find(1, 2));
+    EXPECT_EQ(80U, result.RemoteTotal(2));
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsRatioTwoByOne)
+{
+    ProcessAttr attr = {};
+    attr.pid = 108;
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = { 2, 50, 0 };
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.accountLocalMask[0] = BIT(0) | BIT(1);
+    attr.walkPage.nrPages[0] = 40;
+    attr.walkPage.nrPages[1] = 60;
+    attr.walkPage.nrPages[2] = 30;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 10;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 20;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 2;
+    context.pageSizeKB = 4;
+    context.capacityLocalMask[0] = BIT(0) | BIT(1);
+    PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(65U, result.summary.requestedRemotePages[0]);
+    EXPECT_EQ(65U, result.summary.effectiveRemotePages[0]);
+    EXPECT_EQ(24U, result.Find(0, 2));
+    EXPECT_EQ(41U, result.Find(1, 2));
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsRatioTwoByTwo)
+{
+    ProcessAttr attr = {};
+    attr.pid = 102;
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.count = 2;
+    attr.targetConfig.targets[0] = { 2, 50, 0 };
+    attr.targetConfig.targets[1] = { 3, 25, 0 };
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.accountLocalMask[0] = BIT(0);
+    attr.managedLocalState.accountLocalMask[1] = BIT(1);
+    attr.walkPage.nrPages[0] = 60;
+    attr.walkPage.nrPages[1] = 40;
+    attr.walkPage.nrPages[2] = 20;
+    attr.walkPage.nrPages[3] = 10;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 20;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][1] = 10;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 2;
+    context.pageSizeKB = 4;
+    context.capacityLocalMask[0] = BIT(0) | BIT(1);
+    context.capacityLocalMask[1] = BIT(0) | BIT(1);
+    PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(130U, result.summary.managedTotalPages);
+    EXPECT_EQ(65U, result.summary.requestedRemotePages[0]);
+    EXPECT_EQ(32U, result.summary.requestedRemotePages[1]);
+    EXPECT_EQ(65U, result.RemoteTotal(2));
+    EXPECT_EQ(32U, result.RemoteTotal(3));
+    EXPECT_EQ(47U, result.Find(0, 2));
+    EXPECT_EQ(18U, result.Find(1, 2));
+    EXPECT_EQ(14U, result.Find(0, 3));
+    EXPECT_EQ(18U, result.Find(1, 3));
+    EXPECT_LE(result.LocalTotal(0), 80U);
+    EXPECT_LE(result.LocalTotal(1), 50U);
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsReroutesAsymmetricCandidates)
+{
+    ProcessAttr attr = {};
+    attr.pid = 111;
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.count = 2;
+    attr.targetConfig.targets[0] = { 2, 50, 0 };
+    attr.targetConfig.targets[1] = { 3, 50, 0 };
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
+    attr.walkPage.nrPages[0] = 100;
+    attr.walkPage.nrPages[1] = 100;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 2;
+    context.pageSizeKB = 4;
+    context.capacityLocalMask[0] = BIT(0) | BIT(1);
+    context.capacityLocalMask[1] = BIT(0);
+    PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(100U, result.summary.effectiveRemotePages[0]);
+    EXPECT_EQ(100U, result.summary.effectiveRemotePages[1]);
+    EXPECT_EQ(100U, result.RemoteTotal(2));
+    EXPECT_EQ(100U, result.RemoteTotal(3));
+    EXPECT_EQ(0U, result.Find(0, 2));
+    EXPECT_EQ(100U, result.Find(1, 2));
+    EXPECT_EQ(100U, result.Find(0, 3));
+    EXPECT_EQ(0U, result.Find(1, 3));
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsMemsizeTwoByTwoScales)
+{
+    ProcessAttr attr = {};
+    attr.pid = 103;
+    attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.count = 2;
+    attr.targetConfig.targets[0] = { 2, 0, 320 };
+    attr.targetConfig.targets[1] = { 3, 0, 320 };
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.accountLocalMask[0] = BIT(0);
+    attr.walkPage.nrPages[0] = 40;
+    attr.walkPage.nrPages[1] = 40;
+    attr.walkPage.nrPages[2] = 20;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 20;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 2;
+    context.pageSizeKB = 4;
+    context.capacityLocalMask[0] = BIT(0) | BIT(1);
+    context.capacityLocalMask[1] = BIT(0) | BIT(1);
+    PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(100U, result.summary.managedTotalPages);
+    EXPECT_EQ(80U, result.summary.requestedRemotePages[0]);
+    EXPECT_EQ(80U, result.summary.requestedRemotePages[1]);
+    EXPECT_EQ(55U, result.summary.effectiveRemotePages[0]);
+    EXPECT_EQ(45U, result.summary.effectiveRemotePages[1]);
+    EXPECT_EQ(55U, result.RemoteTotal(2));
+    EXPECT_EQ(45U, result.RemoteTotal(3));
+    EXPECT_LE(result.LocalTotal(0), 60U);
+    EXPECT_LE(result.LocalTotal(1), 40U);
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsShrinksExistingPairs)
+{
+    ProcessAttr attr = {};
+    attr.pid = 104;
+    attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = { 2, 0, 200 };
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.accountLocalMask[0] = BIT(0) | BIT(1);
+    attr.walkPage.nrPages[2] = 100;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 60;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 40;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 2;
+    context.pageSizeKB = 4;
+    PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(30U, result.Find(0, 2));
+    EXPECT_EQ(20U, result.Find(1, 2));
+    EXPECT_EQ(50U, result.RemoteTotal(2));
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsDeletedRemoteEmitsZeroPair)
+{
+    ProcessAttr attr = {};
+    attr.pid = 109;
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.count = 0;
+    attr.managedLocalState.managedLocalMask = BIT(0);
+    attr.managedLocalState.accountLocalMask[0] = BIT(0);
+    attr.walkPage.nrPages[1] = 25;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 25;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 1;
+    context.pageSizeKB = 4;
+    PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, result.ret);
+    ASSERT_EQ(1U, result.targetCnt);
+    EXPECT_EQ(0U, result.summary.requestedRemotePages[0]);
+    EXPECT_EQ(0U, result.summary.effectiveRemotePages[0]);
+    EXPECT_EQ(0U, result.targets[0].requestedPages);
+    EXPECT_EQ(0, result.targets[0].localNid);
+    EXPECT_EQ(1, result.targets[0].remoteNid);
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsNoCapacityKeepsRequest)
+{
+    ProcessAttr attr = {};
+    attr.pid = 110;
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = { 1, 50, 0 };
+    attr.managedLocalState.managedLocalMask = BIT(0);
+    attr.managedLocalState.residentLocalMask = BIT(0);
+    attr.managedLocalState.accountLocalMask[0] = BIT(0);
+    attr.walkPage.nrPages[0] = 80;
+    attr.walkPage.nrPages[1] = 20;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 20;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 1;
+    context.pageSizeKB = 4;
+    PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(50U, result.summary.requestedRemotePages[0]);
+    EXPECT_EQ(50U, result.summary.effectiveRemotePages[0]);
+    EXPECT_EQ(20U, result.RemoteTotal(1));
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsNewLocalKeepsAccount)
+{
+    ProcessAttr attr = {};
+    attr.pid = 105;
+    attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = { 2, 0, 240 };
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.accountLocalMask[0] = BIT(0);
+    attr.walkPage.nrPages[0] = 20;
+    attr.walkPage.nrPages[1] = 40;
+    attr.walkPage.nrPages[2] = 40;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 40;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 2;
+    context.pageSizeKB = 4;
+    context.capacityLocalMask[0] = BIT(0) | BIT(1);
+    PairRequestResult first = RunBuildPairRequestedTargets(attr, context);
+    PairRequestResult second = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, first.ret);
+    ASSERT_EQ(0, second.ret);
+    EXPECT_EQ(60U, first.RemoteTotal(2));
+    EXPECT_GE(first.Find(0, 2), 40U);
+    EXPECT_GT(first.Find(1, 2), 0U);
+    ASSERT_EQ(first.targetCnt, second.targetCnt);
+    EXPECT_EQ(first.summary.managedTotalPages, second.summary.managedTotalPages);
+    for (size_t i = 0; i < first.targetCnt; i++) {
+        EXPECT_EQ(first.targets[i].pid, second.targets[i].pid);
+        EXPECT_EQ(first.targets[i].localNid, second.targets[i].localNid);
+        EXPECT_EQ(first.targets[i].remoteNid, second.targets[i].remoteNid);
+        EXPECT_EQ(first.targets[i].requestedPages, second.targets[i].requestedPages);
+        EXPECT_EQ(first.targets[i].targetPages, second.targets[i].targetPages);
+    }
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsSkipsEmptyLocal)
+{
+    ProcessAttr attr = {};
+    attr.pid = 106;
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = { 2, 50, 0 };
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.residentLocalMask = BIT(0);
+    attr.walkPage.nrPages[0] = 40;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 2;
+    context.pageSizeKB = 4;
+    context.capacityLocalMask[0] = BIT(0) | BIT(1);
+    PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(20U, result.Find(0, 2));
+    EXPECT_EQ(0U, result.Find(1, 2));
+}
+
 extern "C" void SetRunMode(RunMode runMode);
 TEST_F(ManageTest, TestSetRunMode)
 {
