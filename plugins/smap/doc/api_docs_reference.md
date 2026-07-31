@@ -1087,7 +1087,7 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
 | name | IN/OUT | description |
 | --- | --- | --- |
 | pidArr | IN | 进程PID数组。 |
-| scanTime | IN | 扫描间隔，单位ms，必须为50的倍数，最大2000。 |
+| scanTime | IN | 扫描间隔，单位ms，最大2000。 |
 | duration | IN | 扫描持续时长，scanType为2时有效。 |
 | len | IN | 数组长度。 |
 | scanType | IN | 0：将进程设置为只扫描状态，1：将进程恢复为冷热扫描加迁移状态，2：表示进程设置为统计特定时长冷热信息状态。 |

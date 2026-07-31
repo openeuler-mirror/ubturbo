@@ -420,7 +420,7 @@ static void actc_data_update(int nid, u64 pa_index)
 
 	if (unlikely(!adev || pa_index >= adev->page_count))
 		return;
-	if (!adev->is_hist)
+	if (!adev->is_hist && adev->access_bit_actc_data[pa_index] < U8_MAX)
 		adev->access_bit_actc_data[pa_index]++;
 }
 
@@ -449,7 +449,7 @@ static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
 	if (unlikely(!adev || pa_index >= adev->page_count))
 		return;
 
-	if (!adev->is_hist)
+	if (!adev->is_hist && adev->access_bit_actc_data[pa_index] < U8_MAX)
 		adev->access_bit_actc_data[pa_index]++;
 }
 
