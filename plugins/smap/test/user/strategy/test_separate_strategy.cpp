@@ -264,16 +264,31 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuilds2x2NetMigration)
     }
 }
 
-TEST_F(SeparateStrategyTest, TestPairMigrationStrategyRejectsBidirectionalPair)
+TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuildsPairSwapAfterNetMigration)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    const uint16_t local0[] = {0, 1, 6};
+    const uint16_t remote2[] = {9, 8, 2};
+    BuildPairActcData(0, local0, 3, &process.scanAttr);
+    BuildPairActcData(2, remote2, 3, &process.scanAttr);
     initializeMigList(mlist);
-    process.strategyAttr.nrMigratePages[0][2] = 1;
-    process.strategyAttr.nrMigratePages[2][0] = 1;
+    process.strategyAttr.nrMigratePages[0][2] = 3;
+    process.strategyAttr.nrMigratePages[2][0] = 2;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
 
-    EXPECT_EQ(-EINVAL, PairMigrationStrategy(&process, mlist));
+    ASSERT_EQ(0, PairMigrationStrategy(&process, mlist));
+    ASSERT_EQ(3U, mlist[0][2].nr);
+    EXPECT_EQ(0U, mlist[0][2].addr[0]);
+    EXPECT_EQ(10001U, mlist[0][2].addr[1]);
+    EXPECT_EQ(20006U, mlist[0][2].addr[2]);
+    ASSERT_EQ(2U, mlist[2][0].nr);
+    EXPECT_EQ(2000009U, mlist[2][0].addr[0]);
+    EXPECT_EQ(2010008U, mlist[2][0].addr[1]);
+
+    FreeMlist(mlist);
+    free(process.scanAttr.actcData[0]);
+    free(process.scanAttr.actcData[2]);
 }
 
 TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteOnlyPromotes)

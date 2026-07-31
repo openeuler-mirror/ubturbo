@@ -482,23 +482,25 @@ int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][
     StrategyAttribute *strategy = &process->strategyAttr;
     for (int localNid = 0; localNid < nrLocalNuma; localNid++) {
         for (int remoteNid = nrLocalNuma; remoteNid < nrLocalNuma + REMOTE_NUMA_NUM; remoteNid++) {
-            uint32_t demotePages = strategy->nrMigratePages[localNid][remoteNid];
-            uint32_t promotePages = strategy->nrMigratePages[remoteNid][localNid];
-            if (demotePages > 0 && promotePages > 0) {
-                SMAP_LOGGER_ERROR("Pid %d pair %d-%d has bidirectional net migration.", process->pid, localNid,
-                                  remoteNid);
-                FreeMlist(mlist);
-                return -EINVAL;
-            }
-            if (demotePages > 0 && IsNodeForbidden(remoteNid)) {
-                SMAP_LOGGER_INFO("Pid %d pair %d-%d skips demote to disabled remote.", process->pid, localNid,
-                                 remoteNid);
+            uint32_t localToRemote = strategy->nrMigratePages[localNid][remoteNid];
+            uint32_t remoteToLocal = strategy->nrMigratePages[remoteNid][localNid];
+            uint32_t swapPages = MIN(localToRemote, remoteToLocal);
+            uint32_t demotePages = localToRemote - swapPages;
+            uint32_t promotePages = remoteToLocal - swapPages;
+            if (IsNodeForbidden(remoteNid)) {
+                if (localToRemote > 0) {
+                    SMAP_LOGGER_INFO("Pid %d pair %d-%d skips demote and swap to disabled remote.", process->pid,
+                                     localNid, remoteNid);
+                }
+                swapPages = 0;
                 demotePages = 0;
             }
 
-            int ret = BuildPairMlist(process, mlist, numaOffset, localNid, remoteNid, demotePages, SELECT_BOTTOM_K);
+            int ret = BuildPairMlist(process, mlist, numaOffset, localNid, remoteNid, demotePages + swapPages,
+                                     SELECT_BOTTOM_K);
             if (!ret) {
-                ret = BuildPairMlist(process, mlist, numaOffset, remoteNid, localNid, promotePages, SELECT_TOP_K);
+                ret = BuildPairMlist(process, mlist, numaOffset, remoteNid, localNid, promotePages + swapPages,
+                                     SELECT_TOP_K);
             }
             if (ret) {
                 SMAP_LOGGER_ERROR("Build pid %d pair %d-%d migration list failed: %d.", process->pid, localNid,

@@ -140,7 +140,7 @@ static int FindPairPidBudget(const PairPidBudget pidBudgets[], size_t pidBudgetC
 
 static bool IsPairPlanDirectionValid(const PairPlan *plan)
 {
-    if (plan->swapPages != 0 || (plan->demotePages > 0 && plan->promotePages > 0)) {
+    if (plan->demotePages > 0 && plan->promotePages > 0) {
         return false;
     }
     if (plan->targetPages > plan->actualPages) {
@@ -150,6 +150,147 @@ static bool IsPairPlanDirectionValid(const PairPlan *plan)
         return plan->demotePages == 0 && plan->promotePages <= plan->actualPages - plan->targetPages;
     }
     return plan->demotePages == 0 && plan->promotePages == 0;
+}
+
+static ProcessAttr *FindPairPlanProcessLocked(struct ProcessManager *manager, pid_t pid)
+{
+    for (ProcessAttr *process = manager->processes; process; process = process->next) {
+        if (process->pid == pid) {
+            return process;
+        }
+    }
+    return NULL;
+}
+
+static void ConsumeBucketPages(uint64_t buckets[FREQ_BUCKETS_SIZE], uint64_t pages, bool highestFirst)
+{
+    for (int step = 0; step < FREQ_BUCKETS_SIZE && pages > 0; step++) {
+        int bucket = highestFirst ? FREQ_BUCKETS_SIZE - 1 - step : step;
+        uint64_t consumed = MIN(buckets[bucket], pages);
+        buckets[bucket] -= consumed;
+        pages -= consumed;
+    }
+}
+
+static uint64_t CountPairSwapPages(const ProcessAttr *process, int localNid, int remoteNid, uint64_t localSelected,
+                                   uint64_t remoteSelected)
+{
+    if (!process->scanAttr.actcData[localNid] || !process->scanAttr.actcData[remoteNid] ||
+        process->scanAttr.actcLen[localNid] == 0 || process->scanAttr.actcLen[remoteNid] == 0) {
+        return 0;
+    }
+
+    uint64_t localBuckets[FREQ_BUCKETS_SIZE] = { 0 };
+    uint64_t remoteBuckets[FREQ_BUCKETS_SIZE] = { 0 };
+    for (int bucket = 0; bucket < FREQ_BUCKETS_SIZE; bucket++) {
+        localBuckets[bucket] = process->scanAttr.actCount[localNid].freqBuckets[bucket];
+        remoteBuckets[bucket] = process->scanAttr.actCount[remoteNid].freqBuckets[bucket];
+    }
+    /* Net migration selects local cold pages and remote hot pages first. */
+    ConsumeBucketPages(localBuckets, localSelected, false);
+    ConsumeBucketPages(remoteBuckets, remoteSelected, true);
+
+    uint64_t swappable = 0;
+    int localBucket = 0;
+    int remoteBucket = FREQ_BUCKETS_SIZE - 1;
+    while (localBucket < remoteBucket) {
+        while (localBucket < remoteBucket && localBuckets[localBucket] == 0) {
+            localBucket++;
+        }
+        while (localBucket < remoteBucket && remoteBuckets[remoteBucket] == 0) {
+            remoteBucket--;
+        }
+        if (localBucket >= remoteBucket) {
+            break;
+        }
+        uint64_t paired = MIN(localBuckets[localBucket], remoteBuckets[remoteBucket]);
+        swappable += paired;
+        localBuckets[localBucket] -= paired;
+        remoteBuckets[remoteBucket] -= paired;
+    }
+    return swappable;
+}
+
+static bool IsOnlyLocalForRemote(const PairPlan plans[], size_t planCnt, size_t current)
+{
+    const PairPlan *plan = &plans[current];
+    int activeLocalCnt = 0;
+    for (size_t i = 0; i < planCnt; i++) {
+        if (plans[i].pid != plan->pid || plans[i].remoteNid != plan->remoteNid ||
+            (plans[i].targetPages == 0 && plans[i].actualPages == 0 && plans[i].demotePages == 0 &&
+             plans[i].promotePages == 0)) {
+            continue;
+        }
+        activeLocalCnt++;
+    }
+    return activeLocalCnt == 1;
+}
+
+int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCnt, PairPlanContext *context,
+                       PairPidBudget pidBudgets[], size_t pidBudgetCnt)
+{
+    if (!manager || !context || planCnt > MAX_PAIR_TARGET_COUNT || pidBudgetCnt > MAX_4K_PROCESSES_CNT ||
+        (planCnt > 0 && (!plans || !pidBudgets || pidBudgetCnt == 0))) {
+        return -EINVAL;
+    }
+
+    EnvMutexLock(&manager->lock);
+    for (size_t i = 0; i < planCnt; i++) {
+        int budgetIndex = FindPairPidBudget(pidBudgets, pidBudgetCnt, plans[i].pid);
+        ProcessAttr *process = FindPairPlanProcessLocked(manager, plans[i].pid);
+        if (budgetIndex < 0 || !process || process->groupPolicy.enabled || plans[i].localNid < 0 ||
+            plans[i].localNid >= context->nrLocalNuma || plans[i].remoteNid < context->nrLocalNuma ||
+            plans[i].remoteNid >= MAX_NODES || !IsPairPlanDirectionValid(&plans[i]) ||
+            pidBudgets[budgetIndex].plannedPages > pidBudgets[budgetIndex].maxMigratePages) {
+            EnvMutexUnlock(&manager->lock);
+            return -EINVAL;
+        }
+    }
+
+    pid_t currentPid = -1;
+    uint64_t selectedFrom[MAX_NODES] = { 0 };
+    for (size_t i = 0; i < planCnt; i++) {
+        PairPlan *plan = &plans[i];
+        ProcessAttr *process = FindPairPlanProcessLocked(manager, plan->pid);
+        int budgetIndex = FindPairPidBudget(pidBudgets, pidBudgetCnt, plan->pid);
+        PairPidBudget *budget = &pidBudgets[budgetIndex];
+        plan->swapPages = 0;
+
+        if (currentPid != plan->pid) {
+            currentPid = plan->pid;
+            memset(selectedFrom, 0, sizeof(selectedFrom));
+            for (size_t j = 0; j < planCnt; j++) {
+                if (plans[j].pid == currentPid) {
+                    selectedFrom[plans[j].localNid] += plans[j].demotePages;
+                    selectedFrom[plans[j].remoteNid] += plans[j].promotePages;
+                }
+            }
+        }
+        if (!process->enableSwap || IsNodeForbidden(plan->remoteNid) || !IsOnlyLocalForRemote(plans, planCnt, i) ||
+            (plan->targetPages == 0 && plan->demotePages == 0 && plan->promotePages == 0)) {
+            continue;
+        }
+
+        uint64_t freePages = context->freePages[plan->localNid];
+        uint64_t reservePages = context->safetyReservePages[plan->localNid];
+        uint64_t safeCapacity = freePages > reservePages ? freePages - reservePages : 0;
+        uint64_t localFree = safeCapacity > context->plannedPages[plan->localNid] ?
+                                 safeCapacity - context->plannedPages[plan->localNid] :
+                                 0;
+        uint64_t pidRemaining = budget->maxMigratePages - budget->plannedPages;
+        uint64_t swapPages = CountPairSwapPages(process, plan->localNid, plan->remoteNid, selectedFrom[plan->localNid],
+                                                selectedFrom[plan->remoteNid]);
+        swapPages = MIN(swapPages, localFree);
+        swapPages = MIN(swapPages, pidRemaining / 2);
+        swapPages = MIN(swapPages, UINT32_MAX);
+        plan->swapPages = (uint32_t)swapPages;
+        selectedFrom[plan->localNid] += swapPages;
+        selectedFrom[plan->remoteNid] += swapPages;
+        context->plannedPages[plan->localNid] += swapPages;
+        budget->plannedPages += swapPages * 2;
+    }
+    EnvMutexUnlock(&manager->lock);
+    return 0;
 }
 
 int BuildPairPlans(const PairPlan inputs[], size_t inputCnt, PairPlanContext *context, PairPidBudget pidBudgets[],
@@ -334,8 +475,12 @@ int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_
             goto OUT;
         }
         stage->pairSeen[plan->localNid][plan->remoteIndex] = true;
-        stage->nrMigratePages[plan->localNid][plan->remoteNid] = plan->demotePages;
-        stage->nrMigratePages[plan->remoteNid][plan->localNid] = plan->promotePages;
+        if (plan->demotePages > UINT32_MAX - plan->swapPages || plan->promotePages > UINT32_MAX - plan->swapPages) {
+            ret = -EOVERFLOW;
+            goto OUT;
+        }
+        stage->nrMigratePages[plan->localNid][plan->remoteNid] = plan->demotePages + plan->swapPages;
+        stage->nrMigratePages[plan->remoteNid][plan->localNid] = plan->promotePages + plan->swapPages;
     }
 
     for (size_t i = 0; i < stageCnt; i++) {
@@ -387,20 +532,23 @@ int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t p
                                      &pidBudgetCnt);
     }
     if (!ret) {
-    for (size_t i = 0; i < inputCnt; i++) {
-        if (IsNodeForbidden(inputs[i].remoteNid)) {
-            /*
+        for (size_t i = 0; i < inputCnt; i++) {
+            if (IsNodeForbidden(inputs[i].remoteNid)) {
+                /*
 		 * A disabled remote cannot receive new pages, but its current
 		 * residency remains available for promotion back to local.
 		 */
-            inputs[i].targetPages = 0;
+                inputs[i].targetPages = 0;
+            }
         }
-    }
     }
     size_t stagedPlanCnt = 0;
     if (!ret) {
         ret =
             BuildPairPlans(inputs, inputCnt, &context, pidBudgets, pidBudgetCnt, stagedPlans, planCap, &stagedPlanCnt);
+    }
+    if (!ret) {
+        ret = BuildPairSwapPlans(manager, stagedPlans, stagedPlanCnt, &context, pidBudgets, pidBudgetCnt);
     }
     if (!ret) {
         ret = ApplyPairPlans(manager, stagedPlans, stagedPlanCnt);
