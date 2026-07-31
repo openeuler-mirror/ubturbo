@@ -38,8 +38,7 @@ extern "C" void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
 
 class ScopedMigrationPeriod {
 public:
-    explicit ScopedMigrationPeriod(uint32_t period)
-        : previous_(g_processManager.threadCtx[0]), context_()
+    explicit ScopedMigrationPeriod(uint32_t period) : previous_(g_processManager.threadCtx[0]), context_()
     {
         context_.period = period;
         g_processManager.threadCtx[0] = &context_;
@@ -218,15 +217,12 @@ TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicExpansion)
     g_processManager.nrLocalNuma = 4;
     CPU_ZERO(&g_fake_cpu_mask);
     CPU_SET(1, &g_fake_cpu_mask);
-    MOCKER(sched_getaffinity)
-        .expects(once())
-        .will(invoke(fake_sched_getaffinity));
+    MOCKER(sched_getaffinity).expects(once()).will(invoke(fake_sched_getaffinity));
     MOCKER(GetNodeFromCpu).expects(once()).will(returnValue(2));
 
     EXPECT_EQ(0, RefreshManagedLocalState(&attr, false));
     EXPECT_EQ(BIT(2), attr.managedLocalState.observedLocalMask);
-    EXPECT_EQ(BIT(0) | BIT(1) | BIT(2),
-              attr.managedLocalState.managedLocalMask);
+    EXPECT_EQ(BIT(0) | BIT(1) | BIT(2), attr.managedLocalState.managedLocalMask);
 }
 
 TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicUsesCachedAffinity)
@@ -263,9 +259,7 @@ TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicRefreshesDueAffinity)
     ScopedMigrationPeriod refreshPeriod(DEFAULT_MIGRATE_PERIOD);
     CPU_ZERO(&g_fake_cpu_mask);
     CPU_SET(1, &g_fake_cpu_mask);
-    MOCKER(sched_getaffinity)
-        .expects(once())
-        .will(invoke(fake_sched_getaffinity));
+    MOCKER(sched_getaffinity).expects(once()).will(invoke(fake_sched_getaffinity));
     MOCKER(GetNodeFromCpu).expects(once()).will(returnValue(3));
 
     EXPECT_EQ(0, RefreshManagedLocalState(&attr, false));
@@ -322,9 +316,7 @@ TEST_F(ManageTest, TestRefreshManagedLocalStateFullReplacementShrinks)
     g_processManager.nrLocalNuma = 4;
     CPU_ZERO(&g_fake_cpu_mask);
     CPU_SET(1, &g_fake_cpu_mask);
-    MOCKER(sched_getaffinity)
-        .expects(once())
-        .will(invoke(fake_sched_getaffinity));
+    MOCKER(sched_getaffinity).expects(once()).will(invoke(fake_sched_getaffinity));
     MOCKER(GetNodeFromCpu).expects(once()).will(returnValue(0));
 
     EXPECT_EQ(0, RefreshManagedLocalState(&attr, true));
@@ -341,9 +333,7 @@ TEST_F(ManageTest, TestRefreshManagedLocalStateKeepsAccountLocal)
     g_processManager.nrLocalNuma = 4;
     CPU_ZERO(&g_fake_cpu_mask);
     CPU_SET(1, &g_fake_cpu_mask);
-    MOCKER(sched_getaffinity)
-        .expects(once())
-        .will(invoke(fake_sched_getaffinity));
+    MOCKER(sched_getaffinity).expects(once()).will(invoke(fake_sched_getaffinity));
     MOCKER(GetNodeFromCpu).expects(once()).will(returnValue(0));
 
     EXPECT_EQ(0, RefreshManagedLocalState(&attr, true));
@@ -362,13 +352,11 @@ TEST_F(ManageTest, TestBuildManagedTrackingNodes)
     attr.targetConfig.count = 1;
     attr.targetConfig.targets[0] = {5, 25, 0};
 
-    EXPECT_EQ(BIT(0) | BIT(2) | BIT(4) | BIT(5) | BIT(6),
-              BuildManagedTrackingNodes(&attr));
+    EXPECT_EQ(BIT(0) | BIT(2) | BIT(4) | BIT(5) | BIT(6), BuildManagedTrackingNodes(&attr));
     EXPECT_EQ(0U, BuildManagedTrackingNodes(nullptr));
 }
 
-static int RefreshPeriodicManagedLocalCandidate(ProcessAttr *attr,
-                                                bool fullReplacement)
+static int RefreshPeriodicManagedLocalCandidate(ProcessAttr *attr, bool fullReplacement)
 {
     EXPECT_FALSE(fullReplacement);
     attr->managedLocalState.managedLocalMask = BIT(0) | BIT(2);
@@ -385,8 +373,7 @@ static int RefreshUnchangedManagedLocalCandidate(ProcessAttr *attr, bool fullRep
     return 0;
 }
 
-static int CheckManagedTrackingPayload(int len,
-                                       struct AccessAddPidPayload *payload)
+static int CheckManagedTrackingPayload(int len, struct AccessAddPidPayload *payload)
 {
     EXPECT_EQ(1, len);
     EXPECT_EQ(123, payload[0].pid);
@@ -406,12 +393,8 @@ TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopePublishesAfterTracking)
     attr.numaAttr.numaNodes = BIT(0) | BIT(4);
     attr.managedLocalState.managedLocalMask = BIT(0);
 
-    MOCKER(RefreshManagedLocalState)
-        .expects(once())
-        .will(invoke(RefreshPeriodicManagedLocalCandidate));
-    MOCKER(AccessIoctlAddPid)
-        .expects(once())
-        .will(invoke(CheckManagedTrackingPayload));
+    MOCKER(RefreshManagedLocalState).expects(once()).will(invoke(RefreshPeriodicManagedLocalCandidate));
+    MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckManagedTrackingPayload));
 
     EXPECT_EQ(0, RefreshManagedLocalTrackingScope(&attr));
     EXPECT_EQ(BIT(0) | BIT(2), attr.managedLocalState.managedLocalMask);
@@ -605,7 +588,9 @@ TEST_F(ManageTest, TestPidIsValid)
 {
     bool ret;
 
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(0));
     MOCKER(access).stubs().will(returnValue(0));
     ret = PidIsValid(1);
     EXPECT_EQ(ret, true);
@@ -633,7 +618,9 @@ TEST_F(ManageTest, TestIsQemuTaskPath)
     EXPECT_EQ(-EINVAL, ret);
 
     GlobalMockObject::verify();
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(0));
     MOCKER(fopen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
     ret = IsQemuTask(1);
     EXPECT_EQ(-1, ret);
@@ -643,7 +630,9 @@ TEST_F(ManageTest, TestIsQemuTaskFile)
 {
     int ret;
 
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(0));
     static FILE fake_file;
     MOCKER(fopen).stubs().will(returnValue(&fake_file));
     MOCKER(fgets).stubs().will(returnValue(static_cast<char *>(nullptr)));
@@ -652,7 +641,9 @@ TEST_F(ManageTest, TestIsQemuTaskFile)
     EXPECT_EQ(-1, ret);
 
     GlobalMockObject::verify();
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(0));
     MOCKER(fopen).stubs().will(returnValue(&fake_file));
     char buf[] = "1";
     MOCKER(fgets).stubs().will(returnValue(&buf[0]));
@@ -765,8 +756,8 @@ TEST_F(ManageTest, TestGetProcessAttr)
 extern "C" ProcessAttr *GetProcessAttrLocked(pid_t pid);
 TEST_F(ManageTest, TestGetProcessAttrLocked)
 {
-    ProcessAttr pid1 = { .pid = 1 };
-    ProcessAttr pid2 = { .pid = 2, .next = &pid1 };
+    ProcessAttr pid1 = {.pid = 1};
+    ProcessAttr pid2 = {.pid = 2, .next = &pid1};
     g_processManager.processes = &pid2;
     ProcessAttr *ret = GetProcessAttrLocked(pid1.pid);
     EXPECT_EQ(pid1.pid, ret->pid);
@@ -875,12 +866,8 @@ TEST_F(ManageTest, TestSetProcessConfig)
     param.numaParam[0].nid = 4;
     param.numaParam[0].ratio = 50;
     attr.numaAttr.numaNodes = 1;
-    MOCKER(SetLocalNumaByCpu)
-        .expects(once())
-        .will(invoke(AddAffinityLocalForTest));
-    MOCKER(GetProcessNumaMapsObservation)
-        .expects(once())
-        .will(invoke(AddEmptyCandidateResidentForTest));
+    MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddEmptyCandidateResidentForTest));
     int ret = SetProcessConfig(&attr, &param);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(attr.pid, 1);
@@ -903,7 +890,7 @@ TEST_F(ManageTest, TestOpenNumaMaps)
 extern "C" int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge);
 TEST_F(ManageTest, TestGetPidNumaPagesFromNumaMapsOpenFailure)
 {
-    uint64_t numaPages[MAX_NODES] = { 0 };
+    uint64_t numaPages[MAX_NODES] = {0};
     MOCKER(OpenNumaMaps).expects(once()).will(returnValue(static_cast<FILE *>(nullptr)));
     int ret = GetPidNumaPagesFromNumaMaps(1234, numaPages, false);
     EXPECT_EQ(-EINVAL, ret);
@@ -1197,8 +1184,7 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
     EXPECT_NE(nullptr, g_processManager.processes);
     EXPECT_EQ(DEFAULT_SCAN_PERIOD,
-	      g_processManager.processes
-		      ->scanTime); // 首次扫描使用DEFAULT_SCAN_PERIOD
+              g_processManager.processes->scanTime); // 首次扫描使用DEFAULT_SCAN_PERIOD
     EXPECT_EQ(param.duration, g_processManager.processes->duration);
     EXPECT_EQ(50, g_processManager.processes->initLocalMemRatio);
     EXPECT_EQ(0x11, g_processManager.processes->numaAttr.numaNodes);
@@ -1464,7 +1450,7 @@ TEST_F(ManageTest, TestDistributeActcData)
 
 TEST_F(ManageTest, TestCheckAndRemoveInvalidProcess)
 {
-    ProcessAttr attr = { .pid = 1025 };
+    ProcessAttr attr = {.pid = 1025};
     EnvMutexInit(&g_processManager.lock);
     g_processManager.processes = &attr;
     g_processManager.nr[VM_TYPE] = 2;
@@ -1509,7 +1495,7 @@ TEST_F(ManageTest, TestRemoveManagedProcessInvalidPid)
 
     g_processManager.processes = &mockProcess;
     g_processManager.nr[PROCESS_TYPE] = 1;
-    pid_t pidArr[1] = { 1 };
+    pid_t pidArr[1] = {1};
 
     MOCKER(GetPidType).stubs().will(returnValue(PROCESS_TYPE));
     RemoveManagedProcess(1, pidArr);
@@ -1523,7 +1509,7 @@ TEST_F(ManageTest, TestRemoveManagedProcessValidPid)
     mockProcess.pid = pid;
     mockProcess.next = nullptr;
     g_processManager.processes = &mockProcess;
-    pid_t pidArr[1] = { pid };
+    pid_t pidArr[1] = {pid};
     int ret;
 
     g_processManager.nr[VM_TYPE] = 1;
@@ -1850,7 +1836,7 @@ extern "C" void CalRemoteNumaAllocPerPid(int i, int j, uint32_t tmpNrPagesToUse,
                                          uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]);
 TEST_F(ManageTest, TestCalRemoteNumaAllocPerPid)
 {
-    uint32_t tmp[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    uint32_t tmp[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = {0};
 
     ProcessAttr attr = {};
     g_processManager.processes = &attr;
@@ -2076,8 +2062,8 @@ extern "C" int IsPidArrInState(pid_t *pidArr, int len, enum ProcessState state);
 extern "C" int IsPidArrayStateChangeReady(pid_t *pidArr, int len, int enable);
 TEST_F(ManageTest, TestIsPidArrInStateInvalid)
 {
-    ProcessAttr pid = { .state = PROC_IDLE };
-    pid_t pidArr[] = { 1, 2 };
+    ProcessAttr pid = {.state = PROC_IDLE};
+    pid_t pidArr[] = {1, 2};
 
     int ret = IsPidArrayStateChangeReady(nullptr, 2, 1);
     EXPECT_EQ(-EINVAL, ret);
@@ -2088,9 +2074,9 @@ TEST_F(ManageTest, TestIsPidArrInStateInvalid)
 
 TEST_F(ManageTest, TestIsPidArrInStateNormal)
 {
-    ProcessAttr pid1 = { .state = PROC_MIGRATE };
-    ProcessAttr pid2 = { .state = PROC_MOVE };
-    pid_t pidArr[] = { 1, 2 };
+    ProcessAttr pid1 = {.state = PROC_MIGRATE};
+    ProcessAttr pid2 = {.state = PROC_MOVE};
+    pid_t pidArr[] = {1, 2};
 
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&pid1)).then(returnValue(&pid2));
     int ret = IsPidArrayStateChangeReady(pidArr, 2, 0);
@@ -2105,9 +2091,9 @@ TEST_F(ManageTest, TestIsPidArrInStateNormal)
 
 TEST_F(ManageTest, TestIsPidArrInState)
 {
-    ProcessAttr pid1 = { .state = PROC_MOVE };
-    ProcessAttr pid2 = { .state = PROC_MOVE };
-    pid_t pidArr[] = { 1, 2 };
+    ProcessAttr pid1 = {.state = PROC_MOVE};
+    ProcessAttr pid2 = {.state = PROC_MOVE};
+    pid_t pidArr[] = {1, 2};
 
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&pid1)).then(returnValue(&pid2));
     int ret = IsPidArrInState(pidArr, 2, PROC_MOVE);
@@ -2123,9 +2109,9 @@ TEST_F(ManageTest, TestIsPidArrInState)
 extern "C" void SetPidArrState(pid_t *pidArr, int len, enum ProcessState state, int enable);
 TEST_F(ManageTest, TestSetPidArrState)
 {
-    ProcessAttr pid1 = { .state = PROC_IDLE };
-    ProcessAttr pid2 = { .state = PROC_IDLE };
-    pid_t pidArr[] = { 1, 2 };
+    ProcessAttr pid1 = {.state = PROC_IDLE};
+    ProcessAttr pid2 = {.state = PROC_IDLE};
+    pid_t pidArr[] = {1, 2};
 
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&pid1)).then(returnValue(&pid2));
     SetPidArrState(pidArr, 2, PROC_MOVE, 0);
@@ -2220,7 +2206,7 @@ TEST_F(ManageTest, TestChangePidRemoteByPid)
 
 TEST_F(ManageTest, TestEnableProcessMigrateDisableInvalid)
 {
-    pid_t pidArr[] = { 1 };
+    pid_t pidArr[] = {1};
 
     EnvMutexInit(&g_processManager.lock);
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(-EINVAL));
@@ -2230,7 +2216,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateDisableInvalid)
 
 TEST_F(ManageTest, TestEnableProcessMigrateDisableRetryFail)
 {
-    pid_t pidArr[] = { 1 };
+    pid_t pidArr[] = {1};
 
     EnvMutexInit(&g_processManager.lock);
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(0));
@@ -2240,7 +2226,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateDisableRetryFail)
 
 TEST_F(ManageTest, TestEnableProcessMigrateDisableRetrySuccess)
 {
-    pid_t pidArr[] = { 1 };
+    pid_t pidArr[] = {1};
 
     EnvMutexInit(&g_processManager.lock);
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(0)).then(returnValue(1));
@@ -2252,7 +2238,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateDisableRetrySuccess)
 
 TEST_F(ManageTest, TestEnableProcessMigrateDisableNormal)
 {
-    pid_t pidArr[] = { 1 };
+    pid_t pidArr[] = {1};
 
     EnvMutexInit(&g_processManager.lock);
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(1));
@@ -2264,7 +2250,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateDisableNormal)
 
 TEST_F(ManageTest, TestEnableProcessMigrateEnableNormal)
 {
-    pid_t pidArr[] = { 1 };
+    pid_t pidArr[] = {1};
 
     EnvMutexInit(&g_processManager.lock);
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(1));
@@ -2480,7 +2466,7 @@ static uint64_t KBToPages(uint64_t kb, uint32_t pageSize)
 }
 
 // Global NUMA page snapshot for single-remote configuration tests.
-static uint64_t g_testPagesPerNuma[MAX_NODES] = { 0 };
+static uint64_t g_testPagesPerNuma[MAX_NODES] = {0};
 
 extern "C" int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma,
                                          const uint64_t pagesPerNuma[MAX_NODES]);
@@ -2706,13 +2692,13 @@ TEST_F(ManageTest, TestMigratePagesToRemote_MultiLocalNuma)
 
     ProcessAttr attr = {};
     attr.pid = 1234;
-    attr.numaAttr.numaNodes = 0b00000011;  // L1: NUMA 0 and NUMA 1
+    attr.numaAttr.numaNodes = 0b00000011; // L1: NUMA 0 and NUMA 1
 
-    uint64_t pagesPerNuma[MAX_NODES] = { 0 };
-    pagesPerNuma[0] = KBToPages(3 * GIB / KIB, PAGESIZE_4K);  // NUMA0: 3GB
-    pagesPerNuma[1] = KBToPages(2 * GIB / KIB, PAGESIZE_4K);  // NUMA1: 2GB
+    uint64_t pagesPerNuma[MAX_NODES] = {0};
+    pagesPerNuma[0] = KBToPages(3 * GIB / KIB, PAGESIZE_4K); // NUMA0: 3GB
+    pagesPerNuma[1] = KBToPages(2 * GIB / KIB, PAGESIZE_4K); // NUMA1: 2GB
 
-    uint64_t pagesToMigrate = KBToPages(4 * GIB / KIB, PAGESIZE_4K);  // Migrate 4GB
+    uint64_t pagesToMigrate = KBToPages(4 * GIB / KIB, PAGESIZE_4K); // Migrate 4GB
 
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
@@ -2740,7 +2726,7 @@ TEST_F(ManageTest, TestHugePageToKB)
     EXPECT_EQ((uint64_t)0, ret);
 
     ret = HugePageToKB(1);
-    EXPECT_EQ((uint64_t)2048, ret);  // 2MB = 2048KB
+    EXPECT_EQ((uint64_t)2048, ret); // 2MB = 2048KB
 
     ret = HugePageToKB(5);
     EXPECT_EQ((uint64_t)10240, ret); // 5 * 2048 = 10240KB
@@ -2755,7 +2741,7 @@ TEST_F(ManageTest, TestNormalPageToKB)
     EXPECT_EQ((uint64_t)0, ret);
 
     ret = NormalPageToKB(1);
-    EXPECT_EQ((uint64_t)4, ret);  // 4KB page → 4KB
+    EXPECT_EQ((uint64_t)4, ret); // 4KB page → 4KB
 
     ret = NormalPageToKB(256);
     EXPECT_EQ((uint64_t)1024, ret); // 256 * 4 = 1024KB
@@ -2771,7 +2757,7 @@ TEST_F(ManageTest, TestKBToPageNormal)
     EXPECT_EQ((uint64_t)0, ret);
 
     ret = KBToPage(4);
-    EXPECT_EQ((uint64_t)1, ret);  // 4KB memory → 1 normal page
+    EXPECT_EQ((uint64_t)1, ret); // 4KB memory → 1 normal page
 
     ret = KBToPage(1024);
     EXPECT_EQ((uint64_t)256, ret); // 1024KB / 4KB = 256 pages
@@ -2786,7 +2772,7 @@ TEST_F(ManageTest, TestKBToPageHuge)
     EXPECT_EQ((uint64_t)0, ret);
 
     ret = KBToPage(2048);
-    EXPECT_EQ((uint64_t)1, ret);  // 2048KB → 1 huge page
+    EXPECT_EQ((uint64_t)1, ret); // 2048KB → 1 huge page
 
     ret = KBToPage(4096);
     EXPECT_EQ((uint64_t)2, ret); // 4096KB / 2048KB = 2 huge pages
@@ -2802,7 +2788,7 @@ TEST_F(ManageTest, TestPageToKBNormal)
     EXPECT_EQ((uint64_t)0, ret);
 
     ret = PageToKB(1);
-    EXPECT_EQ((uint64_t)4, ret);  // 1 normal page = 4KB
+    EXPECT_EQ((uint64_t)4, ret); // 1 normal page = 4KB
 
     ret = PageToKB(256);
     EXPECT_EQ((uint64_t)1024, ret); // 256 * 4KB = 1024KB
@@ -2817,7 +2803,7 @@ TEST_F(ManageTest, TestPageToKBHuge)
     EXPECT_EQ((uint64_t)0, ret);
 
     ret = PageToKB(1);
-    EXPECT_EQ((uint64_t)2048, ret);  // 1 huge page = 2048KB
+    EXPECT_EQ((uint64_t)2048, ret); // 1 huge page = 2048KB
 
     ret = PageToKB(5);
     EXPECT_EQ((uint64_t)10240, ret); // 5 * 2048KB = 10240KB
@@ -2836,8 +2822,8 @@ TEST_F(ManageTest, TestAllocBorrowPagesForMemsizeInvalidL2IndexLow)
     ProcessAttr attr = {};
     attr.migrateParam[0].nid = 1; // l2Index = 1 - 4 = -3 < 0, triggers early return
 
-    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = {0};
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = {0};
 
     // Should return early without crash or modification
     AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
@@ -2853,8 +2839,8 @@ TEST_F(ManageTest, TestAllocBorrowPagesForMemsizeInvalidL2IndexHigh)
     ProcessAttr attr = {};
     attr.migrateParam[0].nid = 30; // l2Index = 30 - 4 = 26 >= REMOTE_NUMA_NUM(18)
 
-    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = {0};
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = {0};
 
     AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
     EXPECT_EQ((uint64_t)0, attr.strategyAttr.memSize[0][0]);
@@ -2867,13 +2853,13 @@ TEST_F(ManageTest, TestAllocBorrowPagesForMemsizeNoLocalNuma)
     g_processManager.nrLocalNuma = 4;
 
     ProcessAttr attr = {};
-    attr.migrateParam[0].nid = 4;  // l2Index = 0
-    attr.migrateParam[0].memSize = 400;  // 400KB → 100 pages (4K)
-    attr.numaAttr.numaNodes = 0;  // No local NUMA set
+    attr.migrateParam[0].nid = 4;       // l2Index = 0
+    attr.migrateParam[0].memSize = 400; // 400KB → 100 pages (4K)
+    attr.numaAttr.numaNodes = 0;        // No local NUMA set
 
-    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = {0};
     availPrivatePages[0][0] = 100;
-    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = {0};
 
     AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
 
@@ -2889,14 +2875,14 @@ TEST_F(ManageTest, TestAllocBorrowPagesForMemsizePrivateOnly)
     g_processManager.nrLocalNuma = 4;
 
     ProcessAttr attr = {};
-    attr.migrateParam[0].nid = 4;  // remote NUMA 4, l2Index = 0
-    attr.migrateParam[0].memSize = 400;  // 400KB → 100 pages (4K)
-    attr.numaAttr.numaNodes = 0b00000001;  // L1: node 0
+    attr.migrateParam[0].nid = 4;         // remote NUMA 4, l2Index = 0
+    attr.migrateParam[0].memSize = 400;   // 400KB → 100 pages (4K)
+    attr.numaAttr.numaNodes = 0b00000001; // L1: node 0
     attr.strategyAttr.nrPagesPerLocalNuma[0] = 200;
 
-    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    availPrivatePages[0][0] = 150;  // More than memSize needs
-    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = {0};
+    availPrivatePages[0][0] = 150; // More than memSize needs
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = {0};
 
     AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
 
@@ -2913,14 +2899,14 @@ TEST_F(ManageTest, TestAllocBorrowPagesForMemsizePrivateAndShared)
     g_processManager.nrLocalNuma = 4;
 
     ProcessAttr attr = {};
-    attr.migrateParam[0].nid = 4;  // l2Index = 0
+    attr.migrateParam[0].nid = 4;         // l2Index = 0
     attr.migrateParam[0].memSize = 1000;  // 1000KB → 250 pages (4K)
-    attr.numaAttr.numaNodes = 0b00000001;  // L1: node 0
+    attr.numaAttr.numaNodes = 0b00000001; // L1: node 0
     attr.strategyAttr.nrPagesPerLocalNuma[0] = 300;
 
-    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    availPrivatePages[0][0] = 100;  // Private insufficient
-    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = {0};
+    availPrivatePages[0][0] = 100; // Private insufficient
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = {0};
     availSharedPages[0] = 200;
 
     AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
@@ -2941,15 +2927,15 @@ TEST_F(ManageTest, TestAllocBorrowPagesForMemsizeSkipNonLocal)
     g_processManager.nrLocalNuma = 4;
 
     ProcessAttr attr = {};
-    attr.migrateParam[0].nid = 5;  // l2Index = 1
-    attr.migrateParam[0].memSize = 400;  // 100 pages
-    attr.numaAttr.numaNodes = 0b00000010;  // L1: node 1 only (not node 0)
+    attr.migrateParam[0].nid = 5;         // l2Index = 1
+    attr.migrateParam[0].memSize = 400;   // 100 pages
+    attr.numaAttr.numaNodes = 0b00000010; // L1: node 1 only (not node 0)
     attr.strategyAttr.nrPagesPerLocalNuma[0] = 200;
     attr.strategyAttr.nrPagesPerLocalNuma[1] = 200;
 
-    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = {0};
     availPrivatePages[1][1] = 200;
-    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = {0};
 
     AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
 
@@ -2965,18 +2951,18 @@ TEST_F(ManageTest, TestAllocBorrowPagesForMemsizeHugePage)
 {
     g_pageSizeHuge = PAGESIZE_2M;
     g_pageSizeNormal = PAGESIZE_4K;
-    g_processManager.tracking.pageSize = PAGESIZE_2M;  // Huge mode
+    g_processManager.tracking.pageSize = PAGESIZE_2M; // Huge mode
     g_processManager.nrLocalNuma = 4;
 
     ProcessAttr attr = {};
-    attr.migrateParam[0].nid = 4;  // l2Index = 0
+    attr.migrateParam[0].nid = 4;         // l2Index = 0
     attr.migrateParam[0].memSize = 2048;  // 2048KB = 1 huge page worth
-    attr.numaAttr.numaNodes = 0b00000001;  // L1: node 0
+    attr.numaAttr.numaNodes = 0b00000001; // L1: node 0
     attr.strategyAttr.nrPagesPerLocalNuma[0] = 10;
 
-    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = {0};
     availPrivatePages[0][0] = 5;
-    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
+    uint32_t availSharedPages[REMOTE_NUMA_NUM] = {0};
 
     AllocBorrowPagesForMemsize(&attr, availPrivatePages, availSharedPages);
 
@@ -2997,7 +2983,7 @@ TEST_F(ManageTest, TestCalibratePairAccountNoChange)
     attr.pid = 1234;
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
     attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 50;
-    attr.walkPage.nrPages[4] = 150;  // remotePages(150) == wp->nrPages[4](150), skip
+    attr.walkPage.nrPages[4] = 150; // remotePages(150) == wp->nrPages[4](150), skip
 
     CalibratePairAccount(&attr);
 
@@ -3013,7 +2999,7 @@ TEST_F(ManageTest, TestCalibratePairAccountSingleLocal)
     ProcessAttr attr = {};
     attr.pid = 1234;
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
-    attr.walkPage.nrPages[4] = 50;  // actual pages dropped from 100 to 50
+    attr.walkPage.nrPages[4] = 50; // actual pages dropped from 100 to 50
 
     CalibratePairAccount(&attr);
 
@@ -3030,7 +3016,7 @@ TEST_F(ManageTest, TestCalibratePairAccountMultiLocal)
     // Two local NUMAs contribute to remote NUMA 4 (l2Index=0)
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
     attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 100;
-    attr.walkPage.nrPages[4] = 150;  // actual dropped from 200 to 150
+    attr.walkPage.nrPages[4] = 150; // actual dropped from 200 to 150
 
     CalibratePairAccount(&attr);
 
@@ -3051,14 +3037,14 @@ TEST_F(ManageTest, TestCalibratePairAccountSkipZeroEntries)
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 0;
     attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 100;
     attr.strategyAttr.remoteNrPagesAfterMigrate[2][0] = 100;
-    attr.walkPage.nrPages[4] = 300;  // actual increased from 200 to 300
+    attr.walkPage.nrPages[4] = 300; // actual increased from 200 to 300
 
     CalibratePairAccount(&attr);
 
     // remotePages=200, arr=[1,2], nrLeft=300
     // i=0 (arr[0]=1): ratio=100/200=0.5, nrChunk=300*0.5=150, nrLeft=150
     // i=1 (arr[1]=2, last): gets nrLeft=150
-    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);   // unchanged (was 0)
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]); // unchanged (was 0)
     EXPECT_EQ((uint32_t)150, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
     EXPECT_EQ((uint32_t)150, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
 }
@@ -3074,7 +3060,7 @@ TEST_F(ManageTest, TestCalibratePairAccountMultiRemote)
     attr.walkPage.nrPages[4] = 100;
     // l2Index=1: remotePages=200, actual=100 → calibrate
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][1] = 200;
-    attr.walkPage.nrPages[5] = 100;  // l2Index=1, remote=5
+    attr.walkPage.nrPages[5] = 100; // l2Index=1, remote=5
 
     CalibratePairAccount(&attr);
 
@@ -3092,7 +3078,7 @@ TEST_F(ManageTest, TestCalibratePairAccountToZero)
     attr.pid = 1234;
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
     attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 50;
-    attr.walkPage.nrPages[4] = 0;  // all pages gone from remote NUMA 4
+    attr.walkPage.nrPages[4] = 0; // all pages gone from remote NUMA 4
 
     CalibratePairAccount(&attr);
 
@@ -3110,10 +3096,10 @@ TEST_F(ManageTest, TestCalibratePairAccountThreeLocals)
     ProcessAttr attr = {};
     attr.pid = 1234;
     // Three local NUMAs with different proportions
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 10;   // 10%
-    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 30;   // 30%
-    attr.strategyAttr.remoteNrPagesAfterMigrate[2][0] = 60;   // 60%
-    attr.walkPage.nrPages[4] = 200;  // actual doubled from 100 to 200
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 10; // 10%
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 30; // 30%
+    attr.strategyAttr.remoteNrPagesAfterMigrate[2][0] = 60; // 60%
+    attr.walkPage.nrPages[4] = 200;                         // actual doubled from 100 to 200
 
     CalibratePairAccount(&attr);
 
@@ -3142,10 +3128,9 @@ TEST_F(ManageTest, TestCalibratePairAccountStableRemainderOrder)
     EXPECT_EQ((uint32_t)1, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
     EXPECT_EQ((uint32_t)1, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
     EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
-    EXPECT_EQ((uint32_t)2,
-              attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] +
-                  attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] +
-                  attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
+    EXPECT_EQ((uint32_t)2, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] +
+                               attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] +
+                               attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
 }
 
 TEST_F(ManageTest, TestCalibratePairAccountRebuildsByManagedResidentPages)
@@ -3189,10 +3174,9 @@ TEST_F(ManageTest, TestCalibratePairAccountEvenlyRebuildsWithoutLocalPages)
     EXPECT_EQ((uint32_t)3, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
     EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[1][0]);
     EXPECT_EQ((uint32_t)2, attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
-    EXPECT_EQ((uint32_t)5,
-              attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] +
-                  attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] +
-                  attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
+    EXPECT_EQ((uint32_t)5, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] +
+                               attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] +
+                               attr.strategyAttr.remoteNrPagesAfterMigrate[2][0]);
 }
 
 TEST_F(ManageTest, TestCalibratePairAccountKeepsActualPagesAfterCapacityRemoved)
@@ -3287,7 +3271,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsRatioOneByOne)
     attr.pid = 100;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
     attr.targetConfig.count = 1;
-    attr.targetConfig.targets[0] = { 1, 50, 0 };
+    attr.targetConfig.targets[0] = {1, 50, 0};
     attr.managedLocalState.managedLocalMask = BIT(0);
     attr.managedLocalState.residentLocalMask = BIT(0);
     attr.managedLocalState.accountLocalMask[0] = BIT(0);
@@ -3319,7 +3303,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsMemsizeOneByOne)
     attr.pid = 107;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
     attr.targetConfig.count = 1;
-    attr.targetConfig.targets[0] = { 1, 0, 160 };
+    attr.targetConfig.targets[0] = {1, 0, 160};
     attr.managedLocalState.managedLocalMask = BIT(0);
     attr.managedLocalState.residentLocalMask = BIT(0);
     attr.managedLocalState.accountLocalMask[0] = BIT(0);
@@ -3345,7 +3329,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsMemsizeTwoByOne)
     attr.pid = 101;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
     attr.targetConfig.count = 1;
-    attr.targetConfig.targets[0] = { 2, 0, 320 };
+    attr.targetConfig.targets[0] = {2, 0, 320};
     attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
     attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
     attr.managedLocalState.accountLocalMask[0] = BIT(0) | BIT(1);
@@ -3376,7 +3360,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsRatioTwoByOne)
     attr.pid = 108;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
     attr.targetConfig.count = 1;
-    attr.targetConfig.targets[0] = { 2, 50, 0 };
+    attr.targetConfig.targets[0] = {2, 50, 0};
     attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
     attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
     attr.managedLocalState.accountLocalMask[0] = BIT(0) | BIT(1);
@@ -3405,8 +3389,8 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsRatioTwoByTwo)
     attr.pid = 102;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
     attr.targetConfig.count = 2;
-    attr.targetConfig.targets[0] = { 2, 50, 0 };
-    attr.targetConfig.targets[1] = { 3, 25, 0 };
+    attr.targetConfig.targets[0] = {2, 50, 0};
+    attr.targetConfig.targets[1] = {3, 25, 0};
     attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
     attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
     attr.managedLocalState.accountLocalMask[0] = BIT(0);
@@ -3445,8 +3429,8 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsReroutesAsymmetricCandidates)
     attr.pid = 111;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
     attr.targetConfig.count = 2;
-    attr.targetConfig.targets[0] = { 2, 50, 0 };
-    attr.targetConfig.targets[1] = { 3, 50, 0 };
+    attr.targetConfig.targets[0] = {2, 50, 0};
+    attr.targetConfig.targets[1] = {3, 50, 0};
     attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
     attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
     attr.walkPage.nrPages[0] = 100;
@@ -3476,8 +3460,8 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsMemsizeTwoByTwoScales)
     attr.pid = 103;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
     attr.targetConfig.count = 2;
-    attr.targetConfig.targets[0] = { 2, 0, 320 };
-    attr.targetConfig.targets[1] = { 3, 0, 320 };
+    attr.targetConfig.targets[0] = {2, 0, 320};
+    attr.targetConfig.targets[1] = {3, 0, 320};
     attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
     attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
     attr.managedLocalState.accountLocalMask[0] = BIT(0);
@@ -3511,7 +3495,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsShrinksExistingPairs)
     attr.pid = 104;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
     attr.targetConfig.count = 1;
-    attr.targetConfig.targets[0] = { 2, 0, 200 };
+    attr.targetConfig.targets[0] = {2, 0, 200};
     attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
     attr.managedLocalState.accountLocalMask[0] = BIT(0) | BIT(1);
     attr.walkPage.nrPages[2] = 100;
@@ -3561,7 +3545,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsNoCapacityKeepsRequest)
     attr.pid = 110;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
     attr.targetConfig.count = 1;
-    attr.targetConfig.targets[0] = { 1, 50, 0 };
+    attr.targetConfig.targets[0] = {1, 50, 0};
     attr.managedLocalState.managedLocalMask = BIT(0);
     attr.managedLocalState.residentLocalMask = BIT(0);
     attr.managedLocalState.accountLocalMask[0] = BIT(0);
@@ -3587,7 +3571,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsNewLocalKeepsAccount)
     attr.pid = 105;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
     attr.targetConfig.count = 1;
-    attr.targetConfig.targets[0] = { 2, 0, 240 };
+    attr.targetConfig.targets[0] = {2, 0, 240};
     attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
     attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
     attr.managedLocalState.accountLocalMask[0] = BIT(0);
@@ -3625,7 +3609,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsSkipsEmptyLocal)
     attr.pid = 106;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
     attr.targetConfig.count = 1;
-    attr.targetConfig.targets[0] = { 2, 50, 0 };
+    attr.targetConfig.targets[0] = {2, 50, 0};
     attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
     attr.managedLocalState.residentLocalMask = BIT(0);
     attr.walkPage.nrPages[0] = 40;
@@ -3953,6 +3937,41 @@ TEST_F(ManageTest, TestBuildAllPairTargetsCapacityShrinkAndRestore)
     DestroyPairTargetManager(&manager);
 }
 
+TEST_F(ManageTest, TestBuildAllPairPlanInputsKeepsTargetAndActualSnapshot)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+    manager.remoteNumaInfo.privateSize[0][0] = 1;
+
+    ProcessAttr attr;
+    InitRatioPairProcess(&attr, 100, 1, 800, 0, 50);
+    attr.walkPage.nrPage = 1100;
+    attr.walkPage.nrPages[1] = 300;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 300;
+    attr.managedLocalState.accountLocalMask[0] = BIT(0);
+    manager.processes = &attr;
+
+    PairPlan plans[LOCAL_NUMA_NUM * REMOTE_NUMA_NUM] = {};
+    PairPidBudget pidBudgets[1] = {};
+    size_t planCnt = 0;
+    size_t pidBudgetCnt = 0;
+    ASSERT_EQ(0, BuildAllPairPlanInputs(&manager, plans, LOCAL_NUMA_NUM * REMOTE_NUMA_NUM, &planCnt, pidBudgets, 1,
+                                        &pidBudgetCnt));
+    ASSERT_EQ(1U, planCnt);
+    EXPECT_EQ(100, plans[0].pid);
+    EXPECT_EQ(0, plans[0].localNid);
+    EXPECT_EQ(1, plans[0].remoteNid);
+    EXPECT_EQ(0, plans[0].remoteIndex);
+    EXPECT_EQ(256U, plans[0].targetPages);
+    EXPECT_EQ(300U, plans[0].actualPages);
+    ASSERT_EQ(1U, pidBudgetCnt);
+    EXPECT_EQ(100, pidBudgets[0].pid);
+    EXPECT_EQ(1100U, pidBudgets[0].maxMigratePages);
+
+    manager.processes = nullptr;
+    DestroyPairTargetManager(&manager);
+}
+
 TEST_F(ManageTest, TestBuildAllPairTargetsFailureDoesNotPublishUsage)
 {
     ProcessManager manager;
@@ -4150,13 +4169,13 @@ TEST_F(ManageTest, TestInitGroupedUsedPages)
 {
     pid_t pid = 1234;
     GroupMigrationPolicy policy = {};
-    uint64_t numaPages[MAX_NODES] = { 0 };
+    uint64_t numaPages[MAX_NODES] = {0};
     policy.enabled = true;
     policy.groupCount = 1;
     policy.groups[0].targetCount = 1;
     policy.groups[0].targets[0].nid = 4;
-    policy.groups[0].targets[0].quotaPages = 10;  // quotaPages must be set
-    numaPages[4] = 5;  // residentPages <= quotaPages
+    policy.groups[0].targets[0].quotaPages = 10; // quotaPages must be set
+    numaPages[4] = 5;                            // residentPages <= quotaPages
     g_processManager.nrLocalNuma = 4;
     int ret = InitGroupedUsedPages(pid, &policy, numaPages);
     EXPECT_EQ(0, ret);
@@ -4193,8 +4212,8 @@ TEST_F(ManageTest, TestGetCurrentMaxNrPid2M)
 extern "C" ProcessAttr *GetProcessAttr(pid_t pid);
 TEST_F(ManageTest, TestGetProcessAttrFound)
 {
-    ProcessAttr p1 = { .pid = 1, .next = nullptr };
-    ProcessAttr p2 = { .pid = 2, .next = nullptr };
+    ProcessAttr p1 = {.pid = 1, .next = nullptr};
+    ProcessAttr p2 = {.pid = 2, .next = nullptr};
     p1.next = &p2;
     g_processManager.processes = &p1;
     ProcessAttr *ret = GetProcessAttr(1);
@@ -4207,7 +4226,7 @@ TEST_F(ManageTest, TestGetProcessAttrFound)
 
 TEST_F(ManageTest, TestGetProcessAttrNotFound)
 {
-    ProcessAttr p1 = { .pid = 1, .next = nullptr };
+    ProcessAttr p1 = {.pid = 1, .next = nullptr};
     g_processManager.processes = &p1;
     ProcessAttr *ret = GetProcessAttr(3);
     EXPECT_EQ(nullptr, ret);

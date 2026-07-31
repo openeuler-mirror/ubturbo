@@ -36,4 +36,10 @@ int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager);
 int ScanMigrateWork(ThreadCtx *ctx);
 
 int MigrateRemoteNuma(struct ProcessManager *manager, struct MigrateNumaIoctlMsg *msg);
+
+int CollectNodeFreeSnapshot(bool hugePage, int nrLocalNuma, PairPlanContext *context);
+int BuildPairPlans(const PairPlan inputs[], size_t inputCnt, PairPlanContext *context, PairPidBudget pidBudgets[],
+                   size_t pidBudgetCnt, PairPlan plans[], size_t planCap, size_t *planCnt);
+int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt);
+int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt);
 #endif /* __MIGRATION_H__ */

@@ -309,6 +309,21 @@ typedef struct {
     uint32_t swapPages;
 } PairPlan;
 
+/* Per-cycle destination-node budget shared by all processes and Pairs. */
+typedef struct {
+    int nrLocalNuma;
+    uint64_t freePages[MAX_NODES];
+    uint64_t safetyReservePages[MAX_NODES];
+    uint64_t plannedPages[MAX_NODES];
+} PairPlanContext;
+
+/* Per-cycle migration budget shared by all Pairs of one process. */
+typedef struct {
+    pid_t pid;
+    uint64_t maxMigratePages;
+    uint64_t plannedPages;
+} PairPidBudget;
+
 typedef struct {
     /*
      * Pair-level compatibility fields generated from ProcessTargetConfig.
@@ -576,6 +591,8 @@ void CalibratePairAccount(ProcessAttr *attr);
 int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext *context, PairTarget targets[],
                               size_t targetCap, size_t *targetCnt, PairRequestSummary *summary);
 int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], size_t targetCap, size_t *targetCnt);
+int BuildAllPairPlanInputs(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
+                           PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt);
 
 int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size);
 

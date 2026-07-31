@@ -229,8 +229,7 @@ static uint32_t BuildResidentLocalMask(const ProcessAttr *attr)
 
     uint32_t residentLocalMask = 0;
     int nrLocalNuma = GetNrLocalNuma();
-    for (int localNid = 0; localNid < nrLocalNuma && localNid < LOCAL_NUMA_NUM;
-         localNid++) {
+    for (int localNid = 0; localNid < nrLocalNuma && localNid < LOCAL_NUMA_NUM; localNid++) {
         if (attr->walkPage.nrPages[localNid] != 0) {
             AddL1(&residentLocalMask, localNid);
         }
@@ -387,8 +386,7 @@ static uint32_t BuildManagedTrackingNodes(const ProcessAttr *attr)
 
     uint32_t targetCount = attr->targetConfig.count;
     if (targetCount > REMOTE_NUMA_NUM) {
-        SMAP_LOGGER_WARNING("Pid %d target count %u exceeds limit.", attr->pid,
-                            targetCount);
+        SMAP_LOGGER_WARNING("Pid %d target count %u exceeds limit.", attr->pid, targetCount);
         targetCount = REMOTE_NUMA_NUM;
     }
     for (uint32_t i = 0; i < targetCount; i++) {
@@ -1523,14 +1521,10 @@ void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
 
     ProcessAttr *prepared = candidate->prepared;
     if (candidate->isPending) {
-        candidate->active->pendingTargetConfig =
-            prepared->pendingTargetConfig;
-        candidate->active->pendingTargetConfigValid =
-            prepared->pendingTargetConfigValid;
-        candidate->active->pendingTargetNumaNodes =
-            prepared->pendingTargetNumaNodes;
-        SMAP_LOGGER_INFO("Stage pid %d migration target update.",
-                         prepared->pid);
+        candidate->active->pendingTargetConfig = prepared->pendingTargetConfig;
+        candidate->active->pendingTargetConfigValid = prepared->pendingTargetConfigValid;
+        candidate->active->pendingTargetNumaNodes = prepared->pendingTargetNumaNodes;
+        SMAP_LOGGER_INFO("Stage pid %d migration target update.", prepared->pid);
         DiscardProcessManageCandidate(candidate);
         return;
     }
@@ -1547,8 +1541,7 @@ void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
 
     int ret = SyncAllProcessConfig();
     if (ret) {
-        SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.",
-                            prepared->pid, ret);
+        SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", prepared->pid, ret);
     }
     DiscardProcessManageCandidate(candidate);
 }
@@ -1851,9 +1844,8 @@ int SetProcessLocalNuma(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag)
     if (allLocalMask == 0) {
         return -EINVAL;
     }
-    uint32_t observedLocalMask =
-        (observation.affinityValid ? observation.affinityLocalMask : 0) |
-        (observation.residentValid ? observation.residentLocalMask : 0);
+    uint32_t observedLocalMask = (observation.affinityValid ? observation.affinityLocalMask : 0) |
+                                 (observation.residentValid ? observation.residentLocalMask : 0);
     observedLocalMask &= allLocalMask;
     if (observedLocalMask == 0) {
         observedLocalMask = allLocalMask;
@@ -2297,8 +2289,7 @@ static void RebuildPairAccount(ProcessAttr *attr, int remoteIndex, uint32_t actu
     uint32_t allLocalMask = BuildAllLocalNumaMask();
     uint32_t managedLocalMask = attr->managedLocalState.managedLocalMask & allLocalMask;
     uint32_t capacityLocalMask = BuildPairCapacityLocalMask(attr, remoteIndex);
-    uint32_t rebuildLocalMask = managedLocalMask &
-                                (capacityLocalMask | attr->managedLocalState.residentLocalMask);
+    uint32_t rebuildLocalMask = managedLocalMask & (capacityLocalMask | attr->managedLocalState.residentLocalMask);
 
     if (rebuildLocalMask == 0) {
         rebuildLocalMask = managedLocalMask;
@@ -2332,8 +2323,7 @@ static void RebuildPairAccount(ProcessAttr *attr, int remoteIndex, uint32_t actu
         weightTotal = localCount;
     }
 
-    DistributePairAccount(attr, remoteIndex, rebuildLocalMask, weights, weightTotal,
-                          actualRemotePages);
+    DistributePairAccount(attr, remoteIndex, rebuildLocalMask, weights, weightTotal, actualRemotePages);
 }
 
 /*
@@ -2349,8 +2339,7 @@ void CalibratePairAccount(ProcessAttr *attr)
     StrategyAttribute *sa = &attr->strategyAttr;
     int nrLocalNuma = GetNrLocalNuma();
     if (nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM) {
-        SMAP_LOGGER_ERROR("Cannot calibrate pid %d Pair account with %d local NUMA nodes.",
-                          attr->pid, nrLocalNuma);
+        SMAP_LOGGER_ERROR("Cannot calibrate pid %d Pair account with %d local NUMA nodes.", attr->pid, nrLocalNuma);
         return;
     }
 
@@ -2382,19 +2371,16 @@ void CalibratePairAccount(ProcessAttr *attr)
                     sa->remoteNrPagesAfterMigrate[local][remoteIndex] = 0;
                 }
             } else if (accountTotal > 0) {
-                DistributePairAccount(attr, remoteIndex, accountLocalMask, weights,
-                                      accountTotal, actualRemotePages);
+                DistributePairAccount(attr, remoteIndex, accountLocalMask, weights, accountTotal, actualRemotePages);
             } else {
                 RebuildPairAccount(attr, remoteIndex, actualRemotePages);
             }
-            SMAP_LOGGER_INFO("Calibrated pid %d remote %d Pair account from %llu to %u pages.",
-                             attr->pid, remoteNid, accountTotal, actualRemotePages);
+            SMAP_LOGGER_INFO("Calibrated pid %d remote %d Pair account from %llu to %u pages.", attr->pid, remoteNid,
+                             accountTotal, actualRemotePages);
         }
 
-        attr->managedLocalState.accountLocalMask[remoteIndex] =
-            BuildAccountLocalMask(attr, remoteIndex);
-        attr->managedLocalState.managedLocalMask |=
-            attr->managedLocalState.accountLocalMask[remoteIndex];
+        attr->managedLocalState.accountLocalMask[remoteIndex] = BuildAccountLocalMask(attr, remoteIndex);
+        attr->managedLocalState.managedLocalMask |= attr->managedLocalState.accountLocalMask[remoteIndex];
     }
     attr->managedLocalState.managedLocalMask &= BuildAllLocalNumaMask();
 }
@@ -2765,7 +2751,10 @@ int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext 
     uint64_t pairRequests[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
     PreservePairAccounts(attr, context, &result, pairRequests);
     uint64_t baseline[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    memcpy(baseline, pairRequests, sizeof(baseline));
+    ret = memcpy_s(baseline, sizeof(baseline), pairRequests, sizeof(pairRequests));
+    if (ret != EOK) {
+        return -ret;
+    }
 
     uint64_t remainingPages[LOCAL_NUMA_NUM] = { 0 };
     BuildLocalRemainingPages(attr, context, pairRequests, remainingPages);
@@ -2825,6 +2814,7 @@ int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext 
 
 typedef struct {
     PairTarget target;
+    const ProcessAttr *process;
     uint32_t actualPages;
     uint32_t privatePages;
     uint32_t sharedPages;
@@ -3019,6 +3009,7 @@ static int CollectAllPairRequests(const struct ProcessManager *manager,
         for (size_t i = 0; i < processTargetCount; i++) {
             int remoteIndex = processTargets[i].remoteNid - manager->nrLocalNuma;
             entries[count].target = processTargets[i];
+            entries[count].process = attr;
             entries[count].actualPages =
                 attr->strategyAttr.remoteNrPagesAfterMigrate[processTargets[i].localNid][remoteIndex];
             count++;
@@ -3086,6 +3077,24 @@ static void PublishPairCapacityResult(struct ProcessManager *manager, PairArbitr
     }
 }
 
+static int BuildPairArbitrationSnapshotLocked(struct ProcessManager *manager, PairArbitrationEntry entries[],
+                                              size_t entryCap, size_t *entryCount,
+                                              uint64_t privateCapacity[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
+                                              uint64_t totalCapacity[REMOTE_NUMA_NUM])
+{
+    uint64_t sharedCapacity[REMOTE_NUMA_NUM] = { 0 };
+    int ret = BuildPairCapacitySnapshot(manager, privateCapacity, sharedCapacity, totalCapacity);
+    if (ret) {
+        return ret;
+    }
+    ret = CollectAllPairRequests(manager, privateCapacity, sharedCapacity, entries, entryCap, entryCount);
+    if (ret) {
+        return ret;
+    }
+    ArbitrateAllPairCapacity(entries, *entryCount, manager->nrLocalNuma, privateCapacity, sharedCapacity);
+    return 0;
+}
+
 /*
  * Build and arbitrate all normal-process Pair targets from one manager
  * snapshot. The function owns the manager -> remote capacity lock order.
@@ -3106,22 +3115,90 @@ int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], si
     int ret;
     size_t entryCount = 0;
     uint64_t privateCapacity[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    uint64_t sharedCapacity[REMOTE_NUMA_NUM] = { 0 };
     uint64_t totalCapacity[REMOTE_NUMA_NUM] = { 0 };
 
     EnvMutexLock(&manager->lock);
     EnvMutexLock(&manager->remoteNumaInfo.lock);
-    ret = BuildPairCapacitySnapshot(manager, privateCapacity, sharedCapacity, totalCapacity);
+    ret = BuildPairArbitrationSnapshotLocked(manager, entries, targetCap, &entryCount, privateCapacity, totalCapacity);
     if (!ret) {
-        ret = CollectAllPairRequests(manager, privateCapacity, sharedCapacity, entries, targetCap, &entryCount);
-    }
-    if (!ret) {
-        ArbitrateAllPairCapacity(entries, entryCount, manager->nrLocalNuma, privateCapacity, sharedCapacity);
         PublishPairCapacityResult(manager, entries, entryCount, privateCapacity, totalCapacity);
         for (size_t i = 0; i < entryCount; i++) {
             targets[i] = entries[i].target;
         }
         *targetCnt = entryCount;
+    }
+    EnvMutexUnlock(&manager->remoteNumaInfo.lock);
+    EnvMutexUnlock(&manager->lock);
+    free(entries);
+    return ret;
+}
+
+/*
+ * Build target/actual plan inputs and per-process limits from one locked
+ * manager snapshot. File I/O and per-cycle free-page budgeting stay in the
+ * strategy layer.
+ */
+int BuildAllPairPlanInputs(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
+                           PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt)
+{
+    if (!manager || !plans || !planCnt || !pidBudgets || !pidBudgetCnt || manager->nrLocalNuma == 0 ||
+        manager->nrLocalNuma > LOCAL_NUMA_NUM || planCap > MAX_PAIR_TARGET_COUNT ||
+        planCap > SIZE_MAX / sizeof(PairArbitrationEntry)) {
+        return -EINVAL;
+    }
+    *planCnt = 0;
+    *pidBudgetCnt = 0;
+
+    PairArbitrationEntry *entries = planCap == 0 ? NULL : calloc(planCap, sizeof(PairArbitrationEntry));
+    if (planCap > 0 && !entries) {
+        return -ENOMEM;
+    }
+
+    int ret;
+    size_t entryCount = 0;
+    size_t budgetCount = 0;
+    uint64_t privateCapacity[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
+    uint64_t totalCapacity[REMOTE_NUMA_NUM] = { 0 };
+
+    EnvMutexLock(&manager->lock);
+    EnvMutexLock(&manager->remoteNumaInfo.lock);
+    ret = BuildPairArbitrationSnapshotLocked(manager, entries, planCap, &entryCount, privateCapacity, totalCapacity);
+    if (!ret) {
+        for (size_t i = 0; i < entryCount; i++) {
+            if (i == 0 || entries[i].target.pid != entries[i - 1].target.pid) {
+                budgetCount++;
+            }
+        }
+        if (budgetCount > pidBudgetCap) {
+            ret = -ENOSPC;
+        }
+    }
+    if (!ret) {
+        PublishPairCapacityResult(manager, entries, entryCount, privateCapacity, totalCapacity);
+        size_t budgetIndex = 0;
+        for (size_t i = 0; i < entryCount; i++) {
+            int remoteIndex = entries[i].target.remoteNid - manager->nrLocalNuma;
+            plans[i] = (PairPlan){
+                .pid = entries[i].target.pid,
+                .localNid = entries[i].target.localNid,
+                .remoteNid = entries[i].target.remoteNid,
+                .remoteIndex = remoteIndex,
+                .targetPages = entries[i].target.targetPages,
+                .actualPages = entries[i].actualPages,
+            };
+            if (i == 0 || entries[i].target.pid != entries[i - 1].target.pid) {
+                pidBudgets[budgetIndex++] = (PairPidBudget){
+                    .pid = entries[i].target.pid,
+                    /*
+                     * Keep the current separate-strategy limit semantics:
+                     * CalcMaxMigrate(1, walkPage.nrPage).
+                     */
+                    .maxMigratePages = entries[i].process->walkPage.nrPage,
+                };
+            }
+        }
+        *planCnt = entryCount;
+        *pidBudgetCnt = budgetCount;
     }
     EnvMutexUnlock(&manager->remoteNumaInfo.lock);
     EnvMutexUnlock(&manager->lock);
@@ -3160,7 +3237,16 @@ static int DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, A
             }
             return -ENOMEM;
         }
-        memcpy(attr->scanAttr.actcData[nid], buf + actc_offset, pmb->nrPages[nid] * sizeof(ActcData));
+        size_t actcDataSize = pmb->nrPages[nid] * sizeof(ActcData);
+        int ret = memcpy_s(attr->scanAttr.actcData[nid], actcDataSize, buf + actc_offset, actcDataSize);
+        if (ret != EOK) {
+            SMAP_LOGGER_ERROR("copy actcData[%d] failed for pid %d, ret %d", nid, attr->pid, ret);
+            for (int i = 0; i <= nid; i++) {
+                free(attr->scanAttr.actcData[i]);
+                attr->scanAttr.actcData[i] = NULL;
+            }
+            return -ret;
+        }
         actc_offset += pmb->nrPages[nid];
     }
     return 0;
@@ -3833,8 +3919,7 @@ static int RefreshManagedLocalTrackingScope(ProcessAttr *attr)
         };
         ret = AccessIoctlAddPid(1, &payload);
         if (ret) {
-            SMAP_LOGGER_ERROR("Refresh pid %d managed tracking failed: %d.",
-                              attr->pid, ret);
+            SMAP_LOGGER_ERROR("Refresh pid %d managed tracking failed: %d.", attr->pid, ret);
             return ret;
         }
     }
@@ -3867,23 +3952,19 @@ int BuildAllPidData(void)
         }
         ProcessAttr *current = GetProcessAttrLocked(pmb.pid);
         if (current && current->scanType == NORMAL_SCAN) {
-            SMAP_LOGGER_INFO("Pid %d, numaNodes %#x, nrLocalNuma %u.",
-                             current->pid, current->numaAttr.numaNodes,
+            SMAP_LOGGER_INFO("Pid %d, numaNodes %#x, nrLocalNuma %u.", current->pid, current->numaAttr.numaNodes,
                              g_processManager.nrLocalNuma);
             SetPidNrPages(current, pmb.nrPages, MAX_NODES);
             ret = FillPidData(current, &pmb);
             if (ret) {
-                SMAP_LOGGER_ERROR("Fill pid %d actc data failed.",
-                                  current->pid);
+                SMAP_LOGGER_ERROR("Fill pid %d actc data failed.", current->pid);
                 failedCount++;
                 continue;
             }
             if (!current->groupPolicy.enabled) {
                 ret = RefreshManagedLocalTrackingScope(current);
                 if (ret) {
-                    SMAP_LOGGER_ERROR(
-                        "Refresh pid %d managed local state failed: %d.",
-                        current->pid, ret);
+                    SMAP_LOGGER_ERROR("Refresh pid %d managed local state failed: %d.", current->pid, ret);
                     failedCount++;
                 }
                 if (GetRunMode() == WATERLINE_MODE) {
