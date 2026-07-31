@@ -77,6 +77,28 @@ UBTURBO/
 - 在ubturbo_plugin_admission.conf中打开插件前，需保证对应插件已安装且配置完成，否则UBTurbo及对应插件将启动异常.
 
 
+
+## 构建依赖
+
+编译UBTurbo需要安装以下依赖（以openEuler为例）：
+
+```bash
+dnf install -y make gcc gcc-c++ cmake ninja-build dos2unix chrpath patchelf libboundscheck libvirt-devel
+```
+
+| 依赖 | 说明 | 来源 |
+|-----|------|------|
+| cmake >= 3.22 | 构建系统 | CMakeLists.txt |
+| gcc/g++ | C/C++编译器 | ubturbo.spec |
+| make | 构建工具 | ubturbo.spec |
+| ninja-build | 构建加速（可选，推荐） | build.sh |
+| dos2unix | 行尾格式转换 | README |
+| chrpath | RPATH修改工具 | ubturbo.spec |
+| patchelf | ELF二进制修改工具 | ubturbo.spec |
+| libboundscheck | 安全函数库 | ubturbo.spec + 3rdparty子模块 |
+| rapidjson | JSON解析库（header-only） | 3rdparty子模块 |
+| libvirt-devel | 虚拟化管理开发库（RMRS插件需要） | ubturbo.spec |
+
 ## UBTurbo编译
 
 在根目录下执行:
@@ -93,6 +115,42 @@ sh build.sh
 - 在dist/release/lib下会有以下库文件: `libubturbo_client.so`
 
 - 在dist/release/conf下会有以配置文件: `ubturbo_plugin_admission.conf`、`ubturbo.conf`
+
+## 单元测试
+
+UBTurbo使用Google Test和mockcpp框架进行单元测试。测试用例位于`test/testcase/`目录下。
+
+### 执行单元测试
+
+在根目录下执行：
+
+```bash
+sh build.sh -t test
+```
+
+或直接运行测试脚本：
+
+```bash
+sh test/run_ut.sh
+```
+
+### 测试目标
+
+| 测试可执行文件 | 说明 |
+|-------------|------|
+| ubturbo_ut | UBTurbo核心模块单元测试（config、log、ipc、plugin、smap等） |
+| rmrs_ut | RMRS插件单元测试（migrate、smap_helper、ucache等） |
+
+### 代码覆盖率
+
+`test/run_ut.sh`执行测试后会通过lcov生成代码覆盖率报告。lcov需要单独安装：
+
+```bash
+# lcov不在openEuler 24.03官方仓库中，可通过源码编译安装
+# 从 https://github.com/linux-test-project/lcov 获取源码
+# 编译安装：make install PREFIX=/usr/local
+```
+
 
 ## UBTurbo运行
 
