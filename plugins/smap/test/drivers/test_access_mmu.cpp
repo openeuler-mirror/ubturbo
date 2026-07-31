@@ -156,7 +156,7 @@ TEST_F(AccessMMUTest, AddToBMPageTwo)
     free(ap.paddr_bm[L1]);
 }
 
-extern "C" void set_pa_prior(struct access_pid *ap, u64 vaddr, u64 pa_idx, int nid);
+extern "C" void set_pa_prior(struct access_pid *ap, u64 vaddr);
 extern "C" int add_to_bm_hugepage(u64 vaddr, u64 paddr, struct access_pid *ap);
 TEST_F(AccessMMUTest, AddToBmHugepage)
 {
@@ -432,9 +432,9 @@ TEST_F(AccessMMUTest, SetPaPrior)
 
     ap.info.vm_size = 1;
 
-    ap.info.mapping = (u32 *)malloc(sizeof(u32) * ap.info.vm_size);
-    ASSERT_NE(ap.info.mapping, nullptr);
-    memset(ap.info.mapping, 0xFF, sizeof(u32) * ap.info.vm_size);
+    ap.info.priors = (u8 *)malloc(sizeof(u8) * ap.info.vm_size);
+    ASSERT_NE(ap.info.priors, nullptr);
+    memset(ap.info.priors, 0xFF, sizeof(u8) * ap.info.vm_size);
 
     ap.info.nr_segs = 1;
     ap.info.segs[0].start = 0x0;
@@ -442,14 +442,12 @@ TEST_F(AccessMMUTest, SetPaPrior)
     ap.info.segs[0].hugepages = 1;
 
     u64 vaddr = 0x0;
-    u64 pa_idx = 0;
-    int nid = 0;
 
-    set_pa_prior(&ap, vaddr, pa_idx, nid);
+    set_pa_prior(&ap, vaddr);
 
-    EXPECT_EQ(0u, ap.info.mapping[0]);
+    EXPECT_EQ(0u, ap.info.priors[0]);
 
-    free(ap.info.mapping);
+    free(ap.info.priors);
 }
 
 TEST_F(AccessMMUTest, PosToAddr)

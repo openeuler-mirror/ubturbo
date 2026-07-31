@@ -53,7 +53,7 @@ struct AccessPidFreq {
 struct TrakingInfoPayload {
     pid_t pid;
     uint32_t length;
-    actc_t *data;
+    uint16_t *data; /* DFX 统计扫描频次，保留原始 u16 真值，不压缩 */
 };
 
 struct UserInfo {

@@ -81,7 +81,7 @@ struct smap_hist_dev {
 };
 
 struct hist_ops {
-	void (*read)(actc_t *dst_buf, struct addr_seg *seg);
+	void (*read)(u16 *dst_buf, struct addr_seg *seg);
 	void (*update_pgsize)(u32 pgsize);
 };
 

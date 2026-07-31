@@ -38,7 +38,7 @@ TEST_F(StrategyTest, TestRunStrategyOne)
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(SeparateStrategy).stubs().will(returnValue(0));
-    MOCKER(SeparateStrategy4K).stubs().will(returnValue(0));
+    MOCKER(SeparateStrategy).stubs().will(returnValue(0));
     int ret = RunStrategy(&process, mlist, mlistSize);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -52,7 +52,7 @@ TEST_F(StrategyTest, TestRunStrategyTwo)
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(SeparateStrategy).stubs().will(returnValue(0));
-    MOCKER(SeparateStrategy4K).stubs().will(returnValue(0));
+    MOCKER(SeparateStrategy).stubs().will(returnValue(0));
     int ret = RunStrategy(&process, mlist, mlistSize);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -63,7 +63,7 @@ TEST_F(StrategyTest, TestRunStrategyThree)
     ProcessAttr process;
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
     MOCKER(SeparateStrategy).stubs().will(returnValue(0));
-    MOCKER(SeparateStrategy4K).stubs().will(returnValue(0));
+    MOCKER(SeparateStrategy).stubs().will(returnValue(0));
     int ret = RunStrategy(&process, mlist, mlistSize);
     EXPECT_EQ(-EINVAL, ret);
 }

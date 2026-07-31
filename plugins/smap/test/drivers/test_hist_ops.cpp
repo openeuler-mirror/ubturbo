@@ -397,7 +397,7 @@ TEST_F(HistOpsTest, generate_aligned_scan_wins_info_4k_seq_loop)
 }
 
 extern "C" int generate_aligned_4k_scan_wins_info(struct segs_info *win_info,
-    struct segs_info *info, actc_t *buf);
+    struct segs_info *info, u16 *buf);
 extern "C" int filter_4k_scan_hot_wins(struct segs_info *win_info, u32 max_wins_4k_per_ba);
 TEST_F(HistOpsTest, generate_aligned_4k_scan_wins_info)
 {
@@ -411,7 +411,7 @@ TEST_F(HistOpsTest, generate_aligned_4k_scan_wins_info)
     segs[0].start = 0;
     segs[0].size = 0x14000000;
     info.segs = segs;
-    actc_t *buffer = (actc_t *)malloc(sizeof(actc_t) * buf_len);
+    u16 *buffer = (u16 *)malloc(sizeof(u16) * buf_len);
     g_smap_hist_dev.scan_wins_num_per_ba = 1;
     g_smap_hist_dev.freq_register_cnt = 16384;
     g_smap_hist_dev.ba_cnt = 2;
@@ -432,10 +432,10 @@ TEST_F(HistOpsTest, generate_aligned_4k_scan_wins_info)
     free(g_smap_hist_dev.ba_info);
 }
 
-extern "C" int do_hist_scan_sliding(struct segs_info *info, bool do_multi_gran, actc_t *buf,
+extern "C" int do_hist_scan_sliding(struct segs_info *info, bool do_multi_gran, u16 *buf,
     u32 buf_len, enum ub_hist_sts_size sts_size, bool direct_update);
 extern "C" void copy_actc_to_buf(struct segs_info *info, struct addr_seg *seg,
-    actc_t *dst_buf, u16 *freq, u32 buf_len, enum ub_hist_sts_size sts_size);
+    u16 *dst_buf, u16 *freq, u32 buf_len, enum ub_hist_sts_size sts_size);
 extern "C" int hist_scan_sliding(struct segs_info *info, u32 scan_time_total, u32 pgsize);
 
 TEST_F(HistOpsTest, hist_scan_sliding_seq_loop)
@@ -813,13 +813,12 @@ TEST_F(HistOpsTest, update_actc_direct_to_hdev)
     g_smap_hist_dev.freq_register_cnt = 16384;
     update_actc_direct(&rmem_info, &scan_seg, freq_buffer, 4, STS_SIZE_4K);
 
-    /* Verify: access_bit_actc_data should be updated with freq values */
-    /* Since freq values are 100, 200, 300, 400 and original values are 0 */
-    /* After update, values should be the same as freq (sum < U16_MAX) */
-    EXPECT_EQ(100, hdev.access_bit_actc_data[0]);
-    EXPECT_EQ(200, hdev.access_bit_actc_data[1]);
-    EXPECT_EQ(300, hdev.access_bit_actc_data[2]);
-    EXPECT_EQ(400, hdev.access_bit_actc_data[3]);
+    /* Verify: access_bit_actc_data should be updated with compress_freq(freq) */
+    /* freq 100/200/300/400 -> floor(sqrt) = 10/14/17/20 (sum < U8_MAX) */
+    EXPECT_EQ(10, hdev.access_bit_actc_data[0]);
+    EXPECT_EQ(14, hdev.access_bit_actc_data[1]);
+    EXPECT_EQ(17, hdev.access_bit_actc_data[2]);
+    EXPECT_EQ(20, hdev.access_bit_actc_data[3]);
 
     free(rmem_segs);
     free(hdev.access_bit_actc_data);
@@ -852,8 +851,8 @@ TEST_F(HistOpsTest, update_actc_direct_overflow_handling)
     hdev.is_hist = true;
     hdev.page_count = 10;
     hdev.access_bit_actc_data = (actc_t *)calloc(10, sizeof(actc_t));
-    hdev.access_bit_actc_data[0] = U16_MAX - 1; /* Near overflow */
-    hdev.access_bit_actc_data[1] = 1000;
+    hdev.access_bit_actc_data[0] = U8_MAX - 1; /* Near overflow */
+    hdev.access_bit_actc_data[1] = 100;
     init_rwsem(&hdev.buffer_lock);
 
     /* Setup lists */
@@ -869,11 +868,11 @@ TEST_F(HistOpsTest, update_actc_direct_overflow_handling)
     g_smap_hist_dev.freq_register_cnt = 16384;
     update_actc_direct(&rmem_info, &scan_seg, freq_buffer, 2, STS_SIZE_4K);
 
-    /* Verify overflow handling: sum should clamp to U16_MAX */
-    /* index 0: (U16_MAX-1) + U16_MAX = overflow, should be U16_MAX */
-    EXPECT_EQ(U16_MAX, hdev.access_bit_actc_data[0]);
-    /* index 1: 1000 + U16_MAX = overflow, should be U16_MAX */
-    EXPECT_EQ(U16_MAX, hdev.access_bit_actc_data[1]);
+    /* Verify overflow handling: sum should clamp to U8_MAX */
+    /* index 0: (U8_MAX-1) + compress_freq(U16_MAX)=254+255 -> clamp U8_MAX */
+    EXPECT_EQ(U8_MAX, hdev.access_bit_actc_data[0]);
+    /* index 1: 100 + compress_freq(U16_MAX)=100+255 -> clamp U8_MAX */
+    EXPECT_EQ(U8_MAX, hdev.access_bit_actc_data[1]);
 
     free(rmem_segs);
     free(hdev.access_bit_actc_data);

@@ -80,7 +80,7 @@ TEST_F(AccessTrackingTest, init_actc_data)
 {
     struct access_tracking_dev adev;
     adev.page_count = 1;
-    u16 data = 0;
+    actc_t data = 0;
     adev.access_bit_actc_data = &data;
     drivers_init_actc_data(&adev);
     EXPECT_EQ(0, adev.access_bit_actc_data[0]);

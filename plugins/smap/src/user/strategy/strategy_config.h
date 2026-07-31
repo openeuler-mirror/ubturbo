@@ -27,6 +27,13 @@ extern "C" {
 #define DEFAULT_MIGRATE_PERIOD 2000
 #define MIN_MIGRATE_PERIOD 500
 
+/*
+ * 频次类型 actc_t 为 u8(上限 255)。单迁移周期内的扫描次数 = migratePeriod / scanPeriod,
+ * 即一个迁移周期内页面最多被累加 255 次; 超过 255 次后软件扫描的 ++ 会在 u8 处回绕丢真值。
+ * 故约束: migratePeriod <= MAX_SCAN_TIMES_PER_MIGRATE * scanPeriod。
+ */
+#define MAX_SCAN_TIMES_PER_MIGRATE 255
+
 uint32_t GetScanPeriodConfig(void);
 
 uint32_t GetMigratePeriodConfig(void);

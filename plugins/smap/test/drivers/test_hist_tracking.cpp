@@ -52,7 +52,7 @@ TEST_F(HistTrackingTest, reset_actc_data)
     struct access_tracking_dev dev = {
         .page_count = 1
     };
-    dev.access_bit_actc_data = (u16 *)malloc(dev.page_count * sizeof(u16));
+    dev.access_bit_actc_data = (actc_t *)malloc(dev.page_count * sizeof(actc_t));
     drivers_reset_actc_data(&dev);
     EXPECT_EQ(0, dev.access_bit_actc_data[0]);
 }
@@ -89,7 +89,7 @@ TEST_F(HistTrackingTest, actc_buffer_deinit)
     struct access_tracking_dev dev = {
         .page_count = 1
     };
-    dev.access_bit_actc_data = (u16 *)malloc(dev.page_count * sizeof(u16));
+    dev.access_bit_actc_data = (actc_t *)malloc(dev.page_count * sizeof(actc_t));
     drivers_actc_buffer_deinit(&dev);
     EXPECT_EQ(0, dev.page_count);
 }

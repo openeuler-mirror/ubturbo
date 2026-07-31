@@ -2310,7 +2310,7 @@ static int QueryVMFreqFromKernel(int pid, uint16_t *data, uint32_t lengthIn, uin
 {
     int ret;
     struct ProcessManager *manager = GetProcessManager();
-    actc_t *tmpData = malloc(sizeof(actc_t) * lengthIn);
+    uint16_t *tmpData = malloc(sizeof(uint16_t) * lengthIn);
     if (tmpData == NULL) {
         SMAP_LOGGER_ERROR("QueryVMFreqFromKernel malloc tmpData failed.\n");
         return -ENOMEM;

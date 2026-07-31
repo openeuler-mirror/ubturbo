@@ -785,6 +785,14 @@ static int32_t StrategyConfigReview(void)
                           g_tmpStrategyConfig.migratePeriod);
         return RETURN_ERROR;
     }
+    /* actc_t 为 u8(上限 255): 单迁移周期内扫描次数不得超过 255, 否则频次在 u8 处回绕丢真值 */
+    if (g_tmpStrategyConfig.migratePeriod > MAX_SCAN_TIMES_PER_MIGRATE * g_tmpStrategyConfig.scanPeriod) {
+        SMAP_LOGGER_ERROR("Migrate period(%d) must be <= %d * scan period(%d), because actc_t is u8 and scan times "
+                          "per migrate cycle must not exceed %d.",
+                          g_tmpStrategyConfig.migratePeriod, MAX_SCAN_TIMES_PER_MIGRATE, g_tmpStrategyConfig.scanPeriod,
+                          MAX_SCAN_TIMES_PER_MIGRATE);
+        return RETURN_ERROR;
+    }
     return RETURN_OK;
 }
 

@@ -56,9 +56,9 @@ void destroy_access_pid(struct access_pid *elem)
 		elem->scan_count[i] = 0;
 		elem->page_num[i] = 0;
 	}
-	if (elem->info.mapping) {
-		vfree(elem->info.mapping);
-		elem->info.mapping = NULL;
+	if (elem->info.priors) {
+		vfree(elem->info.priors);
+		elem->info.priors = NULL;
 	}
 	kfree(elem);
 	return;
@@ -168,15 +168,15 @@ static inline void post_scan_kvm_gfn(struct kvm *kvm, int idx)
 int init_vm_mapping(struct vm_mapping_info *info)
 {
 	if (info->vm_size) {
-		info->mapping = vmalloc(info->vm_size * sizeof(u32));
-		if (!info->mapping) {
+		info->priors = vmalloc(info->vm_size * sizeof(u8));
+		if (!info->priors) {
 			pr_err("unable to allocate memory for VM mapping\n");
 			return -ENOMEM;
 		}
-		clear_vm_mapping(info->mapping, info->vm_size);
+		clear_vm_mapping(info->priors, info->vm_size);
 		return 0;
 	}
-	info->mapping = NULL;
+	info->priors = NULL;
 	return 0;
 }
 
@@ -281,29 +281,28 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 			break;
 		}
 
-		/* 填充addr - 使用相对索引 */
-		actc[len_cnt].addr = len_cnt;
-
+		u8 flags = 0;
 		/* 填充freq */
 		actc[len_cnt].freq = adev->access_bit_actc_data[acidx];
 
-		/* 填充prior - 从mapping获取 */
-		if (ap->info.vm_size && ap->info.mapping &&
-		    (mapping_offset + len_cnt) < ap->info.vm_size) {
-			actc[len_cnt].prior =
-				ap->info.mapping[mapping_offset + len_cnt] &
-				0xff;
+		/* 填充prior - 从priors获取 */
+		if (ap->info.vm_size && ap->info.priors) {
+			if ((mapping_offset + len_cnt) < ap->info.vm_size) {
+				flags |= ACTC_PRIOR_SET(
+					ap->info.priors[mapping_offset +
+							len_cnt]);
+			}
 		} else {
-			actc[len_cnt].prior = 0;
+			flags |= ACTC_PRIOR_SET(0);
 		}
 
 		/* 填充is_white_list */
 		if (ap->white_list_bm[nid] &&
 		    test_bit(acidx, ap->white_list_bm[nid])) {
-			actc[len_cnt].is_white_list = 1;
-		} else {
-			actc[len_cnt].is_white_list = 0;
+			flags |= ACTC_WHITE_LIST_BIT;
 		}
+
+		actc[len_cnt].flags = flags;
 
 		len_cnt++;
 		acidx++;
@@ -511,9 +510,9 @@ int init_access_pid(struct access_add_pid_payload *payload,
 	}
 	ret = access_walk_pagemap_prepare(ap);
 	if (ret) {
-		if (ap->info.mapping) {
-			vfree(ap->info.mapping);
-			ap->info.mapping = NULL;
+		if (ap->info.priors) {
+			vfree(ap->info.priors);
+			ap->info.priors = NULL;
 		}
 		kfree(ap);
 		return ret;
@@ -581,7 +580,7 @@ static int init_ham_pid_memory(struct ham_tracking_info *info,
 		pr_err("unable to allocate memory for HAM access pid physical address array\n");
 		return -ENOMEM;
 	}
-	info->freq[level] = vzalloc(info->len[level] * sizeof(actc_t));
+	info->freq[level] = vzalloc(info->len[level] * sizeof(u16));
 	if (!info->freq[level]) {
 		vfree(info->paddr[level]);
 		pr_err("unable to allocate memory for HAM access pid frequency array\n");
@@ -1242,9 +1241,9 @@ void clean_last_ap_data(struct access_pid *ap)
 		ap->bm_len[i] = 0;
 		ap->page_num[i] = 0;
 	}
-	if (ap->info.mapping) {
-		vfree(ap->info.mapping);
-		ap->info.mapping = NULL;
+	if (ap->info.priors) {
+		vfree(ap->info.priors);
+		ap->info.priors = NULL;
 	}
 }
 

@@ -89,7 +89,8 @@ extern EnvAtomic g_forbiddenNodes[MAX_NODES];
 #define NODE_FORBIDDEN_MIGBACK_DONE (1 << 1)
 #define NODE_FORBIDDEN_MIGBACK_BUSY (1 << 2)
 
-typedef uint16_t actc_t;
+/* 导出/传输类型：经内核 sqrt 压缩后落在 0..255，对齐 FREQ_BUCKETS_SIZE(256) */
+typedef uint8_t actc_t;
 
 typedef enum {
     WATERLINE_MODE = 0,
@@ -123,10 +124,10 @@ enum {
 };
 
 typedef struct {
-    uint64_t addr;
     actc_t freq;
-    uint8_t prior;
-    uint8_t isWhiteListPage;
+    uint8_t isWhiteListPage : 1; // bit 0
+    uint8_t isSelected : 1; // bit 1
+    uint8_t prior : 6; // bits 2-7
 } __attribute__((packed)) ActcData;
 
 typedef struct {
@@ -137,8 +138,8 @@ typedef struct {
 } LevelActcData;
 
 typedef struct {
-    uint16_t freqMin;
-    uint16_t freqMax;
+    uint8_t freqMin;
+    uint8_t freqMax;
     uint32_t freqZero;
     uint64_t freqNum;
     uint64_t pageNum;

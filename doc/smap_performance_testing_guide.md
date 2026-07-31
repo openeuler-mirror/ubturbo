@@ -492,7 +492,7 @@ smap.period.file.config.switch = false
 |序号|参数|取值|说明|
 |--|--|--|--|
 |1|smap.scan.period|默认值：200<br>单位：ms<br>取值范围：[50,60000]<br>参数配置必须是50的倍数。|扫描周期。|
-|2|smap.migrate.period|默认值：2000<br>单位：ms<br>取值范围：[500,60000]<br>迁移周期不能小于扫描周期。|迁移周期。|
+|2|smap.migrate.period|默认值：2000<br>单位：ms<br>取值范围：[500,60000]<br>迁移周期不能小于扫描周期，且迁移周期不能大于扫描周期的255倍。|迁移周期。|
 |3|smap.remote.freq.percentile|百分比。<br>默认值：99<br>取值范围：[1,100]|远端热页最大频次取值百分比。|
 |4|smap.slow.threshold|默认值：2<br>取值范围：[0,40]|冷热页面判定阈值。|
 |5|smap.freq.wt|默认值：0<br>取值范围：[0,65535]|冷热比较时本地页面缩放因子。|
@@ -519,9 +519,14 @@ smap.period.file.config.switch = false
 ```configure
 50 <= smap.scan.period <= 60000
 500 <= smap.migrate.period <= 60000
+smap.migrate.period <= 255 * smap.scan.period
 1 <= smap.remote.freq.percentile <= 100
 0 <= smap.slow.threshold <= 40
 0 <= smap.freq.wt <= 65535
 ```
 
-扫描周期配置必须是50的倍数，迁移周期不能小于扫描周期。
+扫描周期配置必须是50的倍数，迁移周期不能小于扫描周期，且迁移周期不能大于扫描周期的255倍。
+
+> [!NOTE] 说明
+>
+> - 迁移周期上限为扫描周期的255倍，是因为内存访问频次类型 actc_t 为 u8（取值范围 0~255）。一个迁移周期内的扫描次数等于 `smap.migrate.period / smap.scan.period`，即页面在一个迁移周期内最多被累加访问 255 次；若扫描次数超过 255，频次在 u8 处回绕，会丢失高频页的真实区分度。配置时需保证 `smap.migrate.period <= 255 * smap.scan.period`，例如 `smap.scan.period = 200` 时，`smap.migrate.period` 不得超过 51000。
