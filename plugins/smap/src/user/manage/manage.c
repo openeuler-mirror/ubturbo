@@ -3967,9 +3967,7 @@ int BuildAllPidData(void)
                     SMAP_LOGGER_ERROR("Refresh pid %d managed local state failed: %d.", current->pid, ret);
                     failedCount++;
                 }
-                if (GetRunMode() == WATERLINE_MODE) {
-                    CalibratePairAccount(current);
-                }
+                CalibratePairAccount(current);
             }
         }
     }

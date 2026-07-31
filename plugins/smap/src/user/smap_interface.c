@@ -427,11 +427,6 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType)
             return -EINVAL;
         }
 
-        if (pidType == PAGETYPE_NORMAL && msg->payload[i].count > 1) {
-            SMAP_LOGGER_ERROR("4K process migration: Migration to multiple remote NUMA nodes is unsupported.");
-            return -EINVAL;
-        }
-
         for (int j = 0; j < msg->payload[i].count; j++) {
             SMAP_LOGGER_INFO("mig out msg num:[%d] pid:%d, destNid:%d, ratio:%d, memSize:%llu, migMode:%d.", j,
                              msg->payload[i].pid, msg->payload[i].inner[j].destNid, msg->payload[i].inner[j].ratio,
@@ -928,27 +923,6 @@ static void PublishMigrateOutCandidates(ProcessManageCandidate *candidates, int 
     }
 }
 
-static int CheckNodeBitmap(struct MigrateOutMsg *msg, int pidType, uint32_t *nodeBitmap)
-{
-    if (GetRunMode() != WATERLINE_MODE || pidType != PAGETYPE_HUGE) {
-        return 0;
-    }
-
-    for (int i = 0; i < msg->count; ++i) {
-        if (msg->payload[i].count == 0) {
-            continue;
-        }
-        if (GetL1Count(nodeBitmap[i]) > 1) {
-            SMAP_LOGGER_ERROR("Pid %d has %d local NUMA nodes, "
-                              "not supported in WATERLINE_MODE.",
-                              msg->payload[i].pid, GetL1Count(nodeBitmap[i]));
-            return -EINVAL;
-        }
-    }
-
-    return 0;
-}
-
 int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
 {
     struct ProcessManager *manager = GetProcessManager();
@@ -970,14 +944,6 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
     uint32_t nodeBitmap[MAX_NR_MIGOUT] = { 0 };
     ProcessManageCandidate candidates[MAX_NR_MIGOUT] = { 0 };
     int prepareError = PrepareMigrateOutCandidates(msg, pidType, candidates, nodeBitmap);
-
-    ret = CheckNodeBitmap(msg, pidType, nodeBitmap);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Pid numa bitmap check failed: %d.", ret);
-        DiscardMigrateOutCandidates(candidates, msg->count);
-        EnvMutexUnlock(&manager->lock);
-        return ret;
-    }
 
     ret = TrackMigrateOutCandidates(candidates, msg->count);
     if (ret) {

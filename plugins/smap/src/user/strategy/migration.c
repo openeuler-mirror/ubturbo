@@ -65,6 +65,11 @@ int AddMigList(struct MigrateMsg *mMsg, struct MigList *mList)
     if (mList->nr == 0 || mList->addr == NULL) {
         return 0;
     }
+    int maxMigListCount = GetCurrentMaxNrPid() * MAX_PER_PID_MIG_LIST_COUNT;
+    if (mMsg->cnt >= maxMigListCount) {
+        SMAP_LOGGER_WARNING("Migration list reaches kernel limit %d.", maxMigListCount);
+        return -ENOSPC;
+    }
     SMAP_LOGGER_DEBUG("mList->nr: %lu.", mList->nr);
     mMsg->migList[mMsg->cnt].addr = malloc(sizeof(uint64_t) * mList->nr);
     if (!mMsg->migList[mMsg->cnt].addr) {
@@ -381,6 +386,17 @@ int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t p
         ret = BuildAllPairPlanInputs(manager, inputs, planCap, &inputCnt, pidBudgets, MAX_4K_PROCESSES_CNT,
                                      &pidBudgetCnt);
     }
+    if (!ret) {
+    for (size_t i = 0; i < inputCnt; i++) {
+        if (IsNodeForbidden(inputs[i].remoteNid)) {
+            /*
+		 * A disabled remote cannot receive new pages, but its current
+		 * residency remains available for promotion back to local.
+		 */
+            inputs[i].targetPages = 0;
+        }
+    }
+    }
     size_t stagedPlanCnt = 0;
     if (!ret) {
         ret =
@@ -445,7 +461,7 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
             continue;
         }
         int nid = i - offset;
-        if (IsNodeForbidden(nid)) {
+        if (IsNodeForbidden(nid) && process->groupPolicy.enabled) {
             SMAP_LOGGER_INFO("L2 node%d is forbiddened, pid %d stops migrate out.", nid, process->pid);
             return -EPERM;
         }
@@ -468,19 +484,32 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
     }
 
     uint64_t nrMigTotal = 0;
-    for (int from = 0; from < MAX_NODES; from++) {
-        for (int to = 0; to < MAX_NODES; to++) {
-            if (!migList[from][to].nr) {
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int phase = 0; phase < 2; phase++) {
+        for (int from = 0; from < MAX_NODES; from++) {
+            bool promote = from >= nrLocalNuma;
+            if ((phase == 0) != promote) {
                 continue;
             }
-            nrMigTotal += migList[from][to].nr;
-            ret = AddMigList(mMsg, &migList[from][to]);
-            if (ret) {
-                SMAP_LOGGER_ERROR("Pid %d AddMigList %d %d failed: %d.", process->pid, from, to, ret);
-                FreeMigList(migList);
-                return ret;
+            for (int to = 0; to < MAX_NODES; to++) {
+                if (!migList[from][to].nr) {
+                    continue;
+                }
+                ret = AddMigList(mMsg, &migList[from][to]);
+                if (ret == -ENOSPC) {
+                    SMAP_LOGGER_WARNING("Pid %d migration list is deferred by kernel entry limit.", process->pid);
+                    FreeMigList(migList);
+                    *migratePage += nrMigTotal;
+                    return 0;
+                }
+                if (ret) {
+                    SMAP_LOGGER_ERROR("Pid %d AddMigList %d %d failed: %d.", process->pid, from, to, ret);
+                    FreeMigList(migList);
+                    return ret;
+                }
+                nrMigTotal += migList[from][to].nr;
+                SMAP_LOGGER_INFO("Numa %d --> Numa %d, mig %d pages.", from, to, migList[from][to].nr);
             }
-            SMAP_LOGGER_INFO("Numa %d --> Numa %d, mig %d pages.", from, to, migList[from][to].nr);
         }
     }
     FreeMigList(migList);
@@ -1144,49 +1173,100 @@ static void NumaMigReduceDeal(ProcessAttr *current)
     }
 }
 
+static ProcessAttr *FindMigrationCandidateLocked(struct ProcessManager *manager, pid_t pid)
+{
+    for (ProcessAttr *current = manager->processes; current; current = current->next) {
+        if (current->pid == pid) {
+            return current;
+        }
+    }
+    return NULL;
+}
+
 static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg, uint64_t *migratePages)
 {
     int ret;
     ProcessAttr *current;
     bool isForcedSingleThread = false;
+    size_t candidateCnt = 0;
+    size_t planCnt = 0;
+    pid_t *candidatePids = calloc(MAX_4K_PROCESSES_CNT, sizeof(pid_t));
+    PairPlan *plans = calloc(MAX_PAIR_TARGET_COUNT, sizeof(PairPlan));
+    if (!candidatePids || !plans) {
+        free(candidatePids);
+        free(plans);
+        return -ENOMEM;
+    }
 
     EnvMutexLock(&manager->lock);
     ret = InitMigrateMsg(mMsg, manager);
     if (ret) {
         EnvMutexUnlock(&manager->lock);
         SMAP_LOGGER_ERROR("InitMigrateMsg failed! ret:%d.", ret);
-        return ret;
+        goto OUT;
     }
     for (current = manager->processes; current; current = current->next) {
         if (current->scanType != NORMAL_SCAN) {
             continue;
         }
-        if (current->state == PROC_IDLE && current->pendingTargetConfigValid) {
+        if (current->state != PROC_IDLE) {
+            SMAP_LOGGER_DEBUG("pid %d state is %d, skip migration.", current->pid, current->state);
+            continue;
+        }
+        if (current->pendingTargetConfigValid) {
             ret = ApplyPendingMigrationTargets(current);
             if (ret) {
                 SMAP_LOGGER_ERROR("Apply pending migration target before migration failed, "
                                   "pid %d ret %d.",
                                   current->pid, ret);
+                ret = 0;
                 continue;
             }
         }
-        if (current->state == PROC_IDLE && current->pendingGroupPolicy.valid) {
+        if (current->pendingGroupPolicy.valid) {
             /* Retry a previously failed deferred refresh before building new migrations. */
             ret = ApplyPendingGroupedPolicy(current);
             if (ret) {
                 SMAP_LOGGER_ERROR("Apply pending grouped policy before migration failed, pid %d ret %d.", current->pid,
                                   ret);
+                ret = 0;
                 continue;
             }
         }
         SMAP_LOGGER_INFO("+++++++scan_and_strategy_thread: processing pid %d.", current->pid);
-        NumaMigReduceDeal(current);
-        if (current->state != PROC_IDLE) {
-            SMAP_LOGGER_DEBUG("pid %d state is %d, skip migration.", current->pid, current->state);
-            continue;
+        if (candidateCnt == MAX_4K_PROCESSES_CNT) {
+            ret = -EOVERFLOW;
+            break;
         }
         current->state = PROC_MIGRATE;
+        candidatePids[candidateCnt++] = current->pid;
         SMAP_LOGGER_DEBUG("change pid %d state from idle to migrate.", current->pid);
+    }
+    EnvMutexUnlock(&manager->lock);
+
+    if (ret) {
+        goto ROLLBACK;
+    }
+
+    /*
+     * All candidate processes are in PROC_MIGRATE, so concurrent target
+     * updates are deferred until PostMigration and cannot race this plan.
+     */
+    ret = BuildAllPairPlans(manager, plans, MAX_PAIR_TARGET_COUNT, &planCnt);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Build all pair plans failed: %d.", ret);
+        goto ROLLBACK;
+    }
+
+    EnvMutexLock(&manager->lock);
+    for (size_t i = 0; i < candidateCnt; i++) {
+        current = FindMigrationCandidateLocked(manager, candidatePids[i]);
+        if (!current || current->state != PROC_MIGRATE) {
+            continue;
+        }
+        if (current->groupPolicy.enabled) {
+            NumaMigReduceDeal(current);
+        }
         // 识别每个进程的待迁移冷热页
         ret = BuildMigrationMsg(current, mMsg, migratePages);
         SMAP_LOGGER_INFO("Add process: %d to migrate msg ret: %d.", current->pid, ret);
@@ -1195,7 +1275,25 @@ static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
     EnvMutexUnlock(&manager->lock);
 
     SetMigrateThreadNum(mMsg, *migratePages, isForcedSingleThread);
+    free(candidatePids);
+    free(plans);
     return 0;
+
+ROLLBACK:
+    EnvMutexLock(&manager->lock);
+    for (size_t i = 0; i < candidateCnt; i++) {
+        current = FindMigrationCandidateLocked(manager, candidatePids[i]);
+        if (current && current->state == PROC_MIGRATE) {
+            current->state = PROC_IDLE;
+        }
+    }
+    EnvMutexUnlock(&manager->lock);
+    free(mMsg->migList);
+    mMsg->migList = NULL;
+OUT:
+    free(candidatePids);
+    free(plans);
+    return ret;
 }
 
 static void PostMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg)
