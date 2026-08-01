@@ -452,6 +452,7 @@ static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_
             CollectPages4K(mode, n, currentData, currentMig, nrMig, thresholdFreq, takeAtThreshold, selectedBuckets);
     }
 
+    currentMig->nr = collected;
     return 0;
 }
 
@@ -494,6 +495,7 @@ int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][
                 }
                 swapPages = 0;
                 demotePages = 0;
+                promotePages = remoteToLocal;
             }
 
             int ret = BuildPairMlist(process, mlist, numaOffset, localNid, remoteNid, demotePages + swapPages,

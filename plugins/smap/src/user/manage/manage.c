@@ -377,11 +377,14 @@ static uint32_t BuildManagedTrackingNodes(const ProcessAttr *attr)
     }
 
     /*
-     * Keep existing remote bits until Pair account reconciliation can prove
-     * that no resident pages remain on an omitted remote.
+     * Rebuild the remote tracking scope from the current target and resident
+     * page state. An omitted remote must remain tracked while it still owns
+     * pages, but stale bits must not survive after reconciliation reaches zero.
      */
     uint32_t localBitmapMask = (1U << LOCAL_NUMA_BITS) - 1U;
-    uint32_t numaNodes = attr->numaAttr.numaNodes & ~localBitmapMask;
+    /* A zero total-page count means no fresh pagemap snapshot is available. */
+    bool pageSnapshotValid = attr->walkPage.nrPage != 0;
+    uint32_t numaNodes = pageSnapshotValid ? 0 : (attr->numaAttr.numaNodes & ~localBitmapMask);
     numaNodes |= attr->managedLocalState.managedLocalMask & allLocalMask;
 
     uint32_t targetCount = attr->targetConfig.count;
@@ -397,10 +400,13 @@ static uint32_t BuildManagedTrackingNodes(const ProcessAttr *attr)
         }
     }
     for (int remoteIndex = 0; remoteIndex < REMOTE_NUMA_NUM; remoteIndex++) {
-        if (attr->managedLocalState.accountLocalMask[remoteIndex] == 0) {
+        int remoteNid = GetNrLocalNuma() + remoteIndex;
+        bool hasResidentPages = remoteNid < MAX_NODES && attr->walkPage.nrPages[remoteNid] != 0;
+        bool hasAccount = attr->managedLocalState.accountLocalMask[remoteIndex] != 0;
+        if (!hasResidentPages && !hasAccount) {
             continue;
         }
-        AddL2ByNid(&numaNodes, GetNrLocalNuma() + remoteIndex);
+        AddL2ByNid(&numaNodes, remoteNid);
     }
     return numaNodes;
 }
@@ -2983,11 +2989,12 @@ static void BuildPairRequestContext(const struct ProcessManager *manager,
 static int CollectAllPairRequests(const struct ProcessManager *manager,
                                   const uint64_t privatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
                                   const uint64_t sharedPages[REMOTE_NUMA_NUM], PairArbitrationEntry entries[],
-                                  size_t entryCap, size_t *entryCount)
+                                  size_t entryCap, size_t *entryCount, bool migrateOnly)
 {
     size_t count = 0;
     for (const ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
-        if (attr->scanType != NORMAL_SCAN || attr->groupPolicy.enabled) {
+        if (attr->scanType != NORMAL_SCAN || attr->groupPolicy.enabled ||
+            (migrateOnly && attr->state != PROC_MIGRATE)) {
             continue;
         }
 
@@ -3080,14 +3087,14 @@ static void PublishPairCapacityResult(struct ProcessManager *manager, PairArbitr
 static int BuildPairArbitrationSnapshotLocked(struct ProcessManager *manager, PairArbitrationEntry entries[],
                                               size_t entryCap, size_t *entryCount,
                                               uint64_t privateCapacity[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                              uint64_t totalCapacity[REMOTE_NUMA_NUM])
+                                              uint64_t totalCapacity[REMOTE_NUMA_NUM], bool migrateOnly)
 {
     uint64_t sharedCapacity[REMOTE_NUMA_NUM] = { 0 };
     int ret = BuildPairCapacitySnapshot(manager, privateCapacity, sharedCapacity, totalCapacity);
     if (ret) {
         return ret;
     }
-    ret = CollectAllPairRequests(manager, privateCapacity, sharedCapacity, entries, entryCap, entryCount);
+    ret = CollectAllPairRequests(manager, privateCapacity, sharedCapacity, entries, entryCap, entryCount, migrateOnly);
     if (ret) {
         return ret;
     }
@@ -3119,7 +3126,8 @@ int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], si
 
     EnvMutexLock(&manager->lock);
     EnvMutexLock(&manager->remoteNumaInfo.lock);
-    ret = BuildPairArbitrationSnapshotLocked(manager, entries, targetCap, &entryCount, privateCapacity, totalCapacity);
+    ret = BuildPairArbitrationSnapshotLocked(manager, entries, targetCap, &entryCount, privateCapacity, totalCapacity,
+                                             false);
     if (!ret) {
         PublishPairCapacityResult(manager, entries, entryCount, privateCapacity, totalCapacity);
         for (size_t i = 0; i < entryCount; i++) {
@@ -3138,8 +3146,9 @@ int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], si
  * manager snapshot. File I/O and per-cycle free-page budgeting stay in the
  * strategy layer.
  */
-int BuildAllPairPlanInputs(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
-                           PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt)
+int BuildAllPairPlanInputsForState(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
+                                   PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt,
+                                   bool migrateOnly)
 {
     if (!manager || !plans || !planCnt || !pidBudgets || !pidBudgetCnt || manager->nrLocalNuma == 0 ||
         manager->nrLocalNuma > LOCAL_NUMA_NUM || planCap > MAX_PAIR_TARGET_COUNT ||
@@ -3162,7 +3171,8 @@ int BuildAllPairPlanInputs(struct ProcessManager *manager, PairPlan plans[], siz
 
     EnvMutexLock(&manager->lock);
     EnvMutexLock(&manager->remoteNumaInfo.lock);
-    ret = BuildPairArbitrationSnapshotLocked(manager, entries, planCap, &entryCount, privateCapacity, totalCapacity);
+    ret = BuildPairArbitrationSnapshotLocked(manager, entries, planCap, &entryCount, privateCapacity, totalCapacity,
+                                             migrateOnly);
     if (!ret) {
         for (size_t i = 0; i < entryCount; i++) {
             if (i == 0 || entries[i].target.pid != entries[i - 1].target.pid) {
@@ -3204,6 +3214,13 @@ int BuildAllPairPlanInputs(struct ProcessManager *manager, PairPlan plans[], siz
     EnvMutexUnlock(&manager->lock);
     free(entries);
     return ret;
+}
+
+int BuildAllPairPlanInputs(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
+                           PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt)
+{
+    return BuildAllPairPlanInputsForState(manager, plans, planCap, planCnt, pidBudgets, pidBudgetCap, pidBudgetCnt,
+                                          false);
 }
 
 /**

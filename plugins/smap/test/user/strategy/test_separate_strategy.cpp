@@ -247,14 +247,14 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuilds2x2NetMigration)
     ASSERT_EQ(0, PairMigrationStrategy(&process, mlist));
     ASSERT_EQ(2U, mlist[2][0].nr);
     ASSERT_EQ(1U, mlist[2][1].nr);
-    EXPECT_EQ(2010008U, mlist[2][0].addr[0]);
-    EXPECT_EQ(2020007U, mlist[2][0].addr[1]);
-    EXPECT_EQ(2000003U, mlist[2][1].addr[0]);
+    EXPECT_EQ(1U, mlist[2][0].addr[0]);
+    EXPECT_EQ(2U, mlist[2][0].addr[1]);
+    EXPECT_EQ(0U, mlist[2][1].addr[0]);
     ASSERT_EQ(2U, mlist[0][3].nr);
     ASSERT_EQ(1U, mlist[1][3].nr);
-    EXPECT_EQ(1U, mlist[0][3].addr[0]);
-    EXPECT_EQ(20002U, mlist[0][3].addr[1]);
-    EXPECT_EQ(1000000U, mlist[1][3].addr[0]);
+    EXPECT_EQ(0U, mlist[0][3].addr[0]);
+    EXPECT_EQ(2U, mlist[0][3].addr[1]);
+    EXPECT_EQ(0U, mlist[1][3].addr[0]);
     EXPECT_NE(mlist[2][0].addr[0], mlist[2][1].addr[0]);
     EXPECT_NE(mlist[2][0].addr[1], mlist[2][1].addr[0]);
 
@@ -280,11 +280,11 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuildsPairSwapAfterNetMigr
     ASSERT_EQ(0, PairMigrationStrategy(&process, mlist));
     ASSERT_EQ(3U, mlist[0][2].nr);
     EXPECT_EQ(0U, mlist[0][2].addr[0]);
-    EXPECT_EQ(10001U, mlist[0][2].addr[1]);
-    EXPECT_EQ(20006U, mlist[0][2].addr[2]);
+    EXPECT_EQ(1U, mlist[0][2].addr[1]);
+    EXPECT_EQ(2U, mlist[0][2].addr[2]);
     ASSERT_EQ(2U, mlist[2][0].nr);
-    EXPECT_EQ(2000009U, mlist[2][0].addr[0]);
-    EXPECT_EQ(2010008U, mlist[2][0].addr[1]);
+    EXPECT_EQ(0U, mlist[2][0].addr[0]);
+    EXPECT_EQ(1U, mlist[2][0].addr[1]);
 
     FreeMlist(mlist);
     free(process.scanAttr.actcData[0]);
@@ -299,7 +299,7 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteOnlyPromotes
     BuildPairActcData(2, remote2, 1, &process.scanAttr);
     initializeMigList(mlist);
     process.strategyAttr.nrMigratePages[0][2] = 1;
-    process.strategyAttr.nrMigratePages[2][1] = 1;
+    process.strategyAttr.nrMigratePages[2][0] = 1;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
     EnvAtomicSet(&g_forbiddenNodes[2], 1);
 
@@ -307,8 +307,8 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteOnlyPromotes
     EnvAtomicSet(&g_forbiddenNodes[2], 0);
     ASSERT_EQ(0, ret);
     EXPECT_EQ(0U, mlist[0][2].nr);
-    ASSERT_EQ(1U, mlist[2][1].nr);
-    EXPECT_EQ(2000005U, mlist[2][1].addr[0]);
+    ASSERT_EQ(1U, mlist[2][0].nr);
+    EXPECT_EQ(0U, mlist[2][0].addr[0]);
 
     FreeMlist(mlist);
     free(process.scanAttr.actcData[2]);

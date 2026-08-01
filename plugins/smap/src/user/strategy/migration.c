@@ -258,7 +258,11 @@ int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t 
 
         if (currentPid != plan->pid) {
             currentPid = plan->pid;
-            memset(selectedFrom, 0, sizeof(selectedFrom));
+            int ret = memset_s(selectedFrom, sizeof(selectedFrom), 0, sizeof(selectedFrom));
+            if (ret != EOK) {
+                EnvMutexUnlock(&manager->lock);
+                return ret;
+            }
             for (size_t j = 0; j < planCnt; j++) {
                 if (plans[j].pid == currentPid) {
                     selectedFrom[plans[j].localNid] += plans[j].demotePages;
@@ -266,7 +270,9 @@ int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t 
                 }
             }
         }
-        if (!process->enableSwap || IsNodeForbidden(plan->remoteNid) || !IsOnlyLocalForRemote(plans, planCnt, i) ||
+        /* Capacity convergence has priority over the optional hot/cold swap. */
+        if (plan->targetPages != plan->actualPages || !process->enableSwap || IsNodeForbidden(plan->remoteNid) ||
+            !IsOnlyLocalForRemote(plans, planCnt, i) ||
             (plan->targetPages == 0 && plan->demotePages == 0 && plan->promotePages == 0)) {
             continue;
         }
@@ -435,7 +441,7 @@ static PairPlanMatrixStage *FindPairPlanMatrixStage(PairPlanMatrixStage stages[]
     return NULL;
 }
 
-int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt)
+int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt, bool migrateOnly)
 {
     if (!manager || planCnt > MAX_PAIR_TARGET_COUNT || (planCnt > 0 && !plans)) {
         return -EINVAL;
@@ -454,7 +460,8 @@ int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_
         goto OUT;
     }
     for (ProcessAttr *process = manager->processes; process; process = process->next) {
-        if (process->scanType != NORMAL_SCAN || process->groupPolicy.enabled) {
+        if (process->scanType != NORMAL_SCAN || process->groupPolicy.enabled ||
+            (migrateOnly && process->state != PROC_MIGRATE)) {
             continue;
         }
         if (stageCnt == MAX_4K_PROCESSES_CNT) {
@@ -499,6 +506,11 @@ OUT:
     return ret;
 }
 
+int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt)
+{
+    return ApplyPairPlansForState(manager, plans, planCnt, false);
+}
+
 int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt)
 {
     if (!manager || !plans || !planCnt || planCap > MAX_PAIR_TARGET_COUNT) {
@@ -528,8 +540,8 @@ int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t p
     size_t inputCnt = 0;
     size_t pidBudgetCnt = 0;
     if (!ret) {
-        ret = BuildAllPairPlanInputs(manager, inputs, planCap, &inputCnt, pidBudgets, MAX_4K_PROCESSES_CNT,
-                                     &pidBudgetCnt);
+        ret = BuildAllPairPlanInputsForState(manager, inputs, planCap, &inputCnt, pidBudgets, MAX_4K_PROCESSES_CNT,
+                                             &pidBudgetCnt, true);
     }
     if (!ret) {
         for (size_t i = 0; i < inputCnt; i++) {
@@ -551,7 +563,7 @@ int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t p
         ret = BuildPairSwapPlans(manager, stagedPlans, stagedPlanCnt, &context, pidBudgets, pidBudgetCnt);
     }
     if (!ret) {
-        ret = ApplyPairPlans(manager, stagedPlans, stagedPlanCnt);
+        ret = ApplyPairPlansForState(manager, stagedPlans, stagedPlanCnt, true);
     }
     if (!ret) {
         if (stagedPlanCnt > 0) {

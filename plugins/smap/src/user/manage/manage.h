@@ -594,6 +594,9 @@ int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext 
 int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], size_t targetCap, size_t *targetCnt);
 int BuildAllPairPlanInputs(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
                            PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt);
+int BuildAllPairPlanInputsForState(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
+                                   PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt,
+                                   bool migrateOnly);
 
 int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size);
 

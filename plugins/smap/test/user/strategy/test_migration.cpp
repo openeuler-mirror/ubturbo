@@ -833,8 +833,7 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansUsesRemainingBidirectionalBudget)
     manager.processes = &process;
     ASSERT_EQ(0, EnvMutexInit(&manager.lock));
 
-    PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 8);
-    plan.demotePages = 2;
+    PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 10);
     PairPlanContext context = {.nrLocalNuma = 2};
     context.freePages[0] = 10;
     context.safetyReservePages[0] = 2;
@@ -844,6 +843,37 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansUsesRemainingBidirectionalBudget)
     EXPECT_EQ(5U, plan.swapPages);
     EXPECT_EQ(12U, budget.plannedPages);
     EXPECT_EQ(5U, context.plannedPages[0]);
+    EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
+}
+
+TEST_F(MigrationTest, TestBuildPairSwapPlansSkipsUnconvergedPair)
+{
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 2;
+    ProcessAttr process = {.pid = 100, .scanType = NORMAL_SCAN};
+    ActcData localPages[10] = {};
+    ActcData remotePages[10] = {};
+    process.enableSwap = true;
+    process.scanAttr.actcData[0] = localPages;
+    process.scanAttr.actcData[2] = remotePages;
+    process.scanAttr.actcLen[0] = 10;
+    process.scanAttr.actcLen[2] = 10;
+    process.scanAttr.actCount[0].freqBuckets[0] = 10;
+    process.scanAttr.actCount[2].freqBuckets[5] = 10;
+    manager.processes = &process;
+    ASSERT_EQ(0, EnvMutexInit(&manager.lock));
+
+    PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 8);
+    plan.demotePages = 2;
+    PairPlanContext context = {.nrLocalNuma = 2};
+    context.freePages[0] = 10;
+    context.safetyReservePages[0] = 2;
+    PairPidBudget budget = {.pid = 100, .maxMigratePages = 12, .plannedPages = 2};
+
+    ASSERT_EQ(0, BuildPairSwapPlans(&manager, &plan, 1, &context, &budget, 1));
+    EXPECT_EQ(0U, plan.swapPages);
+    EXPECT_EQ(2U, budget.plannedPages);
+    EXPECT_EQ(0U, context.plannedPages[0]);
     EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
 }
 
@@ -973,9 +1003,11 @@ TEST_F(MigrationTest, TestApplyPairPlansFailureKeepsOldMatrix)
 }
 
 static int BuildDisabledPairPlanInput(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
-                                      PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt)
+                                      PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt,
+                                      bool migrateOnly)
 {
     (void)manager;
+    EXPECT_TRUE(migrateOnly);
     EXPECT_GE(planCap, 1U);
     EXPECT_GE(pidBudgetCap, 1U);
     plans[0] = MakePairPlan(100, 0, 1, 0, 20, 10);
@@ -995,9 +1027,11 @@ static int BuildLocalFreeSnapshot(bool hugePage, int nrLocalNuma, PairPlanContex
     return 0;
 }
 
-static int CheckDisabledPairPlanApplied(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt)
+static int CheckDisabledPairPlanApplied(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt,
+                                        bool migrateOnly)
 {
     (void)manager;
+    EXPECT_TRUE(migrateOnly);
     EXPECT_EQ(1U, planCnt);
     EXPECT_EQ(0U, plans[0].targetPages);
     EXPECT_EQ(0U, plans[0].demotePages);
@@ -1016,9 +1050,9 @@ TEST_F(MigrationTest, TestBuildAllPairPlansPromotesFromDisabledRemote)
     size_t planCnt = 0;
 
     MOCKER(CollectNodeFreeSnapshot).stubs().will(invoke(BuildLocalFreeSnapshot));
-    MOCKER(BuildAllPairPlanInputs).stubs().will(invoke(BuildDisabledPairPlanInput));
+    MOCKER(BuildAllPairPlanInputsForState).stubs().will(invoke(BuildDisabledPairPlanInput));
     MOCKER(BuildPairSwapPlans).stubs().will(returnValue(0));
-    MOCKER(ApplyPairPlans).stubs().will(invoke(CheckDisabledPairPlanApplied));
+    MOCKER(ApplyPairPlansForState).stubs().will(invoke(CheckDisabledPairPlanApplied));
 
     int ret = BuildAllPairPlans(&manager, plans, 1, &planCnt);
     EnvAtomicSet(&g_forbiddenNodes[1], 0);

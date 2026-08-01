@@ -356,6 +356,17 @@ TEST_F(ManageTest, TestBuildManagedTrackingNodes)
     EXPECT_EQ(0U, BuildManagedTrackingNodes(nullptr));
 }
 
+TEST_F(ManageTest, TestBuildManagedTrackingNodesKeepsOmittedRemoteWithResidentPages)
+{
+    ProcessAttr attr = {};
+    g_processManager.nrLocalNuma = 4;
+    attr.numaAttr.numaNodes = BIT(4);
+    attr.walkPage.nrPage = 1;
+    attr.walkPage.nrPages[4] = 1;
+
+    EXPECT_EQ(BIT(4), BuildManagedTrackingNodes(&attr));
+}
+
 static int RefreshPeriodicManagedLocalCandidate(ProcessAttr *attr, bool fullReplacement)
 {
     EXPECT_FALSE(fullReplacement);
