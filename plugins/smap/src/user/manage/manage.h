@@ -33,6 +33,7 @@
 #endif
 #define MAX_4K_PROCESSES_CNT 300
 #define MAX_2M_PROCESSES_CNT 100
+#define MAX_PAIR_TARGET_COUNT (MAX_4K_PROCESSES_CNT * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM)
 #define MAX_THREADS 10
 #define MAX_RES_LEN 4
 #define PAGE_SHIFT 12
@@ -72,6 +73,8 @@
 #define WAIT_FRESH_USED_PERIOD 200
 #define MAX_CHECK_ALREADY_FORBIDDEN_TIME 100
 #define WAIT_CHECK_ALREADY_FORBIDDEN_PERIOD 200
+
+#define MANAGED_LOCAL_AFFINITY_REFRESH_INTERVAL_MS 30000U
 
 #define WAIT_PROC_STATE_PERIOD 100
 #define WAIT_PROC_STATE_MAX_RETRY 300
@@ -253,10 +256,14 @@ typedef struct {
     uint32_t managedLocalMask;
     uint32_t observedLocalMask;
     uint32_t residentLocalMask;
+    uint32_t affinityLocalMask;
+    uint32_t affinityRefreshElapsedMs;
     uint32_t accountLocalMask[REMOTE_NUMA_NUM];
+    bool affinityValid;
+    bool affinitySampled;
 } ManagedLocalState;
 
-/* Runtime-only target after an aggregate remote target is split by local. */
+/* Runtime-only assigned request and capacity-clipped target for one Pair. */
 typedef struct {
     pid_t pid;
     int localNid;
@@ -264,6 +271,31 @@ typedef struct {
     uint32_t requestedPages;
     uint32_t targetPages;
 } PairTarget;
+
+/*
+ * Explicit, immutable inputs used while deriving Pair requested targets.
+ * capacityLocalMask only identifies eligible pairs; it does not reserve or
+ * consume any private/shared capacity.
+ */
+typedef struct {
+    int nrLocalNuma;
+    uint64_t pageSizeKB;
+    uint32_t capacityLocalMask[REMOTE_NUMA_NUM];
+} PairRequestContext;
+
+typedef struct {
+    uint64_t managedTotalPages;
+    /* Original aggregate request derived from ProcessTargetConfig. */
+    uint64_t requestedRemotePages[REMOTE_NUMA_NUM];
+    /* Aggregate request limited only by the process's managed pages. */
+    uint64_t effectiveRemotePages[REMOTE_NUMA_NUM];
+    /*
+     * Portion of effectiveRemotePages that cannot currently be assigned to
+     * any eligible local -> remote Pair. The aggregate request remains in
+     * ProcessTargetConfig and can be assigned when Pair eligibility returns.
+     */
+    uint64_t unassignedRequestedPages[REMOTE_NUMA_NUM];
+} PairRequestSummary;
 
 /* Runtime-only migration decision for one local-to-remote pair. */
 typedef struct {
@@ -277,6 +309,21 @@ typedef struct {
     uint32_t promotePages;
     uint32_t swapPages;
 } PairPlan;
+
+/* Per-cycle destination-node budget shared by all processes and Pairs. */
+typedef struct {
+    int nrLocalNuma;
+    uint64_t freePages[MAX_NODES];
+    uint64_t safetyReservePages[MAX_NODES];
+    uint64_t plannedPages[MAX_NODES];
+} PairPlanContext;
+
+/* Per-cycle migration budget shared by all Pairs of one process. */
+typedef struct {
+    pid_t pid;
+    uint64_t maxMigratePages;
+    uint64_t plannedPages;
+} PairPidBudget;
 
 typedef struct {
     /*
@@ -351,6 +398,18 @@ struct ProcessAttribute {
     struct ProcessAttribute *next;
 };
 typedef struct ProcessAttribute ProcessAttr;
+
+/*
+ * A prepared process update that is published only after access tracking has
+ * accepted prepared->numaAttr.numaNodes. The prepared ProcessAttr is the
+ * candidate introduced by the target-configuration transaction.
+ */
+typedef struct {
+    ProcessAttr *active;
+    ProcessAttr *prepared;
+    bool isNew;
+    bool isPending;
+} ProcessManageCandidate;
 
 typedef struct {
     uint16_t nrSegment;
@@ -485,7 +544,6 @@ int CopyProcessTargetConfig(ProcessTargetConfig *dest, const ProcessTargetConfig
 const ProcessRemoteTarget *FindProcessRemoteTarget(const ProcessTargetConfig *config, int remoteNid);
 int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex);
 void InitProcessMigrationTargetState(ProcessAttr *attr);
-
 int ProcessManagerInit(uint32_t pageType);
 
 int DestroyProcessManager(void);
@@ -513,6 +571,9 @@ int VMPreprocess(pid_t pid, ProcessAttr *attr);
 int SetProcessLocalNuma(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag);
 int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
 
+int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate);
+void DiscardProcessManageCandidate(ProcessManageCandidate *candidate);
+void PublishProcessManageCandidate(ProcessManageCandidate *candidate);
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap);
 int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config);
 int ApplyPendingMigrationTargets(ProcessAttr *attr);
@@ -527,6 +588,12 @@ void RemoveManagedProcess(int nr, pid_t *pidArr);
 int MigrateMemoryBack(pid_t pid, int srcNid, int desNid, uint64_t paStart, uint64_t paEnd);
 
 int BuildAllPidData(void);
+void CalibratePairAccount(ProcessAttr *attr);
+int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext *context, PairTarget targets[],
+                              size_t targetCap, size_t *targetCnt, PairRequestSummary *summary);
+int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], size_t targetCap, size_t *targetCnt);
+int BuildAllPairPlanInputs(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
+                           PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt);
 
 int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size);
 

@@ -9,19 +9,20 @@
 
 #include <sys/ioctl.h>
 
+#include "advanced-strategy/scene.h"
+#include "advanced-strategy/scene_info.h"
+#include "manage/device.h"
 #include "manage/manage.h"
 #include "manage/thread.h"
-#include "manage/device.h"
-#include "advanced-strategy/scene_info.h"
-#include "advanced-strategy/scene.h"
+#include "strategy/migration.h"
 #include "strategy/strategy.h"
 #include "strategy/strategy_config.h"
-#include "strategy/migration.h"
 
 using namespace std;
 
 #define TEST_SMAP_MIG_MAGIC 0xB9
 #define TEST_SMAP_MIG_MIGRATE _IOW(TEST_SMAP_MIG_MAGIC, 0, struct MigrateMsg)
+#define BIT(i) (1U << (i))
 
 extern "C" struct ProcessManager g_processManager;
 
@@ -112,9 +113,9 @@ TEST_F(MigrationTest, TestAddMigListAddMultiSuccess)
 {
     int i;
     int ret;
-    struct MigrateMsg mMsg = { .cnt = 0 };
+    struct MigrateMsg mMsg = {.cnt = 0};
     mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
-    struct MigList mList = { .nr = 2, .from = 0, .to = 1 };
+    struct MigList mList = {.nr = 2, .from = 0, .to = 1};
 
     mList.addr = (uint64_t *)malloc(sizeof(uint64_t) * mList.nr);
     for (i = 0; i < mList.nr; i++) {
@@ -137,9 +138,9 @@ TEST_F(MigrationTest, TestAddMigListAddMultiAndMoreThanFreePagesSuccess)
 {
     int i;
     int ret;
-    struct MigrateMsg mMsg = { .cnt = 0 };
+    struct MigrateMsg mMsg = {.cnt = 0};
     mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
-    struct MigList mList = { .nr = 2, .from = 0, .to = 1 };
+    struct MigList mList = {.nr = 2, .from = 0, .to = 1};
 
     mList.addr = (uint64_t *)malloc(sizeof(uint64_t) * mList.nr);
     for (i = 0; i < mList.nr; i++) {
@@ -162,9 +163,9 @@ TEST_F(MigrationTest, TestAddMigListNoPageToMig)
 {
     int i;
     int ret;
-    struct MigrateMsg mMsg = { .cnt = 0 };
+    struct MigrateMsg mMsg = {.cnt = 0};
     mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
-    struct MigList mList = { .nr = 0, .from = 0, .to = 1 };
+    struct MigList mList = {.nr = 0, .from = 0, .to = 1};
 
     ret = AddMigList(&mMsg, &mList);
     EXPECT_EQ(0, ret);
@@ -174,7 +175,7 @@ TEST_F(MigrationTest, TestAddMigListNoPageToMig)
 extern "C" void FreeMigList(struct MigList mList[MAX_NODES][MAX_NODES]);
 TEST_F(MigrationTest, TestFreeMigList)
 {
-    struct MigList mlist[MAX_NODES][MAX_NODES] = { 0 };
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {0};
     mlist[0][0].addr = (uint64_t *)malloc(sizeof(uint64_t));
     FreeMigList(mlist);
     EXPECT_EQ(nullptr, mlist[0][0].addr);
@@ -183,7 +184,7 @@ TEST_F(MigrationTest, TestFreeMigList)
 extern "C" void strategy_InitMigList(struct MigList mList[MAX_NODES][MAX_NODES], int pid);
 TEST_F(MigrationTest, TestInitMigList)
 {
-    struct MigList mlist[MAX_NODES][MAX_NODES] = { 0 };
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {0};
     printf("MAX_NODES in test = %d\n", MAX_NODES);
     mlist[0][0].addr = (uint64_t *)malloc(sizeof(uint64_t));
     mlist[0][0].nr = 1;
@@ -316,8 +317,8 @@ TEST_F(MigrationTest, TestBuildMigrationMsgSuccess)
 extern "C" int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager);
 TEST_F(MigrationTest, TestDoMigration)
 {
-    struct MigList migList = { .nr = 0 };
-    struct MigrateMsg mMsg = { .cnt = 1, .migList = &migList };
+    struct MigList migList = {.nr = 0};
+    struct MigrateMsg mMsg = {.cnt = 1, .migList = &migList};
 
     struct ProcessManager manager;
     int ret = DoMigration(&mMsg, &manager);
@@ -326,7 +327,7 @@ TEST_F(MigrationTest, TestDoMigration)
 
 TEST_F(MigrationTest, TestDoMigrationInitialized)
 {
-    struct MigList migList = { .nr = 2 };
+    struct MigList migList = {.nr = 2};
 
     migList.addr = (uint64_t *)malloc(sizeof(uint64_t) * migList.nr);
 
@@ -334,7 +335,7 @@ TEST_F(MigrationTest, TestDoMigrationInitialized)
         migList.addr[i] = 0x1000 + i * 0x1000;
     }
 
-    struct MigrateMsg mMsg = { .cnt = 1, .migList = &migList };
+    struct MigrateMsg mMsg = {.cnt = 1, .migList = &migList};
 
     struct ProcessManager manager;
     int ret = DoMigration(&mMsg, &manager);
@@ -343,8 +344,8 @@ TEST_F(MigrationTest, TestDoMigrationInitialized)
 
 TEST_F(MigrationTest, DoMigrationMinusCnt)
 {
-    struct MigList migList = { .nr = 0 };
-    struct MigrateMsg mMsg = { .cnt = -1, .migList = &migList };
+    struct MigList migList = {.nr = 0};
+    struct MigrateMsg mMsg = {.cnt = -1, .migList = &migList};
 
     struct ProcessManager manager;
     int ret = DoMigration(&mMsg, &manager);
@@ -354,8 +355,8 @@ TEST_F(MigrationTest, DoMigrationMinusCnt)
 extern "C" int InitMigrateMsg(struct MigrateMsg *mMsg, struct ProcessManager *manager);
 TEST_F(MigrationTest, TestInitMigrateMsg)
 {
-    struct MigrateMsg mMsg = { .cnt = 1 };
-    struct ProcessManager manager = { .nr = { 0, 1 }, .tracking = { .pageSize = 4096 } };
+    struct MigrateMsg mMsg = {.cnt = 1};
+    struct ProcessManager manager = {.nr = {0, 1}, .tracking = {.pageSize = 4096}};
     MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     ASSERT_EQ(nullptr, mMsg.migList);
     int ret = InitMigrateMsg(&mMsg, &manager);
@@ -389,7 +390,7 @@ TEST_F(MigrationTest, TestPerformMigrationPreparationOK)
 TEST_F(MigrationTest, TestPerformMigrationPreparationEmptyProcesses)
 {
     int ret;
-    struct ProcessManager manager = { .processes = nullptr };
+    struct ProcessManager manager = {.processes = nullptr};
 
     MOCKER(CleanStrategyAttribute).stubs().will(returnValue(0));
     MOCKER(BuildAllPidData).stubs().will(returnValue(0));
@@ -401,7 +402,7 @@ TEST_F(MigrationTest, TestPerformMigrationPreparationBuildError)
 {
     int ret;
     ProcessAttr process;
-    struct ProcessManager manager = { .processes = &process };
+    struct ProcessManager manager = {.processes = &process};
 
     MOCKER(CleanStrategyAttribute).stubs().will(returnValue(0));
     MOCKER(BuildAllPidData).stubs().will(returnValue(-ENOMEM));
@@ -417,9 +418,9 @@ extern "C" void UpdatePeriodFromConfig(ThreadCtx *ctx);
 TEST_F(MigrationTest, TestScanMigrateWorkFileConfOn)
 {
     int ret;
-    ProcessAttr process = { .pid = 1025 };
-    struct ProcessManager manager = { .processes = &process };
-    ThreadCtx ctx = { .processManager = &manager };
+    ProcessAttr process = {.pid = 1025};
+    struct ProcessManager manager = {.processes = &process};
+    ThreadCtx ctx = {.processManager = &manager};
 
     MOCKER(DisableTracking).stubs().will(returnValue(0));
     MOCKER(StrategyConfigRead).stubs().will(ignoreReturnValue());
@@ -440,9 +441,9 @@ TEST_F(MigrationTest, TestScanMigrateWorkFileConfOn)
 TEST_F(MigrationTest, TestScanMigrateWorkFileConfOff)
 {
     int ret;
-    ProcessAttr process = { .pid = 1025 };
-    struct ProcessManager manager = { .processes = &process };
-    ThreadCtx ctx = { .processManager = &manager };
+    ProcessAttr process = {.pid = 1025};
+    struct ProcessManager manager = {.processes = &process};
+    ThreadCtx ctx = {.processManager = &manager};
 
     MOCKER(DisableTracking).stubs().will(returnValue(0));
     MOCKER(StrategyConfigRead).stubs().will(ignoreReturnValue());
@@ -461,9 +462,9 @@ TEST_F(MigrationTest, TestScanMigrateWorkFileConfOff)
 TEST_F(MigrationTest, TestScanMigrateWorkOne)
 {
     int ret;
-    ProcessAttr process = { .pid = 1025 };
-    struct ProcessManager manager = { .processes = &process };
-    ThreadCtx ctx = { .processManager = &manager };
+    ProcessAttr process = {.pid = 1025};
+    struct ProcessManager manager = {.processes = &process};
+    ThreadCtx ctx = {.processManager = &manager};
 
     MOCKER(DisableTracking).stubs().will(returnValue(-1));
     ret = ScanMigrateWork(&ctx);
@@ -473,9 +474,9 @@ TEST_F(MigrationTest, TestScanMigrateWorkOne)
 TEST_F(MigrationTest, TestScanMigrateWorkTwo)
 {
     int ret;
-    ProcessAttr process = { .pid = 1025 };
-    struct ProcessManager manager = { .processes = &process };
-    ThreadCtx ctx = { .processManager = &manager };
+    ProcessAttr process = {.pid = 1025};
+    struct ProcessManager manager = {.processes = &process};
+    ThreadCtx ctx = {.processManager = &manager};
 
     MOCKER(DisableTracking).stubs().will(returnValue(0));
     MOCKER(CheckAndRemoveInvalidProcess).stubs();
@@ -489,7 +490,7 @@ extern "C" int SetMigrateThreadNum(struct MigrateMsg *mMsg, uint64_t migratePage
 TEST_F(MigrationTest, TestSetMigrateThreadNum)
 {
     int ret;
-    struct MigrateMsg mMsg = { 0 };
+    struct MigrateMsg mMsg = {0};
     uint64_t migratePages = LESS_MIG_OUT_2M_PAGE_THRE + 1;
     mMsg.mulMig.pageSize = g_pageSizeHuge = PAGESIZE_2M;
     ret = SetMigrateThreadNum(&mMsg, migratePages, 0);
@@ -506,7 +507,7 @@ TEST_F(MigrationTest, TestSetMigrateThreadNum)
 TEST_F(MigrationTest, TestSetMigrateThreadNumTwo)
 {
     int ret;
-    struct MigrateMsg mMsg = { 0 };
+    struct MigrateMsg mMsg = {0};
     uint64_t migratePages = LESS_MIG_OUT_2M_PAGE_THRE + 1;
     ret = SetMigrateThreadNum(nullptr, migratePages, 0);
     EXPECT_EQ(-EINVAL, ret);
@@ -521,7 +522,7 @@ TEST_F(MigrationTest, TestSetMigrateThreadNumTwo)
 TEST_F(MigrationTest, TestSetMigrateThreadNumThree)
 {
     int ret;
-    struct MigrateMsg mMsg = { 0 };
+    struct MigrateMsg mMsg = {0};
     uint64_t migratePages = LESS_MIG_OUT_2M_PAGE_THRE + 1;
 
     ret = SetMigrateThreadNum(&mMsg, migratePages, 1);
@@ -533,7 +534,7 @@ TEST_F(MigrationTest, TestSetMigrateThreadNumThree)
 TEST_F(MigrationTest, TestSetMigrateThreadNumPage2M)
 {
     int ret;
-    struct MigrateMsg mMsg = { 0 };
+    struct MigrateMsg mMsg = {0};
     mMsg.mulMig.pageSize = PAGESIZE_2M;
     uint64_t migratePages = LESS_MIG_OUT_2M_PAGE_THRE + 1;
 
@@ -544,8 +545,8 @@ TEST_F(MigrationTest, TestSetMigrateThreadNumPage2M)
 extern "C" long CalcDurationUs(struct timeval start, struct timeval end);
 TEST_F(MigrationTest, TestCalcDurationUs)
 {
-    struct timeval start = { 0 };
-    struct timeval end = { 0 };
+    struct timeval start = {0};
+    struct timeval end = {0};
     start.tv_sec = 1;
     start.tv_usec = 100;
     end.tv_sec = 2;
@@ -642,12 +643,256 @@ TEST_F(MigrationTest, TestNumaMigReduceDeal)
     EXPECT_EQ(150, attr.strategyAttr.nrMigratePages[4][0]);
 }
 
+static PairPlan MakePairPlan(pid_t pid, int localNid, int remoteNid, int remoteIndex, uint32_t targetPages,
+                             uint32_t actualPages)
+{
+    PairPlan plan = {};
+    plan.pid = pid;
+    plan.localNid = localNid;
+    plan.remoteNid = remoteNid;
+    plan.remoteIndex = remoteIndex;
+    plan.targetPages = targetPages;
+    plan.actualPages = actualPages;
+    return plan;
+}
+
+static const PairPlan *FindPairPlan(const PairPlan plans[], size_t planCnt, pid_t pid, int localNid, int remoteNid)
+{
+    for (size_t i = 0; i < planCnt; i++) {
+        if (plans[i].pid == pid && plans[i].localNid == localNid && plans[i].remoteNid == remoteNid) {
+            return &plans[i];
+        }
+    }
+    return nullptr;
+}
+
+TEST_F(MigrationTest, TestCollectNodeFreeSnapshotUsesBasePages)
+{
+    PairPlanContext context = {};
+    MOCKER(GetNrFreePagesByNode).stubs().will(returnValue((uint64_t)100));
+
+    ASSERT_EQ(0, CollectNodeFreeSnapshot(false, 2, &context));
+    EXPECT_EQ(2, context.nrLocalNuma);
+    for (int nid = 0; nid < 2; nid++) {
+        EXPECT_EQ(100U, context.freePages[nid]);
+        EXPECT_EQ(5U, context.safetyReservePages[nid]);
+        EXPECT_EQ(0U, context.plannedPages[nid]);
+    }
+    for (int nid = 2; nid < 2 + REMOTE_NUMA_NUM; nid++) {
+        EXPECT_EQ(0U, context.freePages[nid]);
+        EXPECT_EQ(0U, context.safetyReservePages[nid]);
+        EXPECT_EQ(0U, context.plannedPages[nid]);
+    }
+}
+
+TEST_F(MigrationTest, TestCollectNodeFreeSnapshotUsesHugePages)
+{
+    PairPlanContext context = {};
+    MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)21));
+
+    ASSERT_EQ(0, CollectNodeFreeSnapshot(true, 2, &context));
+    for (int nid = 0; nid < 2; nid++) {
+        EXPECT_EQ(21U, context.freePages[nid]);
+        EXPECT_EQ(2U, context.safetyReservePages[nid]);
+    }
+    for (int nid = 2; nid < 2 + REMOTE_NUMA_NUM; nid++) {
+        EXPECT_EQ(0U, context.freePages[nid]);
+        EXPECT_EQ(0U, context.safetyReservePages[nid]);
+    }
+}
+
+TEST_F(MigrationTest, TestBuildPairPlansBuildsOneNetDirection)
+{
+    PairPlan inputs[] = {
+        MakePairPlan(300, 0, 2, 0, 40, 40),
+        MakePairPlan(100, 0, 2, 0, 80, 20),
+        MakePairPlan(200, 1, 3, 1, 0, 50),
+    };
+    PairPidBudget pidBudgets[] = {
+        {.pid = 100, .maxMigratePages = 100},
+        {.pid = 200, .maxMigratePages = 100},
+        {.pid = 300, .maxMigratePages = 100},
+    };
+    PairPlanContext context = {.nrLocalNuma = 2};
+    for (int nid = 0; nid < MAX_NODES; nid++) {
+        context.freePages[nid] = 1000;
+    }
+    PairPlan plans[3] = {};
+    size_t planCnt = 0;
+
+    ASSERT_EQ(0, BuildPairPlans(inputs, 3, &context, pidBudgets, 3, plans, 3, &planCnt));
+    ASSERT_EQ(3U, planCnt);
+    const PairPlan *demote = FindPairPlan(plans, planCnt, 100, 0, 2);
+    const PairPlan *promote = FindPairPlan(plans, planCnt, 200, 1, 3);
+    const PairPlan *balanced = FindPairPlan(plans, planCnt, 300, 0, 2);
+    ASSERT_NE(nullptr, demote);
+    ASSERT_NE(nullptr, promote);
+    ASSERT_NE(nullptr, balanced);
+    EXPECT_EQ(60U, demote->demotePages);
+    EXPECT_EQ(0U, demote->promotePages);
+    EXPECT_EQ(0U, promote->demotePages);
+    EXPECT_EQ(50U, promote->promotePages);
+    EXPECT_EQ(0U, balanced->demotePages);
+    EXPECT_EQ(0U, balanced->promotePages);
+}
+
+TEST_F(MigrationTest, TestBuildPairPlansAppliesFreeBudgetOnlyToPromote)
+{
+    PairPlan inputs[] = {
+        MakePairPlan(400, 1, 2, 0, 100, 0),
+        MakePairPlan(300, 0, 2, 0, 100, 0),
+        MakePairPlan(200, 0, 2, 0, 0, 100),
+        MakePairPlan(100, 0, 3, 1, 0, 100),
+    };
+    PairPidBudget pidBudgets[] = {
+        {.pid = 400, .maxMigratePages = 100},
+        {.pid = 300, .maxMigratePages = 100},
+        {.pid = 200, .maxMigratePages = 100},
+        {.pid = 100, .maxMigratePages = 100},
+    };
+    PairPlanContext context = {.nrLocalNuma = 2};
+    context.freePages[0] = 100;
+    context.safetyReservePages[0] = 10;
+    context.freePages[2] = 0;
+    context.safetyReservePages[2] = 100;
+    PairPlan plans[4] = {};
+    size_t planCnt = 0;
+
+    ASSERT_EQ(0, BuildPairPlans(inputs, 4, &context, pidBudgets, 4, plans, 4, &planCnt));
+    ASSERT_EQ(4U, planCnt);
+    EXPECT_EQ(100, plans[0].pid);
+    EXPECT_EQ(90U, plans[0].promotePages);
+    EXPECT_EQ(200, plans[1].pid);
+    EXPECT_EQ(0U, plans[1].promotePages);
+    EXPECT_EQ(300, plans[2].pid);
+    EXPECT_EQ(100U, plans[2].demotePages);
+    EXPECT_EQ(400, plans[3].pid);
+    EXPECT_EQ(100U, plans[3].demotePages);
+    EXPECT_EQ(90U, context.plannedPages[0]);
+    EXPECT_EQ(0U, context.plannedPages[2]);
+}
+
+TEST_F(MigrationTest, TestBuildPairPlansSharesPidBudgetAcrossPairs)
+{
+    PairPlan inputs[] = {
+        MakePairPlan(100, 0, 3, 1, 50, 0),
+        MakePairPlan(100, 0, 2, 0, 50, 0),
+    };
+    PairPidBudget pidBudgets[] = {
+        {.pid = 100, .maxMigratePages = 60},
+    };
+    PairPlanContext context = {.nrLocalNuma = 2};
+    context.freePages[2] = 1000;
+    context.freePages[3] = 1000;
+    PairPlan plans[2] = {};
+    size_t planCnt = 0;
+
+    ASSERT_EQ(0, BuildPairPlans(inputs, 2, &context, pidBudgets, 1, plans, 2, &planCnt));
+    ASSERT_EQ(2U, planCnt);
+    EXPECT_EQ(2, plans[0].remoteNid);
+    EXPECT_EQ(50U, plans[0].demotePages);
+    EXPECT_EQ(3, plans[1].remoteNid);
+    EXPECT_EQ(10U, plans[1].demotePages);
+    EXPECT_EQ(60U, pidBudgets[0].plannedPages);
+}
+
+TEST_F(MigrationTest, TestBuildPairPlansZeroLocalSafeFreeBlocksPromote)
+{
+    PairPlan input = MakePairPlan(100, 0, 2, 0, 20, 80);
+    PairPidBudget pidBudget = {.pid = 100, .maxMigratePages = 100};
+    PairPlanContext context = {.nrLocalNuma = 2};
+    context.freePages[0] = 10;
+    context.safetyReservePages[0] = 10;
+    PairPlan plan = {};
+    size_t planCnt = 0;
+
+    ASSERT_EQ(0, BuildPairPlans(&input, 1, &context, &pidBudget, 1, &plan, 1, &planCnt));
+    EXPECT_EQ(20U, plan.targetPages);
+    EXPECT_EQ(80U, plan.actualPages);
+    EXPECT_EQ(0U, plan.demotePages);
+    EXPECT_EQ(0U, plan.promotePages);
+}
+
+TEST_F(MigrationTest, TestBuildPairPlansFailureDoesNotPublishPartialState)
+{
+    PairPlan inputs[] = {
+        MakePairPlan(100, 0, 2, 0, 50, 0),
+        MakePairPlan(100, 0, 2, 0, 60, 0),
+    };
+    PairPidBudget pidBudget = {.pid = 100, .maxMigratePages = 100};
+    PairPlanContext context = {.nrLocalNuma = 2};
+    context.freePages[2] = 100;
+    PairPlan plans[2] = {};
+    plans[0].pid = 999;
+    size_t planCnt = 7;
+
+    EXPECT_EQ(-EINVAL, BuildPairPlans(inputs, 2, &context, &pidBudget, 1, plans, 2, &planCnt));
+    EXPECT_EQ(0U, planCnt);
+    EXPECT_EQ(999, plans[0].pid);
+    EXPECT_EQ(0U, context.plannedPages[2]);
+    EXPECT_EQ(0U, pidBudget.plannedPages);
+
+    planCnt = 7;
+    EXPECT_EQ(-EINVAL, BuildPairPlans(inputs, 2, &context, &pidBudget, MAX_4K_PROCESSES_CNT + 1, plans, 2, &planCnt));
+    EXPECT_EQ(7U, planCnt);
+}
+
+TEST_F(MigrationTest, TestApplyPairPlansRebuildsNormalMatricesOnly)
+{
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 2;
+    ProcessAttr first = {.pid = 100, .scanType = NORMAL_SCAN};
+    ProcessAttr second = {.pid = 200, .scanType = NORMAL_SCAN};
+    ProcessAttr grouped = {.pid = 300, .scanType = NORMAL_SCAN};
+    grouped.groupPolicy.enabled = true;
+    first.next = &second;
+    second.next = &grouped;
+    manager.processes = &first;
+    first.strategyAttr.nrMigratePages[7][7] = 7;
+    second.strategyAttr.nrMigratePages[6][6] = 6;
+    grouped.strategyAttr.nrMigratePages[5][5] = 5;
+    ASSERT_EQ(0, EnvMutexInit(&manager.lock));
+
+    PairPlan plans[] = {
+        MakePairPlan(100, 0, 2, 0, 80, 20),
+        MakePairPlan(100, 1, 3, 1, 10, 50),
+    };
+    plans[0].demotePages = 60;
+    plans[1].promotePages = 40;
+
+    ASSERT_EQ(0, ApplyPairPlans(&manager, plans, 2));
+    EXPECT_EQ(60U, first.strategyAttr.nrMigratePages[0][2]);
+    EXPECT_EQ(40U, first.strategyAttr.nrMigratePages[3][1]);
+    EXPECT_EQ(0U, first.strategyAttr.nrMigratePages[7][7]);
+    EXPECT_EQ(0U, second.strategyAttr.nrMigratePages[6][6]);
+    EXPECT_EQ(5U, grouped.strategyAttr.nrMigratePages[5][5]);
+    EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
+}
+
+TEST_F(MigrationTest, TestApplyPairPlansFailureKeepsOldMatrix)
+{
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 2;
+    ProcessAttr process = {.pid = 100, .scanType = NORMAL_SCAN};
+    manager.processes = &process;
+    process.strategyAttr.nrMigratePages[0][2] = 7;
+    ASSERT_EQ(0, EnvMutexInit(&manager.lock));
+
+    PairPlan plan = MakePairPlan(100, 0, 2, 0, 80, 20);
+    plan.demotePages = 60;
+    plan.promotePages = 1;
+
+    EXPECT_EQ(-EINVAL, ApplyPairPlans(&manager, &plan, 1));
+    EXPECT_EQ(7U, process.strategyAttr.nrMigratePages[0][2]);
+    EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
+}
+
 extern "C" int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg, uint64_t *migratePages);
 TEST_F(MigrationTest, TestPerformMigration)
 {
     int ret;
-    ProcessAttr process = { .pid = 1025 };
-    struct ProcessManager manager = { .processes = &process };
+    ProcessAttr process = {.pid = 1025};
+    struct ProcessManager manager = {.processes = &process};
 
     MOCKER(PreMigration).stubs().will(returnValue(-ENOMEM));
     ret = PerformMigration(&manager);
@@ -659,8 +904,8 @@ extern "C" void PostMigration(struct ProcessManager *manager, struct MigrateMsg 
 TEST_F(MigrationTest, TestPerformMigrationSecond)
 {
     int ret;
-    ProcessAttr process = { .pid = 1025 };
-    struct ProcessManager manager = { .processes = &process };
+    ProcessAttr process = {.pid = 1025};
+    struct ProcessManager manager = {.processes = &process};
 
     MOCKER(PreMigration).stubs().will(returnValue(0));
     MOCKER(DoMigration).stubs().will(returnValue(0));
@@ -689,7 +934,7 @@ TEST_F(MigrationTest, TestUpdateScanTime)
 extern "C" void UpdateScene(struct ProcessManager *manager);
 TEST_F(MigrationTest, TestUpdateScene)
 {
-    struct ProcessManager manager = { 0 };
+    struct ProcessManager manager = {0};
     ProcessAttr current = {};
     manager.processes = &current;
     current.type = VM_TYPE;
@@ -706,7 +951,7 @@ TEST_F(MigrationTest, TestUpdateScene)
 extern "C" int HandleScene(ThreadCtx *ctx);
 TEST_F(MigrationTest, TestHandleScene)
 {
-    struct ProcessManager manager = { 0 };
+    struct ProcessManager manager = {0};
     ProcessAttr current = {};
     ThreadCtx ctx = {};
     manager.processes = &current;
@@ -726,7 +971,7 @@ extern "C" uint32_t GetScanPeriodConfig(void);
 extern "C" void UpdateAllProcessScanTime(ThreadCtx *ctx);
 TEST_F(MigrationTest, TestUpdateAllProcessScanTime)
 {
-    struct ProcessManager manager = { 0 };
+    struct ProcessManager manager = {0};
     ProcessAttr current = {};
     ThreadCtx ctx = {};
     manager.processes = &current;
@@ -745,7 +990,7 @@ TEST_F(MigrationTest, TestUpdateAllProcessScanTime)
 extern "C" int HandleScene(ThreadCtx *ctx);
 TEST_F(MigrationTest, TestHandleSceneFirstScanNoPages)
 {
-    struct ProcessManager manager = { 0 };
+    struct ProcessManager manager = {0};
     ProcessAttr current = {};
     ThreadCtx ctx = {};
     manager.processes = &current;
@@ -765,7 +1010,7 @@ TEST_F(MigrationTest, TestHandleSceneFirstScanNoPages)
 
 TEST_F(MigrationTest, TestHandleSceneFirstScanWithPages)
 {
-    struct ProcessManager manager = { 0 };
+    struct ProcessManager manager = {0};
     ProcessAttr current = {};
     ThreadCtx ctx = {};
     manager.processes = &current;
@@ -786,7 +1031,7 @@ TEST_F(MigrationTest, TestHandleSceneFirstScanWithPages)
 
 TEST_F(MigrationTest, TestHandleSceneFirstScanUpdateScanTimeFail)
 {
-    struct ProcessManager manager = { 0 };
+    struct ProcessManager manager = {0};
     ProcessAttr current = {};
     ThreadCtx ctx = {};
     manager.processes = &current;
@@ -807,7 +1052,7 @@ TEST_F(MigrationTest, TestHandleSceneFirstScanUpdateScanTimeFail)
 
 TEST_F(MigrationTest, TestUpdateAllProcessScanTimeFirstScanSkip)
 {
-    struct ProcessManager manager = { 0 };
+    struct ProcessManager manager = {0};
     ProcessAttr current = {};
     ThreadCtx ctx = {};
     manager.processes = &current;
@@ -832,7 +1077,7 @@ extern "C" void IoctlUpdateUbDmaAvail(uint32_t value);
 extern "C" uint32_t GetMigrateModeConfig(void);
 TEST_F(MigrationTest, TestUodatePeriodFromConfig)
 {
-    struct ProcessManager manager = { 0 };
+    struct ProcessManager manager = {0};
     ThreadCtx ctx = {};
     ctx.processManager = &manager;
     ctx.period = 500;
@@ -851,7 +1096,7 @@ TEST_F(MigrationTest, TestUodatePeriodFromConfig)
 
 TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanNoPages)
 {
-    struct ProcessManager manager = { 0 };
+    struct ProcessManager manager = {0};
     ProcessAttr current = {};
     ThreadCtx ctx = {};
     manager.processes = &current;
@@ -876,7 +1121,7 @@ TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanNoPages)
 
 TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanWithPages)
 {
-    struct ProcessManager manager = { 0 };
+    struct ProcessManager manager = {0};
     ProcessAttr current = {};
     ThreadCtx ctx = {};
     manager.processes = &current;
@@ -925,6 +1170,8 @@ TEST_F(MigrationTest, TestUpdateMigResultLocalToRemote)
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(170, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ(1U, attr.managedLocalState.accountLocalMask[0]);
+    free(mMsg.migList);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultSubtractsIsolatedFailure)
@@ -954,6 +1201,62 @@ TEST_F(MigrationTest, TestUpdateMigResultSubtractsIsolatedFailure)
     free(mMsg.migList);
 }
 
+TEST_F(MigrationTest, TestUpdateMigResultPromoteSubtractsOnlySuccessfulPages)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[2][1] = 100;
+
+    struct MigrateMsg mMsg = {};
+    mMsg.cnt = 1;
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
+    mMsg.migList[0].pid = 123;
+    mMsg.migList[0].from = 5;
+    mMsg.migList[0].to = 2;
+    mMsg.migList[0].nr = 80;
+    mMsg.migList[0].failedMigNr = 10;
+    mMsg.migList[0].failedIsolatedNr = 20;
+    mMsg.migList[0].successToUser = true;
+
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 4;
+    manager.processes = &attr;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+
+    UpdateMigResult(&mMsg, &manager);
+
+    EXPECT_EQ((uint32_t)50, attr.strategyAttr.remoteNrPagesAfterMigrate[2][1]);
+    EXPECT_EQ(BIT(2), attr.managedLocalState.accountLocalMask[1]);
+    free(mMsg.migList);
+}
+
+TEST_F(MigrationTest, TestUpdateMigResultUpdatesExactDemotePair)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+
+    struct MigrateMsg mMsg = {};
+    mMsg.cnt = 1;
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
+    mMsg.migList[0].pid = 123;
+    mMsg.migList[0].from = 2;
+    mMsg.migList[0].to = 5;
+    mMsg.migList[0].nr = 10;
+    mMsg.migList[0].successToUser = true;
+
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 4;
+    manager.processes = &attr;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+
+    UpdateMigResult(&mMsg, &manager);
+
+    EXPECT_EQ((uint32_t)10, attr.strategyAttr.remoteNrPagesAfterMigrate[2][1]);
+    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
+    EXPECT_EQ(BIT(2), attr.managedLocalState.accountLocalMask[1]);
+    free(mMsg.migList);
+}
+
 TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalUnexpectedMigCount)
 {
     ProcessAttr attr = {};
@@ -978,6 +1281,8 @@ TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalUnexpectedMigCount)
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ(0U, attr.managedLocalState.accountLocalMask[0]);
+    free(mMsg.migList);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalExpectedMigCount)
@@ -1270,7 +1575,7 @@ extern "C" int MigrateRemoteNuma(struct ProcessManager *manager, struct MigrateN
 TEST_F(MigrationTest, TestMigrateRemoteNumaOne)
 {
     struct ProcessManager manager;
-    struct MigrateNumaIoctlMsg msg = { .srcNid = 4, .destNid = 5, .count = 1, .memids = { 1 } };
+    struct MigrateNumaIoctlMsg msg = {.srcNid = 4, .destNid = 5, .count = 1, .memids = {1}};
     MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-ENOMEM));
     int ret = MigrateRemoteNuma(&manager, &msg);
     EXPECT_EQ(-ENOMEM, ret);
@@ -1292,8 +1597,8 @@ TEST_F(MigrationTest, TestCleanStrateryAttribute)
 extern "C" void PrintMigSpeed(struct ProcessManager *manager, uint64_t nr, struct timeval start, struct timeval end);
 TEST_F(MigrationTest, TestPrintMigSpeed)
 {
-    struct timeval start = { 0 };
-    struct timeval end = { 0 };
+    struct timeval start = {0};
+    struct timeval end = {0};
     struct ProcessManager manager;
     manager.tracking.pageSize = PAGESIZE_4K;
     MOCKER(CalcDurationUs).stubs().will(returnValue(static_cast<long>(100)));
@@ -1358,6 +1663,22 @@ TEST_F(MigrationTest, TestPreMigrationTwo)
 }
 
 extern "C" void PostMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg);
+static bool g_migrationResultSettled;
+
+static void MarkMigrationResultSettled(struct MigrateMsg *mMsg, struct ProcessManager *manager)
+{
+    (void)mMsg;
+    (void)manager;
+    g_migrationResultSettled = true;
+}
+
+static int CheckPendingAppliedAfterResult(ProcessAttr *attr)
+{
+    (void)attr;
+    EXPECT_TRUE(g_migrationResultSettled);
+    return 0;
+}
+
 TEST_F(MigrationTest, TestPostMigration)
 {
     struct ProcessManager manager = {};
@@ -1374,6 +1695,27 @@ TEST_F(MigrationTest, TestPostMigration)
     PostMigration(&manager, &mMsg);
     EXPECT_EQ(PROC_IDLE, current.state);
     free(mMsg.migList);
+}
+
+TEST_F(MigrationTest, TestPostMigrationSettlesResultBeforePendingTarget)
+{
+    struct ProcessManager manager = {};
+    ProcessAttr current = {};
+    struct MigrateMsg mMsg = {};
+    manager.processes = &current;
+    current.pid = 1;
+    current.state = PROC_MIGRATE;
+    mMsg.migList = (struct MigList *)calloc(1, sizeof(struct MigList));
+    EnvMutexInit(&manager.lock);
+    g_migrationResultSettled = false;
+
+    MOCKER(UpdateMigResult).expects(once()).will(invoke(MarkMigrationResultSettled));
+    MOCKER(ApplyPendingMigrationTargets).expects(once()).will(invoke(CheckPendingAppliedAfterResult));
+
+    PostMigration(&manager, &mMsg);
+
+    EXPECT_TRUE(g_migrationResultSettled);
+    EXPECT_EQ(PROC_IDLE, current.state);
 }
 
 TEST_F(MigrationTest, TestPostMigrationTwo)
@@ -1511,9 +1853,9 @@ TEST_F(MigrationTest, TestBuildMigrationMsgL2NodeNotCriticalNotForbidden)
 TEST_F(MigrationTest, TestScanMigrateWorkCallsUpdateRemoteNumaCriticalErr)
 {
     int ret;
-    ProcessAttr process = { .pid = 1025 };
-    struct ProcessManager manager = { .processes = &process };
-    ThreadCtx ctx = { .processManager = &manager };
+    ProcessAttr process = {.pid = 1025};
+    struct ProcessManager manager = {.processes = &process};
+    ThreadCtx ctx = {.processManager = &manager};
 
     MOCKER(DisableTracking).stubs().will(returnValue(0));
     MOCKER(StrategyConfigRead).stubs().will(ignoreReturnValue());

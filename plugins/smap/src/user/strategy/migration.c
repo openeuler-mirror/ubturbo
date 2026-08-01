@@ -34,6 +34,7 @@
 
 #define MAX_MIG_ADDR_PRINT_LEN 2
 #define MAX_GROUP_SWAP_COMP_PLANS (MAX_2M_PROCESSES_CNT * MAX_PER_PID_MIG_LIST_COUNT)
+#define PAIR_PLAN_LOCAL_FREE_RESERVE_DIVISOR 20
 
 typedef struct {
     pid_t pid;
@@ -79,6 +80,331 @@ int AddMigList(struct MigrateMsg *mMsg, struct MigList *mList)
     }
     mMsg->cnt++;
     return 0;
+}
+
+int CollectNodeFreeSnapshot(bool hugePage, int nrLocalNuma, PairPlanContext *context)
+{
+    if (!context || nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM || nrLocalNuma + REMOTE_NUMA_NUM > MAX_NODES) {
+        return -EINVAL;
+    }
+
+    PairPlanContext snapshot = {
+        .nrLocalNuma = nrLocalNuma,
+    };
+    for (int nid = 0; nid < nrLocalNuma; nid++) {
+        uint64_t freePages = hugePage ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
+        snapshot.freePages[nid] = freePages;
+        snapshot.safetyReservePages[nid] =
+            freePages / PAIR_PLAN_LOCAL_FREE_RESERVE_DIVISOR + (freePages % PAIR_PLAN_LOCAL_FREE_RESERVE_DIVISOR != 0);
+    }
+    *context = snapshot;
+    return 0;
+}
+
+static int ComparePairPlan(const void *left, const void *right)
+{
+    const PairPlan *lhs = left;
+    const PairPlan *rhs = right;
+
+    if (lhs->pid != rhs->pid) {
+        return lhs->pid < rhs->pid ? -1 : 1;
+    }
+    if (lhs->localNid != rhs->localNid) {
+        return lhs->localNid < rhs->localNid ? -1 : 1;
+    }
+    if (lhs->remoteNid != rhs->remoteNid) {
+        return lhs->remoteNid < rhs->remoteNid ? -1 : 1;
+    }
+    return 0;
+}
+
+static int FindPairPidBudget(const PairPidBudget pidBudgets[], size_t pidBudgetCnt, pid_t pid)
+{
+    int found = -1;
+    for (size_t i = 0; i < pidBudgetCnt; i++) {
+        if (pidBudgets[i].pid != pid) {
+            continue;
+        }
+        if (found >= 0) {
+            return -EINVAL;
+        }
+        found = (int)i;
+    }
+    return found >= 0 ? found : -ENOENT;
+}
+
+static bool IsPairPlanDirectionValid(const PairPlan *plan)
+{
+    if (plan->swapPages != 0 || (plan->demotePages > 0 && plan->promotePages > 0)) {
+        return false;
+    }
+    if (plan->targetPages > plan->actualPages) {
+        return plan->promotePages == 0 && plan->demotePages <= plan->targetPages - plan->actualPages;
+    }
+    if (plan->actualPages > plan->targetPages) {
+        return plan->demotePages == 0 && plan->promotePages <= plan->actualPages - plan->targetPages;
+    }
+    return plan->demotePages == 0 && plan->promotePages == 0;
+}
+
+int BuildPairPlans(const PairPlan inputs[], size_t inputCnt, PairPlanContext *context, PairPidBudget pidBudgets[],
+                   size_t pidBudgetCnt, PairPlan plans[], size_t planCap, size_t *planCnt)
+{
+    if (!context || !planCnt || inputCnt > planCap || inputCnt > MAX_PAIR_TARGET_COUNT ||
+        pidBudgetCnt > MAX_4K_PROCESSES_CNT || context->nrLocalNuma <= 0 || context->nrLocalNuma > LOCAL_NUMA_NUM ||
+        context->nrLocalNuma + REMOTE_NUMA_NUM > MAX_NODES ||
+        (inputCnt > 0 && (!inputs || !plans || !pidBudgets || pidBudgetCnt == 0))) {
+        return -EINVAL;
+    }
+    *planCnt = 0;
+    if (inputCnt == 0) {
+        return 0;
+    }
+
+    PairPlan *stagedPlans = malloc(inputCnt * sizeof(PairPlan));
+    PairPidBudget *stagedPidBudgets = malloc(pidBudgetCnt * sizeof(PairPidBudget));
+    if (!stagedPlans || !stagedPidBudgets) {
+        free(stagedPlans);
+        free(stagedPidBudgets);
+        return -ENOMEM;
+    }
+
+    int ret = memcpy_s(stagedPlans, inputCnt * sizeof(PairPlan), inputs, inputCnt * sizeof(PairPlan));
+    if (ret != EOK) {
+        free(stagedPlans);
+        free(stagedPidBudgets);
+        return -ret;
+    }
+    ret = memcpy_s(stagedPidBudgets, pidBudgetCnt * sizeof(PairPidBudget), pidBudgets,
+                   pidBudgetCnt * sizeof(PairPidBudget));
+    if (ret != EOK) {
+        free(stagedPlans);
+        free(stagedPidBudgets);
+        return -ret;
+    }
+    PairPlanContext stagedContext = *context;
+
+    for (size_t i = 0; i < pidBudgetCnt; i++) {
+        if (stagedPidBudgets[i].plannedPages > stagedPidBudgets[i].maxMigratePages) {
+            ret = -EINVAL;
+            goto OUT;
+        }
+        for (size_t j = i + 1; j < pidBudgetCnt; j++) {
+            if (stagedPidBudgets[i].pid == stagedPidBudgets[j].pid) {
+                ret = -EINVAL;
+                goto OUT;
+            }
+        }
+    }
+
+    qsort(stagedPlans, inputCnt, sizeof(PairPlan), ComparePairPlan);
+    for (size_t i = 0; i < inputCnt; i++) {
+        PairPlan *plan = &stagedPlans[i];
+        if (plan->localNid < 0 || plan->localNid >= context->nrLocalNuma || plan->remoteIndex < 0 ||
+            plan->remoteIndex >= REMOTE_NUMA_NUM || plan->remoteNid != context->nrLocalNuma + plan->remoteIndex ||
+            plan->remoteNid >= MAX_NODES || (i > 0 && ComparePairPlan(&stagedPlans[i - 1], plan) == 0)) {
+            ret = -EINVAL;
+            goto OUT;
+        }
+
+        int pidBudgetIndex = FindPairPidBudget(stagedPidBudgets, pidBudgetCnt, plan->pid);
+        if (pidBudgetIndex < 0) {
+            ret = pidBudgetIndex;
+            goto OUT;
+        }
+
+        plan->demotePages = 0;
+        plan->promotePages = 0;
+        plan->swapPages = 0;
+        uint64_t requestedPages;
+        bool demote = plan->actualPages < plan->targetPages;
+        if (demote) {
+            requestedPages = plan->targetPages - plan->actualPages;
+        } else if (plan->actualPages > plan->targetPages) {
+            requestedPages = plan->actualPages - plan->targetPages;
+        } else {
+            continue;
+        }
+
+        PairPidBudget *pidBudget = &stagedPidBudgets[pidBudgetIndex];
+        uint64_t pidRemaining = pidBudget->maxMigratePages - pidBudget->plannedPages;
+        uint64_t migratePages = MIN(requestedPages, pidRemaining);
+
+        if (demote) {
+            /* Upper-layer targets own remote capacity; no remote reserve here. */
+            plan->demotePages = (uint32_t)migratePages;
+        } else {
+            int destination = plan->localNid;
+            uint64_t freePages = stagedContext.freePages[destination];
+            uint64_t reservePages = stagedContext.safetyReservePages[destination];
+            uint64_t plannedPages = stagedContext.plannedPages[destination];
+            uint64_t safeFreePages = freePages <= reservePages || freePages - reservePages <= plannedPages ?
+                                         0 :
+                                         freePages - reservePages - plannedPages;
+            migratePages = MIN(migratePages, safeFreePages);
+            plan->promotePages = (uint32_t)migratePages;
+            stagedContext.plannedPages[destination] += migratePages;
+        }
+        pidBudget->plannedPages += migratePages;
+    }
+
+    ret = memcpy_s(plans, planCap * sizeof(PairPlan), stagedPlans, inputCnt * sizeof(PairPlan));
+    if (ret != EOK) {
+        ret = -ret;
+        goto OUT;
+    }
+    ret = memcpy_s(pidBudgets, pidBudgetCnt * sizeof(PairPidBudget), stagedPidBudgets,
+                   pidBudgetCnt * sizeof(PairPidBudget));
+    if (ret != EOK) {
+        ret = -ret;
+        goto OUT;
+    }
+    ret = memcpy_s(context->plannedPages, sizeof(context->plannedPages), stagedContext.plannedPages,
+                   sizeof(context->plannedPages));
+    if (ret != EOK) {
+        ret = -ret;
+        goto OUT;
+    }
+    *planCnt = inputCnt;
+
+OUT:
+    free(stagedPlans);
+    free(stagedPidBudgets);
+    return ret;
+}
+
+typedef struct {
+    ProcessAttr *process;
+    bool pairSeen[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
+    uint32_t nrMigratePages[MAX_NODES][MAX_NODES];
+} PairPlanMatrixStage;
+
+static PairPlanMatrixStage *FindPairPlanMatrixStage(PairPlanMatrixStage stages[], size_t stageCnt, pid_t pid)
+{
+    for (size_t i = 0; i < stageCnt; i++) {
+        if (stages[i].process->pid == pid) {
+            return &stages[i];
+        }
+    }
+    return NULL;
+}
+
+int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt)
+{
+    if (!manager || planCnt > MAX_PAIR_TARGET_COUNT || (planCnt > 0 && !plans)) {
+        return -EINVAL;
+    }
+
+    PairPlanMatrixStage *stages = calloc(MAX_4K_PROCESSES_CNT, sizeof(PairPlanMatrixStage));
+    if (!stages) {
+        return -ENOMEM;
+    }
+
+    int ret = 0;
+    size_t stageCnt = 0;
+    EnvMutexLock(&manager->lock);
+    if (manager->nrLocalNuma <= 0 || manager->nrLocalNuma > LOCAL_NUMA_NUM) {
+        ret = -EINVAL;
+        goto OUT;
+    }
+    for (ProcessAttr *process = manager->processes; process; process = process->next) {
+        if (process->scanType != NORMAL_SCAN || process->groupPolicy.enabled) {
+            continue;
+        }
+        if (stageCnt == MAX_4K_PROCESSES_CNT) {
+            ret = -EOVERFLOW;
+            goto OUT;
+        }
+        stages[stageCnt++].process = process;
+    }
+
+    for (size_t i = 0; i < planCnt; i++) {
+        const PairPlan *plan = &plans[i];
+        PairPlanMatrixStage *stage = FindPairPlanMatrixStage(stages, stageCnt, plan->pid);
+        if (!stage || plan->localNid < 0 || plan->localNid >= manager->nrLocalNuma || plan->remoteIndex < 0 ||
+            plan->remoteIndex >= REMOTE_NUMA_NUM || plan->remoteNid != manager->nrLocalNuma + plan->remoteIndex ||
+            plan->remoteNid >= MAX_NODES || stage->pairSeen[plan->localNid][plan->remoteIndex] ||
+            !IsPairPlanDirectionValid(plan)) {
+            ret = -EINVAL;
+            goto OUT;
+        }
+        stage->pairSeen[plan->localNid][plan->remoteIndex] = true;
+        stage->nrMigratePages[plan->localNid][plan->remoteNid] = plan->demotePages;
+        stage->nrMigratePages[plan->remoteNid][plan->localNid] = plan->promotePages;
+    }
+
+    for (size_t i = 0; i < stageCnt; i++) {
+        ret = memcpy_s(stages[i].process->strategyAttr.nrMigratePages,
+                       sizeof(stages[i].process->strategyAttr.nrMigratePages), stages[i].nrMigratePages,
+                       sizeof(stages[i].nrMigratePages));
+        if (ret != EOK) {
+            ret = -ret;
+            goto OUT;
+        }
+    }
+
+OUT:
+    EnvMutexUnlock(&manager->lock);
+    free(stages);
+    return ret;
+}
+
+int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt)
+{
+    if (!manager || !plans || !planCnt || planCap > MAX_PAIR_TARGET_COUNT) {
+        return -EINVAL;
+    }
+    *planCnt = 0;
+
+    PairPlan *inputs = planCap == 0 ? NULL : calloc(planCap, sizeof(PairPlan));
+    PairPlan *stagedPlans = planCap == 0 ? NULL : calloc(planCap, sizeof(PairPlan));
+    PairPidBudget *pidBudgets = calloc(MAX_4K_PROCESSES_CNT, sizeof(PairPidBudget));
+    if ((planCap > 0 && (!inputs || !stagedPlans)) || !pidBudgets) {
+        free(inputs);
+        free(stagedPlans);
+        free(pidBudgets);
+        return -ENOMEM;
+    }
+
+    bool hugePage;
+    int nrLocalNuma;
+    EnvMutexLock(&manager->lock);
+    hugePage = manager->tracking.pageSize == PAGESIZE_2M;
+    nrLocalNuma = manager->nrLocalNuma;
+    EnvMutexUnlock(&manager->lock);
+
+    PairPlanContext context;
+    int ret = CollectNodeFreeSnapshot(hugePage, nrLocalNuma, &context);
+    size_t inputCnt = 0;
+    size_t pidBudgetCnt = 0;
+    if (!ret) {
+        ret = BuildAllPairPlanInputs(manager, inputs, planCap, &inputCnt, pidBudgets, MAX_4K_PROCESSES_CNT,
+                                     &pidBudgetCnt);
+    }
+    size_t stagedPlanCnt = 0;
+    if (!ret) {
+        ret =
+            BuildPairPlans(inputs, inputCnt, &context, pidBudgets, pidBudgetCnt, stagedPlans, planCap, &stagedPlanCnt);
+    }
+    if (!ret) {
+        ret = ApplyPairPlans(manager, stagedPlans, stagedPlanCnt);
+    }
+    if (!ret) {
+        if (stagedPlanCnt > 0) {
+            ret = memcpy_s(plans, planCap * sizeof(PairPlan), stagedPlans, stagedPlanCnt * sizeof(PairPlan));
+            if (ret != EOK) {
+                ret = -ret;
+            }
+        }
+        if (!ret) {
+            *planCnt = stagedPlanCnt;
+        }
+    }
+
+    free(inputs);
+    free(stagedPlans);
+    free(pidBudgets);
+    return ret;
 }
 
 static void FreeMigList(struct MigList mList[MAX_NODES][MAX_NODES])
@@ -175,6 +501,17 @@ static uint64_t GetMigListSuccessPages(const struct MigList *list)
     return success - list->failedIsolatedNr;
 }
 
+static void RefreshPairAccountMask(ProcessAttr *process, int localNid, int remoteIndex)
+{
+    uint32_t localBit = 1U << localNid;
+    if (process->strategyAttr.remoteNrPagesAfterMigrate[localNid][remoteIndex] > 0) {
+        process->managedLocalState.accountLocalMask[remoteIndex] |= localBit;
+    } else {
+        process->managedLocalState.accountLocalMask[remoteIndex] &= ~localBit;
+    }
+    process->managedLocalState.managedLocalMask |= process->managedLocalState.accountLocalMask[remoteIndex];
+}
+
 void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager)
 {
     ProcessAttr *current;
@@ -196,22 +533,43 @@ void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager)
             continue;
         }
 
-        if (toNid >= manager->nrLocalNuma) {
-            toNid = mMsg->migList[i].to - manager->nrLocalNuma;
-            current->strategyAttr.remoteNrPagesAfterMigrate[fromNid][toNid] += successMigCount;
-        } else {
-            fromNid = mMsg->migList[i].from - manager->nrLocalNuma;
-            if (successMigCount > current->strategyAttr.remoteNrPagesAfterMigrate[toNid][fromNid]) {
-                current->strategyAttr.remoteNrPagesAfterMigrate[toNid][fromNid] = 0;
-                SMAP_LOGGER_DEBUG("Mig Pages Num Exception: pid %d from %d to %d nr %llu pages", current->pid,
-                                  mMsg->migList[i].from, mMsg->migList[i].to, successMigCount);
-                continue;
+        bool fromLocal = fromNid >= 0 && fromNid < manager->nrLocalNuma;
+        bool toLocal = toNid >= 0 && toNid < manager->nrLocalNuma;
+        int remoteNidEnd = manager->nrLocalNuma + REMOTE_NUMA_NUM;
+        bool fromRemote = fromNid >= manager->nrLocalNuma && fromNid < remoteNidEnd;
+        bool toRemote = toNid >= manager->nrLocalNuma && toNid < remoteNidEnd;
+        if (fromLocal && toRemote) {
+            int remoteIndex = toNid - manager->nrLocalNuma;
+            uint32_t *account = &current->strategyAttr.remoteNrPagesAfterMigrate[fromNid][remoteIndex];
+            if (successMigCount > UINT32_MAX - *account) {
+                SMAP_LOGGER_WARNING("Pid %d Pair account overflow after demote from %d to %d "
+                                    "by %llu pages; saturating.",
+                                    current->pid, fromNid, toNid, successMigCount);
+                *account = UINT32_MAX;
+            } else {
+                *account += successMigCount;
             }
-            current->strategyAttr.remoteNrPagesAfterMigrate[toNid][fromNid] -= successMigCount;
+            RefreshPairAccountMask(current, fromNid, remoteIndex);
+        } else if (fromRemote && toLocal) {
+            int remoteIndex = fromNid - manager->nrLocalNuma;
+            uint32_t *account = &current->strategyAttr.remoteNrPagesAfterMigrate[toNid][remoteIndex];
+            if (successMigCount > *account) {
+                SMAP_LOGGER_WARNING("Pid %d Pair account has only %u pages while promote "
+                                    "from %d to %d succeeded for %llu pages; clearing account.",
+                                    current->pid, *account, fromNid, toNid, successMigCount);
+                *account = 0;
+            } else {
+                *account -= successMigCount;
+            }
+            RefreshPairAccountMask(current, toNid, remoteIndex);
+        } else {
+            SMAP_LOGGER_DEBUG("Skip non-Pair migration result for pid %d from %d to %d.", current->pid, fromNid, toNid);
+            continue;
         }
-        SMAP_LOGGER_INFO("pid %d from %d to %d nr %llu failed_mig_nr %llu success_mig_nr %llu.", mMsg->migList[i].pid,
-                         mMsg->migList[i].from, mMsg->migList[i].to, mMsg->migList[i].nr, mMsg->migList[i].failedMigNr,
-                         successMigCount);
+        SMAP_LOGGER_INFO("pid %d from %d to %d nr %llu failed_mig_nr %llu "
+                         "failed_isolated_nr %llu success_mig_nr %llu.",
+                         mMsg->migList[i].pid, mMsg->migList[i].from, mMsg->migList[i].to, mMsg->migList[i].nr,
+                         mMsg->migList[i].failedMigNr, mMsg->migList[i].failedIsolatedNr, successMigCount);
     }
 }
 
