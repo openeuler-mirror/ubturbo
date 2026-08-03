@@ -69,8 +69,6 @@
 #define DEFAULT_SCAN_CPU_MAX 3
 #define DEFAULT_SCAN_CPU_ENABLE 0
 
-#define SCAN_MULTIPLE 1UL
-
 #define RADIX_10 10UL
 
 typedef struct {
@@ -271,11 +269,6 @@ static int32_t ConfigScanPeriod(char *substr, char *value)
     if (g_tmpStrategyConfig.scanPeriod < MIN_SCAN_PERIOD || g_tmpStrategyConfig.scanPeriod > MAX_SCAN_PERIOD) {
         SMAP_LOGGER_ERROR("Config scan period(%d) invalid, range(%d-%d), key:%s.", g_tmpStrategyConfig.scanPeriod,
                           MIN_SCAN_PERIOD, MAX_SCAN_PERIOD, substr);
-        return RETURN_ERROR;
-    }
-    if (g_tmpStrategyConfig.scanPeriod % SCAN_MULTIPLE != 0) {
-        SMAP_LOGGER_ERROR("Scan period(%d) must be a multiple of %d, key:%s.", g_tmpStrategyConfig.scanPeriod,
-                          SCAN_MULTIPLE, substr);
         return RETURN_ERROR;
     }
     return RETURN_OK;
@@ -783,14 +776,6 @@ static int32_t StrategyConfigReview(void)
     if (g_tmpStrategyConfig.scanPeriod > g_tmpStrategyConfig.migratePeriod) {
         SMAP_LOGGER_ERROR("Scan period(%d) must be less than migrate period(%d).", g_tmpStrategyConfig.scanPeriod,
                           g_tmpStrategyConfig.migratePeriod);
-        return RETURN_ERROR;
-    }
-    /* actc_t 为 u8(上限 255): 单迁移周期内扫描次数不得超过 255, 否则频次在 u8 处回绕丢真值 */
-    if (g_tmpStrategyConfig.migratePeriod > MAX_SCAN_TIMES_PER_MIGRATE * g_tmpStrategyConfig.scanPeriod) {
-        SMAP_LOGGER_ERROR("Migrate period(%d) must be <= %d * scan period(%d), because actc_t is u8 and scan times "
-                          "per migrate cycle must not exceed %d.",
-                          g_tmpStrategyConfig.migratePeriod, MAX_SCAN_TIMES_PER_MIGRATE, g_tmpStrategyConfig.scanPeriod,
-                          MAX_SCAN_TIMES_PER_MIGRATE);
         return RETURN_ERROR;
     }
     return RETURN_OK;

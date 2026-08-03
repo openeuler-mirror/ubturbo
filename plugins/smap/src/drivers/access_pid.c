@@ -977,7 +977,6 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 		 * paddr_bm while convert_pos_to_paddr_sorted() reads it.
 		 */
 		ap->cur_times = 0;
-		pid_pte_mkold(ap);
 		submit_one_work(ap);
 		list_move_tail(&ap->node, &ap_data.list);
 	}
