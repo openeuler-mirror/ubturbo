@@ -40,4 +40,5 @@ int SeparateStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_N
 int SeparateStrategyMultiNumaVm(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]);
 void FindThreshold(const SelectionMode mode, uint64_t nrMig, const uint32_t *buckets, int *thresholdFreq,
                    uint32_t *takeAtThreshold);
+int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]);
 #endif /* __SEPARATE_STRATEGY_H__ */

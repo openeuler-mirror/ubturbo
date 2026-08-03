@@ -65,6 +65,11 @@ int AddMigList(struct MigrateMsg *mMsg, struct MigList *mList)
     if (mList->nr == 0 || mList->addr == NULL) {
         return 0;
     }
+    int maxMigListCount = GetCurrentMaxNrPid() * MAX_PER_PID_MIG_LIST_COUNT;
+    if (mMsg->cnt >= maxMigListCount) {
+        SMAP_LOGGER_WARNING("Migration list reaches kernel limit %d.", maxMigListCount);
+        return -ENOSPC;
+    }
     SMAP_LOGGER_DEBUG("mList->nr: %lu.", mList->nr);
     mMsg->migList[mMsg->cnt].addr = malloc(sizeof(uint64_t) * mList->nr);
     if (!mMsg->migList[mMsg->cnt].addr) {
@@ -135,7 +140,7 @@ static int FindPairPidBudget(const PairPidBudget pidBudgets[], size_t pidBudgetC
 
 static bool IsPairPlanDirectionValid(const PairPlan *plan)
 {
-    if (plan->swapPages != 0 || (plan->demotePages > 0 && plan->promotePages > 0)) {
+    if (plan->demotePages > 0 && plan->promotePages > 0) {
         return false;
     }
     if (plan->targetPages > plan->actualPages) {
@@ -145,6 +150,153 @@ static bool IsPairPlanDirectionValid(const PairPlan *plan)
         return plan->demotePages == 0 && plan->promotePages <= plan->actualPages - plan->targetPages;
     }
     return plan->demotePages == 0 && plan->promotePages == 0;
+}
+
+static ProcessAttr *FindPairPlanProcessLocked(struct ProcessManager *manager, pid_t pid)
+{
+    for (ProcessAttr *process = manager->processes; process; process = process->next) {
+        if (process->pid == pid) {
+            return process;
+        }
+    }
+    return NULL;
+}
+
+static void ConsumeBucketPages(uint64_t buckets[FREQ_BUCKETS_SIZE], uint64_t pages, bool highestFirst)
+{
+    for (int step = 0; step < FREQ_BUCKETS_SIZE && pages > 0; step++) {
+        int bucket = highestFirst ? FREQ_BUCKETS_SIZE - 1 - step : step;
+        uint64_t consumed = MIN(buckets[bucket], pages);
+        buckets[bucket] -= consumed;
+        pages -= consumed;
+    }
+}
+
+static uint64_t CountPairSwapPages(const ProcessAttr *process, int localNid, int remoteNid, uint64_t localSelected,
+                                   uint64_t remoteSelected)
+{
+    if (!process->scanAttr.actcData[localNid] || !process->scanAttr.actcData[remoteNid] ||
+        process->scanAttr.actcLen[localNid] == 0 || process->scanAttr.actcLen[remoteNid] == 0) {
+        return 0;
+    }
+
+    uint64_t localBuckets[FREQ_BUCKETS_SIZE] = { 0 };
+    uint64_t remoteBuckets[FREQ_BUCKETS_SIZE] = { 0 };
+    for (int bucket = 0; bucket < FREQ_BUCKETS_SIZE; bucket++) {
+        localBuckets[bucket] = process->scanAttr.actCount[localNid].freqBuckets[bucket];
+        remoteBuckets[bucket] = process->scanAttr.actCount[remoteNid].freqBuckets[bucket];
+    }
+    /* Net migration selects local cold pages and remote hot pages first. */
+    ConsumeBucketPages(localBuckets, localSelected, false);
+    ConsumeBucketPages(remoteBuckets, remoteSelected, true);
+
+    uint64_t swappable = 0;
+    int localBucket = 0;
+    int remoteBucket = FREQ_BUCKETS_SIZE - 1;
+    while (localBucket < remoteBucket) {
+        while (localBucket < remoteBucket && localBuckets[localBucket] == 0) {
+            localBucket++;
+        }
+        while (localBucket < remoteBucket && remoteBuckets[remoteBucket] == 0) {
+            remoteBucket--;
+        }
+        if (localBucket >= remoteBucket) {
+            break;
+        }
+        uint64_t paired = MIN(localBuckets[localBucket], remoteBuckets[remoteBucket]);
+        swappable += paired;
+        localBuckets[localBucket] -= paired;
+        remoteBuckets[remoteBucket] -= paired;
+    }
+    return swappable;
+}
+
+static bool IsOnlyLocalForRemote(const PairPlan plans[], size_t planCnt, size_t current)
+{
+    const PairPlan *plan = &plans[current];
+    int activeLocalCnt = 0;
+    for (size_t i = 0; i < planCnt; i++) {
+        if (plans[i].pid != plan->pid || plans[i].remoteNid != plan->remoteNid ||
+            (plans[i].targetPages == 0 && plans[i].actualPages == 0 && plans[i].demotePages == 0 &&
+             plans[i].promotePages == 0)) {
+            continue;
+        }
+        activeLocalCnt++;
+    }
+    return activeLocalCnt == 1;
+}
+
+int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCnt, PairPlanContext *context,
+                       PairPidBudget pidBudgets[], size_t pidBudgetCnt)
+{
+    if (!manager || !context || planCnt > MAX_PAIR_TARGET_COUNT || pidBudgetCnt > MAX_4K_PROCESSES_CNT ||
+        (planCnt > 0 && (!plans || !pidBudgets || pidBudgetCnt == 0))) {
+        return -EINVAL;
+    }
+
+    EnvMutexLock(&manager->lock);
+    for (size_t i = 0; i < planCnt; i++) {
+        int budgetIndex = FindPairPidBudget(pidBudgets, pidBudgetCnt, plans[i].pid);
+        ProcessAttr *process = FindPairPlanProcessLocked(manager, plans[i].pid);
+        if (budgetIndex < 0 || !process || process->groupPolicy.enabled || plans[i].localNid < 0 ||
+            plans[i].localNid >= context->nrLocalNuma || plans[i].remoteNid < context->nrLocalNuma ||
+            plans[i].remoteNid >= MAX_NODES || !IsPairPlanDirectionValid(&plans[i]) ||
+            pidBudgets[budgetIndex].plannedPages > pidBudgets[budgetIndex].maxMigratePages) {
+            EnvMutexUnlock(&manager->lock);
+            return -EINVAL;
+        }
+    }
+
+    pid_t currentPid = -1;
+    uint64_t selectedFrom[MAX_NODES] = { 0 };
+    for (size_t i = 0; i < planCnt; i++) {
+        PairPlan *plan = &plans[i];
+        ProcessAttr *process = FindPairPlanProcessLocked(manager, plan->pid);
+        int budgetIndex = FindPairPidBudget(pidBudgets, pidBudgetCnt, plan->pid);
+        PairPidBudget *budget = &pidBudgets[budgetIndex];
+        plan->swapPages = 0;
+
+        if (currentPid != plan->pid) {
+            currentPid = plan->pid;
+            int ret = memset_s(selectedFrom, sizeof(selectedFrom), 0, sizeof(selectedFrom));
+            if (ret != EOK) {
+                EnvMutexUnlock(&manager->lock);
+                return ret;
+            }
+            for (size_t j = 0; j < planCnt; j++) {
+                if (plans[j].pid == currentPid) {
+                    selectedFrom[plans[j].localNid] += plans[j].demotePages;
+                    selectedFrom[plans[j].remoteNid] += plans[j].promotePages;
+                }
+            }
+        }
+        /* Capacity convergence has priority over the optional hot/cold swap. */
+        if (plan->targetPages != plan->actualPages || !process->enableSwap || IsNodeForbidden(plan->remoteNid) ||
+            !IsOnlyLocalForRemote(plans, planCnt, i) ||
+            (plan->targetPages == 0 && plan->demotePages == 0 && plan->promotePages == 0)) {
+            continue;
+        }
+
+        uint64_t freePages = context->freePages[plan->localNid];
+        uint64_t reservePages = context->safetyReservePages[plan->localNid];
+        uint64_t safeCapacity = freePages > reservePages ? freePages - reservePages : 0;
+        uint64_t localFree = safeCapacity > context->plannedPages[plan->localNid] ?
+                                 safeCapacity - context->plannedPages[plan->localNid] :
+                                 0;
+        uint64_t pidRemaining = budget->maxMigratePages - budget->plannedPages;
+        uint64_t swapPages = CountPairSwapPages(process, plan->localNid, plan->remoteNid, selectedFrom[plan->localNid],
+                                                selectedFrom[plan->remoteNid]);
+        swapPages = MIN(swapPages, localFree);
+        swapPages = MIN(swapPages, pidRemaining / 2);
+        swapPages = MIN(swapPages, UINT32_MAX);
+        plan->swapPages = (uint32_t)swapPages;
+        selectedFrom[plan->localNid] += swapPages;
+        selectedFrom[plan->remoteNid] += swapPages;
+        context->plannedPages[plan->localNid] += swapPages;
+        budget->plannedPages += swapPages * 2;
+    }
+    EnvMutexUnlock(&manager->lock);
+    return 0;
 }
 
 int BuildPairPlans(const PairPlan inputs[], size_t inputCnt, PairPlanContext *context, PairPidBudget pidBudgets[],
@@ -289,7 +441,7 @@ static PairPlanMatrixStage *FindPairPlanMatrixStage(PairPlanMatrixStage stages[]
     return NULL;
 }
 
-int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt)
+int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt, bool migrateOnly)
 {
     if (!manager || planCnt > MAX_PAIR_TARGET_COUNT || (planCnt > 0 && !plans)) {
         return -EINVAL;
@@ -308,7 +460,8 @@ int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_
         goto OUT;
     }
     for (ProcessAttr *process = manager->processes; process; process = process->next) {
-        if (process->scanType != NORMAL_SCAN || process->groupPolicy.enabled) {
+        if (process->scanType != NORMAL_SCAN || process->groupPolicy.enabled ||
+            (migrateOnly && process->state != PROC_MIGRATE)) {
             continue;
         }
         if (stageCnt == MAX_4K_PROCESSES_CNT) {
@@ -329,8 +482,12 @@ int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_
             goto OUT;
         }
         stage->pairSeen[plan->localNid][plan->remoteIndex] = true;
-        stage->nrMigratePages[plan->localNid][plan->remoteNid] = plan->demotePages;
-        stage->nrMigratePages[plan->remoteNid][plan->localNid] = plan->promotePages;
+        if (plan->demotePages > UINT32_MAX - plan->swapPages || plan->promotePages > UINT32_MAX - plan->swapPages) {
+            ret = -EOVERFLOW;
+            goto OUT;
+        }
+        stage->nrMigratePages[plan->localNid][plan->remoteNid] = plan->demotePages + plan->swapPages;
+        stage->nrMigratePages[plan->remoteNid][plan->localNid] = plan->promotePages + plan->swapPages;
     }
 
     for (size_t i = 0; i < stageCnt; i++) {
@@ -347,6 +504,11 @@ OUT:
     EnvMutexUnlock(&manager->lock);
     free(stages);
     return ret;
+}
+
+int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt)
+{
+    return ApplyPairPlansForState(manager, plans, planCnt, false);
 }
 
 int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt)
@@ -378,8 +540,19 @@ int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t p
     size_t inputCnt = 0;
     size_t pidBudgetCnt = 0;
     if (!ret) {
-        ret = BuildAllPairPlanInputs(manager, inputs, planCap, &inputCnt, pidBudgets, MAX_4K_PROCESSES_CNT,
-                                     &pidBudgetCnt);
+        ret = BuildAllPairPlanInputsForState(manager, inputs, planCap, &inputCnt, pidBudgets, MAX_4K_PROCESSES_CNT,
+                                             &pidBudgetCnt, true);
+    }
+    if (!ret) {
+        for (size_t i = 0; i < inputCnt; i++) {
+            if (IsNodeForbidden(inputs[i].remoteNid)) {
+                /*
+		 * A disabled remote cannot receive new pages, but its current
+		 * residency remains available for promotion back to local.
+		 */
+                inputs[i].targetPages = 0;
+            }
+        }
     }
     size_t stagedPlanCnt = 0;
     if (!ret) {
@@ -387,7 +560,10 @@ int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t p
             BuildPairPlans(inputs, inputCnt, &context, pidBudgets, pidBudgetCnt, stagedPlans, planCap, &stagedPlanCnt);
     }
     if (!ret) {
-        ret = ApplyPairPlans(manager, stagedPlans, stagedPlanCnt);
+        ret = BuildPairSwapPlans(manager, stagedPlans, stagedPlanCnt, &context, pidBudgets, pidBudgetCnt);
+    }
+    if (!ret) {
+        ret = ApplyPairPlansForState(manager, stagedPlans, stagedPlanCnt, true);
     }
     if (!ret) {
         if (stagedPlanCnt > 0) {
@@ -445,7 +621,7 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
             continue;
         }
         int nid = i - offset;
-        if (IsNodeForbidden(nid)) {
+        if (IsNodeForbidden(nid) && process->groupPolicy.enabled) {
             SMAP_LOGGER_INFO("L2 node%d is forbiddened, pid %d stops migrate out.", nid, process->pid);
             return -EPERM;
         }
@@ -468,19 +644,32 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
     }
 
     uint64_t nrMigTotal = 0;
-    for (int from = 0; from < MAX_NODES; from++) {
-        for (int to = 0; to < MAX_NODES; to++) {
-            if (!migList[from][to].nr) {
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int phase = 0; phase < 2; phase++) {
+        for (int from = 0; from < MAX_NODES; from++) {
+            bool promote = from >= nrLocalNuma;
+            if ((phase == 0) != promote) {
                 continue;
             }
-            nrMigTotal += migList[from][to].nr;
-            ret = AddMigList(mMsg, &migList[from][to]);
-            if (ret) {
-                SMAP_LOGGER_ERROR("Pid %d AddMigList %d %d failed: %d.", process->pid, from, to, ret);
-                FreeMigList(migList);
-                return ret;
+            for (int to = 0; to < MAX_NODES; to++) {
+                if (!migList[from][to].nr) {
+                    continue;
+                }
+                ret = AddMigList(mMsg, &migList[from][to]);
+                if (ret == -ENOSPC) {
+                    SMAP_LOGGER_WARNING("Pid %d migration list is deferred by kernel entry limit.", process->pid);
+                    FreeMigList(migList);
+                    *migratePage += nrMigTotal;
+                    return 0;
+                }
+                if (ret) {
+                    SMAP_LOGGER_ERROR("Pid %d AddMigList %d %d failed: %d.", process->pid, from, to, ret);
+                    FreeMigList(migList);
+                    return ret;
+                }
+                nrMigTotal += migList[from][to].nr;
+                SMAP_LOGGER_INFO("Numa %d --> Numa %d, mig %d pages.", from, to, migList[from][to].nr);
             }
-            SMAP_LOGGER_INFO("Numa %d --> Numa %d, mig %d pages.", from, to, migList[from][to].nr);
         }
     }
     FreeMigList(migList);
@@ -1144,49 +1333,100 @@ static void NumaMigReduceDeal(ProcessAttr *current)
     }
 }
 
+static ProcessAttr *FindMigrationCandidateLocked(struct ProcessManager *manager, pid_t pid)
+{
+    for (ProcessAttr *current = manager->processes; current; current = current->next) {
+        if (current->pid == pid) {
+            return current;
+        }
+    }
+    return NULL;
+}
+
 static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg, uint64_t *migratePages)
 {
     int ret;
     ProcessAttr *current;
     bool isForcedSingleThread = false;
+    size_t candidateCnt = 0;
+    size_t planCnt = 0;
+    pid_t *candidatePids = calloc(MAX_4K_PROCESSES_CNT, sizeof(pid_t));
+    PairPlan *plans = calloc(MAX_PAIR_TARGET_COUNT, sizeof(PairPlan));
+    if (!candidatePids || !plans) {
+        free(candidatePids);
+        free(plans);
+        return -ENOMEM;
+    }
 
     EnvMutexLock(&manager->lock);
     ret = InitMigrateMsg(mMsg, manager);
     if (ret) {
         EnvMutexUnlock(&manager->lock);
         SMAP_LOGGER_ERROR("InitMigrateMsg failed! ret:%d.", ret);
-        return ret;
+        goto OUT;
     }
     for (current = manager->processes; current; current = current->next) {
         if (current->scanType != NORMAL_SCAN) {
             continue;
         }
-        if (current->state == PROC_IDLE && current->pendingTargetConfigValid) {
+        if (current->state != PROC_IDLE) {
+            SMAP_LOGGER_DEBUG("pid %d state is %d, skip migration.", current->pid, current->state);
+            continue;
+        }
+        if (current->pendingTargetConfigValid) {
             ret = ApplyPendingMigrationTargets(current);
             if (ret) {
                 SMAP_LOGGER_ERROR("Apply pending migration target before migration failed, "
                                   "pid %d ret %d.",
                                   current->pid, ret);
+                ret = 0;
                 continue;
             }
         }
-        if (current->state == PROC_IDLE && current->pendingGroupPolicy.valid) {
+        if (current->pendingGroupPolicy.valid) {
             /* Retry a previously failed deferred refresh before building new migrations. */
             ret = ApplyPendingGroupedPolicy(current);
             if (ret) {
                 SMAP_LOGGER_ERROR("Apply pending grouped policy before migration failed, pid %d ret %d.", current->pid,
                                   ret);
+                ret = 0;
                 continue;
             }
         }
         SMAP_LOGGER_INFO("+++++++scan_and_strategy_thread: processing pid %d.", current->pid);
-        NumaMigReduceDeal(current);
-        if (current->state != PROC_IDLE) {
-            SMAP_LOGGER_DEBUG("pid %d state is %d, skip migration.", current->pid, current->state);
-            continue;
+        if (candidateCnt == MAX_4K_PROCESSES_CNT) {
+            ret = -EOVERFLOW;
+            break;
         }
         current->state = PROC_MIGRATE;
+        candidatePids[candidateCnt++] = current->pid;
         SMAP_LOGGER_DEBUG("change pid %d state from idle to migrate.", current->pid);
+    }
+    EnvMutexUnlock(&manager->lock);
+
+    if (ret) {
+        goto ROLLBACK;
+    }
+
+    /*
+     * All candidate processes are in PROC_MIGRATE, so concurrent target
+     * updates are deferred until PostMigration and cannot race this plan.
+     */
+    ret = BuildAllPairPlans(manager, plans, MAX_PAIR_TARGET_COUNT, &planCnt);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Build all pair plans failed: %d.", ret);
+        goto ROLLBACK;
+    }
+
+    EnvMutexLock(&manager->lock);
+    for (size_t i = 0; i < candidateCnt; i++) {
+        current = FindMigrationCandidateLocked(manager, candidatePids[i]);
+        if (!current || current->state != PROC_MIGRATE) {
+            continue;
+        }
+        if (current->groupPolicy.enabled) {
+            NumaMigReduceDeal(current);
+        }
         // 识别每个进程的待迁移冷热页
         ret = BuildMigrationMsg(current, mMsg, migratePages);
         SMAP_LOGGER_INFO("Add process: %d to migrate msg ret: %d.", current->pid, ret);
@@ -1195,7 +1435,25 @@ static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
     EnvMutexUnlock(&manager->lock);
 
     SetMigrateThreadNum(mMsg, *migratePages, isForcedSingleThread);
+    free(candidatePids);
+    free(plans);
     return 0;
+
+ROLLBACK:
+    EnvMutexLock(&manager->lock);
+    for (size_t i = 0; i < candidateCnt; i++) {
+        current = FindMigrationCandidateLocked(manager, candidatePids[i]);
+        if (current && current->state == PROC_MIGRATE) {
+            current->state = PROC_IDLE;
+        }
+    }
+    EnvMutexUnlock(&manager->lock);
+    free(mMsg->migList);
+    mMsg->migList = NULL;
+OUT:
+    free(candidatePids);
+    free(plans);
+    return ret;
 }
 
 static void PostMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg)

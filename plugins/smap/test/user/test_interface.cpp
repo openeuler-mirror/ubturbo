@@ -583,6 +583,22 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgMigOutCount)
     EXPECT_EQ(0, ret);
 }
 
+TEST_F(InterfaceTest, TestCheckMigrateOutMsgAllows4KMultiRemote)
+{
+    struct MigrateOutMsg msg = {.count = 1};
+    msg.payload[0].pid = 1234;
+    msg.payload[0].count = 2;
+    int pidCount = 0;
+
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_processManager.nr[PROCESS_TYPE] = 0;
+    g_processManager.processes = nullptr;
+    MOCKER(IsMigParaValid).stubs().will(returnValue(true));
+
+    EXPECT_EQ(0, CheckMigrateOutMsg(&msg, PAGETYPE_NORMAL, &pidCount));
+}
+
 TEST_F(InterfaceTest, TestCheckMigrateOutMsgInvalidDestNid)
 {
     struct MigrateOutMsg msg = {.count = 1};

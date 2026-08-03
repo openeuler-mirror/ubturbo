@@ -172,6 +172,19 @@ TEST_F(MigrationTest, TestAddMigListNoPageToMig)
     EXPECT_EQ(0, mMsg.cnt);
 }
 
+TEST_F(MigrationTest, TestAddMigListRejectsKernelEntryOverflow)
+{
+    uint64_t addr = 0;
+    struct MigList mList = {.nr = 1, .addr = &addr};
+    struct MigrateMsg mMsg = {
+        .cnt = MAX_2M_PROCESSES_CNT * MAX_PER_PID_MIG_LIST_COUNT,
+    };
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+
+    EXPECT_EQ(-ENOSPC, AddMigList(&mMsg, &mList));
+    EXPECT_EQ(MAX_2M_PROCESSES_CNT * MAX_PER_PID_MIG_LIST_COUNT, mMsg.cnt);
+}
+
 extern "C" void FreeMigList(struct MigList mList[MAX_NODES][MAX_NODES]);
 TEST_F(MigrationTest, TestFreeMigList)
 {
@@ -272,11 +285,11 @@ TEST_F(MigrationTest, TestBuildMigrationMsgNoPage)
     EXPECT_EQ(0, ret);
 }
 
-TEST_F(MigrationTest, TestBuildMigrationMsgL2NodeForbidden)
+TEST_F(MigrationTest, TestBuildMigrationMsgAllowsNormalPromoteFromForbiddenNode)
 {
     int ret;
     int nid = 4;
-    uint64_t pages;
+    uint64_t pages = 0;
     ProcessAttr process = {};
     process.numaAttr.numaNodes = 0b00010001;
     struct MigrateMsg mMsg;
@@ -285,9 +298,16 @@ TEST_F(MigrationTest, TestBuildMigrationMsgL2NodeForbidden)
 
     g_processManager.nrLocalNuma = 4;
     EnvAtomicSet(&g_forbiddenNodes[nid], 1);
+    MOCKER(RunStrategy).stubs().will(returnValue(0));
 
     ret = BuildMigrationMsg(&process, &mMsg, &pages);
+    EXPECT_EQ(0, ret);
+
+    GlobalMockObject::verify();
+    process.groupPolicy.enabled = true;
+    ret = BuildMigrationMsg(&process, &mMsg, &pages);
     EXPECT_EQ(-EPERM, ret);
+    EnvAtomicSet(&g_forbiddenNodes[nid], 0);
 }
 
 extern "C" int RunStrategyStub(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], size_t mlistSize);
@@ -796,6 +816,99 @@ TEST_F(MigrationTest, TestBuildPairPlansSharesPidBudgetAcrossPairs)
     EXPECT_EQ(60U, pidBudgets[0].plannedPages);
 }
 
+TEST_F(MigrationTest, TestBuildPairSwapPlansUsesRemainingBidirectionalBudget)
+{
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 2;
+    ProcessAttr process = {.pid = 100, .scanType = NORMAL_SCAN};
+    ActcData localPages[10] = {};
+    ActcData remotePages[10] = {};
+    process.enableSwap = true;
+    process.scanAttr.actcData[0] = localPages;
+    process.scanAttr.actcData[2] = remotePages;
+    process.scanAttr.actcLen[0] = 10;
+    process.scanAttr.actcLen[2] = 10;
+    process.scanAttr.actCount[0].freqBuckets[0] = 10;
+    process.scanAttr.actCount[2].freqBuckets[5] = 10;
+    manager.processes = &process;
+    ASSERT_EQ(0, EnvMutexInit(&manager.lock));
+
+    PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 10);
+    PairPlanContext context = {.nrLocalNuma = 2};
+    context.freePages[0] = 10;
+    context.safetyReservePages[0] = 2;
+    PairPidBudget budget = {.pid = 100, .maxMigratePages = 12, .plannedPages = 2};
+
+    ASSERT_EQ(0, BuildPairSwapPlans(&manager, &plan, 1, &context, &budget, 1));
+    EXPECT_EQ(5U, plan.swapPages);
+    EXPECT_EQ(12U, budget.plannedPages);
+    EXPECT_EQ(5U, context.plannedPages[0]);
+    EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
+}
+
+TEST_F(MigrationTest, TestBuildPairSwapPlansSkipsUnconvergedPair)
+{
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 2;
+    ProcessAttr process = {.pid = 100, .scanType = NORMAL_SCAN};
+    ActcData localPages[10] = {};
+    ActcData remotePages[10] = {};
+    process.enableSwap = true;
+    process.scanAttr.actcData[0] = localPages;
+    process.scanAttr.actcData[2] = remotePages;
+    process.scanAttr.actcLen[0] = 10;
+    process.scanAttr.actcLen[2] = 10;
+    process.scanAttr.actCount[0].freqBuckets[0] = 10;
+    process.scanAttr.actCount[2].freqBuckets[5] = 10;
+    manager.processes = &process;
+    ASSERT_EQ(0, EnvMutexInit(&manager.lock));
+
+    PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 8);
+    plan.demotePages = 2;
+    PairPlanContext context = {.nrLocalNuma = 2};
+    context.freePages[0] = 10;
+    context.safetyReservePages[0] = 2;
+    PairPidBudget budget = {.pid = 100, .maxMigratePages = 12, .plannedPages = 2};
+
+    ASSERT_EQ(0, BuildPairSwapPlans(&manager, &plan, 1, &context, &budget, 1));
+    EXPECT_EQ(0U, plan.swapPages);
+    EXPECT_EQ(2U, budget.plannedPages);
+    EXPECT_EQ(0U, context.plannedPages[0]);
+    EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
+}
+
+TEST_F(MigrationTest, TestBuildPairSwapPlansRejectsAmbiguousSharedRemote)
+{
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 2;
+    ProcessAttr process = {.pid = 100, .scanType = NORMAL_SCAN};
+    ActcData pages[3][4] = {};
+    process.enableSwap = true;
+    for (int nid : {0, 1, 2}) {
+        process.scanAttr.actcData[nid] = pages[nid];
+        process.scanAttr.actcLen[nid] = 4;
+    }
+    process.scanAttr.actCount[0].freqBuckets[0] = 4;
+    process.scanAttr.actCount[1].freqBuckets[0] = 4;
+    process.scanAttr.actCount[2].freqBuckets[5] = 4;
+    manager.processes = &process;
+    ASSERT_EQ(0, EnvMutexInit(&manager.lock));
+
+    PairPlan plans[] = {
+        MakePairPlan(100, 0, 2, 0, 4, 4),
+        MakePairPlan(100, 1, 2, 0, 4, 4),
+    };
+    PairPlanContext context = {.nrLocalNuma = 2};
+    context.freePages[0] = context.freePages[1] = 100;
+    PairPidBudget budget = {.pid = 100, .maxMigratePages = 100};
+
+    ASSERT_EQ(0, BuildPairSwapPlans(&manager, plans, 2, &context, &budget, 1));
+    EXPECT_EQ(0U, plans[0].swapPages);
+    EXPECT_EQ(0U, plans[1].swapPages);
+    EXPECT_EQ(0U, budget.plannedPages);
+    EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
+}
+
 TEST_F(MigrationTest, TestBuildPairPlansZeroLocalSafeFreeBlocksPromote)
 {
     PairPlan input = MakePairPlan(100, 0, 2, 0, 20, 80);
@@ -858,10 +971,12 @@ TEST_F(MigrationTest, TestApplyPairPlansRebuildsNormalMatricesOnly)
         MakePairPlan(100, 1, 3, 1, 10, 50),
     };
     plans[0].demotePages = 60;
+    plans[0].swapPages = 5;
     plans[1].promotePages = 40;
 
     ASSERT_EQ(0, ApplyPairPlans(&manager, plans, 2));
-    EXPECT_EQ(60U, first.strategyAttr.nrMigratePages[0][2]);
+    EXPECT_EQ(65U, first.strategyAttr.nrMigratePages[0][2]);
+    EXPECT_EQ(5U, first.strategyAttr.nrMigratePages[2][0]);
     EXPECT_EQ(40U, first.strategyAttr.nrMigratePages[3][1]);
     EXPECT_EQ(0U, first.strategyAttr.nrMigratePages[7][7]);
     EXPECT_EQ(0U, second.strategyAttr.nrMigratePages[6][6]);
@@ -884,6 +999,67 @@ TEST_F(MigrationTest, TestApplyPairPlansFailureKeepsOldMatrix)
 
     EXPECT_EQ(-EINVAL, ApplyPairPlans(&manager, &plan, 1));
     EXPECT_EQ(7U, process.strategyAttr.nrMigratePages[0][2]);
+    EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
+}
+
+static int BuildDisabledPairPlanInput(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
+                                      PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt,
+                                      bool migrateOnly)
+{
+    (void)manager;
+    EXPECT_TRUE(migrateOnly);
+    EXPECT_GE(planCap, 1U);
+    EXPECT_GE(pidBudgetCap, 1U);
+    plans[0] = MakePairPlan(100, 0, 1, 0, 20, 10);
+    pidBudgets[0] = {.pid = 100, .maxMigratePages = 100};
+    *planCnt = 1;
+    *pidBudgetCnt = 1;
+    return 0;
+}
+
+static int BuildLocalFreeSnapshot(bool hugePage, int nrLocalNuma, PairPlanContext *context)
+{
+    (void)hugePage;
+    EXPECT_EQ(1, nrLocalNuma);
+    *context = {};
+    context->nrLocalNuma = 1;
+    context->freePages[0] = 100;
+    return 0;
+}
+
+static int CheckDisabledPairPlanApplied(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt,
+                                        bool migrateOnly)
+{
+    (void)manager;
+    EXPECT_TRUE(migrateOnly);
+    EXPECT_EQ(1U, planCnt);
+    EXPECT_EQ(0U, plans[0].targetPages);
+    EXPECT_EQ(0U, plans[0].demotePages);
+    EXPECT_EQ(10U, plans[0].promotePages);
+    return 0;
+}
+
+TEST_F(MigrationTest, TestBuildAllPairPlansPromotesFromDisabledRemote)
+{
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 1;
+    manager.tracking.pageSize = PAGESIZE_4K;
+    ASSERT_EQ(0, EnvMutexInit(&manager.lock));
+    EnvAtomicSet(&g_forbiddenNodes[1], 1);
+    PairPlan plans[1] = {};
+    size_t planCnt = 0;
+
+    MOCKER(CollectNodeFreeSnapshot).stubs().will(invoke(BuildLocalFreeSnapshot));
+    MOCKER(BuildAllPairPlanInputsForState).stubs().will(invoke(BuildDisabledPairPlanInput));
+    MOCKER(BuildPairSwapPlans).stubs().will(returnValue(0));
+    MOCKER(ApplyPairPlansForState).stubs().will(invoke(CheckDisabledPairPlanApplied));
+
+    int ret = BuildAllPairPlans(&manager, plans, 1, &planCnt);
+    EnvAtomicSet(&g_forbiddenNodes[1], 0);
+    ASSERT_EQ(0, ret);
+    ASSERT_EQ(1U, planCnt);
+    EXPECT_EQ(10U, plans[0].promotePages);
+
     EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
 }
 
@@ -1198,6 +1374,42 @@ TEST_F(MigrationTest, TestUpdateMigResultSubtractsIsolatedFailure)
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(150, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    free(mMsg.migList);
+}
+
+TEST_F(MigrationTest, TestUpdateMigResultSettlesPairSwapByEachDirectionSuccess)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+
+    struct MigrateMsg mMsg = {};
+    mMsg.cnt = 2;
+    mMsg.migList = (struct MigList *)calloc(2, sizeof(struct MigList));
+    mMsg.migList[0].successToUser = true;
+    mMsg.migList[0].nr = 10;
+    mMsg.migList[0].pid = 123;
+    mMsg.migList[0].from = 4;
+    mMsg.migList[0].to = 0;
+    mMsg.migList[1].successToUser = true;
+    mMsg.migList[1].nr = 10;
+    mMsg.migList[1].pid = 123;
+    mMsg.migList[1].from = 0;
+    mMsg.migList[1].to = 4;
+
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 4;
+    manager.processes = &attr;
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+
+    UpdateMigResult(&mMsg, &manager);
+    EXPECT_EQ(100U, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    mMsg.migList[0].failedMigNr = 4;
+    mMsg.migList[1].failedMigNr = 1;
+    UpdateMigResult(&mMsg, &manager);
+    EXPECT_EQ(103U, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
     free(mMsg.migList);
 }
 
@@ -1630,6 +1842,7 @@ TEST_F(MigrationTest, TestPreMigration)
     current.state = PROC_IDLE;
     MOCKER(InitMigrateMsg).stubs().will(returnValue(0));
     MOCKER(NumaMigReduceDeal).stubs();
+    MOCKER(BuildAllPairPlans).stubs().will(returnValue(0));
     MOCKER(BuildMigrationMsg).stubs().will(returnValue(0));
     MOCKER(SetMigrateThreadNum).stubs().will(ignoreReturnValue());
     ret = PreMigration(&manager, &mMsg, &migratePages);
@@ -1656,10 +1869,32 @@ TEST_F(MigrationTest, TestPreMigrationTwo)
     current.state = PROC_MIGRATE;
     MOCKER(InitMigrateMsg).stubs().will(returnValue(0));
     MOCKER(NumaMigReduceDeal).stubs();
+    MOCKER(BuildAllPairPlans).stubs().will(returnValue(0));
     MOCKER(BuildMigrationMsg).stubs().will(returnValue(0));
     MOCKER(SetMigrateThreadNum).stubs().will(ignoreReturnValue());
     ret = PreMigration(&manager, &mMsg, &migratePages);
     EXPECT_EQ(0, ret);
+}
+
+TEST_F(MigrationTest, TestPreMigrationRollsBackStateWhenPairPlanningFails)
+{
+    struct ProcessManager manager = {};
+    ProcessAttr current = {};
+    struct MigrateMsg mMsg = {};
+    uint64_t migratePages = 0;
+
+    manager.processes = &current;
+    current.pid = 3;
+    current.scanType = NORMAL_SCAN;
+    current.state = PROC_IDLE;
+    ASSERT_EQ(0, EnvMutexInit(&manager.lock));
+    MOCKER(InitMigrateMsg).stubs().will(returnValue(0));
+    MOCKER(BuildAllPairPlans).stubs().will(returnValue(-EIO));
+
+    EXPECT_EQ(-EIO, PreMigration(&manager, &mMsg, &migratePages));
+    EXPECT_EQ(PROC_IDLE, current.state);
+    EXPECT_EQ(nullptr, mMsg.migList);
+    EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
 }
 
 extern "C" void PostMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg);

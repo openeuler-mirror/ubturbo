@@ -214,6 +214,106 @@ void initializeMigList(MigList mlist[][MAX_NODES])
     }
 }
 
+extern "C" int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]);
+static void BuildPairActcData(int nid, const uint16_t data[], int size, ScanAttribute *scanAttribute)
+{
+    BuildActcData(nid, data, size, scanAttribute);
+    for (int i = 0; i < size; i++) {
+        int bucket = std::min((int)data[i], FREQ_BUCKETS_SIZE - 1);
+        scanAttribute->actCount[nid].freqBuckets[bucket]++;
+    }
+}
+
+TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuilds2x2NetMigration)
+{
+    ProcessAttr process = {};
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    const uint16_t local0[] = {1, 4, 2};
+    const uint16_t local1[] = {0, 5};
+    const uint16_t remote2[] = {3, 8, 7};
+    const uint16_t remote3[] = {9, 6};
+    BuildPairActcData(0, local0, 3, &process.scanAttr);
+    BuildPairActcData(1, local1, 2, &process.scanAttr);
+    BuildPairActcData(2, remote2, 3, &process.scanAttr);
+    BuildPairActcData(3, remote3, 2, &process.scanAttr);
+    initializeMigList(mlist);
+
+    process.strategyAttr.nrMigratePages[2][0] = 2;
+    process.strategyAttr.nrMigratePages[0][3] = 2;
+    process.strategyAttr.nrMigratePages[2][1] = 1;
+    process.strategyAttr.nrMigratePages[1][3] = 1;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
+
+    ASSERT_EQ(0, PairMigrationStrategy(&process, mlist));
+    ASSERT_EQ(2U, mlist[2][0].nr);
+    ASSERT_EQ(1U, mlist[2][1].nr);
+    EXPECT_EQ(1U, mlist[2][0].addr[0]);
+    EXPECT_EQ(2U, mlist[2][0].addr[1]);
+    EXPECT_EQ(0U, mlist[2][1].addr[0]);
+    ASSERT_EQ(2U, mlist[0][3].nr);
+    ASSERT_EQ(1U, mlist[1][3].nr);
+    EXPECT_EQ(0U, mlist[0][3].addr[0]);
+    EXPECT_EQ(2U, mlist[0][3].addr[1]);
+    EXPECT_EQ(0U, mlist[1][3].addr[0]);
+    EXPECT_NE(mlist[2][0].addr[0], mlist[2][1].addr[0]);
+    EXPECT_NE(mlist[2][0].addr[1], mlist[2][1].addr[0]);
+
+    FreeMlist(mlist);
+    for (int nid = 0; nid < 4; nid++) {
+        free(process.scanAttr.actcData[nid]);
+    }
+}
+
+TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuildsPairSwapAfterNetMigration)
+{
+    ProcessAttr process = {};
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    const uint16_t local0[] = {0, 1, 6};
+    const uint16_t remote2[] = {9, 8, 2};
+    BuildPairActcData(0, local0, 3, &process.scanAttr);
+    BuildPairActcData(2, remote2, 3, &process.scanAttr);
+    initializeMigList(mlist);
+    process.strategyAttr.nrMigratePages[0][2] = 3;
+    process.strategyAttr.nrMigratePages[2][0] = 2;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
+
+    ASSERT_EQ(0, PairMigrationStrategy(&process, mlist));
+    ASSERT_EQ(3U, mlist[0][2].nr);
+    EXPECT_EQ(0U, mlist[0][2].addr[0]);
+    EXPECT_EQ(1U, mlist[0][2].addr[1]);
+    EXPECT_EQ(2U, mlist[0][2].addr[2]);
+    ASSERT_EQ(2U, mlist[2][0].nr);
+    EXPECT_EQ(0U, mlist[2][0].addr[0]);
+    EXPECT_EQ(1U, mlist[2][0].addr[1]);
+
+    FreeMlist(mlist);
+    free(process.scanAttr.actcData[0]);
+    free(process.scanAttr.actcData[2]);
+}
+
+TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteOnlyPromotes)
+{
+    ProcessAttr process = {};
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    const uint16_t remote2[] = {5};
+    BuildPairActcData(2, remote2, 1, &process.scanAttr);
+    initializeMigList(mlist);
+    process.strategyAttr.nrMigratePages[0][2] = 1;
+    process.strategyAttr.nrMigratePages[2][0] = 1;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
+    EnvAtomicSet(&g_forbiddenNodes[2], 1);
+
+    int ret = PairMigrationStrategy(&process, mlist);
+    EnvAtomicSet(&g_forbiddenNodes[2], 0);
+    ASSERT_EQ(0, ret);
+    EXPECT_EQ(0U, mlist[0][2].nr);
+    ASSERT_EQ(1U, mlist[2][0].nr);
+    EXPECT_EQ(0U, mlist[2][0].addr[0]);
+
+    FreeMlist(mlist);
+    free(process.scanAttr.actcData[2]);
+}
+
 extern "C" uint64_t GetNrFreePagesByNode(int nid);
 TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasic)
 {

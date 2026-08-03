@@ -436,7 +436,8 @@ static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_
     /* 计算剩余范围的频次桶 = freqBuckets - selectedBuckets */
     /* freqBuckets 在 CalcActcStats 中已排除白名单页面，迁出场景正确 */
     for (int f = 0; f < FREQ_BUCKETS_SIZE; f++) {
-        remainBuckets[f] = actCount->freqBuckets[f] - selectedBuckets[f];
+        remainBuckets[f] =
+            actCount->freqBuckets[f] > selectedBuckets[f] ? actCount->freqBuckets[f] - selectedBuckets[f] : 0;
     }
 
     int thresholdFreq;
@@ -451,6 +452,66 @@ static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_
             CollectPages4K(mode, n, currentData, currentMig, nrMig, thresholdFreq, takeAtThreshold, selectedBuckets);
     }
 
+    currentMig->nr = collected;
+    return 0;
+}
+
+static int BuildPairMlist(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
+                          uint64_t numaOffset[MAX_NODES], int from, int to, uint32_t nrMigrate, SelectionMode mode)
+{
+    if (nrMigrate == 0) {
+        return 0;
+    }
+
+    mlist[from][to].nr = nrMigrate;
+    int ret = BuildSelectKMlistAddr(process, mlist, numaOffset, from, to, mode);
+    if (ret) {
+        return ret;
+    }
+    numaOffset[from] += mlist[from][to].nr;
+    return 0;
+}
+
+int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    if (!process || nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM || nrLocalNuma + REMOTE_NUMA_NUM > MAX_NODES) {
+        return -EINVAL;
+    }
+
+    uint64_t numaOffset[MAX_NODES] = { 0 };
+    StrategyAttribute *strategy = &process->strategyAttr;
+    for (int localNid = 0; localNid < nrLocalNuma; localNid++) {
+        for (int remoteNid = nrLocalNuma; remoteNid < nrLocalNuma + REMOTE_NUMA_NUM; remoteNid++) {
+            uint32_t localToRemote = strategy->nrMigratePages[localNid][remoteNid];
+            uint32_t remoteToLocal = strategy->nrMigratePages[remoteNid][localNid];
+            uint32_t swapPages = MIN(localToRemote, remoteToLocal);
+            uint32_t demotePages = localToRemote - swapPages;
+            uint32_t promotePages = remoteToLocal - swapPages;
+            if (IsNodeForbidden(remoteNid)) {
+                if (localToRemote > 0) {
+                    SMAP_LOGGER_INFO("Pid %d pair %d-%d skips demote and swap to disabled remote.", process->pid,
+                                     localNid, remoteNid);
+                }
+                swapPages = 0;
+                demotePages = 0;
+                promotePages = remoteToLocal;
+            }
+
+            int ret = BuildPairMlist(process, mlist, numaOffset, localNid, remoteNid, demotePages + swapPages,
+                                     SELECT_BOTTOM_K);
+            if (!ret) {
+                ret = BuildPairMlist(process, mlist, numaOffset, remoteNid, localNid, promotePages + swapPages,
+                                     SELECT_TOP_K);
+            }
+            if (ret) {
+                SMAP_LOGGER_ERROR("Build pid %d pair %d-%d migration list failed: %d.", process->pid, localNid,
+                                  remoteNid, ret);
+                FreeMlist(mlist);
+                return ret;
+            }
+        }
+    }
     return 0;
 }
 
