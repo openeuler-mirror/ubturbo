@@ -21,6 +21,7 @@
 namespace rmrs::libvirt {
 using namespace turbo::log;
 
+bool LibvirtModule::available = false;
 void *LibvirtModule::libvirtHandle = nullptr;
 VirConnectOpenFunc LibvirtModule::virConnectOpenFunc = nullptr;
 VirConnectCloseFunc LibvirtModule::virConnectCloseFunc = nullptr;
@@ -38,15 +39,35 @@ VirEventRunDefaultImplFunc LibvirtModule::virEventRunDefaultImplFunc = nullptr;
 VirConnectDomainEventRegisterFunc LibvirtModule::virConnectDomainEventRegisterFunc = nullptr;
 VirConnectDomainEventDeRegisterFunc LibvirtModule::virConnectDomainEventDeRegisterFunc = nullptr;
 
+// dlsym前校验handle, 避免dlsym(nullptr)退化为RTLD_DEFAULT全局查找
+static void *LoadLibvirtSymbol(void *handle, const char *symbolName)
+{
+    if (handle == nullptr) {
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[RmrsResourceExport] [LibvirtModule] Libvirt is not initialized, get " << symbolName << " ptr failed.";
+        return nullptr;
+    }
+    return dlsym(handle, symbolName);
+}
+
 RmrsResult LibvirtModule::Init()
 {
+    if (available) {
+        return RMRS_OK;
+    }
     libvirtHandle = dlopen("libvirt.so.0", RTLD_LAZY);
     if (libvirtHandle == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Load libvirt.so.0 failed. " << strerror(errno) << ".";
         return RMRS_ERROR;
     }
+    available = true;
     return RMRS_OK;
+}
+
+bool LibvirtModule::IsAvailable()
+{
+    return available;
 }
 
 VirConnectOpenFunc LibvirtModule::VirConnectOpen()
@@ -54,7 +75,7 @@ VirConnectOpenFunc LibvirtModule::VirConnectOpen()
     if (virConnectOpenFunc != nullptr) {
         return virConnectOpenFunc;
     }
-    virConnectOpenFunc = (VirConnectOpenFunc)(dlsym(libvirtHandle, "virConnectOpen"));
+    virConnectOpenFunc = (VirConnectOpenFunc)(LoadLibvirtSymbol(libvirtHandle, "virConnectOpen"));
     if (virConnectOpenFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get VirConnectOpen ptr failed. " << strerror(errno) << ".";
@@ -68,7 +89,7 @@ VirConnectCloseFunc LibvirtModule::VirConnectClose()
     if (virConnectCloseFunc != nullptr) {
         return virConnectCloseFunc;
     }
-    virConnectCloseFunc = (VirConnectCloseFunc)(dlsym(libvirtHandle, "virConnectClose"));
+    virConnectCloseFunc = (VirConnectCloseFunc)(LoadLibvirtSymbol(libvirtHandle, "virConnectClose"));
     if (virConnectCloseFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get VirConnectListAllDomains ptr failed. " << strerror(errno)
@@ -83,7 +104,8 @@ VirConnectListAllDomainsFunc LibvirtModule::VirConnectListAllDomains()
     if (virConnectListAllDomainsFunc != nullptr) {
         return virConnectListAllDomainsFunc;
     }
-    virConnectListAllDomainsFunc = (VirConnectListAllDomainsFunc)(dlsym(libvirtHandle, "virConnectListAllDomains"));
+    virConnectListAllDomainsFunc =
+        (VirConnectListAllDomainsFunc)(LoadLibvirtSymbol(libvirtHandle, "virConnectListAllDomains"));
     if (virConnectListAllDomainsFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get VirConnectListAllDomains ptr failed. " << strerror(errno)
@@ -98,7 +120,7 @@ VirDomainGetNameFunc LibvirtModule::VirDomainGetName()
     if (virDomainGetNameFunc != nullptr) {
         return virDomainGetNameFunc;
     }
-    virDomainGetNameFunc = (VirDomainGetNameFunc)(dlsym(libvirtHandle, "virDomainGetName"));
+    virDomainGetNameFunc = (VirDomainGetNameFunc)(LoadLibvirtSymbol(libvirtHandle, "virDomainGetName"));
     if (virDomainGetNameFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get VirDomainGetName ptr failed. " << strerror(errno) << ".";
@@ -112,7 +134,7 @@ VirDomainGetIDFunc LibvirtModule::VirDomainGetID()
     if (virDomainGetIDFunc != nullptr) {
         return virDomainGetIDFunc;
     }
-    virDomainGetIDFunc = (VirDomainGetIDFunc)(dlsym(libvirtHandle, "virDomainGetID"));
+    virDomainGetIDFunc = (VirDomainGetIDFunc)(LoadLibvirtSymbol(libvirtHandle, "virDomainGetID"));
     if (virDomainGetIDFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get VirDomainGetID ptr failed. " << strerror(errno) << ".";
@@ -126,7 +148,8 @@ VirDomainGetUUIDStringFunc LibvirtModule::VirDomainGetUUIDString()
     if (virDomainGetUUIDStringFunc != nullptr) {
         return virDomainGetUUIDStringFunc;
     }
-    virDomainGetUUIDStringFunc = (VirDomainGetUUIDStringFunc)(dlsym(libvirtHandle, "virDomainGetUUIDString"));
+    virDomainGetUUIDStringFunc =
+        (VirDomainGetUUIDStringFunc)(LoadLibvirtSymbol(libvirtHandle, "virDomainGetUUIDString"));
     if (virDomainGetUUIDStringFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get virDomainGetUUIDString ptr failed. " << strerror(errno) << ".";
@@ -140,7 +163,7 @@ VirDomainGetInfoFunc LibvirtModule::VirDomainGetInfo()
     if (virDomainGetInfoFunc != nullptr) {
         return virDomainGetInfoFunc;
     }
-    virDomainGetInfoFunc = (VirDomainGetInfoFunc)(dlsym(libvirtHandle, "virDomainGetInfo"));
+    virDomainGetInfoFunc = (VirDomainGetInfoFunc)(LoadLibvirtSymbol(libvirtHandle, "virDomainGetInfo"));
     if (virDomainGetInfoFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get VirDomainGetInfo ptr failed, errno " << strerror(errno) << ".";
@@ -154,7 +177,7 @@ VirDomainGetVcpusFunc LibvirtModule::VirDomainGetVcpus()
     if (virDomainGetVcpusFunc != nullptr) {
         return virDomainGetVcpusFunc;
     }
-    virDomainGetVcpusFunc = (VirDomainGetVcpusFunc)(dlsym(libvirtHandle, "virDomainGetVcpus"));
+    virDomainGetVcpusFunc = (VirDomainGetVcpusFunc)(LoadLibvirtSymbol(libvirtHandle, "virDomainGetVcpus"));
     if (virDomainGetVcpusFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get VirDomainGetVcpus ptr failed. " << strerror(errno) << ".";
@@ -168,7 +191,7 @@ VirConnectGetHostnameFunc LibvirtModule::VirConnectGetHostname()
     if (virConnectGetHostnameFunc != nullptr) {
         return virConnectGetHostnameFunc;
     }
-    virConnectGetHostnameFunc = (VirConnectGetHostnameFunc)(dlsym(libvirtHandle, "virConnectGetHostname"));
+    virConnectGetHostnameFunc = (VirConnectGetHostnameFunc)(LoadLibvirtSymbol(libvirtHandle, "virConnectGetHostname"));
     if (virConnectGetHostnameFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get VirConnectGetHostname ptr failed. " << strerror(errno) << ".";
@@ -182,7 +205,7 @@ VirDomainFreeFunc LibvirtModule::VirDomainFree()
     if (virDomainFreeFunc != nullptr) {
         return virDomainFreeFunc;
     }
-    virDomainFreeFunc = (VirDomainFreeFunc)(dlsym(libvirtHandle, "virDomainFree"));
+    virDomainFreeFunc = (VirDomainFreeFunc)(LoadLibvirtSymbol(libvirtHandle, "virDomainFree"));
     if (virDomainFreeFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get VirDomainFree ptr failed. " << strerror(errno) << ".";
@@ -196,7 +219,7 @@ VirConnectIsAliveFunc LibvirtModule::VirConnectIsAlive()
     if (virConnectIsAliveFunc != nullptr) {
         return virConnectIsAliveFunc;
     }
-    virConnectIsAliveFunc = (VirConnectIsAliveFunc)(dlsym(libvirtHandle, "virConnectIsAlive"));
+    virConnectIsAliveFunc = (VirConnectIsAliveFunc)(LoadLibvirtSymbol(libvirtHandle, "virConnectIsAlive"));
     if (virConnectIsAliveFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get VirConnectIsAlive ptr failed. " << strerror(errno) << ".";
@@ -211,7 +234,7 @@ VirEventRegisterDefaultImplFunc LibvirtModule::VirEventRegisterDefaultImpl()
         return virEventRegisterDefaultImplFunc;
     }
     virEventRegisterDefaultImplFunc =
-        (VirEventRegisterDefaultImplFunc)(dlsym(libvirtHandle, "virEventRegisterDefaultImpl"));
+        (VirEventRegisterDefaultImplFunc)(LoadLibvirtSymbol(libvirtHandle, "virEventRegisterDefaultImpl"));
     if (virEventRegisterDefaultImplFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get virEventRegisterDefaultImpl ptr failed. " << strerror(errno)
@@ -226,7 +249,8 @@ VirEventRunDefaultImplFunc LibvirtModule::VirEventRunDefaultImpl()
     if (virEventRunDefaultImplFunc != nullptr) {
         return virEventRunDefaultImplFunc;
     }
-    virEventRunDefaultImplFunc = (VirEventRunDefaultImplFunc)(dlsym(libvirtHandle, "virEventRunDefaultImpl"));
+    virEventRunDefaultImplFunc =
+        (VirEventRunDefaultImplFunc)(LoadLibvirtSymbol(libvirtHandle, "virEventRunDefaultImpl"));
     if (virEventRunDefaultImplFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get virEventRunDefaultImpl ptr failed. " << strerror(errno) << ".";
@@ -241,7 +265,7 @@ VirConnectDomainEventRegisterFunc LibvirtModule::VirConnectDomainEventRegister()
         return virConnectDomainEventRegisterFunc;
     }
     virConnectDomainEventRegisterFunc =
-        (VirConnectDomainEventRegisterFunc)(dlsym(libvirtHandle, "virConnectDomainEventRegister"));
+        (VirConnectDomainEventRegisterFunc)(LoadLibvirtSymbol(libvirtHandle, "virConnectDomainEventRegister"));
     if (virConnectDomainEventRegisterFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get virConnectDomainEventRegister ptr failed. " << strerror(errno)
@@ -257,7 +281,7 @@ VirConnectDomainEventDeRegisterFunc LibvirtModule::VirConnectDomainEventDeRegist
         return virConnectDomainEventDeRegisterFunc;
     }
     virConnectDomainEventDeRegisterFunc =
-        (VirConnectDomainEventDeRegisterFunc)(dlsym(libvirtHandle, "virConnectDomainEventDeRegister"));
+        (VirConnectDomainEventDeRegisterFunc)(LoadLibvirtSymbol(libvirtHandle, "virConnectDomainEventDeRegister"));
     if (virConnectDomainEventDeRegisterFunc == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[RmrsResourceExport] [LibvirtModule] Get virConnectDomainEventDeRegister ptr failed. "

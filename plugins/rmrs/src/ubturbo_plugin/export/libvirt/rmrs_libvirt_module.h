@@ -40,6 +40,8 @@ class LibvirtModule {
 public:
     static RmrsResult Init();
 
+    static bool IsAvailable();
+
     static VirConnectOpenFunc VirConnectOpen();
 
     static VirConnectCloseFunc VirConnectClose();
@@ -71,6 +73,7 @@ public:
     static VirConnectDomainEventDeRegisterFunc VirConnectDomainEventDeRegister();
 
 private:
+    static bool available;
     static void *libvirtHandle;
     static VirConnectOpenFunc virConnectOpenFunc;
     static VirConnectCloseFunc virConnectCloseFunc;
