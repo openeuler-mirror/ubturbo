@@ -3113,6 +3113,23 @@ TEST_F(InterfaceTest, TestCheckAddProcessTrackingMsgStateInvalid)
     EXPECT_EQ(-EINVAL, ret);
 }
 
+TEST_F(InterfaceTest, TestCheckAddProcessTrackingMsgMigratingProcessBusy)
+{
+    struct ProcessManager manager = {};
+    ProcessAttr current = {};
+    pid_t pidArr[1] = {123};
+    uint32_t scanTime[1] = {MIN_SCAN_TIME};
+    uint32_t duration[1] = {1};
+
+    manager.processes = &current;
+    current.pid = pidArr[0];
+    current.state = PROC_MIGRATE;
+    MOCKER(IsMigOutCountValid).stubs().will(returnValue(true));
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+
+    EXPECT_EQ(-EBUSY, CheckAddProcessTrackingMsg(pidArr, scanTime, duration, 1, HAM_SCAN));
+}
+
 TEST_F(InterfaceTest, TestCheckAddProcessTrackingMsgScanTimeInvalid)
 {
     struct ProcessManager manager;
@@ -3367,6 +3384,32 @@ TEST_F(InterfaceTest, AddProcessTrackingHAMScanSuccess)
     EXPECT_EQ(0, ret);
 }
 
+static int CheckTrackingPayloadKeepsAllRemoteNodes(int len, struct AccessAddPidPayload *payload)
+{
+    EXPECT_EQ(1, len);
+    EXPECT_EQ((1U << 4) | (1U << 6), payload[0].numaNodes);
+    return 0;
+}
+
+TEST_F(InterfaceTest, AddProcessTrackingKeepsAllManagedRemoteNodes)
+{
+    pid_t pid = 1234;
+    uint32_t scanTime = MIN_SCAN_TIME;
+    uint32_t duration = 1;
+    ProcessAttr process = {};
+    process.pid = pid;
+    process.numaAttr.numaNodes = (1U << 0) | (1U << 4) | (1U << 6);
+
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
+    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&process));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckTrackingPayloadKeepsAllRemoteNodes));
+
+    EXPECT_EQ(0, AddProcessTracking(&pid, &scanTime, &duration, 1, NORMAL_SCAN));
+}
+
 TEST_F(InterfaceTest, TestSmapAddProcessTrackingFailed)
 {
     pid_t pidArr[] = { 1 };
@@ -3414,6 +3457,39 @@ TEST_F(InterfaceTest, TestSmapAddProcessTrackingCheckAddManage)
     ret = ubturbo_smap_process_tracking_add(pidArr, scanTime, duration, 1, 0);
     EXPECT_EQ(0, ret);
     EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+}
+
+TEST_F(InterfaceTest, TestSmapAddProcessTrackingUpdatesManagedPidMode)
+{
+    ProcessAttr attr = {};
+    pid_t pidArr[] = {1};
+    uint32_t scanTime[] = {MIN_SCAN_TIME * 2};
+    uint32_t duration[] = {60};
+    attr.pid = pidArr[0];
+    attr.state = PROC_IDLE;
+    attr.scanType = NORMAL_SCAN;
+    attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.count = 2;
+    attr.targetConfig.targets[0] = {4, 0, 2048};
+    attr.targetConfig.targets[1] = {6, 0, 4096};
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 321;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    EnvAtomicSet(&g_status, RUNNING);
+    MOCKER(CheckAddProcessTrackingMsg).expects(once()).will(returnValue(0));
+    MOCKER(AddProcessTracking).expects(once()).will(returnValue(0));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    MOCKER(ProcessAddManage).expects(never());
+    MOCKER(SyncAllProcessConfig).expects(once()).will(returnValue(0));
+
+    EXPECT_EQ(0, ubturbo_smap_process_tracking_add(pidArr, scanTime, duration, 1, HAM_SCAN));
+    EXPECT_EQ(HAM_SCAN, attr.scanType);
+    EXPECT_EQ(PROC_MOVE, attr.state);
+    EXPECT_EQ(2U, attr.targetConfig.count);
+    EXPECT_EQ(4, attr.targetConfig.targets[0].remoteNid);
+    EXPECT_EQ(6, attr.targetConfig.targets[1].remoteNid);
+    EXPECT_EQ(321U, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
+    g_processManager.tracking.pageSize = 0;
 }
 
 extern "C" int CheckRemoveProcessTrackingMsg(pid_t *pidArr, int len);

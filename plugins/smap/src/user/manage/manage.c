@@ -139,6 +139,25 @@ int CopyProcessTargetConfig(ProcessTargetConfig *dest, const ProcessTargetConfig
     return 0;
 }
 
+bool RemoveProcessRemoteTarget(ProcessTargetConfig *config, int remoteNid)
+{
+    if (!config || config->count > REMOTE_NUMA_NUM) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < config->count; i++) {
+        if (config->targets[i].remoteNid != remoteNid) {
+            continue;
+        }
+        for (uint32_t j = i + 1; j < config->count; j++) {
+            config->targets[j - 1] = config->targets[j];
+        }
+        config->targets[--config->count] = (ProcessRemoteTarget){ 0 };
+        return true;
+    }
+    return false;
+}
+
 static int ValidateProcessTargetConfig(const ProcessTargetConfig *config)
 {
     ProcessTargetConfig copy;
@@ -1530,6 +1549,10 @@ void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
         candidate->active->pendingTargetConfig = prepared->pendingTargetConfig;
         candidate->active->pendingTargetConfigValid = prepared->pendingTargetConfigValid;
         candidate->active->pendingTargetNumaNodes = prepared->pendingTargetNumaNodes;
+        int ret = SyncAllProcessConfig();
+        if (ret) {
+            SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", prepared->pid, ret);
+        }
         SMAP_LOGGER_INFO("Stage pid %d migration target update.", prepared->pid);
         DiscardProcessManageCandidate(candidate);
         return;
@@ -1887,6 +1910,10 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
             if (nodeBitmap) {
                 current->pendingTargetNumaNodes = *nodeBitmap;
             }
+            ret = SyncAllProcessConfig();
+            if (ret) {
+                SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", current->pid, ret);
+            }
             SMAP_LOGGER_INFO("Stage pid %d migration target update.", current->pid);
             return 0;
         }
@@ -1909,6 +1936,23 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
         SMAP_LOGGER_INFO("Add pid %d to list done.", param->pid);
     }
 
+    return 0;
+}
+
+int UpdateManagedProcessTrackingMode(ProcessAttr *attr, ScanType scanType, uint32_t scanTime, uint32_t duration)
+{
+    if (!attr || scanType < HAM_SCAN || scanType >= SCAN_TYPE_MAX) {
+        return -EINVAL;
+    }
+    if (attr->state == PROC_MIGRATE) {
+        return -EBUSY;
+    }
+
+    attr->scanType = scanType;
+    attr->scanTime = scanTime;
+    attr->duration = duration;
+    attr->isFirstScan = true;
+    attr->state = scanType == NORMAL_SCAN ? PROC_IDLE : PROC_MOVE;
     return 0;
 }
 

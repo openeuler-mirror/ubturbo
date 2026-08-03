@@ -257,7 +257,7 @@ static inline bool IsRunModeValid(RunMode runMode)
 
 static bool IsConfigHeaderValid(struct SmapConfigHeader *header)
 {
-    if (header->ver != SMAP_CONFIG_VER_V1) {
+    if (header->ver != SMAP_CONFIG_VER) {
         SMAP_LOGGER_ERROR("Wrong smap config header ver: %hd.", header->ver);
         return false;
     }
@@ -390,38 +390,105 @@ static void WriteOneNumaConfig(char *numaBase, struct NumaPayload *np)
     SMAP_LOGGER_DEBUG("Exit WriteOneNumaPayload.");
 }
 
-static void AssignProcessAttr(ProcessAttr *attr, struct ProcessPayload *payload)
+static int RestoreProcessTargetConfig(ProcessTargetConfig *config, uint8_t migrateMode, int count,
+                                      const struct PersistRemoteTarget targets[])
 {
-    attr->pid = payload->pid;
-    attr->numaAttr.numaNodes = payload->numaNodes;
-    attr->remoteNumaCnt = payload->count;
-    int nrLocalNuma = GetNrLocalNuma();
-    int totalRatio = 0;
-    for (int i = 0; i < payload->count; i++) {
-        attr->migrateParam[i].nid = payload->migrateParam[i].nid;
-        attr->migrateParam[i].memSize = payload->migrateParam[i].memSize;
-        for (int j = 0; j < GetNrLocalNuma(); j++) {
-            if (EqualToAttrL1(attr, j)) {
-                int l2Index = payload->migrateParam[i].nid - nrLocalNuma;
-                attr->strategyAttr.initRemoteMemRatio[j][l2Index] = payload->migrateParam[i].ratio;
-                attr->strategyAttr.memSize[j][l2Index] = payload->migrateParam[i].memSize;
-            }
-        }
-        totalRatio += payload->migrateParam[i].ratio;
+    if (!config || !targets || count < 0 || count > REMOTE_NUMA_NUM ||
+        (migrateMode != MIG_RATIO_MODE && migrateMode != MIG_MEMSIZE_MODE)) {
+        return -EINVAL;
     }
 
-    attr->initLocalMemRatio = HUNDRED - totalRatio;
+    InitProcessTargetConfig(config);
+    config->migrateMode = (MigrateMode)migrateMode;
+    uint64_t totalRatio = 0;
+    uint64_t pageSizeKB = GetPageSize() / KIB;
+    bool remoteSeen[REMOTE_NUMA_NUM] = { false };
+    for (int i = 0; i < count; i++) {
+        int remoteIndex;
+        const struct PersistRemoteTarget *target = &targets[i];
+        bool valid = RemoteNidToIndex(target->nid, GetNrLocalNuma(), &remoteIndex) == 0 && !remoteSeen[remoteIndex];
+        if (valid && migrateMode == MIG_RATIO_MODE) {
+            valid = target->ratio <= HUNDRED && totalRatio + target->ratio <= HUNDRED;
+        }
+        if (valid && migrateMode == MIG_MEMSIZE_MODE) {
+            valid = pageSizeKB != 0 && target->memSize % pageSizeKB == 0 && target->memSize / pageSizeKB <= UINT32_MAX;
+        }
+        if (!valid) {
+            SMAP_LOGGER_ERROR("Invalid persisted V1 target nid %d.", target->nid);
+            return -EINVAL;
+        }
+
+        remoteSeen[remoteIndex] = true;
+        config->targets[config->count++] = (ProcessRemoteTarget){
+            .remoteNid = target->nid,
+            .ratio = target->ratio,
+            .memSizeKB = target->memSize,
+        };
+        totalRatio += target->ratio;
+    }
+    return 0;
+}
+
+static void ApplyRecoveredTargetConfig(ProcessAttr *attr, const ProcessTargetConfig *config)
+{
+    int totalRatio = 0;
+    attr->targetConfig = *config;
+    attr->migrateMode = config->migrateMode;
+    attr->remoteNumaCnt = config->count;
+    for (uint32_t i = 0; i < config->count; i++) {
+        int remoteIndex = config->targets[i].remoteNid - GetNrLocalNuma();
+        attr->migrateParam[i].nid = config->targets[i].remoteNid;
+        attr->migrateParam[i].memSize = config->targets[i].memSizeKB;
+        for (int localNid = 0; localNid < GetNrLocalNuma(); localNid++) {
+            if (!InAttrL1(attr, localNid)) {
+                continue;
+            }
+            attr->strategyAttr.initRemoteMemRatio[localNid][remoteIndex] = config->targets[i].ratio;
+            attr->strategyAttr.memSize[localNid][remoteIndex] = config->targets[i].memSizeKB;
+        }
+        AddAttrL2(attr, config->targets[i].remoteNid);
+        totalRatio += config->targets[i].ratio;
+    }
+    attr->initLocalMemRatio = config->migrateMode == MIG_RATIO_MODE ? HUNDRED - totalRatio : HUNDRED;
+}
+
+static bool IsRecoveredTargetConfigZero(const ProcessTargetConfig *config)
+{
+    if (config->count == 0) {
+        return true;
+    }
+    for (uint32_t i = 0; i < config->count; i++) {
+        if ((config->migrateMode == MIG_RATIO_MODE && config->targets[i].ratio != 0) ||
+            (config->migrateMode == MIG_MEMSIZE_MODE && config->targets[i].memSizeKB != 0)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayload *payload)
+{
+    ProcessTargetConfig activeConfig;
+    int ret = RestoreProcessTargetConfig(&activeConfig, payload->migrateMode, payload->count, payload->migrateParam);
+    if (ret) {
+        return ret;
+    }
+
+    attr->pid = payload->pid;
+    attr->numaAttr.numaNodes = payload->numaNodes;
     attr->type = payload->type;
-    attr->state = payload->state;
+    attr->state = payload->state == PROC_MIGRATE ? PROC_IDLE : payload->state;
     attr->scanType = payload->scanType;
     attr->scanTime = payload->scanTime;
-    attr->migrateMode = payload->migrateMode;
     attr->duration = payload->duration;
     attr->enableSwap = true;
     attr->isFirstScan = true;
+    ApplyRecoveredTargetConfig(attr, &activeConfig);
+    attr->autoRemoveWhenRemoteEmpty = attr->scanType == NORMAL_SCAN && IsRecoveredTargetConfigZero(&activeConfig);
     if (time(&attr->scanStart) == (time_t)-1) {
         SMAP_LOGGER_ERROR("get time error.");
     }
+    return 0;
 }
 
 /*
@@ -454,14 +521,13 @@ static int RecoverProcessConfig(char *processBase)
 {
     struct PayloadHeader *header = (struct PayloadHeader *)processBase;
     struct ProcessManager *manager = GetProcessManager();
-    struct ProcessPayload *payload;
     ProcessAttr *attr;
     uint32_t nrPayload;
     bool errFlag = false;
 
     SMAP_LOGGER_DEBUG("Enter RecoverProcessConfig.");
     nrPayload = header->len / CONFIG_PROC_LEN;
-    payload = (struct ProcessPayload *)JumpToProcessPayload(processBase);
+    struct ProcessPayload *payload = (struct ProcessPayload *)JumpToProcessPayload(processBase);
     for (uint32_t i = 0; i < nrPayload; i++, payload++) {
         if (payload->type != GetPidType(manager)) {
             SMAP_LOGGER_WARNING("Pid %d type %d is different from %d.", payload->pid, payload->type,
@@ -475,14 +541,18 @@ static int RecoverProcessConfig(char *processBase)
             break;
         }
         InitProcessMigrationTargetState(attr);
-        AssignProcessAttr(attr, payload);
+        int ret = AssignProcessAttr(attr, payload);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Skip invalid persisted process %d: %d.", payload->pid, ret);
+            free(attr);
+            continue;
+        }
         SMAP_LOGGER_INFO("ProcessPayload %d, type %hu, numaNodes %#x, state %hu, scan type %hu, scan time %u.",
-                         payload->pid, payload->type, payload->numaNodes, payload->state, payload->scanType,
-                         payload->scanTime);
-        for (int j = 0; j < payload->count; j++) {
-            SMAP_LOGGER_INFO("ProcessPayload %d, destNid %d, ratio %d, memsize %llu.", payload->pid,
-                             payload->migrateParam[j].nid, payload->migrateParam[j].ratio,
-                             payload->migrateParam[j].memSize);
+                         attr->pid, attr->type, attr->numaAttr.numaNodes, attr->state, attr->scanType, attr->scanTime);
+        for (uint32_t j = 0; j < attr->targetConfig.count; j++) {
+            SMAP_LOGGER_INFO("ProcessPayload %d, destNid %d, ratio %u, memsize %llu.", attr->pid,
+                             attr->targetConfig.targets[j].remoteNid, attr->targetConfig.targets[j].ratio,
+                             attr->targetConfig.targets[j].memSizeKB);
         }
         LinkedListAdd(&manager->processes, &attr);
         manager->nr[attr->type]++;
@@ -520,14 +590,35 @@ static int WriteProcessConfig(char *processBase, struct ProcessPayload *p, int n
     return -ret;
 }
 
-static uint8_t GetAttrRemoteMemRatio(ProcessAttr *attr, int nid)
+static int WriteTargetConfigToPayload(struct PersistRemoteTarget payloadTargets[], int *payloadCount,
+                                      uint8_t *payloadMode, const ProcessTargetConfig *config)
 {
-    int nrLocalNuma = GetNrLocalNuma();
-    int l1Node = GetAttrL1(attr);
-    for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
-        if (nid == i + nrLocalNuma) {
-            return (uint8_t)attr->strategyAttr.initRemoteMemRatio[l1Node][i];
+    if (!payloadTargets || !payloadCount || !payloadMode || !config || config->count > REMOTE_NUMA_NUM ||
+        (config->migrateMode != MIG_RATIO_MODE && config->migrateMode != MIG_MEMSIZE_MODE)) {
+        return -EINVAL;
+    }
+    *payloadCount = (int)config->count;
+    *payloadMode = (uint8_t)config->migrateMode;
+    uint64_t totalRatio = 0;
+    uint64_t pageSizeKB = GetPageSize() / KIB;
+    bool remoteSeen[REMOTE_NUMA_NUM] = { false };
+    for (uint32_t i = 0; i < config->count; i++) {
+        int remoteIndex;
+        const ProcessRemoteTarget *target = &config->targets[i];
+        if (RemoteNidToIndex(target->remoteNid, GetNrLocalNuma(), &remoteIndex) || remoteSeen[remoteIndex] ||
+            (config->migrateMode == MIG_RATIO_MODE &&
+             (target->ratio > HUNDRED || totalRatio + target->ratio > HUNDRED)) ||
+            (config->migrateMode == MIG_MEMSIZE_MODE &&
+             (pageSizeKB == 0 || target->memSizeKB % pageSizeKB != 0 || target->memSizeKB / pageSizeKB > UINT32_MAX))) {
+            return -EINVAL;
         }
+        remoteSeen[remoteIndex] = true;
+        totalRatio += target->ratio;
+        payloadTargets[i] = (struct PersistRemoteTarget){
+            .nid = target->remoteNid,
+            .ratio = (uint8_t)target->ratio,
+            .memSize = target->memSizeKB,
+        };
     }
     return 0;
 }
@@ -552,7 +643,7 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
         return 0;
     }
 
-    p = malloc(nrPayload * CONFIG_PROC_LEN);
+    p = calloc(nrPayload, CONFIG_PROC_LEN);
     if (!p) {
         SMAP_LOGGER_ERROR("BuildAllProcessPayload calloc failed.");
         return -ENOMEM;
@@ -566,16 +657,19 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
         tmp->pid = attr->pid;
         tmp->scanType = attr->scanType;
         tmp->type = attr->type;
-        tmp->state = attr->state;
-        tmp->migrateMode = attr->migrateMode;
-        tmp->numaNodes = attr->numaAttr.numaNodes;
+        const ProcessTargetConfig *effectiveConfig = attr->pendingTargetConfigValid ? &attr->pendingTargetConfig :
+                                                                                      &attr->targetConfig;
+        tmp->state = attr->state == PROC_MIGRATE ? PROC_IDLE : attr->state;
+        tmp->numaNodes = attr->pendingTargetConfigValid && attr->pendingTargetNumaNodes != 0 ?
+                             attr->pendingTargetNumaNodes :
+                             attr->numaAttr.numaNodes;
         tmp->scanTime = attr->scanTime;
         tmp->duration = attr->duration;
-        tmp->count = attr->remoteNumaCnt;
-        for (int i = 0; i < tmp->count; i++) {
-            tmp->migrateParam[i].nid = attr->migrateParam[i].nid;
-            tmp->migrateParam[i].memSize = attr->migrateParam[i].memSize;
-            tmp->migrateParam[i].ratio = GetAttrRemoteMemRatio(attr, tmp->migrateParam[i].nid);
+        int ret = WriteTargetConfigToPayload(tmp->migrateParam, &tmp->count, &tmp->migrateMode, effectiveConfig);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Build pid %d effective target config payload failed: %d.", attr->pid, ret);
+            free(p);
+            return ret;
         }
         tmp++;
     }

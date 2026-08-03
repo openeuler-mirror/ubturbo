@@ -1389,6 +1389,10 @@ static void RemoveManagedProcessRemoteNode(ProcessAttr *attr, int remoteNid)
     int remotePos = remoteNid + (LOCAL_NUMA_BITS - nrLocalNuma);
     ClearNodeBit(&attr->numaAttr.numaNodes, remotePos);
     ClearRemovedRemoteStrategy(attr, remoteNid);
+    (void)RemoveProcessRemoteTarget(&attr->targetConfig, remoteNid);
+    if (attr->pendingTargetConfigValid) {
+        (void)RemoveProcessRemoteTarget(&attr->pendingTargetConfig, remoteNid);
+    }
 
     int writeIdx = 0;
     for (int i = 0; i < attr->remoteNumaCnt; i++) {
@@ -1404,7 +1408,7 @@ static void RemoveManagedProcessRemoteNode(ProcessAttr *attr, int remoteNid)
         attr->migrateParam[i].nid = 0;
         attr->migrateParam[i].memSize = 0;
     }
-    attr->remoteNumaCnt = GetL2Count(attr->numaAttr.numaNodes);
+    attr->remoteNumaCnt = attr->targetConfig.count;
 }
 
 /* Apply a partial remote-node remove to the user-space manager state. */
@@ -1767,6 +1771,11 @@ static int Recover(void)
     }
     SMAP_LOGGER_INFO("Recover from config done.");
     RecoverRemoveInvalidProcess();
+    /* Persist the normalized recovery state and the effective Pair target. */
+    ret = SyncAllProcessConfig();
+    if (ret) {
+        SMAP_LOGGER_WARNING("Synchronize recovered process config maybe failed: %d.", ret);
+    }
     if (IsHugeMode()) {
         RecoverAllMMapType();
     }
@@ -2207,9 +2216,15 @@ static int CheckAddProcessTrackingMsg(pid_t *pidArr, uint32_t *scanTime, uint32_
     }
     while (current) {
         for (int i = 0; i < len; i++) {
-            if (current->pid == pidArr[i] && current->state != PROC_MOVE) {
-                SMAP_LOGGER_ERROR("The pid %d state is %d, not PROC_MOVE.", pidArr[i], current->state);
-                return -EINVAL;
+            if (current->pid == pidArr[i]) {
+                if (current->state == PROC_MIGRATE) {
+                    SMAP_LOGGER_ERROR("The pid %d is migrating, reject scan type change.", pidArr[i]);
+                    return -EBUSY;
+                }
+                if (current->state != PROC_IDLE && current->state != PROC_MOVE) {
+                    SMAP_LOGGER_ERROR("The pid %d state is %d, cannot change scan type.", pidArr[i], current->state);
+                    return -EINVAL;
+                }
             }
         }
         current = current->next;
@@ -2257,24 +2272,33 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
         payload[i].duration = duration[i];
         payload[i].type = scanType;
         ProcessAttr *attr = GetProcessAttrLocked(pidArr[i]);
-        if (scanType == NORMAL_SCAN) {
-            if (!attr) {
-                SMAP_LOGGER_ERROR("pid %d is not managed , scan type can not be %d.", pidArr[i], scanType);
+        if (attr) {
+            int nrLocalNuma = GetNrLocalNuma();
+            bool hasRemoteTracking = false;
+            for (int remoteNid = nrLocalNuma; remoteNid < nrLocalNuma + REMOTE_NUMA_NUM; remoteNid++) {
+                if (InAttrL2(attr, remoteNid)) {
+                    hasRemoteTracking = true;
+                    if (scanType == NORMAL_SCAN && !IsOnlineRemoteNidValid(remoteNid)) {
+                        SMAP_LOGGER_ERROR("pid %d remote node %d is invalid, scan type is %d.", attr->pid, remoteNid,
+                                          scanType);
+                        free(payload);
+                        return -EINVAL;
+                    }
+                }
+            }
+            if (scanType == NORMAL_SCAN && !hasRemoteTracking) {
+                SMAP_LOGGER_ERROR("pid %d has no remote tracking node, scan type can not be %d.", pidArr[i], scanType);
                 free(payload);
                 return -EINVAL;
             }
-            if (!IsOnlineRemoteNidValid(GetAttrL2(attr))) {
-                SMAP_LOGGER_ERROR("pid %d l2 node is invalid, scan type is %d.", attr->pid, scanType);
-                free(payload);
-                return -EINVAL;
-            }
-            SetL2ByNid(&payload[i].numaNodes, GetAttrL2(attr));
+            /* Keep every historically tracked remote node when changing scan type. */
+            payload[i].numaNodes |= attr->numaAttr.numaNodes & REMOTE_NUMA_MASK;
+        } else if (scanType == NORMAL_SCAN) {
+            SMAP_LOGGER_ERROR("pid %d is not managed, scan type can not be %d.", pidArr[i], scanType);
+            free(payload);
+            return -EINVAL;
         } else {
-            if (attr == NULL || GetAttrL2(attr) == DEFAULT_L2_NODE) {
-                ClearL2(&payload[i].numaNodes);
-            } else {
-                SetL2ByNid(&payload[i].numaNodes, GetAttrL2(attr));
-            }
+            ClearL2(&payload[i].numaNodes);
         }
     }
     ret = AccessIoctlAddPid(len, payload);
@@ -2313,19 +2337,27 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
         return ret;
     }
     SMAP_LOGGER_INFO("Add process tracking done.");
-    // add pid to process manager
+    bool hasManagedProcess = false;
+    // Add an unmanaged pid, or update only scan mode for a managed pid.
     for (int i = 0; i < len; i++) {
+        ProcessAttr *attr = GetProcessAttrLocked(pidArr[i]);
+        if (attr) {
+            ret = UpdateManagedProcessTrackingMode(attr, scanType, scanTime[i], duration[i]);
+            if (ret) {
+                SMAP_LOGGER_ERROR("Update managed process %d scan type failed: %d.", pidArr[i], ret);
+                EnvMutexUnlock(&manager->lock);
+                return ret;
+            }
+            hasManagedProcess = true;
+            SMAP_LOGGER_INFO("Update managed process %d scan type to %d done.", pidArr[i], scanType);
+            continue;
+        }
+
         ProcessParam param = { 0 };
         param.count = 1;
         param.pid = pidArr[i];
-        ProcessAttr *attr = GetProcessAttrLocked(pidArr[i]);
-        if (attr) {
-            param.numaParam[0].ratio = HUNDRED - attr->initLocalMemRatio;
-            param.numaParam[0].nid = GetAttrL2(attr);
-        } else {
-            param.numaParam[0].ratio = 0;
-            param.numaParam[0].nid = DEFAULT_L2_NODE;
-        }
+        param.numaParam[0].ratio = 0;
+        param.numaParam[0].nid = DEFAULT_L2_NODE;
         param.scanTime = scanTime[i];
         param.duration = duration[i];
         param.scanType = scanType;
@@ -2337,6 +2369,13 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
             return ret;
         }
         SMAP_LOGGER_INFO("Add process %d tracking done.", pidArr[i]);
+    }
+    if (hasManagedProcess) {
+        ret = SyncAllProcessConfig();
+        if (ret) {
+            SMAP_LOGGER_WARNING("Synchronize managed process tracking config maybe failed: %d.", ret);
+            ret = 0;
+        }
     }
     SMAP_LOGGER_INFO("Add process tracking manage result: %d.", ret);
     EnvMutexUnlock(&manager->lock);
@@ -3018,6 +3057,7 @@ static int AssignOldProcessPayload(struct OldProcessPayload *result, ProcessAttr
     int len, l2Index;
     int nrLocalNuma = GetNrLocalNuma();
     int l1Node = GetAttrL1(attr);
+    const ProcessRemoteTarget *target = FindProcessRemoteTarget(&attr->targetConfig, l2Node);
     if (l1Node < 0 || l2Node < nrLocalNuma) {
         SMAP_LOGGER_ERROR("AssignOldProcessPayload pid %d L1 %d or L2 %d is invalid.", attr->pid, l1Node, l2Node);
         return -EINVAL;
@@ -3026,7 +3066,7 @@ static int AssignOldProcessPayload(struct OldProcessPayload *result, ProcessAttr
     l2Index = l2Node - nrLocalNuma;
     len = sizeof(result->l1Node) / sizeof(result->l1Node[0]);
     result->pid = attr->pid;
-    result->ratio = attr->strategyAttr.initRemoteMemRatio[l1Node][l2Index];
+    result->ratio = target ? target->ratio : attr->strategyAttr.initRemoteMemRatio[l1Node][l2Index];
     result->scanType = attr->scanType;
     result->type = attr->type;
     result->state = attr->state;
@@ -3034,12 +3074,7 @@ static int AssignOldProcessPayload(struct OldProcessPayload *result, ProcessAttr
     result->l2Node[0] = l2Node;
     result->scanTime = attr->scanTime;
     result->migrateMode = attr->migrateMode;
-    for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
-        if (attr->migrateParam[i].nid == l2Node) {
-            result->memSize = attr->migrateParam[i].memSize;
-            break;
-        }
-    }
+    result->memSize = target ? target->memSizeKB : 0;
     // only the first elem of l1Node and l2Node is used, so assign invalid nid to other elems
     for (int i = 1; i < len; i++) {
         result->l1Node[i] = result->l2Node[i] = NUMA_NO_NODE;

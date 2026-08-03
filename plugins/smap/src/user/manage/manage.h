@@ -541,6 +541,7 @@ bool IsRemoteNidValid(int nid);
 void InitProcessTargetConfig(ProcessTargetConfig *config);
 void ClearProcessTargetConfig(ProcessTargetConfig *config);
 int CopyProcessTargetConfig(ProcessTargetConfig *dest, const ProcessTargetConfig *src);
+bool RemoveProcessRemoteTarget(ProcessTargetConfig *config, int remoteNid);
 const ProcessRemoteTarget *FindProcessRemoteTarget(const ProcessTargetConfig *config, int remoteNid);
 int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex);
 void InitProcessMigrationTargetState(ProcessAttr *attr);
@@ -575,6 +576,7 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
 void DiscardProcessManageCandidate(ProcessManageCandidate *candidate);
 void PublishProcessManageCandidate(ProcessManageCandidate *candidate);
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap);
+int UpdateManagedProcessTrackingMode(ProcessAttr *attr, ScanType scanType, uint32_t scanTime, uint32_t duration);
 int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config);
 int ApplyPendingMigrationTargets(ProcessAttr *attr);
 int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);

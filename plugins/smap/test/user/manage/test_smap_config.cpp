@@ -540,15 +540,14 @@ TEST_F(SmapConfigTest, TestWriteOneNumaConfig)
     free(payload);
 }
 
-extern "C" void AssignProcessAttr(ProcessAttr *attr, struct ProcessPayload *payload);
+extern "C" int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayload *payload);
 TEST_F(SmapConfigTest, TestAssignProcessAttr)
 {
     ProcessAttr attr;
-    struct ProcessPayload payload = {
-        1025, NORMAL_SCAN, VM_TYPE, PROC_MOVE, 0, 0x11, 200, 1, 1
-    };
+    struct ProcessPayload payload = {1025, NORMAL_SCAN, VM_TYPE, PROC_MOVE, 0, 0x11, 200, 1, 1};
     payload.migrateParam[0].nid = 4;
     payload.migrateParam[0].ratio = 50;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     memset(&attr, 0, sizeof(ProcessAttr));
     ASSERT_EQ(attr.pid, 0);
     ASSERT_EQ(attr.initLocalMemRatio, 0);
@@ -559,7 +558,7 @@ TEST_F(SmapConfigTest, TestAssignProcessAttr)
     ASSERT_EQ(attr.numaAttr.numaNodes, 0);
     ASSERT_EQ(attr.isFirstScan, false);
     ASSERT_EQ(attr.enableSwap, false);
-    AssignProcessAttr(&attr, &payload);
+    EXPECT_EQ(0, AssignProcessAttr(&attr, &payload));
     EXPECT_EQ(attr.pid, payload.pid);
     EXPECT_EQ(attr.initLocalMemRatio, payload.migrateParam[0].ratio);
     EXPECT_EQ(attr.type, payload.type);
@@ -615,19 +614,36 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfig)
     int ret;
     int nrProcess = 2;
     ProcessAttr *attr;
-    struct PayloadHeader header = { .len = nrProcess * CONFIG_PROC_LEN };
-    struct ProcessManager manager = { .processes = nullptr };
-    struct ProcessPayload payload[] = {
-        { 1025, 25, NORMAL_SCAN, VM_TYPE, { 1 }, { 5 }, 200 },
-        { 1026, 15, NORMAL_SCAN, VM_TYPE, { 2 }, { 6 }, 200 }
-    };
+    struct PayloadHeader header = {.len = nrProcess * CONFIG_PROC_LEN};
+    struct ProcessManager manager = {.processes = nullptr};
+    struct ProcessPayload payload[2] = {};
+    payload[0] = {.pid = 1025,
+                  .scanType = NORMAL_SCAN,
+                  .type = PROCESS_TYPE,
+                  .state = PROC_IDLE,
+                  .migrateMode = MIG_RATIO_MODE,
+                  .numaNodes = 0x11,
+                  .scanTime = 200,
+                  .count = 1,
+                  .migrateParam = {{.nid = 4, .ratio = 25}}};
+    payload[1] = {.pid = 1026,
+                  .scanType = NORMAL_SCAN,
+                  .type = PROCESS_TYPE,
+                  .state = PROC_IDLE,
+                  .migrateMode = MIG_RATIO_MODE,
+                  .numaNodes = 0x21,
+                  .scanTime = 200,
+                  .count = 1,
+                  .migrateParam = {{.nid = 5, .ratio = 15}}};
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetPidType).stubs().will(returnValue(PROCESS_TYPE));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
     MOCKER(InitProcessMigrationTargetState).expects(exactly(nrProcess));
     ret = RecoverProcessConfig((char *)&header);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(nrProcess, manager.nr[VM_TYPE]);
+    EXPECT_EQ(nrProcess, manager.nr[PROCESS_TYPE]);
     EXPECT_EQ(payload[0].pid, manager.processes->next->pid);
     EXPECT_EQ(payload[1].pid, manager.processes->pid);
 
@@ -643,18 +659,62 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigTwo)
 {
     int ret;
     int nrProcess = 1;
-    struct PayloadHeader header = { .len = nrProcess * CONFIG_PROC_LEN };
-    struct ProcessManager manager = { .processes = nullptr };
-    struct ProcessPayload payload[] = {
-        { 1025, 25, NORMAL_SCAN, VM_TYPE, { 1 }, { 5 }, 200 },
-    };
+    struct PayloadHeader header = {.len = nrProcess * CONFIG_PROC_LEN};
+    struct ProcessManager manager = {.processes = nullptr};
+    struct ProcessPayload payload[] = {{.pid = 1025,
+                                        .scanType = NORMAL_SCAN,
+                                        .type = PROCESS_TYPE,
+                                        .state = PROC_IDLE,
+                                        .migrateMode = MIG_RATIO_MODE,
+                                        .numaNodes = 0x11,
+                                        .scanTime = 200,
+                                        .count = 1,
+                                        .migrateParam = {{.nid = 4, .ratio = 25}}}};
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetPidType).stubs().will(returnValue(PROCESS_TYPE));
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
     MOCKER(calloc).stubs().will(returnValue(static_cast<void *>(nullptr)));
     ret = RecoverProcessConfig((char *)&header);
     EXPECT_EQ(-ENOMEM, ret);
     ASSERT_EQ(nullptr, manager.processes);
+}
+
+TEST_F(SmapConfigTest, TestRecoverProcessConfigRestoresPairMultiRemoteTarget)
+{
+    struct PayloadHeader header = {.len = CONFIG_PROC_LEN};
+    struct ProcessManager manager = {};
+    struct ProcessPayload payload = {
+        .pid = 1234,
+        .scanType = NORMAL_SCAN,
+        .type = PROCESS_TYPE,
+        .state = PROC_IDLE,
+        .migrateMode = MIG_MEMSIZE_MODE,
+        .numaNodes = 0x53,
+        .scanTime = 200,
+        .count = 2,
+        .migrateParam = {{.nid = 4, .memSize = 2048}, {.nid = 6, .memSize = 4096}},
+    };
+
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetPidType).stubs().will(returnValue(PROCESS_TYPE));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(GetPageSize).stubs().will(returnValue(static_cast<uint32_t>(PAGESIZE_4K)));
+    MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)&payload));
+
+    EXPECT_EQ(0, RecoverProcessConfig((char *)&header));
+    ASSERT_NE(nullptr, manager.processes);
+    EXPECT_EQ(2U, manager.processes->targetConfig.count);
+    EXPECT_EQ(MIG_MEMSIZE_MODE, manager.processes->targetConfig.migrateMode);
+    EXPECT_EQ(4, manager.processes->targetConfig.targets[0].remoteNid);
+    EXPECT_EQ(2048U, manager.processes->targetConfig.targets[0].memSizeKB);
+    EXPECT_EQ(6, manager.processes->targetConfig.targets[1].remoteNid);
+    EXPECT_EQ(4096U, manager.processes->targetConfig.targets[1].memSizeKB);
+    EXPECT_EQ(4, manager.processes->migrateParam[0].nid);
+    EXPECT_EQ(6, manager.processes->migrateParam[1].nid);
+
+    ProcessAttr *attr = manager.processes;
+    LinkedListRemove(&attr, &manager.processes);
 }
 
 extern "C" int WriteProcessConfig(char *processBase, struct ProcessPayload *p, int nrPayload);
@@ -788,6 +848,44 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
         attr = manager.processes;
     }
     ASSERT_EQ(nullptr, manager.processes);
+    free(payload);
+}
+
+TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffectiveTarget)
+{
+    struct ProcessManager manager = {};
+    ProcessAttr attr = {};
+    struct ProcessPayload *payload = nullptr;
+    int len = 0;
+    attr.type = PROCESS_TYPE;
+    attr.pid = 1234;
+    attr.scanType = NORMAL_SCAN;
+    attr.state = PROC_MIGRATE;
+    attr.numaAttr.numaNodes = 0x53;
+    attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.count = 2;
+    attr.targetConfig.targets[0] = {4, 0, 2048};
+    attr.targetConfig.targets[1] = {6, 0, 4096};
+    attr.pendingTargetConfigValid = true;
+    attr.pendingTargetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.pendingTargetConfig.count = 1;
+    attr.pendingTargetConfig.targets[0] = {8, 0, 8192};
+    attr.pendingTargetNumaNodes = 0x153;
+    manager.processes = &attr;
+
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(GetPageSize).stubs().will(returnValue(static_cast<uint32_t>(PAGESIZE_4K)));
+
+    EXPECT_EQ(0, BuildAllProcessPayload(&payload, &len));
+    ASSERT_NE(nullptr, payload);
+    EXPECT_EQ(1, len);
+    EXPECT_EQ(PROC_IDLE, payload[0].state);
+    EXPECT_EQ(0x153U, payload[0].numaNodes);
+    EXPECT_EQ(MIG_MEMSIZE_MODE, payload[0].migrateMode);
+    EXPECT_EQ(1, payload[0].count);
+    EXPECT_EQ(8, payload[0].migrateParam[0].nid);
+    EXPECT_EQ(8192U, payload[0].migrateParam[0].memSize);
     free(payload);
 }
 
