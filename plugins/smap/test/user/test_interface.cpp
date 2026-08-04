@@ -2895,6 +2895,16 @@ TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaIsPidArrChangePidRemoteByPid)
 extern "C" bool GetAdaptMem(void);
 extern "C" bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid);
 extern "C" int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime);
+extern "C" int MigrateOutWithCapacityPolicy(struct MigrateOutMsg *msg, int pidType, bool ignoreRemoteCapacity);
+
+static int CheckSyncMigrateOutCapacityPolicy(struct MigrateOutMsg *msg, int pidType, bool ignoreRemoteCapacity)
+{
+    (void)msg;
+    (void)pidType;
+    EXPECT_TRUE(ignoreRemoteCapacity);
+    return 0;
+}
+
 TEST_F(InterfaceTest, TestSmapMigrateOutSyncErrMaxWaitTime)
 {
     int ret;
@@ -2934,7 +2944,7 @@ TEST_F(InterfaceTest, TestSmapMigrateOutSyncFailSmapMigrateOut)
     int pidType = VM_TYPE;
     uint64_t maxWaitTime = 10000;
     MOCKER(GetRunMode).stubs().will(returnValue(1));
-    MOCKER(ubturbo_smap_migrate_out).stubs().will(returnValue(-EPERM));
+    MOCKER(MigrateOutWithCapacityPolicy).stubs().will(returnValue(-EPERM));
     ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
     EXPECT_EQ(-EPERM, ret);
 }
@@ -2958,7 +2968,7 @@ TEST_F(InterfaceTest, TestSmapMigrateOutSyncSuccess)
     EnvMutexInit(&manager.lock);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetRunMode).stubs().will(returnValue(1));
-    MOCKER(ubturbo_smap_migrate_out).stubs().will(returnValue(0));
+    MOCKER(MigrateOutWithCapacityPolicy).expects(once()).will(invoke(CheckSyncMigrateOutCapacityPolicy));
     MOCKER(MigOutIsDone).stubs().will(returnValue(true));
     ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
     EXPECT_EQ(0, ret);
@@ -2983,7 +2993,7 @@ TEST_F(InterfaceTest, TestSmapMigrateOutSyncFail)
     EnvMutexInit(&manager.lock);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetRunMode).stubs().will(returnValue(1));
-    MOCKER(ubturbo_smap_migrate_out).stubs().will(returnValue(0));
+    MOCKER(MigrateOutWithCapacityPolicy).stubs().will(returnValue(0));
     MOCKER(MigOutIsDone).stubs().will(returnValue(false));
     ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
     EXPECT_EQ(-EBUSY, ret);

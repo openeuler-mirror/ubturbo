@@ -832,7 +832,8 @@ static bool IsAnyGroupedPidOnRemoteNid(int remoteNid)
     return false;
 }
 
-static int BuildMigrateOutProcessParam(const struct MigrateOutPayload *payload, ProcessParam *param)
+static int BuildMigrateOutProcessParamWithCapacityPolicy(const struct MigrateOutPayload *payload, ProcessParam *param,
+                                                         bool ignoreRemoteCapacity)
 {
     if (!payload || !param) {
         return -EINVAL;
@@ -842,6 +843,7 @@ static int BuildMigrateOutProcessParam(const struct MigrateOutPayload *payload, 
         .pid = payload->pid,
         .scanType = NORMAL_SCAN,
         .count = payload->count,
+        .ignoreRemoteCapacity = ignoreRemoteCapacity,
     };
     int ret = BuildProcessTargetConfig(payload, &param->targetConfig);
     if (ret) {
@@ -858,13 +860,14 @@ static void DiscardMigrateOutCandidates(ProcessManageCandidate *candidates, int 
     }
 }
 
-static int PrepareMigrateOutCandidates(struct MigrateOutMsg *msg, int pidType, ProcessManageCandidate *candidates,
-                                       uint32_t *nodeBitmap)
+static int PrepareMigrateOutCandidatesWithCapacityPolicy(struct MigrateOutMsg *msg, int pidType,
+                                                         ProcessManageCandidate *candidates, uint32_t *nodeBitmap,
+                                                         bool ignoreRemoteCapacity)
 {
     int firstError = 0;
     for (int i = 0; i < msg->count; i++) {
         ProcessParam param;
-        int ret = BuildMigrateOutProcessParam(&msg->payload[i], &param);
+        int ret = BuildMigrateOutProcessParamWithCapacityPolicy(&msg->payload[i], &param, ignoreRemoteCapacity);
         if (ret == 0) {
             PidType type = pidType == PAGETYPE_HUGE ? VM_TYPE : PROCESS_TYPE;
             ret = PrepareProcessManageCandidate(&param, type, &candidates[i]);
@@ -884,6 +887,12 @@ static int PrepareMigrateOutCandidates(struct MigrateOutMsg *msg, int pidType, P
         }
     }
     return firstError;
+}
+
+static int PrepareMigrateOutCandidates(struct MigrateOutMsg *msg, int pidType, ProcessManageCandidate *candidates,
+                                       uint32_t *nodeBitmap)
+{
+    return PrepareMigrateOutCandidatesWithCapacityPolicy(msg, pidType, candidates, nodeBitmap, false);
 }
 
 static int TrackMigrateOutCandidates(ProcessManageCandidate *candidates, int count)
@@ -923,7 +932,7 @@ static void PublishMigrateOutCandidates(ProcessManageCandidate *candidates, int 
     }
 }
 
-int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
+static int MigrateOutWithCapacityPolicy(struct MigrateOutMsg *msg, int pidType, bool ignoreRemoteCapacity)
 {
     struct ProcessManager *manager = GetProcessManager();
 
@@ -943,7 +952,9 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
 
     uint32_t nodeBitmap[MAX_NR_MIGOUT] = { 0 };
     ProcessManageCandidate candidates[MAX_NR_MIGOUT] = { 0 };
-    int prepareError = PrepareMigrateOutCandidates(msg, pidType, candidates, nodeBitmap);
+    int prepareError = ignoreRemoteCapacity ?
+                           PrepareMigrateOutCandidatesWithCapacityPolicy(msg, pidType, candidates, nodeBitmap, true) :
+                           PrepareMigrateOutCandidates(msg, pidType, candidates, nodeBitmap);
 
     ret = TrackMigrateOutCandidates(candidates, msg->count);
     if (ret) {
@@ -957,6 +968,11 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
 
     EnvMutexUnlock(&manager->lock);
     return prepareError;
+}
+
+int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
+{
+    return MigrateOutWithCapacityPolicy(msg, pidType, false);
 }
 
 int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType)
@@ -2716,7 +2732,7 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64
     SetSyncWaitRemoteEmpty(msg, true);
     syncWaitProtected = true;
 
-    ret = ubturbo_smap_migrate_out(msg, pidType);
+    ret = MigrateOutWithCapacityPolicy(msg, pidType, true);
     if (ret && ret != -ESRCH) {
         SMAP_LOGGER_ERROR("Smap migrate out failed, ret %d.", ret);
         goto out;

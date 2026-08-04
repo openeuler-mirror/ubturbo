@@ -373,6 +373,9 @@ struct ProcessAttribute {
     bool isFirstScan; // 标记首次扫描，需要恢复扫描周期
     bool autoRemoveWhenRemoteEmpty; // 上层将远端目标调为0后，远端页清空时自动移除纳管
     bool syncWaitRemoteEmpty; // 同步迁移等待远端页清空时，临时保护进程不被自动移除
+    /* Runtime-only compatibility mode for migrate_out_sync targets. */
+    bool ignoreRemoteCapacity;
+    bool pendingIgnoreRemoteCapacity;
     struct { // 迁移相关参数
         int nid;
         uint64_t memSize; // 迁移内存大小,单位为KB
@@ -528,6 +531,7 @@ typedef struct {
         MigrateMode migrateMode;
     } numaParam[REMOTE_NUMA_NUM];
     bool targetConfigValid;
+    bool ignoreRemoteCapacity;
     ProcessTargetConfig targetConfig;
 } ProcessParam;
 

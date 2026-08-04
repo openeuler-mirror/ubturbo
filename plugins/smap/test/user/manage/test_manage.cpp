@@ -302,6 +302,7 @@ TEST_F(ManageTest, TestInitProcessMigrationTargetState)
     attr.targetConfig.count = 1;
     attr.pendingTargetConfig.count = 1;
     attr.pendingTargetConfigValid = true;
+    attr.pendingIgnoreRemoteCapacity = true;
     attr.pendingTargetNumaNodes = 0x31;
     attr.managedLocalState.managedLocalMask = 0xf;
     attr.managedLocalState.accountLocalMask[0] = 0x1;
@@ -311,6 +312,7 @@ TEST_F(ManageTest, TestInitProcessMigrationTargetState)
     EXPECT_EQ(0U, attr.targetConfig.count);
     EXPECT_EQ(0U, attr.pendingTargetConfig.count);
     EXPECT_FALSE(attr.pendingTargetConfigValid);
+    EXPECT_FALSE(attr.pendingIgnoreRemoteCapacity);
     EXPECT_EQ(0U, attr.pendingTargetNumaNodes);
     EXPECT_EQ(0U, attr.managedLocalState.managedLocalMask);
     EXPECT_EQ(0U, attr.managedLocalState.accountLocalMask[0]);
@@ -583,6 +585,7 @@ TEST_F(ManageTest, TestConfigureMigrationTargetsStagesWhileMigrating)
     int ret = ConfigureMigrationTargets(&attr, &config);
     EXPECT_EQ(0, ret);
     EXPECT_TRUE(attr.pendingTargetConfigValid);
+    EXPECT_FALSE(attr.pendingIgnoreRemoteCapacity);
     EXPECT_EQ(4, attr.targetConfig.targets[0].remoteNid);
     EXPECT_EQ(MIG_RATIO_MODE, attr.migrateMode);
     EXPECT_EQ(25, attr.strategyAttr.initRemoteMemRatio[0][0]);
@@ -604,6 +607,7 @@ TEST_F(ManageTest, TestApplyPendingMigrationTargets)
     attr.pendingTargetConfig.count = 1;
     attr.pendingTargetConfig.targets[0] = {5, 0, 4096};
     attr.pendingTargetConfigValid = true;
+    attr.pendingIgnoreRemoteCapacity = true;
     attr.pendingTargetNumaNodes = 0x21;
 
     g_processManager.nrLocalNuma = 4;
@@ -624,6 +628,8 @@ TEST_F(ManageTest, TestApplyPendingMigrationTargets)
     EXPECT_EQ(5, attr.targetConfig.targets[0].remoteNid);
     EXPECT_EQ(MIG_MEMSIZE_MODE, attr.migrateMode);
     EXPECT_EQ(1, attr.remoteNumaCnt);
+    EXPECT_TRUE(attr.ignoreRemoteCapacity);
+    EXPECT_FALSE(attr.pendingIgnoreRemoteCapacity);
     EXPECT_EQ(0x21U, attr.numaAttr.numaNodes);
     EXPECT_EQ(0U, attr.pendingTargetNumaNodes);
 }
@@ -1115,6 +1121,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateSamplesOnce)
 {
     ProcessAttr active = {};
     ProcessParam param = InitCandidateTest(&active);
+    param.ignoreRemoteCapacity = true;
     ProcessManageCandidate candidate = {};
 
     MOCKER(CheckPid).expects(once()).will(returnValue(0));
@@ -1128,10 +1135,40 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateSamplesOnce)
     EXPECT_EQ(0U, active.managedLocalState.managedLocalMask);
     EXPECT_EQ(BIT(0) | BIT(2), candidate.prepared->managedLocalState.managedLocalMask);
     EXPECT_EQ(BIT(0) | BIT(2), candidate.prepared->numaAttr.numaNodes);
+    EXPECT_TRUE(candidate.prepared->ignoreRemoteCapacity);
 
     PublishProcessManageCandidate(&candidate);
     EXPECT_EQ(BIT(0) | BIT(2), active.managedLocalState.managedLocalMask);
+    EXPECT_TRUE(active.ignoreRemoteCapacity);
     EXPECT_EQ(nullptr, candidate.prepared);
+}
+
+TEST_F(ManageTest, TestPublishProcessManageCandidateStagesCapacityBypass)
+{
+    ProcessAttr active = {};
+    ProcessAttr *prepared = (ProcessAttr *)calloc(1, sizeof(ProcessAttr));
+    ASSERT_NE(nullptr, prepared);
+    active.pid = 123;
+    prepared->pid = active.pid;
+    prepared->pendingTargetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    prepared->pendingTargetConfig.count = 1;
+    prepared->pendingTargetConfig.targets[0] = {4, 0, 2048};
+    prepared->pendingTargetConfigValid = true;
+    prepared->pendingIgnoreRemoteCapacity = true;
+    prepared->pendingTargetNumaNodes = BIT(0) | BIT(4);
+    ProcessManageCandidate candidate = {
+        .active = &active,
+        .prepared = prepared,
+        .isPending = true,
+    };
+
+    MOCKER(SyncAllProcessConfig).expects(once()).will(returnValue(0));
+
+    PublishProcessManageCandidate(&candidate);
+    EXPECT_TRUE(active.pendingTargetConfigValid);
+    EXPECT_TRUE(active.pendingIgnoreRemoteCapacity);
+    EXPECT_EQ(4, active.pendingTargetConfig.targets[0].remoteNid);
+    EXPECT_EQ(BIT(0) | BIT(4), active.pendingTargetNumaNodes);
 }
 
 TEST_F(ManageTest, TestPrepareProcessManageCandidateAffinityFailureUsesResident)
@@ -3808,6 +3845,30 @@ static AllPairTargetResult RunBuildAllPairTargets(ProcessManager *manager)
     result.ret = BuildAllPairTargets(manager, result.targets, sizeof(result.targets) / sizeof(result.targets[0]),
                                      &result.targetCnt);
     return result;
+}
+
+TEST_F(ManageTest, TestBuildAllPairTargetsSyncBypassesRemoteCapacity)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+
+    ProcessAttr syncPid;
+    ProcessAttr normalPid;
+    InitRatioPairProcess(&syncPid, 100, 1, 800, 0, 50);
+    InitRatioPairProcess(&normalPid, 200, 1, 800, 0, 50);
+    syncPid.ignoreRemoteCapacity = true;
+    syncPid.next = &normalPid;
+    manager.processes = &syncPid;
+
+    AllPairTargetResult result = RunBuildAllPairTargets(&manager);
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(400U, result.Requested(100, 0, 1));
+    EXPECT_EQ(400U, result.Target(100, 0, 1));
+    EXPECT_EQ(0U, result.Requested(200, 0, 1));
+    EXPECT_EQ(0U, result.Target(200, 0, 1));
+
+    manager.processes = nullptr;
+    DestroyPairTargetManager(&manager);
 }
 
 TEST_F(ManageTest, TestBuildAllPairTargetsPrivateFairAndStable)

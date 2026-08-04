@@ -293,7 +293,9 @@ void InitProcessMigrationTargetState(ProcessAttr *attr)
 
     InitProcessTargetConfig(&attr->targetConfig);
     InitProcessTargetConfig(&attr->pendingTargetConfig);
+    attr->ignoreRemoteCapacity = false;
     attr->pendingTargetConfigValid = false;
+    attr->pendingIgnoreRemoteCapacity = false;
     attr->pendingTargetNumaNodes = 0;
     attr->managedLocalState = (ManagedLocalState){ 0 };
 }
@@ -1309,6 +1311,7 @@ static void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *
     attr->remoteNumaCnt = candidate->remoteNumaCnt;
     attr->initLocalMemRatio = candidate->initLocalMemRatio;
     attr->autoRemoveWhenRemoteEmpty = candidate->autoRemoveWhenRemoteEmpty;
+    attr->ignoreRemoteCapacity = candidate->ignoreRemoteCapacity;
     attr->numaAttr = candidate->numaAttr;
     attr->managedLocalState = candidate->managedLocalState;
     attr->strategyAttr = candidate->strategyAttr;
@@ -1334,7 +1337,7 @@ static int ApplyProcessTargetConfig(ProcessAttr *attr, const ProcessTargetConfig
     return 0;
 }
 
-static int StagePendingMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config)
+static int StagePendingMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config, bool ignoreRemoteCapacity)
 {
     ProcessTargetConfig targetConfig;
     if (!attr || ValidateProcessTargetConfig(config) || CopyProcessTargetConfig(&targetConfig, config)) {
@@ -1352,12 +1355,14 @@ static int StagePendingMigrationTargets(ProcessAttr *attr, const ProcessTargetCo
     }
     attr->pendingTargetConfig = targetConfig;
     attr->pendingTargetConfigValid = true;
+    attr->pendingIgnoreRemoteCapacity = ignoreRemoteCapacity;
     attr->pendingTargetNumaNodes = BuildManagedTrackingNodes(&trackingCandidate);
     SMAP_LOGGER_INFO("Save pending migration target for pid %d.", attr->pid);
     return 0;
 }
 
-int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config)
+static int ConfigureMigrationTargetsWithCapacityPolicy(ProcessAttr *attr, const ProcessTargetConfig *config,
+                                                       bool ignoreRemoteCapacity)
 {
     ProcessTargetConfig targetConfig;
     if (!attr || ValidateProcessTargetConfig(config) || CopyProcessTargetConfig(&targetConfig, config)) {
@@ -1365,10 +1370,19 @@ int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *conf
     }
 
     if (attr->state == PROC_MIGRATE) {
-        return StagePendingMigrationTargets(attr, &targetConfig);
+        return StagePendingMigrationTargets(attr, &targetConfig, ignoreRemoteCapacity);
     }
 
-    return ApplyProcessTargetConfig(attr, &targetConfig);
+    int ret = ApplyProcessTargetConfig(attr, &targetConfig);
+    if (!ret) {
+        attr->ignoreRemoteCapacity = ignoreRemoteCapacity;
+    }
+    return ret;
+}
+
+int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config)
+{
+    return ConfigureMigrationTargetsWithCapacityPolicy(attr, config, false);
 }
 
 int ApplyPendingMigrationTargets(ProcessAttr *attr)
@@ -1405,8 +1419,10 @@ int ApplyPendingMigrationTargets(ProcessAttr *attr)
 
     PublishProcessTargetCandidate(attr, &candidate);
 
+    attr->ignoreRemoteCapacity = attr->pendingIgnoreRemoteCapacity;
     ClearProcessTargetConfig(&attr->pendingTargetConfig);
     attr->pendingTargetConfigValid = false;
+    attr->pendingIgnoreRemoteCapacity = false;
     attr->pendingTargetNumaNodes = 0;
     ret = SyncAllProcessConfig();
     if (ret) {
@@ -1434,7 +1450,7 @@ static int SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
     }
 
     SetBasicProcessConfig(attr, param);
-    return ConfigureMigrationTargets(attr, &config);
+    return ConfigureMigrationTargetsWithCapacityPolicy(attr, &config, param->ignoreRemoteCapacity);
 }
 
 static void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeBitmap,
@@ -1594,7 +1610,7 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
     candidate->prepared = prepared;
     candidate->isNew = active == NULL;
     candidate->isPending = active && active->state == PROC_MIGRATE;
-    ret = ConfigureMigrationTargets(prepared, &config);
+    ret = ConfigureMigrationTargetsWithCapacityPolicy(prepared, &config, param->ignoreRemoteCapacity);
     if (ret) {
         DiscardProcessManageCandidate(candidate);
         return ret;
@@ -1615,6 +1631,7 @@ void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
     if (candidate->isPending) {
         candidate->active->pendingTargetConfig = prepared->pendingTargetConfig;
         candidate->active->pendingTargetConfigValid = prepared->pendingTargetConfigValid;
+        candidate->active->pendingIgnoreRemoteCapacity = prepared->pendingIgnoreRemoteCapacity;
         candidate->active->pendingTargetNumaNodes = prepared->pendingTargetNumaNodes;
         int ret = SyncAllProcessConfig();
         if (ret) {
@@ -2963,6 +2980,11 @@ static int ComparePairArbitrationEntry(const void *left, const void *right)
 
 static uint64_t PairCapacityDemand(const PairArbitrationEntry *entry, PairCapacityPhase phase)
 {
+    if (entry->process->ignoreRemoteCapacity) {
+        /* Explicit sync targets must not consume configured Pair capacity. */
+        return 0;
+    }
+
     uint64_t requested = entry->target.requestedPages;
     uint64_t baseline = MIN(entry->actualPages, requested);
     uint64_t allocated;
@@ -3094,6 +3116,10 @@ static void BuildPairRequestContext(const struct ProcessManager *manager,
         if (sharedPages[remote] > 0) {
             context->capacityLocalMask[remote] |= attr->managedLocalState.managedLocalMask;
         }
+        if (attr->ignoreRemoteCapacity) {
+            /* Sync migration can assign its target from every managed local NUMA. */
+            context->capacityLocalMask[remote] |= attr->managedLocalState.managedLocalMask;
+        }
     }
 }
 
@@ -3145,6 +3171,13 @@ static void ArbitrateAllPairCapacity(PairArbitrationEntry entries[], size_t entr
                                      const uint64_t privateCapacity[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
                                      const uint64_t sharedCapacity[REMOTE_NUMA_NUM])
 {
+    for (size_t i = 0; i < entryCount; i++) {
+        if (entries[i].process->ignoreRemoteCapacity) {
+            /* Preserve migrate_out_sync's legacy target semantics. */
+            entries[i].privatePages = entries[i].target.requestedPages;
+        }
+    }
+
     for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
         int remoteNid = nrLocalNuma + remote;
         for (int local = 0; local < nrLocalNuma; local++) {
