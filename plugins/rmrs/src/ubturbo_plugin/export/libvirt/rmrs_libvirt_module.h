@@ -13,6 +13,7 @@
 #define RMRS_LIBVIRT_MODULE_H
 
 #include <libvirt/libvirt.h>
+#include <atomic>
 #include <cstdint>
 #include "rmrs_error.h"
 
@@ -73,7 +74,8 @@ public:
     static VirConnectDomainEventDeRegisterFunc VirConnectDomainEventDeRegister();
 
 private:
-    static bool available;
+    // 原子变量: EnsureLibvirtReady双检锁的锁外读依赖其与Init中release写配对, 避免弱内存序平台数据竞争
+    static std::atomic<bool> available;
     static void *libvirtHandle;
     static VirConnectOpenFunc virConnectOpenFunc;
     static VirConnectCloseFunc virConnectCloseFunc;

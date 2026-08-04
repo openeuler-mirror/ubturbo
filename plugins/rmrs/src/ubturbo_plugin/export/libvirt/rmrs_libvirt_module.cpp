@@ -21,7 +21,7 @@
 namespace rmrs::libvirt {
 using namespace turbo::log;
 
-bool LibvirtModule::available = false;
+std::atomic<bool> LibvirtModule::available{false};
 void *LibvirtModule::libvirtHandle = nullptr;
 VirConnectOpenFunc LibvirtModule::virConnectOpenFunc = nullptr;
 VirConnectCloseFunc LibvirtModule::virConnectCloseFunc = nullptr;
@@ -52,7 +52,7 @@ static void *LoadLibvirtSymbol(void *handle, const char *symbolName)
 
 RmrsResult LibvirtModule::Init()
 {
-    if (available) {
+    if (available.load(std::memory_order_acquire)) {
         return RMRS_OK;
     }
     libvirtHandle = dlopen("libvirt.so.0", RTLD_LAZY);
@@ -61,13 +61,14 @@ RmrsResult LibvirtModule::Init()
             << "[RmrsResourceExport] [LibvirtModule] Load libvirt.so.0 failed. " << strerror(errno) << ".";
         return RMRS_ERROR;
     }
-    available = true;
+    // release写与IsAvailable的acquire读配对, 保证锁外读到true时libvirtHandle等状态必然可见
+    available.store(true, std::memory_order_release);
     return RMRS_OK;
 }
 
 bool LibvirtModule::IsAvailable()
 {
-    return available;
+    return available.load(std::memory_order_acquire);
 }
 
 VirConnectOpenFunc LibvirtModule::VirConnectOpen()

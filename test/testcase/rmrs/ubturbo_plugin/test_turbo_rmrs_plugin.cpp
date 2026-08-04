@@ -130,6 +130,16 @@ TEST_F(TestTurboRmrsPlugin, LoadSceneUnknownWhenFileInvalid)
     std::filesystem::remove(PAGE_TYPE_FILE_FOR_TEST);
 }
 
+TEST_F(TestTurboRmrsPlugin, LoadSceneUnknownWhenPageTypeOutOfRange)
+{
+    // pageType为越界值(非0/1)时不做枚举cast, 按未知场景兜底等待业务惰性判定
+    WritePageTypeFile(2);
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::VM);
+    RmrsConfig::Instance().LoadRmrsScene();
+    EXPECT_EQ(RmrsConfig::Instance().GetRmrsScene(), RmrsScene::UNKNOWN);
+    std::filesystem::remove(PAGE_TYPE_FILE_FOR_TEST);
+}
+
 TEST_F(TestTurboRmrsPlugin, RmrsRebootFailed1)
 {
     MOCKER_CPP((bool (*)(const std::filesystem::path &))(std::filesystem::exists),
