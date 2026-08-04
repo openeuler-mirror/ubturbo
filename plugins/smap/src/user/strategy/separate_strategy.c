@@ -485,18 +485,16 @@ int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][
         for (int remoteNid = nrLocalNuma; remoteNid < nrLocalNuma + REMOTE_NUMA_NUM; remoteNid++) {
             uint32_t localToRemote = strategy->nrMigratePages[localNid][remoteNid];
             uint32_t remoteToLocal = strategy->nrMigratePages[remoteNid][localNid];
+            if (IsNodeForbidden(remoteNid)) {
+                if (localToRemote > 0 || remoteToLocal > 0) {
+                    SMAP_LOGGER_INFO("Pid %d pair %d-%d skips migration to and from disabled remote.", process->pid,
+                                     localNid, remoteNid);
+                }
+                continue;
+            }
             uint32_t swapPages = MIN(localToRemote, remoteToLocal);
             uint32_t demotePages = localToRemote - swapPages;
             uint32_t promotePages = remoteToLocal - swapPages;
-            if (IsNodeForbidden(remoteNid)) {
-                if (localToRemote > 0) {
-                    SMAP_LOGGER_INFO("Pid %d pair %d-%d skips demote and swap to disabled remote.", process->pid,
-                                     localNid, remoteNid);
-                }
-                swapPages = 0;
-                demotePages = 0;
-                promotePages = remoteToLocal;
-            }
 
             int ret = BuildPairMlist(process, mlist, numaOffset, localNid, remoteNid, demotePages + swapPages,
                                      SELECT_BOTTOM_K);

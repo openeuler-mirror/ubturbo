@@ -1027,19 +1027,17 @@ static int BuildLocalFreeSnapshot(bool hugePage, int nrLocalNuma, PairPlanContex
     return 0;
 }
 
-static int CheckDisabledPairPlanApplied(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt,
-                                        bool migrateOnly)
+static int CheckFrozenPairPlanApplied(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt,
+                                      bool migrateOnly)
 {
     (void)manager;
+    (void)plans;
     EXPECT_TRUE(migrateOnly);
-    EXPECT_EQ(1U, planCnt);
-    EXPECT_EQ(0U, plans[0].targetPages);
-    EXPECT_EQ(0U, plans[0].demotePages);
-    EXPECT_EQ(10U, plans[0].promotePages);
+    EXPECT_EQ(0U, planCnt);
     return 0;
 }
 
-TEST_F(MigrationTest, TestBuildAllPairPlansPromotesFromDisabledRemote)
+TEST_F(MigrationTest, TestBuildAllPairPlansSkipsDisabledRemote)
 {
     ProcessManager manager = {};
     manager.nrLocalNuma = 1;
@@ -1052,13 +1050,12 @@ TEST_F(MigrationTest, TestBuildAllPairPlansPromotesFromDisabledRemote)
     MOCKER(CollectNodeFreeSnapshot).stubs().will(invoke(BuildLocalFreeSnapshot));
     MOCKER(BuildAllPairPlanInputsForState).stubs().will(invoke(BuildDisabledPairPlanInput));
     MOCKER(BuildPairSwapPlans).stubs().will(returnValue(0));
-    MOCKER(ApplyPairPlansForState).stubs().will(invoke(CheckDisabledPairPlanApplied));
+    MOCKER(ApplyPairPlansForState).stubs().will(invoke(CheckFrozenPairPlanApplied));
 
     int ret = BuildAllPairPlans(&manager, plans, 1, &planCnt);
     EnvAtomicSet(&g_forbiddenNodes[1], 0);
     ASSERT_EQ(0, ret);
-    ASSERT_EQ(1U, planCnt);
-    EXPECT_EQ(10U, plans[0].promotePages);
+    EXPECT_EQ(0U, planCnt);
 
     EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
 }

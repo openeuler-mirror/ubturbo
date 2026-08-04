@@ -291,7 +291,7 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuildsPairSwapAfterNetMigr
     free(process.scanAttr.actcData[2]);
 }
 
-TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteOnlyPromotes)
+TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteSkipsBothDirections)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
@@ -307,8 +307,7 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteOnlyPromotes
     EnvAtomicSet(&g_forbiddenNodes[2], 0);
     ASSERT_EQ(0, ret);
     EXPECT_EQ(0U, mlist[0][2].nr);
-    ASSERT_EQ(1U, mlist[2][0].nr);
-    EXPECT_EQ(0U, mlist[2][0].addr[0]);
+    EXPECT_EQ(0U, mlist[2][0].nr);
 
     FreeMlist(mlist);
     free(process.scanAttr.actcData[2]);
