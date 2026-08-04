@@ -2235,13 +2235,10 @@ static int CheckAddProcessTrackingMsg(pid_t *pidArr, uint32_t *scanTime, uint32_
     while (current) {
         for (int i = 0; i < len; i++) {
             if (current->pid == pidArr[i]) {
-                if (current->state == PROC_MIGRATE) {
-                    SMAP_LOGGER_ERROR("The pid %d is migrating, reject scan type change.", pidArr[i]);
+                if (current->state != PROC_MOVE) {
+                    SMAP_LOGGER_ERROR("The pid %d state is %d, only PROC_MOVE can change scan type.", pidArr[i],
+                                      current->state);
                     return -EBUSY;
-                }
-                if (current->state != PROC_IDLE && current->state != PROC_MOVE) {
-                    SMAP_LOGGER_ERROR("The pid %d state is %d, cannot change scan type.", pidArr[i], current->state);
-                    return -EINVAL;
                 }
             }
         }

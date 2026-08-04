@@ -2028,7 +2028,7 @@ int UpdateManagedProcessTrackingMode(ProcessAttr *attr, ScanType scanType, uint3
     if (!attr || scanType < HAM_SCAN || scanType >= SCAN_TYPE_MAX) {
         return -EINVAL;
     }
-    if (attr->state == PROC_MIGRATE) {
+    if (attr->state != PROC_MOVE) {
         return -EBUSY;
     }
 
@@ -2036,7 +2036,8 @@ int UpdateManagedProcessTrackingMode(ProcessAttr *attr, ScanType scanType, uint3
     attr->scanTime = scanTime;
     attr->duration = duration;
     attr->isFirstScan = true;
-    attr->state = scanType == NORMAL_SCAN ? PROC_IDLE : PROC_MOVE;
+    /* Tracking mode changes are only valid for PROC_MOVE processes. */
+    attr->state = PROC_MOVE;
     return 0;
 }
 

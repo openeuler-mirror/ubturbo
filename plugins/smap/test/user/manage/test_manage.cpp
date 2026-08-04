@@ -217,6 +217,9 @@ TEST_F(ManageTest, TestUpdateManagedProcessTrackingModeKeepsMigrationConfig)
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 123;
     attr.strategyAttr.remoteNrPagesAfterMigrate[1][2] = 456;
 
+    // Migration must be explicitly disabled before changing away from NORMAL_SCAN.
+    EXPECT_EQ(-EBUSY, UpdateManagedProcessTrackingMode(&attr, HAM_SCAN, 200, 60));
+    attr.state = PROC_MOVE;
     EXPECT_EQ(0, UpdateManagedProcessTrackingMode(&attr, HAM_SCAN, 200, 60));
     EXPECT_EQ(HAM_SCAN, attr.scanType);
     EXPECT_EQ(PROC_MOVE, attr.state);
@@ -235,7 +238,7 @@ TEST_F(ManageTest, TestUpdateManagedProcessTrackingModeKeepsMigrationConfig)
 
     EXPECT_EQ(0, UpdateManagedProcessTrackingMode(&attr, NORMAL_SCAN, 400, 120));
     EXPECT_EQ(NORMAL_SCAN, attr.scanType);
-    EXPECT_EQ(PROC_IDLE, attr.state);
+    EXPECT_EQ(PROC_MOVE, attr.state);
     EXPECT_EQ(400U, attr.scanTime);
     EXPECT_EQ(120U, attr.duration);
     EXPECT_EQ(2U, attr.targetConfig.count);
@@ -258,6 +261,35 @@ TEST_F(ManageTest, TestUpdateManagedProcessTrackingModeRejectsMigratingProcess)
     EXPECT_EQ(NORMAL_SCAN, attr.scanType);
     EXPECT_EQ(200U, attr.scanTime);
     EXPECT_EQ(60U, attr.duration);
+}
+
+TEST_F(ManageTest, TestUpdateManagedProcessTrackingModeRejectsActiveMigration)
+{
+    ProcessAttr attr = {};
+    attr.state = PROC_IDLE;
+    attr.scanType = NORMAL_SCAN;
+    attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = {4, 0, 2048};
+
+    EXPECT_EQ(-EBUSY, UpdateManagedProcessTrackingMode(&attr, HAM_SCAN, 400, 120));
+    EXPECT_EQ(PROC_IDLE, attr.state);
+    EXPECT_EQ(NORMAL_SCAN, attr.scanType);
+}
+
+TEST_F(ManageTest, TestUpdateManagedProcessTrackingModeKeepsMigrationDisabled)
+{
+    ProcessAttr attr = {};
+    attr.state = PROC_MOVE;
+    attr.scanType = NORMAL_SCAN;
+    attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = {4, 0, 2048};
+
+    EXPECT_EQ(0, UpdateManagedProcessTrackingMode(&attr, NORMAL_SCAN, 400, 120));
+    EXPECT_EQ(PROC_MOVE, attr.state);
+    EXPECT_EQ(0, UpdateManagedProcessTrackingMode(&attr, HAM_SCAN, 400, 120));
+    EXPECT_EQ(PROC_MOVE, attr.state);
 }
 
 TEST_F(ManageTest, TestFindProcessRemoteTarget)

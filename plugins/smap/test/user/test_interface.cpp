@@ -3145,7 +3145,7 @@ TEST_F(InterfaceTest, TestCheckAddProcessTrackingMsgStateInvalid)
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(PidIsValid).stubs().will(returnValue(true));
     int ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, 1, 0);
-    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ(-EBUSY, ret);
 }
 
 TEST_F(InterfaceTest, TestCheckAddProcessTrackingMsgMigratingProcessBusy)
@@ -3501,7 +3501,9 @@ TEST_F(InterfaceTest, TestSmapAddProcessTrackingUpdatesManagedPidMode)
     uint32_t scanTime[] = {MIN_SCAN_TIME * 2};
     uint32_t duration[] = {60};
     attr.pid = pidArr[0];
-    attr.state = PROC_IDLE;
+    // The migration target is active, so model the required explicit
+    // migration-disable transition before changing scan type.
+    attr.state = PROC_MOVE;
     attr.scanType = NORMAL_SCAN;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
     attr.targetConfig.count = 2;
