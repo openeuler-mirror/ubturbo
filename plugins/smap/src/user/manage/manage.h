@@ -542,6 +542,7 @@ void InitProcessTargetConfig(ProcessTargetConfig *config);
 void ClearProcessTargetConfig(ProcessTargetConfig *config);
 int CopyProcessTargetConfig(ProcessTargetConfig *dest, const ProcessTargetConfig *src);
 bool RemoveProcessRemoteTarget(ProcessTargetConfig *config, int remoteNid);
+int MoveProcessRemoteTarget(ProcessTargetConfig *config, int srcNid, int destNid, uint64_t memSizeKB, int ratio);
 const ProcessRemoteTarget *FindProcessRemoteTarget(const ProcessTargetConfig *config, int remoteNid);
 int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex);
 void InitProcessMigrationTargetState(ProcessAttr *attr);

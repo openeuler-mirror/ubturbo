@@ -158,6 +158,73 @@ bool RemoveProcessRemoteTarget(ProcessTargetConfig *config, int remoteNid)
     return false;
 }
 
+int MoveProcessRemoteTarget(ProcessTargetConfig *config, int srcNid, int destNid, uint64_t memSizeKB, int ratio)
+{
+    if (!config || config->count > REMOTE_NUMA_NUM || srcNid == destNid ||
+        (config->migrateMode != MIG_RATIO_MODE && config->migrateMode != MIG_MEMSIZE_MODE) || ratio < 0) {
+        return -EINVAL;
+    }
+
+    int srcIndex = -1;
+    int destIndex = -1;
+    for (uint32_t i = 0; i < config->count; i++) {
+        if (config->targets[i].remoteNid == srcNid) {
+            srcIndex = (int)i;
+        }
+        if (config->targets[i].remoteNid == destNid) {
+            destIndex = (int)i;
+        }
+    }
+    if (srcIndex < 0) {
+        return -ENOENT;
+    }
+
+    ProcessRemoteTarget *src = &config->targets[srcIndex];
+    uint64_t moved = config->migrateMode == MIG_RATIO_MODE ? (uint64_t)ratio : memSizeKB;
+    uint64_t source = config->migrateMode == MIG_RATIO_MODE ? src->ratio : src->memSizeKB;
+    if (moved == 0) {
+        return 0;
+    }
+    if (moved > source) {
+        return -ERANGE;
+    }
+
+    if (destIndex < 0 && moved == source) {
+        src->remoteNid = destNid;
+        return 0;
+    }
+    if (destIndex < 0) {
+        if (config->count == REMOTE_NUMA_NUM) {
+            return -ENOSPC;
+        }
+        destIndex = (int)config->count++;
+        config->targets[destIndex] = (ProcessRemoteTarget){ .remoteNid = destNid };
+    }
+
+    ProcessRemoteTarget *dest = &config->targets[destIndex];
+    if (config->migrateMode == MIG_RATIO_MODE) {
+        if (moved > HUNDRED || dest->ratio > HUNDRED - moved) {
+            return -ERANGE;
+        }
+        src->ratio -= (uint32_t)moved;
+        dest->ratio += (uint32_t)moved;
+        if (src->ratio == 0) {
+            (void)RemoveProcessRemoteTarget(config, srcNid);
+        }
+        return 0;
+    }
+
+    if (dest->memSizeKB > UINT64_MAX - moved) {
+        return -EOVERFLOW;
+    }
+    src->memSizeKB -= moved;
+    dest->memSizeKB += moved;
+    if (src->memSizeKB == 0) {
+        (void)RemoveProcessRemoteTarget(config, srcNid);
+    }
+    return 0;
+}
+
 static int ValidateProcessTargetConfig(const ProcessTargetConfig *config)
 {
     ProcessTargetConfig copy;
@@ -4682,6 +4749,15 @@ int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg)
         }
 
         ChangePidRemoteMemory(attr, srcNode, destNode, msg->payloads[i].memSize, msg->payloads[i].ratio);
+        /* Pair planning and V1 persistence both use targetConfig as their source of truth. */
+        ret = MoveProcessRemoteTarget(&attr->targetConfig, msg->payloads[i].srcNid, msg->payloads[i].destNid,
+                                      msg->payloads[i].memSize, msg->payloads[i].ratio);
+        if (ret) {
+            SMAP_LOGGER_WARNING("Pid %d move Pair target %d to %d failed: %d.", attr->pid, msg->payloads[i].srcNid,
+                                msg->payloads[i].destNid, ret);
+        } else {
+            attr->remoteNumaCnt = attr->targetConfig.count;
+        }
     }
     ret = SyncAllProcessConfig();
     if (ret) {

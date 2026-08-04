@@ -171,6 +171,34 @@ TEST_F(ManageTest, TestRemoveProcessRemoteTarget)
     EXPECT_FALSE(RemoveProcessRemoteTarget(&config, 6));
 }
 
+TEST_F(ManageTest, TestMoveProcessRemoteTarget)
+{
+    ProcessTargetConfig ratioConfig = {};
+    ratioConfig.migrateMode = MIG_RATIO_MODE;
+    ratioConfig.count = 2;
+    ratioConfig.targets[0] = {3, 60, 0};
+    ratioConfig.targets[1] = {8, 40, 0};
+
+    EXPECT_EQ(0, MoveProcessRemoteTarget(&ratioConfig, 3, 12, 60, 60));
+    EXPECT_EQ(2U, ratioConfig.count);
+    EXPECT_EQ(12, ratioConfig.targets[0].remoteNid);
+    EXPECT_EQ(60U, ratioConfig.targets[0].ratio);
+    EXPECT_EQ(8, ratioConfig.targets[1].remoteNid);
+
+    ProcessTargetConfig memSizeConfig = {};
+    memSizeConfig.migrateMode = MIG_MEMSIZE_MODE;
+    memSizeConfig.count = 2;
+    memSizeConfig.targets[0] = {3, 0, 8192};
+    memSizeConfig.targets[1] = {12, 0, 4096};
+
+    EXPECT_EQ(0, MoveProcessRemoteTarget(&memSizeConfig, 3, 12, 4096, 0));
+    EXPECT_EQ(2U, memSizeConfig.count);
+    EXPECT_EQ(4096U, memSizeConfig.targets[0].memSizeKB);
+    EXPECT_EQ(8192U, memSizeConfig.targets[1].memSizeKB);
+    EXPECT_EQ(-ERANGE, MoveProcessRemoteTarget(&memSizeConfig, 3, 12, 8192, 0));
+    EXPECT_EQ(-ENOENT, MoveProcessRemoteTarget(&memSizeConfig, 4, 12, 1, 0));
+}
+
 TEST_F(ManageTest, TestUpdateManagedProcessTrackingModeKeepsMigrationConfig)
 {
     ProcessAttr attr = {};
