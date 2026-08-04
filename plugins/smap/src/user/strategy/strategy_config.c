@@ -850,7 +850,7 @@ InitStrategyConfigFileBufferInner(char strategyDefaultConfig[STRATEGY_CONFIG_ENT
         SMAP_LOGGER_ERROR("Strncpy smap scan cpu enable failed.");
         return RETURN_ERROR;
     }
-    const char *scanCpuConfigNote = "// min: min cpu number max: max cpu number\n";
+    const char *scanCpuConfigNote = "// cpu range: left is min cpu number, right is max cpu number\n";
     size_t scanCpuConfigNoteLen = strlen(scanCpuConfigNote);
     ret = strncpy_s(strategyDefaultConfig[numConfigs + 1], STRATEGY_CONFIG_BUFFSIZE, scanCpuConfigNote,
                     scanCpuConfigNoteLen);
@@ -858,7 +858,7 @@ InitStrategyConfigFileBufferInner(char strategyDefaultConfig[STRATEGY_CONFIG_ENT
         SMAP_LOGGER_ERROR("Strncpy smap scan cpu range failed.");
         return RETURN_ERROR;
     }
-    const char *cpuScanRangeStr = "smap.scan.cpu = min-max\n";
+    const char *cpuScanRangeStr = "smap.scan.cpu = 0-0\n";
     size_t cpuScanRangeStrLen = strlen(cpuScanRangeStr);
     ret =
         strncpy_s(strategyDefaultConfig[numConfigs + 2], STRATEGY_CONFIG_BUFFSIZE, cpuScanRangeStr, cpuScanRangeStrLen);
