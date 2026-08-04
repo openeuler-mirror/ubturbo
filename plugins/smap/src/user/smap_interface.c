@@ -290,10 +290,6 @@ static bool CheckMigOutPayloadItems(struct MigrateOutPayload *payload, uint64_t 
             SMAP_LOGGER_ERROR("mig para pid:%d destnode%d invalid.", payload->pid, payload->inner[i].destNid);
             return false;
         }
-        if (IsNodeForbidden(payload->inner[i].destNid)) {
-            SMAP_LOGGER_ERROR("mig para pid:%d destnode%d forbiddened.", payload->pid, payload->inner[i].destNid);
-            return false;
-        }
         if (payload->inner[i].migrateMode < MIG_RATIO_MODE || payload->inner[i].migrateMode > MIG_MEMSIZE_MODE) {
             SMAP_LOGGER_ERROR("[%d] pid: %d migrateMode %d invalid.", i, payload->pid, payload->inner[i].migrateMode);
             return false;
@@ -301,6 +297,12 @@ static bool CheckMigOutPayloadItems(struct MigrateOutPayload *payload, uint64_t 
         if (payload->inner[i].migrateMode != migrateMode) {
             SMAP_LOGGER_ERROR("[%d] pid: %d mixed migrateMode %d and %d.", i, payload->pid, migrateMode,
                               payload->inner[i].migrateMode);
+            return false;
+        }
+        bool targetIsZero = migrateMode == MIG_RATIO_MODE ? payload->inner[i].ratio == 0 :
+                                                            payload->inner[i].memSize == 0;
+        if (IsNodeForbidden(payload->inner[i].destNid) && !targetIsZero) {
+            SMAP_LOGGER_ERROR("mig para pid:%d destnode%d forbiddened.", payload->pid, payload->inner[i].destNid);
             return false;
         }
         if (migrateMode == MIG_RATIO_MODE && !IsRatioValid(payload->inner[i].ratio)) {

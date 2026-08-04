@@ -544,15 +544,15 @@ int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t p
                                              &pidBudgetCnt, true);
     }
     if (!ret) {
+        size_t activeInputCnt = 0;
         for (size_t i = 0; i < inputCnt; i++) {
             if (IsNodeForbidden(inputs[i].remoteNid)) {
-                /*
-		 * A disabled remote cannot receive new pages, but its current
-		 * residency remains available for promotion back to local.
-		 */
-                inputs[i].targetPages = 0;
+                /* A disabled remote is frozen until it is enabled again. */
+                continue;
             }
+            inputs[activeInputCnt++] = inputs[i];
         }
+        inputCnt = activeInputCnt;
     }
     size_t stagedPlanCnt = 0;
     if (!ret) {

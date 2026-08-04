@@ -697,6 +697,31 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgCheckMigrateMode)
     EXPECT_EQ(0, ret);
 }
 
+TEST_F(InterfaceTest, TestCheckMigrateOutMsgAllowsZeroTargetOnDisabledRemote)
+{
+    struct MigrateOutMsg msg = {.count = 1};
+    int pidCount = 0;
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    g_processManager.nr[VM_TYPE] = 1;
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.processes = nullptr;
+    msg.payload[0].count = 1;
+    msg.payload[0].pid = 1234;
+    msg.payload[0].inner[0].destNid = 4;
+    msg.payload[0].inner[0].migrateMode = MIG_MEMSIZE_MODE;
+
+    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
+
+    EXPECT_EQ(0, CheckMigrateOutMsg(&msg, PAGETYPE_HUGE, &pidCount));
+
+    msg.payload[0].inner[0].memSize = KB_PER_2MB;
+    EXPECT_EQ(-EINVAL, CheckMigrateOutMsg(&msg, PAGETYPE_HUGE, &pidCount));
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
 extern "C" int IoctlHandler(const void *msg, int pidType, const unsigned long *ioctlCommands);
 extern "C" int PrepareMigrateOutCandidates(struct MigrateOutMsg *msg, int pidType, ProcessManageCandidate *candidates,
                                            uint32_t *nodeBitmap);
