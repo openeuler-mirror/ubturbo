@@ -67,9 +67,8 @@ EXPORT_SYMBOL(calc_time_us);
 
 void cancel_ap_scan_work(struct access_pid *ap)
 {
-	if (ap && ap->scan_work.work.func) {
+	if (ap && ap->scan_work.work.func)
 		cancel_delayed_work_sync(&ap->scan_work);
-	}
 }
 
 int set_scan_cpus(u32 cpu_start, u32 cpu_end)
@@ -275,6 +274,10 @@ static int access_tracking_disable(struct device *ldev)
 	 */
 	down_write(&ap_data.lock);
 	list_for_each_entry(ap, &ap_data.list, node) {
+		/* completion_done 为 false 表示仍有在排队/在跑的扫描，
+		 * 返回 -EBUSY 让上层重试。disable 期新加的 pid 因
+		 * complete(work_done) 使 completion_done() 返回 true，不会误判 -EBUSY。
+		 */
 		if (!completion_done(&ap->work_done)) {
 			all_complete = false;
 			break;
