@@ -27,7 +27,6 @@
 #include "securec.h"
 #include "device.h"
 #include "access_ioctl.h"
-#include "virt.h"
 #include "advanced-strategy/scene.h"
 #include "smap_config.h"
 #include "strategy/strategy_config.h"
@@ -842,43 +841,93 @@ ProcessAttr *GetProcessAttrLocked(pid_t pid)
     return current;
 }
 
-static int ParseMmapType(int domainId, MmapType *mmapType)
+int ReadCmdlineByPid(pid_t pid, char *buf, int len)
 {
-    int err;
-    char *xml;
-    int retry = 10;
-
-    do {
-        xml = GetXMLByDomainId(domainId);
-    } while (retry-- && !xml);
-    if (!xml) {
-        *mmapType = MMAP_SHARED;
+    char cmdBuf[BUFFER_SIZE];
+    char skip[BUFFER_SIZE];
+    int ret = snprintf_s(cmdBuf, sizeof(cmdBuf), sizeof(cmdBuf) - 1, "%s %d cmdline %s", CAT_SCRIPT_CAT_PATH, pid,
+                         CAT_SCRIPT_TAIL);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("Make pid %d cmdline cmd error.", pid);
         return -EINVAL;
     }
-    if (strstr(xml, MMAP_TYPE_SHARED_SEG1) || strstr(xml, MMAP_TYPE_SHARED_SEG2)) {
-        *mmapType = MMAP_SHARED;
+    FILE *file = popen(cmdBuf, "r");
+    if (file == NULL) {
+        SMAP_LOGGER_ERROR("Open pid %d cmdline error: %d.", pid, errno);
+        return -errno;
     }
-    free(xml);
+    if (fgets(skip, sizeof(skip), file) == NULL) {
+        (void)pclose(file);
+        SMAP_LOGGER_ERROR("Read pid %d cmdline skip-line failed.", pid);
+        return -EIO;
+    }
+    if (fgets(buf, len, file) == NULL) {
+        (void)pclose(file);
+        SMAP_LOGGER_ERROR("Read pid %d cmdline content failed.", pid);
+        return -EIO;
+    }
+    (void)pclose(file);
+    /* /proc/<pid>/cmdline 不受 4096 字节限制: 大虚机参数可能更长。缓冲填满说明被截断,
+     * share 标志可能落在窗口外导致误判 PRIVATE。保守返回错误, 由 ParseMmapType 置 SHARED。 */
+    if (strlen(buf) >= (size_t)len - 1) {
+        SMAP_LOGGER_ERROR("Pid %d cmdline exceeds %d bytes, may be truncated, default mmap_shared.", pid, len);
+        return -E2BIG;
+    }
+    return 0;
+}
+
+/*
+ * libvirt 生成的 QEMU cmdline 旧式为 -object memory-backend-file,...,share=on，
+ * 新式为 JSON -object {"qom-type":"memory-backend-file",...,"share":true}；两者都匹配。
+ * 与 libvirt domain XML 的 memAccess='shared'
+ */
+static int CmdlineHasSharedMem(const char *cmdline, int len)
+{
+    const char *tmp = cmdline;
+    while (tmp != NULL && *tmp != '\0') {
+        if (strstr(tmp, "\"share\":true") != NULL || strstr(tmp, "share=on") != NULL) {
+            return 1;
+        }
+        tmp = strchr(tmp, '\0');
+        if (tmp == NULL || tmp >= cmdline + len) {
+            break;
+        }
+        tmp++;
+    }
+    return 0;
+}
+
+/*
+ * 判定虚机内存映射 SHARED/PRIVATE，替代原 libvirt domain XML 路径。
+ * 读 cmdline 失败时保守置 SHARED(与旧 libvirt no-xml 语义一致：失败倾向单线程迁出)。
+ */
+int ParseMmapType(pid_t pid, MmapType *mmapType)
+{
+    char cmdline[CMDLINE_LEN] = { 0 };
+    int ret = ReadCmdlineByPid(pid, cmdline, sizeof(cmdline));
+    if (ret) {
+        *mmapType = MMAP_SHARED;
+        SMAP_LOGGER_ERROR("Read cmdline of pid %d failed: %d, default mmap_shared.", pid, ret);
+        return -EINVAL;
+    }
+    if (CmdlineHasSharedMem(cmdline, sizeof(cmdline))) {
+        *mmapType = MMAP_SHARED;
+    } else {
+        *mmapType = MMAP_PARIVATE;
+    }
+    SMAP_LOGGER_INFO("Read Mmap type of pid %d: %s.", pid, g_mmapTypeName[*mmapType]);
     return 0;
 }
 
 int VMPreprocess(pid_t pid, ProcessAttr *attr)
 {
-    int ret;
-
-    if (GetPidType(&g_processManager) == VM_TYPE) {
-        ret = ReadDomainIdByPid(pid, &attr->vmPidAttr.domainId);
-        if (ret) {
-            SMAP_LOGGER_ERROR("Read domain id of pid %d error: %d.", pid, ret);
-            return -EINVAL;
-        }
-        SMAP_LOGGER_INFO("Read domain id of pid %d: %d.", pid, attr->vmPidAttr.domainId);
-        ret = ParseMmapType(attr->vmPidAttr.domainId, &attr->vmPidAttr.mmapType);
-        if (ret) {
-            SMAP_LOGGER_ERROR("Parse mmap type of pid %d failed.", pid);
-            return 0;
-        }
-        SMAP_LOGGER_INFO("Read Mmap type of pid %d: %s.", pid, g_mmapTypeName[attr->vmPidAttr.mmapType]);
+    if (GetPidType(&g_processManager) != VM_TYPE) {
+        return 0;
+    }
+    int ret = ParseMmapType(pid, &attr->vmPidAttr.mmapType);
+    if (ret) {
+        SMAP_LOGGER_ERROR("Parse mmap type of pid %d failed.", pid);
+        return 0;
     }
     return 0;
 }
