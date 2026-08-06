@@ -460,6 +460,63 @@ TEST_F(DriversAccessPidTest, AccessAddPid)
     EXPECT_EQ(0, ret);
 }
 
+/* 扫描模块未 enable（disable/migrate 期间）时，add_pid 不应立即提交扫描任务，
+ * pid 仅入 ap_data.list 等下次 enable 由 submit_scan_works 拉起。 */
+int ap_data_len();
+TEST_F(DriversAccessPidTest, AccessAddPidScanDisabledNoSubmit)
+{
+    int ret;
+    struct access_pid ap;
+    struct access_pid *tmp;
+    struct access_tracking_dev adev = {};
+    struct access_add_pid_payload payload = {0};
+
+    ap.pid = 1;
+    tmp = &ap;
+
+    INIT_LIST_HEAD(&ap_data.list);
+    INIT_LIST_HEAD(&access_dev);
+    adev.enable_on = false;
+    list_add(&adev.list, &access_dev);
+
+    MOCKER(init_access_pid).stubs().with(&payload, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
+    MOCKER(submit_one_work).expects(never());
+    ret = access_add_pid(1, &payload);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, ap_data_len());
+
+    GlobalMockObject::verify();
+    list_del(&adev.list);
+    list_del(&ap.node);
+}
+
+/* disable 时，disable 期新加的 pid 因 complete(work_done) 使
+ * completion_done() 返回 true，不会误判 -EBUSY，disable 成功。 */
+extern "C" int access_tracking_disable(struct device *ldev);
+TEST_F(DriversAccessPidTest, AccessDisableSkipsUnsubmittedPid)
+{
+    int ret;
+    struct access_tracking_dev adev = {};
+    struct access_pid ap = {};
+
+    INIT_LIST_HEAD(&ap_data.list);
+    INIT_LIST_HEAD(&access_dev);
+    list_add(&adev.list, &access_dev);
+    adev.enable_on = true;
+
+    ap.pid = 1;
+    init_completion(&ap.work_done);
+    ap.work_done.done = 1; /* 模拟 disable 期新加 pid 的 complete */
+    list_add(&ap.node, &ap_data.list);
+
+    ret = access_tracking_disable(&adev.ldev);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(false, adev.enable_on);
+
+    list_del(&ap.node);
+    list_del(&adev.list);
+}
+
 /* 扫描模块已 enable 时，add_pid 立即提交扫描任务。 */
 TEST_F(DriversAccessPidTest, AccessAddPidScanEnabledSubmits)
 {

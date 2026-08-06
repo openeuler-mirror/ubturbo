@@ -965,19 +965,18 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 	}
 	/* move all new pids to ap_data.list */
 	list_for_each_entry_safe(ap, tmp, tmp_head, node) {
-		/*
-		 * A new pid may be attached during scan period or migrate period,
-		 * For performance reasons,
-		 * set cur_times to zero directly to ensure a complete scan can be performed.
-		 *
-		 * Only submit the scan work when the tracking module is enabled; otherwise
-		 * (disable/migrate window) leave it parked in ap_data.list so that
-		 * submit_scan_works picks it up at the next enable. This avoids a scan
-		 * cycle running concurrently with migrate, whose prepare() reallocates
-		 * paddr_bm while convert_pos_to_paddr_sorted() reads it.
-		 */
 		ap->cur_times = 0;
-		submit_one_work(ap);
+		if (access_scan_enabled()) {
+			submit_one_work(ap);
+		} else {
+			/* Disable/migrate 窗口内新加的 pid 不提交扫描，留在
+			 * ap_data.list 等下次 enable 由 submit_scan_works 拉起，
+			 * 避免扫描与 migrate 的 paddr_bm 重分配竞态。
+			 * 同时 complete(work_done) 使 completion_done() 返回
+			 * true，避免 disable 误判 -EBUSY。
+			 */
+			complete(&ap->work_done);
+		}
 		list_move_tail(&ap->node, &ap_data.list);
 	}
 	up_write(&ap_data.lock);
