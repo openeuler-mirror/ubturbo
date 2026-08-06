@@ -775,7 +775,7 @@ static int ConfigReadReadFile(const char *filepath)
         }
         ret = ConfigReadByLine(fp, buf, STRATEGY_CONFIG_BUFFSIZE);
         if (ret == STRATEGY_CONFIG_READ_OVER) {
-            SMAP_LOGGER_INFO("Read config over.");
+            SMAP_LOGGER_DEBUG("Read config over.");
             ret = RETURN_OK;
             break;
         } else if (ret == RETURN_ERROR) {

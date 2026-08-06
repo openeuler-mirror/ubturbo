@@ -14,6 +14,9 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/rwsem.h>
+extern "C" {
+#include <linux/delay.h>
+}
 
 #include "access_iomem.h"
 #include "ub_hist.h"
@@ -1174,3 +1177,170 @@ TEST_F(HistOpsTest, pick_one_seg_seq_loop_no_wrap)
     EXPECT_EQ(1, offset_val);
 }
 
+extern "C" int ub_watch_config(uint32_t duration_ms);
+extern "C" int ub_watch(struct ub_flux_mb *result);
+extern "C" void ub_watch_dwork_func(struct work_struct *work);
+extern "C" bool queue_delayed_work(struct workqueue_struct *wq,
+                                   struct delayed_work *dwork, unsigned long delay);
+extern "C" bool cancel_delayed_work_sync(struct delayed_work *dwork);
+extern "C" unsigned int ub_watch_perf_prd_ms;
+extern "C" unsigned int ub_watch_sample_interval_ms;
+
+TEST_F(HistOpsTest, ub_watch_config_normal)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->measure_state = MEASURE_NOT_STARTED;
+    ub_watch_perf_prd_ms = 200;
+    ub_watch_sample_interval_ms = 1000;
+
+    MOCKER(cancel_delayed_work_sync).stubs().will(returnValue(false));
+    MOCKER(queue_delayed_work).stubs().will(returnValue(true));
+    int ret = ub_watch_config(2000);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(2000, dev->ub_watch_duration_ms);
+    EXPECT_EQ(200, dev->ub_watch_perf_prd_ms);
+    EXPECT_EQ(1000, dev->ub_watch_sample_interval_ms);
+}
+
+TEST_F(HistOpsTest, ub_watch_config_interrupt_in_progress)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->measure_state = MEASURE_IN_PROGRESS;
+    ub_watch_perf_prd_ms = 200;
+    ub_watch_sample_interval_ms = 1000;
+
+    MOCKER(cancel_delayed_work_sync).stubs().will(returnValue(false));
+    MOCKER(queue_delayed_work).stubs().will(returnValue(true));
+    int ret = ub_watch_config(3000);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(MEASURE_NOT_STARTED, dev->measure_state);
+    EXPECT_EQ(3000, dev->ub_watch_duration_ms);
+}
+
+TEST_F(HistOpsTest, ub_watch_config_clamp_to_duration)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->measure_state = MEASURE_NOT_STARTED;
+    ub_watch_perf_prd_ms = 5000;
+    ub_watch_sample_interval_ms = 10000;
+
+    MOCKER(cancel_delayed_work_sync).stubs().will(returnValue(false));
+    MOCKER(queue_delayed_work).stubs().will(returnValue(true));
+    int ret = ub_watch_config(1000);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1000, dev->ub_watch_perf_prd_ms);
+    EXPECT_EQ(1000, dev->ub_watch_sample_interval_ms);
+}
+
+TEST_F(HistOpsTest, ub_watch_query_not_started)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->measure_state = MEASURE_NOT_STARTED;
+
+    struct ub_flux_mb result;
+    int ret = ub_watch(&result);
+    EXPECT_EQ(-ENODATA, ret);
+}
+
+TEST_F(HistOpsTest, ub_watch_query_null_result)
+{
+    int ret = ub_watch(nullptr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(HistOpsTest, ub_watch_query_in_progress_returns_intermediate)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->measure_state = MEASURE_IN_PROGRESS;
+    dev->ub_watch_perf_prd_ms = 200;
+    /* avg_flux=163840 → 163840*64/1048576=10, 10*1000/200=50 MB/s */
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        dev->ub_watch_avg_flux_rd[i] = 163840;
+        dev->ub_watch_avg_flux_wr[i] = 81920;
+    }
+
+    struct ub_flux_mb result;
+    int ret = ub_watch(&result);
+    EXPECT_EQ(0, ret);
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        EXPECT_EQ(50, result.read[i]);
+        EXPECT_EQ(25, result.write[i]);
+    }
+}
+
+TEST_F(HistOpsTest, ub_watch_query_completed_returns_final)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->measure_state = MEASURE_COMPLETED;
+    dev->ub_watch_perf_prd_ms = 100;
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        dev->ub_watch_avg_flux_rd[i] = 1048576;
+        dev->ub_watch_avg_flux_wr[i] = 0;
+    }
+
+    struct ub_flux_mb result;
+    int ret = ub_watch(&result);
+    EXPECT_EQ(0, ret);
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        EXPECT_EQ(640, result.read[i]);
+        EXPECT_EQ(0, result.write[i]);
+    }
+}
+
+TEST_F(HistOpsTest, ub_watch_dwork_func_interrupted)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->ub_watch_duration_ms = 1000;
+    dev->ub_watch_perf_prd_ms = 200;
+    dev->ub_watch_sample_interval_ms = 500;
+    dev->measure_state = MEASURE_NOT_STARTED;
+
+    /* Simulate interruption: perf_check returns false for all windows,
+     * which causes all windows to be skipped (similar to interruption) */
+    MOCKER(ub_hist_mar_perf_en).stubs().will(ignoreReturnValue());
+    MOCKER(msleep).stubs().will(ignoreReturnValue());
+    MOCKER(ub_hist_mar_perf_check).stubs().will(returnValue(false));
+
+    ub_watch_dwork_func(nullptr);
+    EXPECT_EQ(MEASURE_COMPLETED, dev->measure_state);
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        EXPECT_EQ(0, dev->ub_watch_avg_flux_rd[i]);
+    }
+}
+
+TEST_F(HistOpsTest, ub_watch_dwork_func_all_windows_invalid)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->ub_watch_duration_ms = 1000;
+    dev->ub_watch_perf_prd_ms = 200;
+    dev->ub_watch_sample_interval_ms = 500;
+    dev->measure_state = MEASURE_IN_PROGRESS;
+
+    MOCKER(ub_hist_mar_perf_en).stubs().will(ignoreReturnValue());
+    MOCKER(msleep).stubs().will(ignoreReturnValue());
+    MOCKER(ub_hist_mar_perf_check).stubs().will(returnValue(false));
+
+    ub_watch_dwork_func(nullptr);
+    EXPECT_EQ(MEASURE_COMPLETED, dev->measure_state);
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        EXPECT_EQ(0, dev->ub_watch_avg_flux_rd[i]);
+        EXPECT_EQ(0, dev->ub_watch_avg_flux_wr[i]);
+    }
+}
+
+TEST_F(HistOpsTest, ub_watch_dwork_func_normal_completion)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->ub_watch_duration_ms = 1000;
+    dev->ub_watch_perf_prd_ms = 200;
+    dev->ub_watch_sample_interval_ms = 500;
+    dev->measure_state = MEASURE_IN_PROGRESS;
+
+    MOCKER(ub_hist_mar_perf_en).stubs().will(ignoreReturnValue());
+    MOCKER(msleep).stubs().will(ignoreReturnValue());
+    MOCKER(ub_hist_mar_perf_check).stubs().will(returnValue(true));
+    MOCKER(ub_hist_get_access_count).stubs().will(ignoreReturnValue());
+
+    ub_watch_dwork_func(nullptr);
+    EXPECT_EQ(MEASURE_COMPLETED, dev->measure_state);
+}
