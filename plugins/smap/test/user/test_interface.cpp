@@ -238,21 +238,6 @@ TEST_F(InterfaceTest, TestIsRatioValidThree)
     EXPECT_EQ(false, ret);
 }
 
-extern "C" int InitVirAPI(void);
-TEST_F(InterfaceTest, TestInitVirAPI)
-{
-    int ret;
-    MOCKER(OpenVirHandler).stubs().will(returnValue(-1));
-    MOCKER(CloseVirHandler).stubs().will(returnValue(0));
-    ret = InitVirAPI();
-    EXPECT_EQ(-9, ret);
-
-    GlobalMockObject::verify();
-    MOCKER(OpenVirHandler).stubs().will(returnValue(0));
-    ret = InitVirAPI();
-    EXPECT_EQ(0, ret);
-}
-
 TEST_F(InterfaceTest, TestInitAllThreads)
 {
     int ret;
@@ -1771,23 +1756,6 @@ TEST_F(InterfaceTest, TestSmapInitWithAccessIoctlRemoveAllPidFailed)
     MOCKER(DestroyProcessManager).stubs().will(ignoreReturnValue());
     MOCKER(InitTrackingDev).stubs().will(returnValue(0));
     MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(-EINVAL));
-    MOCKER(CreateProcfs).stubs().will(returnValue(0));
-    MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
-    int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
-TEST_F(InterfaceTest, TestSmapInitWithInitVirAPIFailed)
-{
-    EnvAtomicSet(&g_status, 0);
-    MOCKER(InitLog).stubs().will(returnValue(0));
-    MOCKER(CheckPidtype).stubs().will(returnValue(0));
-    MOCKER(ProcessManagerInit).stubs().will(returnValue(0));
-    MOCKER(DestroyProcessManager).stubs().will(ignoreReturnValue());
-    MOCKER(InitTrackingDev).stubs().will(returnValue(0));
-    MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(0));
-    MOCKER(IsHugeMode).stubs().will(returnValue(true));
-    MOCKER(InitVirAPI).stubs().will(returnValue(-EINVAL));
     MOCKER(CreateProcfs).stubs().will(returnValue(0));
     MOCKER(DeinitTrackingDev).stubs().will(ignoreReturnValue());
     int ret = ubturbo_smap_start(PAGETYPE_NORMAL, nullptr);

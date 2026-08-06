@@ -12,7 +12,6 @@
 #ifndef __MANAGE_H__
 #define __MANAGE_H__
 
-#include "virt.h"
 #include "smap_env.h"
 #include "numa_nodes.h"
 #include "advanced-strategy/scene_info.h"
@@ -62,8 +61,6 @@
 #define NUMAMAP_HUGE_2M_SUBSTR "kernelpagesize_kB=2048"
 
 #define MMAP_TYPE_STRING_LEN 20
-#define MMAP_TYPE_SHARED_SEG1 "memAccess='shared'"
-#define MMAP_TYPE_SHARED_SEG2 "access mode='shared'"
 
 #define STRATEGY_CONFIG_PATH "/opt/ubturbo/conf/smap/period.config"
 #define DEFAULT_NMEMB 1
@@ -352,7 +349,6 @@ typedef struct {
 } ScanAttribute;
 
 typedef struct {
-    int domainId; // 虚机pid使用
     MmapType mmapType; // 内存映射模式SHARED/PRIVATE
 } VMPidAttribute;
 
@@ -571,6 +567,8 @@ uint32_t GetHugePageSize(void);
 uint32_t GetPageSize(void);
 
 ProcessAttr *GetProcessAttr(pid_t pid);
+
+int ReadCmdlineByPid(pid_t pid, char *buf, int len);
 
 int VMPreprocess(pid_t pid, ProcessAttr *attr);
 

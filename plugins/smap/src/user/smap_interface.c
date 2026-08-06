@@ -33,7 +33,6 @@
 #include "manage/thread.h"
 #include "manage/access_ioctl.h"
 #include "manage/smap_ioctl.h"
-#include "manage/virt.h"
 #include "manage/smap_config.h"
 #include "strategy/migration.h"
 #include "strategy/strategy_config.h"
@@ -222,18 +221,6 @@ static bool IsPidArrValid(pid_t *pidArr, int len, bool ignoreUnmanaged)
         }
     }
     return true;
-}
-
-static int InitVirAPI(void)
-{
-    int ret;
-    ret = OpenVirHandler();
-    if (ret) {
-        CloseVirHandler();
-        SMAP_LOGGER_ERROR("open virsh handler error: %d.", ret);
-        return -EBADF;
-    }
-    return ret;
 }
 
 static int InitAllThreads(struct ProcessManager *manager)
@@ -1925,33 +1912,23 @@ int ubturbo_smap_start(uint32_t pageType, Logfunc extlog)
         goto EXIT_DEV;
     }
 
-    if (IsHugeMode()) {
-        ret = InitVirAPI();
-        if (ret) {
-            SMAP_LOGGER_ERROR("Get libvirt API failed, ret = %d.", ret);
-            goto EXIT_DEV;
-        }
-    }
-
     // Recover only after manager->nrLocalNuma has been set and kernel's pid has been all removed
     ret = Recover();
     if (ret) {
         SMAP_LOGGER_ERROR("Recover config failed: %d.", ret);
         ret = -EBADF;
-        goto EXIT_VIR;
+        goto EXIT_DEV;
     }
     SMAP_LOGGER_INFO("Recover config done.");
 
     ret = InitAllThreads(manager);
     if (ret) {
         SMAP_LOGGER_ERROR("Smap init threads failed, ret = %d.", ret);
-        goto EXIT_VIR;
+        goto EXIT_DEV;
     }
     SMAP_LOGGER_INFO("Smap init success.");
     return ret;
 
-EXIT_VIR:
-    CloseVirHandler();
 EXIT_DEV:
     DeinitTrackingDev(manager);
     DestroyProcessManager();
@@ -1975,10 +1952,6 @@ int ubturbo_smap_stop(void)
     DestroyAllThread(manager);
     EnvMutexUnlock(&manager->threadLock);
     SMAP_LOGGER_INFO("All threads destroyed.");
-    if (IsHugeMode()) {
-        CloseVirHandler();
-        SMAP_LOGGER_INFO("Libvirt handler closed.");
-    }
 
     RemoveAllManagedProcess();
     SMAP_LOGGER_INFO("All managed processes removed.");

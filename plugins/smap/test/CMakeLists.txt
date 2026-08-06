@@ -129,7 +129,6 @@ list(APPEND TEST_SRC ${SMAP_SRC}/src/user/user_log/smap_user_log/smap_user_log.c
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/user_log/smap_log_core.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/access_ioctl.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/oom_migrate.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/virt.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/smap_config.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/strategy_config.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/migration.c)

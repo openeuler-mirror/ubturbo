@@ -17,7 +17,6 @@ BuildRequires: patchelf
 BuildRequires: libboundscheck
 BuildRequires: rapidjson
 BuildRequires: ninja-build
-BuildRequires: libvirt-devel
 
 %define debug_package %{nil}
 %define ubturbo_dir /opt/ubturbo

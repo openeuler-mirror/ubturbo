@@ -923,92 +923,93 @@ TEST_F(ManageTest, TestGetProcessAttrLocked)
     g_processManager.processes = nullptr;
 }
 
-extern "C" int ParseMmapType(int domainId, MmapType *mmapType);
+extern "C" int ParseMmapType(pid_t pid, MmapType *mmapType);
+extern "C" int ReadCmdlineByPid(pid_t pid, char *buf, int len);
+
+/* cmdline 无 share 字段(非 shared 虚机)：各参数以 \0 分隔 */
+static const char CMD_PRIVATE[] =
+    "qemu-system-aarch64\0-name guest=vm1\0-object memory-backend-file,id=ram0,size=2G,mem-path=/dev/hugepages\0";
+/* cmdline 含 JSON 形式 \"share\":true(shared 虚机) */
+static const char CMD_SHARED[] =
+    "qemu-system-aarch64\0-name guest=vm1\0-object {\"qom-type\":\"memory-backend-file\",\"share\":true}\0";
+
+static int MockReadCmdlinePrivate(pid_t pid, char *buf, int len)
+{
+    (void)pid;
+    return memcpy_s(buf, len, CMD_PRIVATE, sizeof(CMD_PRIVATE) - 1) == EOK ? 0 : -EINVAL;
+}
+
+static int MockReadCmdlineShared(pid_t pid, char *buf, int len)
+{
+    (void)pid;
+    return memcpy_s(buf, len, CMD_SHARED, sizeof(CMD_SHARED) - 1) == EOK ? 0 : -EINVAL;
+}
+
+static int MockReadCmdlineFail(pid_t pid, char *buf, int len)
+{
+    (void)pid;
+    (void)buf;
+    (void)len;
+    return -EIO;
+}
+
 TEST_F(ManageTest, TestParseMmapTypeFailed)
 {
-    int domainId = 0;
-    MmapType mmapType;
-    int ret;
-
-    MOCKER(GetXMLByDomainId).stubs().will(returnValue((char *)nullptr));
-    ret = ParseMmapType(domainId, &mmapType);
-
+    MmapType mmapType = (MmapType)0;
+    MOCKER(ReadCmdlineByPid).stubs().will(invoke(MockReadCmdlineFail));
+    int ret = ParseMmapType(1, &mmapType);
     EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ(MMAP_SHARED, mmapType); /* 读失败保守置 SHARED */
 }
 
 TEST_F(ManageTest, TestParseMmapTypePrivate)
 {
-    int domainId = 0;
     MmapType mmapType = (MmapType)0;
-    char rawXml[] = "memAccess='private'";
-    int length = strlen(rawXml) + 1;
-    char *xml = (char *)malloc(length);
-    int ret;
-
-    memcpy_s(xml, length, rawXml, length);
-
-    MOCKER(GetXMLByDomainId).stubs().will(returnValue(xml));
-
-    ret = ParseMmapType(domainId, &mmapType);
+    MOCKER(ReadCmdlineByPid).stubs().will(invoke(MockReadCmdlinePrivate));
+    int ret = ParseMmapType(1, &mmapType);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(0, mmapType);
+    EXPECT_EQ(MMAP_PARIVATE, mmapType);
 }
 
 TEST_F(ManageTest, TestParseMmapTypeShared)
 {
-    int domainId = 0;
-    MmapType mmapType;
-    char rawXml[] = "memAccess='shared'";
-    int length = strlen(rawXml) + 1;
-    char *xml = (char *)malloc(length);
-    int ret;
-
-    memcpy_s(xml, length, rawXml, length);
-
-    MOCKER(GetXMLByDomainId).stubs().will(returnValue(xml));
-
-    ret = ParseMmapType(domainId, &mmapType);
+    MmapType mmapType = (MmapType)0;
+    MOCKER(ReadCmdlineByPid).stubs().will(invoke(MockReadCmdlineShared));
+    int ret = ParseMmapType(1, &mmapType);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(1, mmapType);
+    EXPECT_EQ(MMAP_SHARED, mmapType);
 }
 
 extern "C" int VMPreprocess(pid_t pid, ProcessAttr *attr);
 TEST_F(ManageTest, TestVMProcessNormal)
 {
-    pid_t pid;
-    ProcessAttr attr;
+    pid_t pid = 1;
+    ProcessAttr attr = {};
     int ret;
 
+    /* 非 VM_TYPE，直接返回 0 */
     MOCKER(GetPidType).stubs().will(returnValue(0));
+    ret = VMPreprocess(pid, &attr);
+    EXPECT_EQ(0, ret);
 
+    GlobalMockObject::verify();
+    /* VM_TYPE，ParseMmapType 成功 */
+    MOCKER(GetPidType).stubs().will(returnValue(1));
+    MOCKER(ParseMmapType).stubs().will(returnValue(0));
     ret = VMPreprocess(pid, &attr);
     EXPECT_EQ(0, ret);
 }
 
-TEST_F(ManageTest, TestVMProcessReadDomainIdFailed)
-{
-    pid_t pid;
-    ProcessAttr attr;
-    int ret;
-
-    g_processManager.tracking.pageSize = PAGESIZE_2M;
-    MOCKER(ReadDomainIdByPid).stubs().will(returnValue(-1));
-
-    ret = VMPreprocess(pid, &attr);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
 TEST_F(ManageTest, TestVMProcessParseMmapTypeFailed)
 {
-    pid_t pid;
-    ProcessAttr attr;
-    int ret;
+    pid_t pid = 1;
+    ProcessAttr attr = {};
 
-    MOCKER(IsQemuTask).stubs().will(returnValue(1));
-    MOCKER(ReadDomainIdByPid).stubs().will(returnValue(0));
+    /* VM_TYPE 但 ParseMmapType 失败，仍返回 0（保守策略） */
+    MOCKER(GetPidType).stubs().will(returnValue(1));
     MOCKER(ParseMmapType).stubs().will(returnValue(-EINVAL));
 
-    ret = VMPreprocess(pid, &attr);
+    int ret = VMPreprocess(pid, &attr);
     EXPECT_EQ(0, ret);
 }
 
