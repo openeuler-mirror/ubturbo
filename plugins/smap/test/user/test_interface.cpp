@@ -4420,6 +4420,7 @@ TEST_F(InterfaceTest, TestIsAutoRemoveCandidateEligible)
     attr.syncWaitRemoteEmpty = false;
     attr.groupPolicy.enabled = false;
     attr.scanType = NORMAL_SCAN;
+    attr.walkPage.nrPage = 100;
     bool ret = IsAutoRemoveCandidate(&attr);
     EXPECT_EQ(true, ret);
 }
