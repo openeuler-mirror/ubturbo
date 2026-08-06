@@ -1365,6 +1365,8 @@ static void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *
     attr->numaAttr = candidate->numaAttr;
     attr->managedLocalState = candidate->managedLocalState;
     attr->strategyAttr = candidate->strategyAttr;
+    attr->isFirstScan = candidate->isFirstScan;
+    attr->scanTime = candidate->scanTime;
     for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
         attr->migrateParam[i] = candidate->migrateParam[i];
     }
@@ -1607,6 +1609,16 @@ void DiscardProcessManageCandidate(ProcessManageCandidate *candidate)
     *candidate = (ProcessManageCandidate){ 0 };
 }
 
+/* Sum the configured migrate memSize (KB) of an already-managed pid. */
+static uint64_t SumAttrMigrateMemSize(const ProcessAttr *attr)
+{
+    uint64_t total = 0;
+    for (int i = 0; i < attr->remoteNumaCnt; i++) {
+        total += attr->migrateParam[i].memSize;
+    }
+    return total;
+}
+
 int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate)
 {
     if (!param || !candidate) {
@@ -1660,10 +1672,28 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
     candidate->prepared = prepared;
     candidate->isNew = active == NULL;
     candidate->isPending = active && active->state == PROC_MIGRATE;
+    /* memSize 增大时重置 isFirstScan，使下一轮高频扫描快速迁移新增需求 */
+    uint64_t oldMemSize = active ? SumAttrMigrateMemSize(active) : 0;
     ret = ConfigureMigrationTargetsWithCapacityPolicy(prepared, &config, param->ignoreRemoteCapacity);
     if (ret) {
         DiscardProcessManageCandidate(candidate);
         return ret;
+    }
+    if (active && !IsHugeMode()) {
+        uint64_t newMemSize = SumAttrMigrateMemSize(prepared);
+        if (newMemSize > oldMemSize) {
+            /* memSize 增大时直接设置扫描周期为 DEFAULT_SCAN_PERIOD 立即生效，
+             * 同时置 isFirstScan 防止正常扫描周期更新逻辑立即重置。
+             * 设到 prepared 上，由 TrackMigrateOutCandidates 读取
+             * prepared->scanTime 下发内核态，再由 PublishProcessTargetCandidate
+             * 传播到 active。
+             * 仅 4K 场景生效：2M 虚机场景扫描周期由内核态管理，无需用户态重置。
+             */
+            prepared->isFirstScan = true;
+            prepared->scanTime = DEFAULT_SCAN_PERIOD;
+            SMAP_LOGGER_INFO("pid %d memSize increased %lu->%lu, reset scan period to %ums.", prepared->pid, oldMemSize,
+                             newMemSize, DEFAULT_SCAN_PERIOD);
+        }
     }
     if (candidate->isNew) {
         prepared->scanTime = DEFAULT_SCAN_PERIOD;
@@ -2015,6 +2045,16 @@ int SetProcessLocalNuma(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag)
     }
     *nodeBitmap |= observedLocalMask;
     return 0;
+}
+
+/* Sum the migrate memSize (KB) carried by a new migrate-out request. */
+static uint64_t SumParamMigrateMemSize(const ProcessParam *param)
+{
+    uint64_t total = 0;
+    for (int i = 0; i < param->count; i++) {
+        total += param->numaParam[i].memSize;
+    }
+    return total;
 }
 
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
