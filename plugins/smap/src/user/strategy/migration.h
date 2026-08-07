@@ -42,7 +42,6 @@ int BuildPairPlans(const PairPlan inputs[], size_t inputCnt, PairPlanContext *co
                    size_t pidBudgetCnt, PairPlan plans[], size_t planCap, size_t *planCnt);
 int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCnt, PairPlanContext *context,
                        PairPidBudget pidBudgets[], size_t pidBudgetCnt);
-int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt);
-int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt, bool migrateOnly);
+int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt);
 int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt);
 #endif /* __MIGRATION_H__ */

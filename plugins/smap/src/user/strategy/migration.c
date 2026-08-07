@@ -211,6 +211,32 @@ static uint64_t CountPairSwapPages(const ProcessAttr *process, int localNid, int
     return swappable;
 }
 
+static uint64_t CalcPairRemoteGuaranteeExtraSwap(const ProcessAttr *process, const PairPlan *plan,
+                                                 uint64_t localSelected, uint64_t remoteSelected,
+                                                 uint64_t baseSwapPages, uint64_t remainingSwapBudget)
+{
+    if (!process->scanAttr.actcData[plan->localNid] || !process->scanAttr.actcData[plan->remoteNid] ||
+        process->scanAttr.actcLen[plan->localNid] == 0 || process->scanAttr.actcLen[plan->remoteNid] == 0) {
+        return 0;
+    }
+
+    uint64_t localAfterBase = localSelected + baseSwapPages;
+    uint64_t remoteAfterBase = remoteSelected + baseSwapPages;
+    uint64_t remoteGuarantee = process->scanAttr.actCount[plan->remoteNid].remoteHotNum;
+    if (remoteAfterBase >= remoteGuarantee) {
+        return 0;
+    }
+
+    uint64_t localRemaining = process->scanAttr.actcLen[plan->localNid] > localAfterBase ?
+                                  process->scanAttr.actcLen[plan->localNid] - localAfterBase :
+                                  0;
+    uint64_t remoteRemaining = process->scanAttr.actcLen[plan->remoteNid] > remoteAfterBase ?
+                                   process->scanAttr.actcLen[plan->remoteNid] - remoteAfterBase :
+                                   0;
+    uint64_t missingHotPages = remoteGuarantee - remoteAfterBase;
+    return MIN(MIN(missingHotPages, localRemaining), MIN(remoteRemaining, remainingSwapBudget));
+}
+
 static bool IsOnlyLocalForRemote(const PairPlan plans[], size_t planCnt, size_t current)
 {
     const PairPlan *plan = &plans[current];
@@ -270,9 +296,7 @@ int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t 
                 }
             }
         }
-        /* Capacity convergence has priority over the optional hot/cold swap. */
-        if (plan->targetPages != plan->actualPages || !process->enableSwap || IsNodeForbidden(plan->remoteNid) ||
-            !IsOnlyLocalForRemote(plans, planCnt, i) ||
+        if (!process->enableSwap || IsNodeForbidden(plan->remoteNid) || !IsOnlyLocalForRemote(plans, planCnt, i) ||
             (plan->targetPages == 0 && plan->demotePages == 0 && plan->promotePages == 0)) {
             continue;
         }
@@ -284,11 +308,18 @@ int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t 
                                  safeCapacity - context->plannedPages[plan->localNid] :
                                  0;
         uint64_t pidRemaining = budget->maxMigratePages - budget->plannedPages;
+        uint64_t swapLimit = MIN(MIN(localFree, pidRemaining / 2), UINT32_MAX);
         uint64_t swapPages = CountPairSwapPages(process, plan->localNid, plan->remoteNid, selectedFrom[plan->localNid],
                                                 selectedFrom[plan->remoteNid]);
-        swapPages = MIN(swapPages, localFree);
-        swapPages = MIN(swapPages, pidRemaining / 2);
-        swapPages = MIN(swapPages, UINT32_MAX);
+        swapPages = MIN(swapPages, swapLimit);
+        uint64_t extraSwapPages = CalcPairRemoteGuaranteeExtraSwap(process, plan, selectedFrom[plan->localNid],
+                                                                   selectedFrom[plan->remoteNid], swapPages,
+                                                                   swapLimit - swapPages);
+        swapPages += extraSwapPages;
+        if (extraSwapPages > 0) {
+            SMAP_LOGGER_DEBUG("Pid %d pair %d-%d adds %llu swap pages for remote hot guarantee.", process->pid,
+                              plan->localNid, plan->remoteNid, extraSwapPages);
+        }
         plan->swapPages = (uint32_t)swapPages;
         selectedFrom[plan->localNid] += swapPages;
         selectedFrom[plan->remoteNid] += swapPages;
@@ -441,7 +472,7 @@ static PairPlanMatrixStage *FindPairPlanMatrixStage(PairPlanMatrixStage stages[]
     return NULL;
 }
 
-int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt, bool migrateOnly)
+int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt)
 {
     if (!manager || planCnt > MAX_PAIR_TARGET_COUNT || (planCnt > 0 && !plans)) {
         return -EINVAL;
@@ -460,8 +491,7 @@ int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[
         goto OUT;
     }
     for (ProcessAttr *process = manager->processes; process; process = process->next) {
-        if (process->scanType != NORMAL_SCAN || process->groupPolicy.enabled ||
-            (migrateOnly && process->state != PROC_MIGRATE)) {
+        if (process->scanType != NORMAL_SCAN || process->groupPolicy.enabled || process->state != PROC_MIGRATE) {
             continue;
         }
         if (stageCnt == MAX_4K_PROCESSES_CNT) {
@@ -504,11 +534,6 @@ OUT:
     EnvMutexUnlock(&manager->lock);
     free(stages);
     return ret;
-}
-
-int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt)
-{
-    return ApplyPairPlansForState(manager, plans, planCnt, false);
 }
 
 int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt)
@@ -563,7 +588,7 @@ int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t p
         ret = BuildPairSwapPlans(manager, stagedPlans, stagedPlanCnt, &context, pidBudgets, pidBudgetCnt);
     }
     if (!ret) {
-        ret = ApplyPairPlansForState(manager, stagedPlans, stagedPlanCnt, true);
+        ret = ApplyPairPlansForState(manager, stagedPlans, stagedPlanCnt);
     }
     if (!ret) {
         if (stagedPlanCnt > 0) {
@@ -644,32 +669,25 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
     }
 
     uint64_t nrMigTotal = 0;
-    int nrLocalNuma = GetNrLocalNuma();
-    for (int phase = 0; phase < 2; phase++) {
-        for (int from = 0; from < MAX_NODES; from++) {
-            bool promote = from >= nrLocalNuma;
-            if ((phase == 0) != promote) {
+    for (int from = 0; from < MAX_NODES; from++) {
+        for (int to = 0; to < MAX_NODES; to++) {
+            if (!migList[from][to].nr) {
                 continue;
             }
-            for (int to = 0; to < MAX_NODES; to++) {
-                if (!migList[from][to].nr) {
-                    continue;
-                }
-                ret = AddMigList(mMsg, &migList[from][to]);
-                if (ret == -ENOSPC) {
-                    SMAP_LOGGER_WARNING("Pid %d migration list is deferred by kernel entry limit.", process->pid);
-                    FreeMigList(migList);
-                    *migratePage += nrMigTotal;
-                    return 0;
-                }
-                if (ret) {
-                    SMAP_LOGGER_ERROR("Pid %d AddMigList %d %d failed: %d.", process->pid, from, to, ret);
-                    FreeMigList(migList);
-                    return ret;
-                }
-                nrMigTotal += migList[from][to].nr;
-                SMAP_LOGGER_INFO("Numa %d --> Numa %d, mig %d pages.", from, to, migList[from][to].nr);
+            ret = AddMigList(mMsg, &migList[from][to]);
+            if (ret == -ENOSPC) {
+                SMAP_LOGGER_WARNING("Pid %d migration list is deferred by kernel entry limit.", process->pid);
+                FreeMigList(migList);
+                *migratePage += nrMigTotal;
+                return 0;
             }
+            if (ret) {
+                SMAP_LOGGER_ERROR("Pid %d AddMigList %d %d failed: %d.", process->pid, from, to, ret);
+                FreeMigList(migList);
+                return ret;
+            }
+            nrMigTotal += migList[from][to].nr;
+            SMAP_LOGGER_INFO("Numa %d --> Numa %d, mig %d pages.", from, to, migList[from][to].nr);
         }
     }
     FreeMigList(migList);
