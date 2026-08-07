@@ -732,30 +732,62 @@ static int collect_statistic_vaddr(struct kvm *kvm,
 	return 0;
 }
 
+static void smap_on_pte_young_cb(u64 gpa, bool is_young, bool pte_valid,
+				 void *arg)
+{
+	struct smap_stage2_range_mkold_data *ctx = arg;
+	unsigned long hva;
+	struct access_pid *ap = (struct access_pid *)ctx->ap;
+	bool set_young;
+
+	if (!is_young && !access_pid_cur_last_scanning(ap))
+		return;
+
+	hva = gfn_to_hva_memslot(ctx->memslot, gpa_to_gfn(gpa));
+	if (!get_vma_if_huge_page(ctx->kvm, hva))
+		return;
+	set_young = is_young && pte_valid;
+	if (set_young || access_pid_cur_last_scanning(ap))
+		(void)hva_to_hpa(ctx->kvm, hva, ap, set_young);
+}
+
+static void smap_on_hole_cb(u64 gpa_start, u64 gpa_end, void *arg)
+{
+	struct smap_stage2_range_mkold_data *ctx = arg;
+	struct access_pid *ap = ctx->ap;
+	unsigned long hva;
+	gfn_t start = gpa_start >> PAGE_SHIFT;
+	gfn_t end = gpa_end >> PAGE_SHIFT;
+	gfn_t gfn;
+
+	if (!access_pid_cur_last_scanning(ap))
+		return;
+
+	for (gfn = start; gfn < end; gfn += ctx->stride) {
+		hva = gfn_to_hva_memslot(ctx->memslot, gfn);
+		(void)hva_to_hpa(ctx->kvm, hva, ap, false);
+	}
+}
+
 static int process_memslot_pages(struct kvm *kvm,
 				 struct kvm_memory_slot *memslot,
 				 struct access_pid *ap, int page_size)
 {
-	gpa_t gpa;
-	unsigned long hva;
-	bool is_young;
-	int ret;
+	u64 memslot_start = memslot->base_gfn << PAGE_SHIFT;
+	u64 memslot_end = (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
+	struct smap_stage2_range_mkold_data data = {
+		.kvm = kvm,
+		.memslot = memslot,
+		.ap = (void *)ap,
+		.on_pte_young = smap_on_pte_young_cb,
+		.on_hole = smap_on_hole_cb,
+	};
+	data.stride = (page_size == PAGE_SIZE_2M) ? PTRS_PER_PMD : 1;
 
-	for (gpa = memslot->base_gfn << PAGE_SHIFT;
-	     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
-	     gpa += (gpa_t)page_size) {
-		is_young =
-			smap_kvm_pgtable_stage2_mkold(kvm->arch.mmu.pgt, gpa);
-		if (!is_young && !access_pid_cur_last_scanning(ap))
-			continue;
-		hva = gfn_to_hva_memslot(memslot, gpa_to_gfn(gpa));
-		if (!get_vma_if_huge_page(kvm, hva))
-			continue;
-		ret = hva_to_hpa(kvm, hva, ap, is_young);
-		if (ret)
-			continue;
-	}
-	return 0;
+	return smap_kvm_pgtable_stage2_mkold_range(kvm->arch.mmu.pgt,
+						   memslot_start,
+						   memslot_end - memslot_start,
+						   &data);
 }
 
 static int scan_kvm_memslots(struct kvm *kvm, struct access_pid *ap,

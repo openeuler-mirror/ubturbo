@@ -1498,3 +1498,274 @@ TEST_F(AccessedBitTest, ProcessScanResultsBothFallbacksFail)
     GlobalMockObject::verify();
 }
 
+extern "C" void smap_on_pte_young_cb(u64 gpa, bool is_young, bool pte_valid,
+    void *arg);
+extern "C" void smap_on_hole_cb(u64 gpa_start, u64 gpa_end, void *arg);
+extern "C" int process_memslot_pages(struct kvm *kvm,
+    struct kvm_memory_slot *memslot, struct access_pid *ap, int page_size);
+
+TEST_F(AccessedBitTest, OnPteYoungCbNotYoungNotLastScanning)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct smap_stage2_range_mkold_data data = {};
+    data.ap = (void *)&ap;
+
+    smap_on_pte_young_cb(0x1000, false, false, &data);
+}
+
+TEST_F(AccessedBitTest, OnPteYoungCbNotYoungLastScanning)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct kvm_memory_slot memslot;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0));
+    MOCKER(get_vma_if_huge_page).stubs().will(returnValue((struct vm_area_struct *)nullptr));
+    smap_on_pte_young_cb(0x1000, false, false, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnPteYoungCbYoungNotValidNoHugePage)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct kvm_memory_slot memslot;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(get_vma_if_huge_page).stubs().will(returnValue((struct vm_area_struct *)nullptr));
+    smap_on_pte_young_cb(0x1000, true, false, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnPteYoungCbYoungValidNoHugePage)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct kvm_memory_slot memslot;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(get_vma_if_huge_page).stubs().will(returnValue((struct vm_area_struct *)nullptr));
+    smap_on_pte_young_cb(0x1000, true, true, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnPteYoungCbYoungValidHugePageHvaToHpa)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    struct kvm_memory_slot memslot;
+    struct vm_area_struct vma;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(get_vma_if_huge_page).stubs().will(returnValue(&vma));
+    MOCKER(hva_to_hpa).stubs().will(returnValue(0));
+    smap_on_pte_young_cb(0x1000, true, true, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnPteYoungCbYoungNotValidHugePageLastScanning)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    struct kvm_memory_slot memslot;
+    struct vm_area_struct vma;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(get_vma_if_huge_page).stubs().will(returnValue(&vma));
+    MOCKER(hva_to_hpa).stubs().will(returnValue(0));
+    smap_on_pte_young_cb(0x1000, true, false, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnPteYoungCbNotYoungLastScanningHugePage)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    struct kvm_memory_slot memslot;
+    struct vm_area_struct vma;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(get_vma_if_huge_page).stubs().will(returnValue(&vma));
+    MOCKER(hva_to_hpa).stubs().will(returnValue(0));
+    smap_on_pte_young_cb(0x1000, false, false, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnHoleCbNotLastScanning)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct smap_stage2_range_mkold_data data = {};
+    data.ap = (void *)&ap;
+    data.stride = 1;
+
+    smap_on_hole_cb(0x0, 0x3000, &data);
+}
+
+TEST_F(AccessedBitTest, OnHoleCbLastScanning)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    struct kvm_memory_slot memslot;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+    data.stride = 512;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(hva_to_hpa).stubs().will(returnValue(0));
+    smap_on_hole_cb(0x0, 0x3000, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnHoleCbLastScanningSmallRange)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    struct kvm_memory_slot memslot;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+    data.stride = 1;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(hva_to_hpa).stubs().will(returnValue(0));
+    smap_on_hole_cb(0x1000, 0x2000, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, ProcessMemslotPages2M)
+{
+    struct kvm kvm;
+    struct kvm_pgtable pgt;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    kvm.arch.mmu.pgt = &pgt;
+    struct kvm_memory_slot memslot;
+    memslot.base_gfn = 0x100;
+    memslot.npages = 0x200;
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
+
+    MOCKER(smap_kvm_pgtable_stage2_mkold_range).stubs().will(returnValue(0));
+    int ret = process_memslot_pages(&kvm, &memslot, &ap, PAGE_SIZE_2M);
+    EXPECT_EQ(0, ret);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, ProcessMemslotPages4K)
+{
+    struct kvm kvm;
+    struct kvm_pgtable pgt;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    kvm.arch.mmu.pgt = &pgt;
+    struct kvm_memory_slot memslot;
+    memslot.base_gfn = 0x100;
+    memslot.npages = 0x200;
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
+
+    MOCKER(smap_kvm_pgtable_stage2_mkold_range).stubs().will(returnValue(0));
+    int ret = process_memslot_pages(&kvm, &memslot, &ap, PAGE_SIZE_4K);
+    EXPECT_EQ(0, ret);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, ProcessMemslotPagesWalkError)
+{
+    struct kvm kvm;
+    struct kvm_pgtable pgt;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    kvm.arch.mmu.pgt = &pgt;
+    struct kvm_memory_slot memslot;
+    memslot.base_gfn = 0x100;
+    memslot.npages = 0x200;
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
+
+    MOCKER(smap_kvm_pgtable_stage2_mkold_range).stubs().will(returnValue(-EAGAIN));
+    int ret = process_memslot_pages(&kvm, &memslot, &ap, PAGE_SIZE_2M);
+    EXPECT_EQ(-EAGAIN, ret);
+    GlobalMockObject::verify();
+}
+
