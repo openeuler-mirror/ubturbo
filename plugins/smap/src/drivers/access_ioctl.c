@@ -503,7 +503,6 @@ static long ioctl_set_scan_cpu(void __user *argp)
 		       range.cpu_max);
 		return -EINVAL;
 	}
-	pr_info("set scan cpu range: %d-%d\n", range.cpu_min, range.cpu_max);
 	return 0;
 }
 
