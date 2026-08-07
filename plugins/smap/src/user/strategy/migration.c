@@ -211,6 +211,32 @@ static uint64_t CountPairSwapPages(const ProcessAttr *process, int localNid, int
     return swappable;
 }
 
+static uint64_t CalcPairRemoteGuaranteeExtraSwap(const ProcessAttr *process, const PairPlan *plan,
+                                                 uint64_t localSelected, uint64_t remoteSelected,
+                                                 uint64_t baseSwapPages, uint64_t remainingSwapBudget)
+{
+    if (!process->scanAttr.actcData[plan->localNid] || !process->scanAttr.actcData[plan->remoteNid] ||
+        process->scanAttr.actcLen[plan->localNid] == 0 || process->scanAttr.actcLen[plan->remoteNid] == 0) {
+        return 0;
+    }
+
+    uint64_t localAfterBase = localSelected + baseSwapPages;
+    uint64_t remoteAfterBase = remoteSelected + baseSwapPages;
+    uint64_t remoteGuarantee = process->scanAttr.actCount[plan->remoteNid].remoteHotNum;
+    if (remoteAfterBase >= remoteGuarantee) {
+        return 0;
+    }
+
+    uint64_t localRemaining = process->scanAttr.actcLen[plan->localNid] > localAfterBase ?
+                                  process->scanAttr.actcLen[plan->localNid] - localAfterBase :
+                                  0;
+    uint64_t remoteRemaining = process->scanAttr.actcLen[plan->remoteNid] > remoteAfterBase ?
+                                   process->scanAttr.actcLen[plan->remoteNid] - remoteAfterBase :
+                                   0;
+    uint64_t missingHotPages = remoteGuarantee - remoteAfterBase;
+    return MIN(MIN(missingHotPages, localRemaining), MIN(remoteRemaining, remainingSwapBudget));
+}
+
 static bool IsOnlyLocalForRemote(const PairPlan plans[], size_t planCnt, size_t current)
 {
     const PairPlan *plan = &plans[current];
@@ -270,9 +296,7 @@ int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t 
                 }
             }
         }
-        /* Capacity convergence has priority over the optional hot/cold swap. */
-        if (plan->targetPages != plan->actualPages || !process->enableSwap || IsNodeForbidden(plan->remoteNid) ||
-            !IsOnlyLocalForRemote(plans, planCnt, i) ||
+        if (!process->enableSwap || IsNodeForbidden(plan->remoteNid) || !IsOnlyLocalForRemote(plans, planCnt, i) ||
             (plan->targetPages == 0 && plan->demotePages == 0 && plan->promotePages == 0)) {
             continue;
         }
@@ -284,11 +308,18 @@ int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t 
                                  safeCapacity - context->plannedPages[plan->localNid] :
                                  0;
         uint64_t pidRemaining = budget->maxMigratePages - budget->plannedPages;
+        uint64_t swapLimit = MIN(MIN(localFree, pidRemaining / 2), UINT32_MAX);
         uint64_t swapPages = CountPairSwapPages(process, plan->localNid, plan->remoteNid, selectedFrom[plan->localNid],
                                                 selectedFrom[plan->remoteNid]);
-        swapPages = MIN(swapPages, localFree);
-        swapPages = MIN(swapPages, pidRemaining / 2);
-        swapPages = MIN(swapPages, UINT32_MAX);
+        swapPages = MIN(swapPages, swapLimit);
+        uint64_t extraSwapPages = CalcPairRemoteGuaranteeExtraSwap(process, plan, selectedFrom[plan->localNid],
+                                                                   selectedFrom[plan->remoteNid], swapPages,
+                                                                   swapLimit - swapPages);
+        swapPages += extraSwapPages;
+        if (extraSwapPages > 0) {
+            SMAP_LOGGER_DEBUG("Pid %d pair %d-%d adds %llu swap pages for remote hot guarantee.", process->pid,
+                              plan->localNid, plan->remoteNid, extraSwapPages);
+        }
         plan->swapPages = (uint32_t)swapPages;
         selectedFrom[plan->localNid] += swapPages;
         selectedFrom[plan->remoteNid] += swapPages;

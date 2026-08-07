@@ -891,7 +891,7 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansUsesRemainingBidirectionalBudget)
     EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
 }
 
-TEST_F(MigrationTest, TestBuildPairSwapPlansSkipsUnconvergedPair)
+TEST_F(MigrationTest, TestBuildPairSwapPlansAllowsUnconvergedPair)
 {
     ProcessManager manager = {};
     manager.nrLocalNuma = 2;
@@ -916,9 +916,40 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansSkipsUnconvergedPair)
     PairPidBudget budget = {.pid = 100, .maxMigratePages = 12, .plannedPages = 2};
 
     ASSERT_EQ(0, BuildPairSwapPlans(&manager, &plan, 1, &context, &budget, 1));
-    EXPECT_EQ(0U, plan.swapPages);
-    EXPECT_EQ(2U, budget.plannedPages);
-    EXPECT_EQ(0U, context.plannedPages[0]);
+    EXPECT_EQ(5U, plan.swapPages);
+    EXPECT_EQ(12U, budget.plannedPages);
+    EXPECT_EQ(5U, context.plannedPages[0]);
+    EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
+}
+
+TEST_F(MigrationTest, TestBuildPairSwapPlansFillsRemoteHotGuarantee)
+{
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 2;
+    ProcessAttr process = {.pid = 100, .scanType = NORMAL_SCAN};
+    ActcData localPages[10] = {};
+    ActcData remotePages[10] = {};
+    process.enableSwap = true;
+    process.scanAttr.actcData[0] = localPages;
+    process.scanAttr.actcData[2] = remotePages;
+    process.scanAttr.actcLen[0] = 10;
+    process.scanAttr.actcLen[2] = 10;
+    process.scanAttr.actCount[0].freqBuckets[5] = 10;
+    process.scanAttr.actCount[2].freqBuckets[5] = 10;
+    process.scanAttr.actCount[2].remoteHotNum = 4;
+    manager.processes = &process;
+    ASSERT_EQ(0, EnvMutexInit(&manager.lock));
+
+    PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 10);
+    PairPlanContext context = {.nrLocalNuma = 2};
+    context.freePages[0] = 10;
+    context.safetyReservePages[0] = 2;
+    PairPidBudget budget = {.pid = 100, .maxMigratePages = 8};
+
+    ASSERT_EQ(0, BuildPairSwapPlans(&manager, &plan, 1, &context, &budget, 1));
+    EXPECT_EQ(4U, plan.swapPages);
+    EXPECT_EQ(8U, budget.plannedPages);
+    EXPECT_EQ(4U, context.plannedPages[0]);
     EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
 }
 
@@ -936,6 +967,7 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansRejectsAmbiguousSharedRemote)
     process.scanAttr.actCount[0].freqBuckets[0] = 4;
     process.scanAttr.actCount[1].freqBuckets[0] = 4;
     process.scanAttr.actCount[2].freqBuckets[5] = 4;
+    process.scanAttr.actCount[2].remoteHotNum = 4;
     manager.processes = &process;
     ASSERT_EQ(0, EnvMutexInit(&manager.lock));
 
