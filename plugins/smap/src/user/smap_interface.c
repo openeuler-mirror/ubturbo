@@ -1543,6 +1543,10 @@ static bool IsAutoRemoveCandidate(ProcessAttr *attr)
         attr->scanType != NORMAL_SCAN) {
         return false;
     }
+    if (attr->walkPage.nrPage == 0) {
+        SMAP_LOGGER_INFO("Pid %d page snapshot is empty, skip auto remove.", attr->pid);
+        return false;
+    }
     return true;
 }
 
