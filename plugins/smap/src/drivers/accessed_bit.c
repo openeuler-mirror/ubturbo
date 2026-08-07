@@ -446,11 +446,10 @@ static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
 		return;
 
 	adev = get_access_tracking_dev(nid);
-	if (unlikely(!adev || pa_index >= adev->page_count))
+	if (unlikely(!adev || pa_index >= adev->page_count || adev->is_hist))
 		return;
 
-	if (!adev->is_hist)
-		adev->access_bit_actc_data[pa_index]++;
+	adev->access_bit_actc_data[pa_index]++;
 }
 
 static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
@@ -823,6 +822,86 @@ static bool memslot_is_mem(struct kvm_memory_slot *memslot)
 	return true;
 }
 
+/* Context passed to the bulk stage-2 walker callback for each young PTE */
+struct smap_bulk_memslot_ctx {
+	struct kvm *kvm;
+	struct kvm_memory_slot *memslot;
+	struct access_pid *ap;
+};
+
+/*
+ * smap_bulk_pte_cb — per-PTE callback for bulk stage-2 mkold range walk.
+ *
+ * Called by smap_stage2_range_walker for each valid leaf PTE in the walk
+ * range. Converts GPA to HVA via the memslot and records the physical page
+ * frame (and updates actc_data for young pages) via hva_to_hpa.
+ */
+static int smap_bulk_pte_cb(u64 gpa, u64 hpa, bool young, bool pte_valid,
+			    void *arg)
+{
+	struct smap_bulk_memslot_ctx *ctx = arg;
+	struct access_pid *ap = ctx->ap;
+	unsigned long hva;
+	int ret = 0;
+
+	/* Skip cold PTEs unless this is the last scan (need page counting) */
+	if (!young && !access_pid_cur_last_scanning(ap))
+		return 0;
+
+	if (pte_valid) {
+		if (young)
+			actc_data_add_fast(hpa, PAGE_SIZE);
+		if (access_pid_cur_last_scanning(ap))
+			add_to_bm_page(hpa, ap);
+	} else {
+		hva = gfn_to_hva_memslot(ctx->memslot, gpa >> PAGE_SHIFT);
+		ret = hva_to_hpa(ctx->kvm, hva, ap, young);
+	}
+
+	return ret;
+}
+
+static void smap_bulk_hole_cb(u64 gpa_start, u64 gpa_end, void *arg)
+{
+	struct smap_bulk_memslot_ctx *ctx = arg;
+	struct access_pid *ap = ctx->ap;
+	unsigned long hva;
+	gfn_t start = gpa_start >> PAGE_SHIFT;
+	gfn_t end = gpa_end >> PAGE_SHIFT;
+	gfn_t gfn;
+
+	if (!access_pid_cur_last_scanning(ap))
+		return;
+
+	for (gfn = start; gfn < end; gfn++) {
+		hva = gfn_to_hva_memslot(ctx->memslot, gfn);
+		(void)hva_to_hpa(ctx->kvm, hva, ap, false);
+	}
+}
+
+static int process_memslot_pages_4k(struct kvm *kvm,
+				    struct kvm_memory_slot *memslot,
+				    struct access_pid *ap)
+{
+	u64 memslot_start = memslot->base_gfn << PAGE_SHIFT;
+	u64 memslot_end = (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
+	struct smap_bulk_memslot_ctx bulk_ctx = {
+		.kvm = kvm,
+		.memslot = memslot,
+		.ap = ap,
+	};
+	struct smap_stage2_range_data range_data = {
+		.on_pte = smap_bulk_pte_cb,
+		.on_hole = smap_bulk_hole_cb,
+		.cb_arg = &bulk_ctx,
+	};
+
+	(void)smap_kvm_pgtable_stage2_mkold_range(kvm->arch.mmu.pgt,
+		memslot_start, memslot_end - memslot_start, &range_data);
+
+	return 0;
+}
+
 static int collect_statistic_vaddr(struct kvm *kvm,
 				   struct kvm_memory_slot *memslot,
 				   struct access_pid *ap, int page_size,
@@ -868,7 +947,7 @@ static int process_memslot_pages(struct kvm *kvm,
 		if (!is_young && !access_pid_cur_last_scanning(ap))
 			continue;
 		hva = gfn_to_hva_memslot(memslot, gpa_to_gfn(gpa));
-		if (page_size == g_pagesize_huge && !get_vma_if_huge_page(kvm, hva))
+		if (!get_vma_if_huge_page(kvm, hva))
 			continue;
 		ret = hva_to_hpa(kvm, hva, ap, is_young);
 		if (ret)
@@ -925,7 +1004,11 @@ static int scan_kvm_memslots(struct kvm *kvm, struct access_pid *ap,
 		kvm_for_each_memslot(memslot, bkt, slots) {
 			if (!memslot_is_mem(memslot))
 				continue;
-			process_memslot_pages(kvm, memslot, ap, page_size);
+			if (page_size == g_pagesize_huge) {
+				process_memslot_pages(kvm, memslot, ap, page_size);
+			} else {
+				process_memslot_pages_4k(kvm, memslot, ap);
+			}
 		}
 		kvm_flush_remote_tlbs(kvm);
 	}

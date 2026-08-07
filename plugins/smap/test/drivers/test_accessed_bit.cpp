@@ -1849,3 +1849,168 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmHugePageRenamed)
     EXPECT_EQ(-EINVAL, ret);
 }
 
+// ========== DT supplement: smap_bulk_pte_cb ==========
+
+extern "C" int kvm_pgtable_walk(struct kvm_pgtable *pgt, u64 addr, u64 size,
+                                struct kvm_pgtable_walker *walker);
+extern "C" int add_to_bm_page(u64 paddr, struct access_pid *ap);
+
+struct smap_bulk_memslot_ctx {
+    struct kvm *kvm;
+    struct kvm_memory_slot *memslot;
+    struct access_pid *ap;
+};
+
+extern "C" int smap_bulk_pte_cb(u64 gpa, u64 hpa, bool young, bool pte_valid, void *arg);
+
+TEST_F(AccessedBitTest, BulkPteCbColdNotLastScanSkips)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    /* young=false, last_scanning=false → early return */
+    int ret = smap_bulk_pte_cb(0x1000, 0x2000, false, true, &ctx);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(AccessedBitTest, BulkPteCbValidYoungCallsActcAddFast)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    MOCKER(actc_data_add_fast).expects(exactly(1));
+    int ret = smap_bulk_pte_cb(0x1000, 0x2000, true, true, &ctx);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(AccessedBitTest, BulkPteCbValidLastScanCallsAddToBmPage)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    MOCKER(actc_data_add_fast).stubs();
+    MOCKER(add_to_bm_page).expects(exactly(1)).will(returnValue(0));
+    int ret = smap_bulk_pte_cb(0x1000, 0x2000, true, true, &ctx);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(AccessedBitTest, BulkPteCbInvalidPteCallsHvaToHpa)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    /* gpa=0x1000, PAGE_SHIFT=12, gfn = 0x1000 >> 12 = 1
+       gfn_to_hva_memslot returns 0 (stub) → hva_to_hpa called with hva=0 */
+    MOCKER(hva_to_hpa).expects(exactly(1)).will(returnValue(0));
+    int ret = smap_bulk_pte_cb(0x1000, 0x2000, true, false, &ctx);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(AccessedBitTest, BulkPteCbColdLastScanCallsHvaToHpa)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    /* young=false but last_scanning=true → does NOT skip.
+       pte_valid=true → add_to_bm_page(hpa, ap) */
+    MOCKER(add_to_bm_page).expects(exactly(1)).will(returnValue(0));
+    int ret = smap_bulk_pte_cb(0x1000, 0x2000, false, true, &ctx);
+    EXPECT_EQ(0, ret);
+}
+
+// ========== DT supplement: smap_bulk_hole_cb ==========
+
+extern "C" void smap_bulk_hole_cb(u64 gpa_start, u64 gpa_end, void *arg);
+
+TEST_F(AccessedBitTest, BulkHoleCbNotLastScanSkips)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    /* Not last scan → early return, no hva_to_hpa call */
+    smap_bulk_hole_cb(0x1000, 0x3000, &ctx);
+}
+
+TEST_F(AccessedBitTest, BulkHoleCbLastScanCallsHvaToHpa)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    /* Last scan: iterates from gfn=1 to gfn=2 (2 pages) */
+    MOCKER(hva_to_hpa).expects(exactly(2)).will(returnValue(0));
+    smap_bulk_hole_cb(0x1000, 0x3000, &ctx);
+}
+
+// ========== DT supplement: process_memslot_pages_4k ==========
+
+extern "C" int process_memslot_pages_4k(struct kvm *kvm,
+                                        struct kvm_memory_slot *memslot,
+                                        struct access_pid *ap);
+
+TEST_F(AccessedBitTest, ProcessMemslotPages4kCallsBulkWalk)
+{
+    struct mm_struct mm;
+    struct kvm_pgtable pgt;
+    struct kvm_arch arch = { .mmu = { 0 } };
+    arch.mmu.pgt = &pgt;
+    struct kvm kvm_obj = { .mm = &mm, .arch = arch };
+
+    struct kvm_memory_slot memslot;
+    memslot.base_gfn = 1;
+    memslot.npages = 512;
+    memslot.userspace_addr = 0x100000;
+
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    /* memslot_start = 1 << 12 = 0x1000
+       memslot_end = (1+512) << 12 = 0x201000
+       size = 0x201000 - 0x1000 = 0x200000 */
+    MOCKER(kvm_pgtable_walk).stubs().will(returnValue(0));
+    int ret = process_memslot_pages_4k(&kvm_obj, &memslot, &ap);
+    EXPECT_EQ(0, ret);
+}
