@@ -50,6 +50,10 @@ unsigned int enable_hist = DISABLE_HIST;
 module_param(enable_hist, uint, S_IRUGO);
 MODULE_PARM_DESC(enable_hist, "smap hist disable: 0, smap hist enable: 1");
 
+unsigned int process_type = TYPE_PROC;
+module_param(process_type, uint, S_IRUGO);
+MODULE_PARM_DESC(process_type, "smap process type: 0 for process, 1 for vm");
+
 LIST_HEAD(access_dev);
 u8 access_page_size = PAGE_MODE_2M;
 
@@ -509,9 +513,9 @@ static void work_func(struct work_struct *work)
 	down_read(&ap_data.lock);
 	page_size = get_page_size(adev);
 	if (page_size == g_pagesize_huge) {
-		ret = scan_accessed_bit_forward_vm(ap, page_size);
+		ret = scan_accessed_bit_forward_hugepage(ap, page_size);
 	} else {
-		ret = scan_accessed_bit_forward_mm(ap, page_size);
+		ret = scan_accessed_bit_forward_smallpage(ap, page_size);
 	}
 	up_read(&ap_data.lock);
 	adev_buffer_up_read();

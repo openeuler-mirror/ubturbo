@@ -37,6 +37,12 @@ static inline int page_mapcount(struct page *page)
 #define NODES_MASK		((1UL << NODES_WIDTH) - 1)
 
 pte_t *drivers__pte_offset_map(pmd_t *pmd, unsigned long addr, pmd_t *pmdvalp_);
+pte_t *__pte_offset_map(pmd_t *pmd, unsigned long addr, pmd_t *pmdvalp_);
+static inline pte_t *pte_offset_map(pmd_t *pmd, unsigned long addr)
+{
+    return __pte_offset_map(pmd, addr, NULL);
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif

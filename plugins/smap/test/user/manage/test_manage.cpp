@@ -122,45 +122,6 @@ extern "C" FILE *fopen(const char *__restrict __filename, const char *__restrict
 extern "C" char *fgets(char *__restrict __s, int __n, FILE *__restrict __stream);
 extern "C" int fclose(FILE *__stream);
 extern "C" int strncmp(const char *cs, const char *ct, size_t count);
-extern "C" int IsQemuTask(pid_t pid);
-TEST_F(ManageTest, TestIsQemuTaskPath)
-{
-    int ret;
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
-        .stubs()
-        .will(returnValue(-1));
-    ret = IsQemuTask(1);
-    EXPECT_EQ(-EINVAL, ret);
-
-    GlobalMockObject::verify();
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
-    MOCKER(fopen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
-    ret = IsQemuTask(1);
-    EXPECT_EQ(-1, ret);
-}
-
-TEST_F(ManageTest, TestIsQemuTaskFile)
-{
-    int ret;
-
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
-    static FILE fake_file;
-    MOCKER(fopen).stubs().will(returnValue(&fake_file));
-    MOCKER(fgets).stubs().will(returnValue(static_cast<char *>(nullptr)));
-    MOCKER(fclose).stubs().will(returnValue(0));
-    ret = IsQemuTask(1);
-    EXPECT_EQ(-1, ret);
-
-    GlobalMockObject::verify();
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s).stubs().will(returnValue(0));
-    MOCKER(fopen).stubs().will(returnValue(&fake_file));
-    char buf[] = "1";
-    MOCKER(fgets).stubs().will(returnValue(&buf[0]));
-    MOCKER(fclose).stubs().will(returnValue(0));
-    ret = IsQemuTask(1);
-    EXPECT_EQ(0, ret);
-}
-
 extern "C" void LinkedListRemove(ProcessAttr **remove, ProcessAttr **head);
 extern "C" void FreeProceccesAttr(ProcessAttr *attr);
 TEST_F(ManageTest, TestLinkedListRemoveInputNull)
@@ -247,9 +208,8 @@ TEST_F(ManageTest, TestCheckPid)
     GlobalMockObject::verify();
     MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     MOCKER(PidIsValid).stubs().will(returnValue(true));
-    MOCKER(IsQemuTask).stubs().will(returnValue((int)PROCESS_TYPE));
     ret = CheckPid(pid);
-    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ(0, ret);
 }
 
 extern "C" ProcessAttr *GetProcessAttr(pid_t pid);
@@ -354,7 +314,6 @@ TEST_F(ManageTest, TestVMProcessParseMmapTypeFailed)
     ProcessAttr attr;
     int ret;
 
-    MOCKER(IsQemuTask).stubs().will(returnValue(1));
     MOCKER(ReadDomainIdByPid).stubs().will(returnValue(0));
     MOCKER(ParseMmapType).stubs().will(returnValue(-EINVAL));
 
@@ -435,7 +394,6 @@ TEST_F(ManageTest, TestSetProcessLocalNuma)
 }
 
 extern "C" int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap);
-extern "C" int IsQemuTask(pid_t pid);
 TEST_F(ManageTest, TestProcessAddManageResetPidConfig)
 {
     int ret;
@@ -2769,7 +2727,6 @@ TEST_F(ManageTest, TestCheckPidValid)
 {
     MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     MOCKER(PidIsValid).stubs().will(returnValue(true));
-    MOCKER(IsQemuTask).stubs().will(returnValue((int)VM_TYPE));
     int ret = CheckPid(1);
     EXPECT_EQ(0, ret);
 }

@@ -10,6 +10,7 @@
 #include <linux/version.h>
 
 #define HPAGE_SHIFT		PMD_SHIFT
+#define HPAGE_SIZE		(1UL << HPAGE_SHIFT)
 #define PAGE_SHIFT		12
 #define HUGETLB_PAGE_ORDER	(HPAGE_SHIFT - PAGE_SHIFT)
 #define _AT(T, X)	((T)(X))

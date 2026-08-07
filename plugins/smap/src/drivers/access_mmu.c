@@ -85,11 +85,12 @@ int add_to_bm_page(u64 paddr, struct access_pid *ap)
 {
 	int nid, nid_pos, ret;
 	u64 acidx;
+	unsigned long numa_nodes = ap->numa_nodes;
+
 	ret = calc_paddr_acidx(paddr, &nid, &acidx);
 	if (ret)
 		return ret;
 	nid_pos = convert_nid_to_pos(nid);
-	unsigned long numa_nodes = ap->numa_nodes;
 	if (unlikely(!test_bit(nid_pos, &numa_nodes))) {
 		return -EINVAL;
 	}
