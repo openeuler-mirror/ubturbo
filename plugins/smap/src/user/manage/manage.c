@@ -578,6 +578,8 @@ int ProcessManagerInit(uint32_t pageType)
         g_processManager.threadCtx[i] = NULL;
     }
     g_processManager.processes = NULL;
+    g_processManager.ubBwThreshold = GetUbBwThresholdConfig();
+    g_processManager.currentFluxRet = -ENODATA;
     RemoteNumaInfoInit();
     EnvMutexInit(&g_processManager.lock);
     EnvMutexInit(&g_processManager.threadLock);

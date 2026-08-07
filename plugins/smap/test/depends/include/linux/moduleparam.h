@@ -16,6 +16,7 @@ struct kernel_param_ops {
 
 struct kernel_param {
     const struct kernel_param_ops *ops;
+    void *arg;
 };
 
 extern int param_set_uint(const char *val, const struct kernel_param *kp);

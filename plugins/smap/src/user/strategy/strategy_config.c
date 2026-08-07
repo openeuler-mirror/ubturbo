@@ -20,7 +20,7 @@
 #include "securec.h"
 #include "strategy_config.h"
 
-#define STRATEGY_CONFIG_ENTRY 18
+#define STRATEGY_CONFIG_ENTRY 32
 #define STRATEGY_CONFIG_BUFFSIZE 500
 
 #define RETURN_OK 0
@@ -69,6 +69,9 @@
 #define DEFAULT_SCAN_CPU_MAX 3
 #define DEFAULT_SCAN_CPU_ENABLE 0
 
+#define MAX_UB_BW_THRESHOLD 65535
+#define DEFAULT_UB_BW_THRESHOLD 0
+
 #define RADIX_10 10UL
 
 typedef struct {
@@ -94,6 +97,7 @@ typedef struct {
     uint32_t scanCpuMin;
     uint32_t scanCpuMax;
     bool scanCpuEnable;
+    uint32_t ubBwThreshold;
 } StrategyConfig;
 
 static StrategyConfig g_tmpStrategyConfig;
@@ -237,6 +241,11 @@ void SetScanPeriodChanged(bool val)
 void SetMigratePeriodChanged(bool val)
 {
     g_strategyConfig.migratePeriodChanged = val;
+}
+
+uint32_t GetUbBwThresholdConfig(void)
+{
+    return g_strategyConfig.ubBwThreshold;
 }
 
 static int32_t ConfigReadValueToInt(char *pvalue, uint32_t *resultvalue)
@@ -553,6 +562,22 @@ static int32_t ConfigFileConfSwitch(char *substr, char *value)
     return RETURN_OK;
 }
 
+static int32_t ConfigUbBwThreshold(char *substr, char *value)
+{
+    SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
+    int32_t ret = ConfigReadValueToInt(value, &g_tmpStrategyConfig.ubBwThreshold);
+    if (ret != RETURN_OK) {
+        SMAP_LOGGER_ERROR("Config ub bw threshold read failed, key:%s.", substr);
+        return ret;
+    }
+    if (g_tmpStrategyConfig.ubBwThreshold > MAX_UB_BW_THRESHOLD) {
+        SMAP_LOGGER_ERROR("Config ub bw threshold(%u) invalid, range(%u-%u), key:%s.",
+                          g_tmpStrategyConfig.ubBwThreshold, 0, MAX_UB_BW_THRESHOLD, substr);
+        return RETURN_ERROR;
+    }
+    return RETURN_OK;
+}
+
 static StrategyConfigReadElem g_strategyConfigRead[] = { {
                                                              "smap.scan.period",
                                                              ConfigScanPeriod,
@@ -641,6 +666,12 @@ static StrategyConfigReadElem g_strategyConfigRead[] = { {
                                                              "smap.period.file.config.switch",
                                                              ConfigFileConfSwitch,
                                                              1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.ub.bw.threshold",
+                                                             ConfigUbBwThreshold,
+                                                             0UL,
                                                              0UL,
                                                          },
                                                          {
@@ -815,6 +846,7 @@ static void InitStrategyConfig(void)
     g_strategyConfig.scanCpuMax = 0;
     g_strategyConfig.scanCpuEnable = false;
     g_strategyConfig.scanCpuChanged = false;
+    g_strategyConfig.ubBwThreshold = DEFAULT_UB_BW_THRESHOLD;
 }
 
 static int32_t EnsureDirectoryExists(const char *dirPath)
@@ -902,7 +934,8 @@ static int32_t InitStrategyConfigFileBuffer(char strategyDefaultConfig[STRATEGY_
                     { "smap.group.swap.ratio = %d\n", DEFAULT_GROUP_SWAP_RATIO },
                     { "smap.group.swap.min.remote.freq = %d\n", DEFAULT_GROUP_SWAP_MIN_REMOTE_FREQ },
                     { "smap.group.swap.min.freq.gain = %d\n", DEFAULT_GROUP_SWAP_MIN_FREQ_GAIN },
-                    { "smap.group.swap.local.watermark.ratio = %d\n", DEFAULT_GROUP_SWAP_LOCAL_WATERMARK_RATIO } };
+                    { "smap.group.swap.local.watermark.ratio = %d\n", DEFAULT_GROUP_SWAP_LOCAL_WATERMARK_RATIO },
+                    { "smap.ub.bw.threshold = %d\n", DEFAULT_UB_BW_THRESHOLD } };
     size_t numConfigs = sizeof(configs) / sizeof(configs[0]);
 
     // 使用循环处理snprintf_s部分
@@ -944,7 +977,7 @@ static int32_t InitStrategyConfigFileBuffer(char strategyDefaultConfig[STRATEGY_
 int32_t GenerateStrategyConfigFile(const char *configFile)
 {
     InitStrategyConfig();
-    char strategyDefaultConfig[STRATEGY_CONFIG_ENTRY][STRATEGY_CONFIG_BUFFSIZE];
+    char strategyDefaultConfig[STRATEGY_CONFIG_ENTRY][STRATEGY_CONFIG_BUFFSIZE] = { 0 };
     int32_t res = InitStrategyConfigFileBuffer(strategyDefaultConfig);
     if (res != RETURN_OK) {
         return res;
@@ -1033,6 +1066,7 @@ static bool UpdateStrategyConfigChanged(void)
     uint32_t oldGroupSwapLocalWatermarkRatio, groupSwapLocalWatermarkRatio;
     uint32_t groupSwapRatio, groupSwapMinRemoteFreq, groupSwapMinFreqGain;
     uint64_t oldFreqWt, freqWt;
+    uint32_t oldUbBwThreshold, ubBwThreshold;
     bool oldZeroFreqMigrateEnable, zeroFreqMigrateEnable;
     bool oldAdaptiveRatioEnable, adaptiveRatioEnable;
 
@@ -1054,6 +1088,7 @@ static bool UpdateStrategyConfigChanged(void)
     oldGroupSwapLocalWatermarkRatio = g_strategyConfig.groupSwapLocalWatermarkRatio;
     oldZeroFreqMigrateEnable = g_strategyConfig.zeroFreqMigrateEnable;
     oldAdaptiveRatioEnable = g_strategyConfig.adaptiveRatioEnable;
+    oldUbBwThreshold = g_strategyConfig.ubBwThreshold;
 
     scanPeriod = g_tmpStrategyConfig.scanPeriod;
     migratePeriod = g_tmpStrategyConfig.migratePeriod;
@@ -1067,13 +1102,15 @@ static bool UpdateStrategyConfigChanged(void)
     groupSwapLocalWatermarkRatio = g_tmpStrategyConfig.groupSwapLocalWatermarkRatio;
     zeroFreqMigrateEnable = g_tmpStrategyConfig.zeroFreqMigrateEnable;
     adaptiveRatioEnable = g_tmpStrategyConfig.adaptiveRatioEnable;
+    ubBwThreshold = g_tmpStrategyConfig.ubBwThreshold;
 
     if (oldScanPeriod == scanPeriod && oldMigratePeriod == migratePeriod &&
         oldRemoteHotThreshold == remoteHotThreshold && oldRemoteFreqPercentile == remoteFreqPercentile &&
         oldSlowThreshold == slowThreshold && oldFreqWt == freqWt && oldGroupSwapRatio == groupSwapRatio &&
         oldGroupSwapMinRemoteFreq == groupSwapMinRemoteFreq && oldGroupSwapMinFreqGain == groupSwapMinFreqGain &&
         oldGroupSwapLocalWatermarkRatio == groupSwapLocalWatermarkRatio &&
-        oldZeroFreqMigrateEnable == zeroFreqMigrateEnable && oldAdaptiveRatioEnable == adaptiveRatioEnable) {
+        oldZeroFreqMigrateEnable == zeroFreqMigrateEnable && oldAdaptiveRatioEnable == adaptiveRatioEnable &&
+        oldUbBwThreshold == ubBwThreshold) {
         return false;
     }
 
@@ -1126,6 +1163,10 @@ static bool UpdateStrategyConfigChanged(void)
     if (oldAdaptiveRatioEnable != adaptiveRatioEnable) {
         SMAP_LOGGER_INFO("Start update adaptive ratio enable from config to %s.",
                          adaptiveRatioEnable ? "true" : "false");
+    }
+
+    if (oldUbBwThreshold != ubBwThreshold) {
+        SMAP_LOGGER_INFO("Start update ub bandwidth threshold from config to %u.", ubBwThreshold);
     }
 
     return true;
