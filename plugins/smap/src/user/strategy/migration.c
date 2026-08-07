@@ -441,7 +441,7 @@ static PairPlanMatrixStage *FindPairPlanMatrixStage(PairPlanMatrixStage stages[]
     return NULL;
 }
 
-int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt, bool migrateOnly)
+int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt)
 {
     if (!manager || planCnt > MAX_PAIR_TARGET_COUNT || (planCnt > 0 && !plans)) {
         return -EINVAL;
@@ -460,8 +460,7 @@ int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[
         goto OUT;
     }
     for (ProcessAttr *process = manager->processes; process; process = process->next) {
-        if (process->scanType != NORMAL_SCAN || process->groupPolicy.enabled ||
-            (migrateOnly && process->state != PROC_MIGRATE)) {
+        if (process->scanType != NORMAL_SCAN || process->groupPolicy.enabled || process->state != PROC_MIGRATE) {
             continue;
         }
         if (stageCnt == MAX_4K_PROCESSES_CNT) {
@@ -504,11 +503,6 @@ OUT:
     EnvMutexUnlock(&manager->lock);
     free(stages);
     return ret;
-}
-
-int ApplyPairPlans(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt)
-{
-    return ApplyPairPlansForState(manager, plans, planCnt, false);
 }
 
 int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt)
@@ -563,7 +557,7 @@ int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t p
         ret = BuildPairSwapPlans(manager, stagedPlans, stagedPlanCnt, &context, pidBudgets, pidBudgetCnt);
     }
     if (!ret) {
-        ret = ApplyPairPlansForState(manager, stagedPlans, stagedPlanCnt, true);
+        ret = ApplyPairPlansForState(manager, stagedPlans, stagedPlanCnt);
     }
     if (!ret) {
         if (stagedPlanCnt > 0) {
@@ -644,32 +638,25 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
     }
 
     uint64_t nrMigTotal = 0;
-    int nrLocalNuma = GetNrLocalNuma();
-    for (int phase = 0; phase < 2; phase++) {
-        for (int from = 0; from < MAX_NODES; from++) {
-            bool promote = from >= nrLocalNuma;
-            if ((phase == 0) != promote) {
+    for (int from = 0; from < MAX_NODES; from++) {
+        for (int to = 0; to < MAX_NODES; to++) {
+            if (!migList[from][to].nr) {
                 continue;
             }
-            for (int to = 0; to < MAX_NODES; to++) {
-                if (!migList[from][to].nr) {
-                    continue;
-                }
-                ret = AddMigList(mMsg, &migList[from][to]);
-                if (ret == -ENOSPC) {
-                    SMAP_LOGGER_WARNING("Pid %d migration list is deferred by kernel entry limit.", process->pid);
-                    FreeMigList(migList);
-                    *migratePage += nrMigTotal;
-                    return 0;
-                }
-                if (ret) {
-                    SMAP_LOGGER_ERROR("Pid %d AddMigList %d %d failed: %d.", process->pid, from, to, ret);
-                    FreeMigList(migList);
-                    return ret;
-                }
-                nrMigTotal += migList[from][to].nr;
-                SMAP_LOGGER_INFO("Numa %d --> Numa %d, mig %d pages.", from, to, migList[from][to].nr);
+            ret = AddMigList(mMsg, &migList[from][to]);
+            if (ret == -ENOSPC) {
+                SMAP_LOGGER_WARNING("Pid %d migration list is deferred by kernel entry limit.", process->pid);
+                FreeMigList(migList);
+                *migratePage += nrMigTotal;
+                return 0;
             }
+            if (ret) {
+                SMAP_LOGGER_ERROR("Pid %d AddMigList %d %d failed: %d.", process->pid, from, to, ret);
+                FreeMigList(migList);
+                return ret;
+            }
+            nrMigTotal += migList[from][to].nr;
+            SMAP_LOGGER_INFO("Numa %d --> Numa %d, mig %d pages.", from, to, migList[from][to].nr);
         }
     }
     FreeMigList(migList);

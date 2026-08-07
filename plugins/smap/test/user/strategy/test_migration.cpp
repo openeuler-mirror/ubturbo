@@ -311,6 +311,51 @@ TEST_F(MigrationTest, TestBuildMigrationMsgAllowsNormalPromoteFromForbiddenNode)
 }
 
 extern "C" int RunStrategyStub(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], size_t mlistSize);
+
+static int g_addMigListOrder[2];
+static int g_addMigListCount;
+
+static int BuildMigrationMsgDirectionLists(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
+                                           size_t mlistSize)
+{
+    (void)process;
+    (void)mlistSize;
+    mlist[0][1].nr = 2;
+    mlist[1][0].nr = 1;
+    return 0;
+}
+
+static int RecordMigListOrder(struct MigrateMsg *mMsg, struct MigList *mList)
+{
+    (void)mMsg;
+    if (g_addMigListCount < 2) {
+        g_addMigListOrder[g_addMigListCount] = mList->from;
+    }
+    g_addMigListCount++;
+    return 0;
+}
+
+TEST_F(MigrationTest, TestBuildMigrationMsgKeepsMatrixOrder)
+{
+    ProcessAttr process = {};
+    struct MigrateMsg mMsg = {};
+    uint64_t pages = 0;
+    ActcData actc = {};
+    process.scanAttr.actcData[0] = &actc;
+    g_addMigListCount = 0;
+
+    MOCKER(CheckActcDataValid).stubs().will(returnValue(0));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(1));
+    MOCKER(RunStrategy).stubs().will(invoke(BuildMigrationMsgDirectionLists));
+    MOCKER(AddMigList).stubs().will(invoke(RecordMigListOrder));
+
+    ASSERT_EQ(0, BuildMigrationMsg(&process, &mMsg, &pages));
+    EXPECT_EQ(3U, pages);
+    EXPECT_EQ(2, g_addMigListCount);
+    EXPECT_EQ(0, g_addMigListOrder[0]);
+    EXPECT_EQ(1, g_addMigListOrder[1]);
+}
+
 TEST_F(MigrationTest, TestBuildMigrationMsgSuccess)
 {
     int ret;
@@ -950,13 +995,14 @@ TEST_F(MigrationTest, TestBuildPairPlansFailureDoesNotPublishPartialState)
     EXPECT_EQ(7U, planCnt);
 }
 
-TEST_F(MigrationTest, TestApplyPairPlansRebuildsNormalMatricesOnly)
+TEST_F(MigrationTest, TestApplyPairPlansForStateRebuildsMigratingMatrixOnly)
 {
     ProcessManager manager = {};
     manager.nrLocalNuma = 2;
     ProcessAttr first = {.pid = 100, .scanType = NORMAL_SCAN};
     ProcessAttr second = {.pid = 200, .scanType = NORMAL_SCAN};
     ProcessAttr grouped = {.pid = 300, .scanType = NORMAL_SCAN};
+    first.state = PROC_MIGRATE;
     grouped.groupPolicy.enabled = true;
     first.next = &second;
     second.next = &grouped;
@@ -974,21 +1020,22 @@ TEST_F(MigrationTest, TestApplyPairPlansRebuildsNormalMatricesOnly)
     plans[0].swapPages = 5;
     plans[1].promotePages = 40;
 
-    ASSERT_EQ(0, ApplyPairPlans(&manager, plans, 2));
+    ASSERT_EQ(0, ApplyPairPlansForState(&manager, plans, 2));
     EXPECT_EQ(65U, first.strategyAttr.nrMigratePages[0][2]);
     EXPECT_EQ(5U, first.strategyAttr.nrMigratePages[2][0]);
     EXPECT_EQ(40U, first.strategyAttr.nrMigratePages[3][1]);
     EXPECT_EQ(0U, first.strategyAttr.nrMigratePages[7][7]);
-    EXPECT_EQ(0U, second.strategyAttr.nrMigratePages[6][6]);
+    EXPECT_EQ(6U, second.strategyAttr.nrMigratePages[6][6]);
     EXPECT_EQ(5U, grouped.strategyAttr.nrMigratePages[5][5]);
     EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
 }
 
-TEST_F(MigrationTest, TestApplyPairPlansFailureKeepsOldMatrix)
+TEST_F(MigrationTest, TestApplyPairPlansForStateFailureKeepsOldMatrix)
 {
     ProcessManager manager = {};
     manager.nrLocalNuma = 2;
     ProcessAttr process = {.pid = 100, .scanType = NORMAL_SCAN};
+    process.state = PROC_MIGRATE;
     manager.processes = &process;
     process.strategyAttr.nrMigratePages[0][2] = 7;
     ASSERT_EQ(0, EnvMutexInit(&manager.lock));
@@ -997,7 +1044,7 @@ TEST_F(MigrationTest, TestApplyPairPlansFailureKeepsOldMatrix)
     plan.demotePages = 60;
     plan.promotePages = 1;
 
-    EXPECT_EQ(-EINVAL, ApplyPairPlans(&manager, &plan, 1));
+    EXPECT_EQ(-EINVAL, ApplyPairPlansForState(&manager, &plan, 1));
     EXPECT_EQ(7U, process.strategyAttr.nrMigratePages[0][2]);
     EXPECT_EQ(0, EnvMutexDestroy(&manager.lock));
 }
@@ -1027,12 +1074,10 @@ static int BuildLocalFreeSnapshot(bool hugePage, int nrLocalNuma, PairPlanContex
     return 0;
 }
 
-static int CheckFrozenPairPlanApplied(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt,
-                                      bool migrateOnly)
+static int CheckFrozenPairPlanApplied(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt)
 {
     (void)manager;
     (void)plans;
-    EXPECT_TRUE(migrateOnly);
     EXPECT_EQ(0U, planCnt);
     return 0;
 }
