@@ -597,3 +597,190 @@ TEST_F(KvmPgTableTest, Stage2TrySetPteNonSharedPath)
     bool ret = stage2_try_set_pte(&ctx, new_pte);
     EXPECT_EQ(true, ret);
 }
+
+// ========== DT supplement: smap_kvm_pgtable_stage2_mkold_range ==========
+
+static int test_pte_cb_called;
+static u64 test_pte_cb_gpa;
+static u64 test_pte_cb_hpa;
+static bool test_pte_cb_young;
+static bool test_pte_cb_pte_valid;
+
+static int test_range_pte_cb(u64 gpa, u64 hpa, bool young, bool pte_valid, void *arg)
+{
+    test_pte_cb_called++;
+    test_pte_cb_gpa = gpa;
+    test_pte_cb_hpa = hpa;
+    test_pte_cb_young = young;
+    test_pte_cb_pte_valid = pte_valid;
+    return 0;
+}
+
+static int test_hole_cb_called;
+static u64 test_hole_cb_start;
+static u64 test_hole_cb_end;
+
+static void test_range_hole_cb(u64 gpa_start, u64 gpa_end, void *arg)
+{
+    test_hole_cb_called++;
+    test_hole_cb_start = gpa_start;
+    test_hole_cb_end = gpa_end;
+}
+
+TEST_F(KvmPgTableTest, MkoldRangeResetsCountersAndCallsWalk)
+{
+    struct kvm_pgtable pgt = {};
+    struct smap_stage2_range_data data = {};
+    data.on_pte = test_range_pte_cb;
+    data.on_hole = test_range_hole_cb;
+    data.total_ptes = 99;
+    data.young_ptes = 88;
+
+    MOCKER(kvm_pgtable_walk).expects(exactly(1)).will(returnValue(0));
+    int ret = smap_kvm_pgtable_stage2_mkold_range(&pgt, 0x1000, 0x2000, &data);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(0, data.total_ptes);
+    EXPECT_EQ(0, data.young_ptes);
+}
+
+TEST_F(KvmPgTableTest, MkoldRangePropagatesWalkError)
+{
+    struct kvm_pgtable pgt = {};
+    struct smap_stage2_range_data data = {};
+    data.on_pte = test_range_pte_cb;
+    data.on_hole = test_range_hole_cb;
+
+    MOCKER(kvm_pgtable_walk).stubs().will(returnValue(-EINVAL));
+    int ret = smap_kvm_pgtable_stage2_mkold_range(&pgt, 0x1000, 0x2000, &data);
+    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ(0, data.total_ptes);
+    EXPECT_EQ(0, data.young_ptes);
+}
+
+// ========== DT supplement: smap_stage2_range_walker ==========
+
+/* AF bit in DT: BIT(10) = 10 */
+#define DT_AF_BIT 10
+
+extern "C" int smap_stage2_range_walker(const struct kvm_pgtable_visit_ctx *ctx,
+                                        enum kvm_pgtable_walk_flags visit);
+
+TEST_F(KvmPgTableTest, RangeWalkerNonLeafCallsHoleCb)
+{
+    struct smap_stage2_range_data data = {};
+    data.on_pte = test_range_pte_cb;
+    data.on_hole = test_range_hole_cb;
+    data.cb_arg = nullptr;
+    data.total_ptes = 0;
+    data.young_ptes = 0;
+
+    struct kvm_pgtable_visit_ctx ctx = {};
+    kvm_pte_t ptep_val = 0;
+    ctx.ptep = &ptep_val;
+    ctx.old = 0;
+    ctx.arg = &data;
+    ctx.addr = 0x5000;
+    ctx.level = 1; /* non-leaf: level < KVM_PGTABLE_MAX_LEVELS-1 = 3 */
+    ctx.flags = KVM_PGTABLE_WALK_LEAF;
+
+    test_hole_cb_called = 0;
+    test_pte_cb_called = 0;
+    int ret = smap_stage2_range_walker(&ctx, KVM_PGTABLE_WALK_LEAF);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, test_hole_cb_called);
+    EXPECT_EQ(0, test_pte_cb_called);
+    /* kvm_granule_size() returns 0 in DT, so hole_end = addr + 0 */
+    EXPECT_EQ((u64)0x5000, test_hole_cb_start);
+    EXPECT_EQ((u64)0x5000, test_hole_cb_end);
+}
+
+TEST_F(KvmPgTableTest, RangeWalkerLeafValidYoungPte)
+{
+    struct smap_stage2_range_data data = {};
+    data.on_pte = test_range_pte_cb;
+    data.on_hole = test_range_hole_cb;
+    data.cb_arg = nullptr;
+    data.total_ptes = 0;
+    data.young_ptes = 0;
+
+    /* Valid PTE with AF: bit 0 set (KVM_PTE_VALID=BIT(0)=0, 1 & 0 = 0 → invalid!)
+       In DT: KVM_PTE_VALID = BIT(0) = 0, kvm_pte_valid(pte) = pte & 0 = always false.
+       So we test the "invalid + young" path. */
+    kvm_pte_t pte_val = DT_AF_BIT; /* old = 10, has AF bit */
+    struct kvm_pgtable_visit_ctx ctx = {};
+    ctx.ptep = &pte_val;
+    ctx.old = pte_val;
+    ctx.arg = &data;
+    ctx.addr = 0x3000;
+    ctx.level = 3; /* leaf: level == KVM_PGTABLE_MAX_LEVELS-1 */
+    ctx.flags = KVM_PGTABLE_WALK_SHARED;
+
+    test_pte_cb_called = 0;
+    test_hole_cb_called = 0;
+    int ret = smap_stage2_range_walker(&ctx, KVM_PGTABLE_WALK_LEAF);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(0, test_hole_cb_called);
+    EXPECT_EQ(1, test_pte_cb_called);
+    EXPECT_EQ(1, data.total_ptes);
+    /* new = 10 & ~10 = 0, young = (0 != 10) = true */
+    EXPECT_EQ(true, test_pte_cb_young);
+    /* kvm_pte_valid(10) = 10 & 0 = 0 → false in DT */
+    EXPECT_EQ(false, test_pte_cb_pte_valid);
+    /* pte_valid is false, so young_ptes stays 0 despite young being true */
+    EXPECT_EQ(0, data.young_ptes);
+}
+
+TEST_F(KvmPgTableTest, RangeWalkerLeafOldPte)
+{
+    struct smap_stage2_range_data data = {};
+    data.on_pte = test_range_pte_cb;
+    data.on_hole = test_range_hole_cb;
+    data.cb_arg = nullptr;
+    data.total_ptes = 0;
+    data.young_ptes = 0;
+
+    /* PTE without AF bit: old = 5, new = 5 & ~10 = 5, young = (5 != 5) = false */
+    kvm_pte_t pte_val = 5;
+    struct kvm_pgtable_visit_ctx ctx = {};
+    ctx.ptep = &pte_val;
+    ctx.old = pte_val;
+    ctx.arg = &data;
+    ctx.addr = 0x4000;
+    ctx.level = 3; /* leaf */
+    ctx.flags = KVM_PGTABLE_WALK_LEAF;
+
+    test_pte_cb_called = 0;
+    int ret = smap_stage2_range_walker(&ctx, KVM_PGTABLE_WALK_LEAF);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, data.total_ptes);
+    EXPECT_EQ(false, test_pte_cb_young);
+    EXPECT_EQ(0, data.young_ptes);
+}
+
+TEST_F(KvmPgTableTest, RangeWalkerLeafValidPteZero)
+{
+    struct smap_stage2_range_data data = {};
+    data.on_pte = test_range_pte_cb;
+    data.on_hole = test_range_hole_cb;
+    data.cb_arg = nullptr;
+    data.total_ptes = 0;
+    data.young_ptes = 0;
+
+    /* PTE = 0: no AF, no valid bit. new = 0 & ~10 = 0, young = false */
+    kvm_pte_t pte_val = 0;
+    struct kvm_pgtable_visit_ctx ctx = {};
+    ctx.ptep = &pte_val;
+    ctx.old = pte_val;
+    ctx.arg = &data;
+    ctx.addr = 0x6000;
+    ctx.level = 3; /* leaf */
+    ctx.flags = KVM_PGTABLE_WALK_LEAF;
+
+    test_pte_cb_called = 0;
+    int ret = smap_stage2_range_walker(&ctx, KVM_PGTABLE_WALK_LEAF);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, data.total_ptes);
+    EXPECT_EQ(false, test_pte_cb_young);
+    EXPECT_EQ(false, test_pte_cb_pte_valid);
+    EXPECT_EQ(0, data.young_ptes);
+}

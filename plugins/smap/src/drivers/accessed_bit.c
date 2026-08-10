@@ -446,11 +446,10 @@ static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
 		return;
 
 	adev = get_access_tracking_dev(nid);
-	if (unlikely(!adev || pa_index >= adev->page_count))
+	if (unlikely(!adev || pa_index >= adev->page_count || adev->is_hist))
 		return;
 
-	if (!adev->is_hist)
-		adev->access_bit_actc_data[pa_index]++;
+	adev->access_bit_actc_data[pa_index]++;
 }
 
 static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
@@ -489,6 +488,123 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 
 	if (access_pid_cur_last_scanning(ap))
 		add_to_bm_huge(host_va, paddr, ap);
+
+	return 0;
+}
+
+#if defined(CONFIG_GUP_GET_PXX_LOW_HIGH) && \
+	(defined(CONFIG_SMP) || defined(CONFIG_PREEMPT_RCU))
+/*
+ * See the comment above ptep_get_lockless() in include/linux/pgtable.h:
+ * the barriers in pmdp_get_lockless() cannot guarantee that the value in
+ * pmd_high actually belongs with the value in pmd_low; but holding interrupts
+ * off blocks the TLB flush between present updates, which guarantees that a
+ * successful __pte_offset_map() points to a page from matched halves.
+ */
+static unsigned long pmdp_get_lockless_start(void)
+{
+	unsigned long irqflags;
+
+	local_irq_save(irqflags);
+	return irqflags;
+}
+static void pmdp_get_lockless_end(unsigned long irqflags)
+{
+	local_irq_restore(irqflags);
+}
+#else
+static unsigned long pmdp_get_lockless_start(void) { return 0; }
+static void pmdp_get_lockless_end(unsigned long irqflags) { }
+#endif
+
+pte_t *__pte_offset_map(pmd_t *pmd, unsigned long addr, pmd_t *pmdvalp)
+{
+	unsigned long irqflags;
+	pmd_t pmdval;
+
+	rcu_read_lock();
+	irqflags = pmdp_get_lockless_start();
+	pmdval = pmdp_get_lockless(pmd);
+	pmdp_get_lockless_end(irqflags);
+
+	if (pmdvalp)
+		*pmdvalp = pmdval;
+	if (unlikely(pmd_none(pmdval) || is_pmd_migration_entry(pmdval)))
+		goto nomap;
+	if (unlikely(pmd_trans_huge(pmdval) || pmd_devmap(pmdval)))
+		goto nomap;
+	if (unlikely(pmd_bad(pmdval))) {
+		pmd_clear_bad(pmd);
+		goto nomap;
+	}
+	return __pte_map(&pmdval, addr);
+nomap:
+	rcu_read_unlock();
+	return NULL;
+}
+
+pte_t *smap_pte_offset(struct mm_struct *mm, unsigned long addr)
+{
+	pgd_t *pgd;
+	p4d_t *p4d;
+	pud_t *pud;
+	pmd_t *pmd;
+	pte_t *pte;
+
+	pgd = pgd_offset(mm, addr);
+	if (!pgd_present(READ_ONCE(*pgd)))
+		return NULL;
+
+	p4d = p4d_offset(pgd, addr);
+	if (!p4d_present(READ_ONCE(*p4d)))
+		return NULL;
+
+	pud = pud_offset(p4d, addr);
+	if (!pud_present(READ_ONCE(*pud)))
+		return NULL;
+
+	pmd = pmd_offset(pud, addr);
+	if (!pmd_present(READ_ONCE(*pmd)))
+		return NULL;
+
+	pte = pte_offset_map(pmd, addr);
+	return pte;
+}
+
+static int hva_to_hpa_4k(struct kvm *kvm, u64 host_va, struct access_pid *ap,
+			 bool is_young)
+{
+	pte_t *ptep;
+	pte_t pte;
+	phys_addr_t paddr;
+
+	if (!kvm)
+		return -EINVAL;
+
+	ptep = smap_pte_offset(kvm->mm, host_va);
+	if (!ptep) {
+		return -EFAULT;
+	}
+
+#ifdef KERNEL_VELINUX
+	pte = ptep_get(ptep);
+#else
+	pte = __ptep_get(ptep);
+#endif
+	if (!pte_present(pte)) {
+		pr_debug("unable to get PTE\n");
+		pte_unmap(ptep);
+		return -EINVAL;
+	}
+
+	paddr = __pte_to_phys(pte);
+	pte_unmap(ptep);
+
+	if (is_young)
+		actc_data_add_fast(paddr, PAGE_SIZE);
+
+	if (access_pid_cur_last_scanning(ap))
+		add_to_bm_page(paddr, ap);
 
 	return 0;
 }
@@ -604,6 +720,8 @@ static int hva_to_hpa(struct kvm *kvm, u64 host_va, struct access_pid *ap,
 		} else {
 			ret = hva_to_hpa_hugetlb(kvm, host_va, ap, is_young);
 		}
+	} else {
+		ret = hva_to_hpa_4k(kvm, host_va, ap, is_young);
 	}
 	return ret;
 }
@@ -704,6 +822,86 @@ static bool memslot_is_mem(struct kvm_memory_slot *memslot)
 	return true;
 }
 
+/* Context passed to the bulk stage-2 walker callback for each young PTE */
+struct smap_bulk_memslot_ctx {
+	struct kvm *kvm;
+	struct kvm_memory_slot *memslot;
+	struct access_pid *ap;
+};
+
+/*
+ * smap_bulk_pte_cb — per-PTE callback for bulk stage-2 mkold range walk.
+ *
+ * Called by smap_stage2_range_walker for each valid leaf PTE in the walk
+ * range. Converts GPA to HVA via the memslot and records the physical page
+ * frame (and updates actc_data for young pages) via hva_to_hpa.
+ */
+static int smap_bulk_pte_cb(u64 gpa, u64 hpa, bool young, bool pte_valid,
+			    void *arg)
+{
+	struct smap_bulk_memslot_ctx *ctx = arg;
+	struct access_pid *ap = ctx->ap;
+	unsigned long hva;
+	int ret = 0;
+
+	/* Skip cold PTEs unless this is the last scan (need page counting) */
+	if (!young && !access_pid_cur_last_scanning(ap))
+		return 0;
+
+	if (pte_valid) {
+		if (young)
+			actc_data_add_fast(hpa, PAGE_SIZE);
+		if (access_pid_cur_last_scanning(ap))
+			add_to_bm_page(hpa, ap);
+	} else {
+		hva = gfn_to_hva_memslot(ctx->memslot, gpa >> PAGE_SHIFT);
+		ret = hva_to_hpa(ctx->kvm, hva, ap, young);
+	}
+
+	return ret;
+}
+
+static void smap_bulk_hole_cb(u64 gpa_start, u64 gpa_end, void *arg)
+{
+	struct smap_bulk_memslot_ctx *ctx = arg;
+	struct access_pid *ap = ctx->ap;
+	unsigned long hva;
+	gfn_t start = gpa_start >> PAGE_SHIFT;
+	gfn_t end = gpa_end >> PAGE_SHIFT;
+	gfn_t gfn;
+
+	if (!access_pid_cur_last_scanning(ap))
+		return;
+
+	for (gfn = start; gfn < end; gfn++) {
+		hva = gfn_to_hva_memslot(ctx->memslot, gfn);
+		(void)hva_to_hpa(ctx->kvm, hva, ap, false);
+	}
+}
+
+static int process_memslot_pages_4k(struct kvm *kvm,
+				    struct kvm_memory_slot *memslot,
+				    struct access_pid *ap)
+{
+	u64 memslot_start = memslot->base_gfn << PAGE_SHIFT;
+	u64 memslot_end = (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
+	struct smap_bulk_memslot_ctx bulk_ctx = {
+		.kvm = kvm,
+		.memslot = memslot,
+		.ap = ap,
+	};
+	struct smap_stage2_range_data range_data = {
+		.on_pte = smap_bulk_pte_cb,
+		.on_hole = smap_bulk_hole_cb,
+		.cb_arg = &bulk_ctx,
+	};
+
+	(void)smap_kvm_pgtable_stage2_mkold_range(kvm->arch.mmu.pgt,
+		memslot_start, memslot_end - memslot_start, &range_data);
+
+	return 0;
+}
+
 static int collect_statistic_vaddr(struct kvm *kvm,
 				   struct kvm_memory_slot *memslot,
 				   struct access_pid *ap, int page_size,
@@ -777,6 +975,9 @@ static int scan_kvm_memslots(struct kvm *kvm, struct access_pid *ap,
 		return -EINVAL;
 
 	if (ap->type == STATISTIC_SCAN) {
+		if (page_size != g_pagesize_huge) {
+			return -EINVAL;
+		}
 		nr_pages = 0;
 		kvm_for_each_memslot(memslot, bkt, slots) {
 			if (!memslot_is_mem(memslot))
@@ -803,7 +1004,11 @@ static int scan_kvm_memslots(struct kvm *kvm, struct access_pid *ap,
 		kvm_for_each_memslot(memslot, bkt, slots) {
 			if (!memslot_is_mem(memslot))
 				continue;
-			process_memslot_pages(kvm, memslot, ap, page_size);
+			if (page_size == g_pagesize_huge) {
+				process_memslot_pages(kvm, memslot, ap, page_size);
+			} else {
+				process_memslot_pages_4k(kvm, memslot, ap);
+			}
 		}
 		kvm_flush_remote_tlbs(kvm);
 	}
@@ -1289,7 +1494,7 @@ static void release_resources(struct file *filp, struct task_struct *task,
 		put_pid(pid);
 }
 
-static int scan_forward_2M(struct access_pid *ap, int page_size)
+static int scan_forward_vm(struct access_pid *ap, int page_size)
 {
 	int srcu_idx;
 	struct file *filp;
@@ -1711,19 +1916,23 @@ int pid_pte_mkold(struct access_pid *ap)
 	return 0;
 }
 
-int scan_accessed_bit_forward_vm(struct access_pid *ap, int page_size)
+int scan_accessed_bit_forward_hugepage(struct access_pid *ap, int page_size)
 {
 	if (page_size == g_pagesize_huge) {
-		return scan_forward_2M(ap, page_size);
+		return scan_forward_vm(ap, page_size);
 	} else {
 		return -EINVAL;
 	}
 }
 
-int scan_accessed_bit_forward_mm(struct access_pid *ap, int page_size)
+int scan_accessed_bit_forward_smallpage(struct access_pid *ap, int page_size)
 {
 	if (page_size == PAGE_SIZE) {
-		return scan_forward_4k_mm(ap, page_size);
+		if (process_type == TYPE_PROC) {
+			return scan_forward_4k_mm(ap, page_size);
+		} else if (process_type == TYPE_VM) {
+			return scan_forward_vm(ap, page_size);
+		}
 	}
 	return -EINVAL;
 }

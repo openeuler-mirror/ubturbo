@@ -28,6 +28,7 @@
 #include "kvm_pgtable.h"
 #include "access_pid.h"
 #include "accessed_bit.h"
+#include "access_tracking.h"
 #include "access_tracking_wrapper.h"
 #include "access_iomem.h"
 #include "hist_tracking.h"
@@ -367,6 +368,7 @@ TEST_F(AccessedBitTest, hvaToHpaWithErrorVma)
 }
 
 extern "C" int hva_to_hpa_ham(struct kvm *kvm, u64 host_va, pid_t pid);
+extern "C" pte_t *smap_pte_offset(struct mm_struct *mm, unsigned long addr);
 TEST_F(AccessedBitTest, hvaToHpaTest)
 {
     int ret;
@@ -377,16 +379,17 @@ TEST_F(AccessedBitTest, hvaToHpaTest)
     ap.type = HAM_SCAN;
     ap.pid = 1;
 
-    // ret value of hva_to_hpa_hugetlb and hva_to_hpa_ham is ignored,
-    // since all following tests should success
+    // 4K path: is_vm_hugetlb_page=false -> hva_to_hpa_4k -> smap_pte_offset
     MOCKER(find_vma).stubs().will(returnValue(&vma));
     MOCKER(is_vm_hugetlb_page).stubs().will(returnValue(false));
+    MOCKER(smap_pte_offset).stubs().will(returnValue((pte_t *)nullptr));
     ret = hva_to_hpa(&kvm, 0, &ap, true);
-    EXPECT_EQ(0, ret);
+    EXPECT_EQ(-EFAULT, ret);
     ret = hva_to_hpa(&kvm, 0, &ap, true);
-    EXPECT_EQ(0, ret);
+    EXPECT_EQ(-EFAULT, ret);
 
     GlobalMockObject::verify();
+    // hugetlb path: is_vm_hugetlb_page=true -> hva_to_hpa_ham / hva_to_hpa_hugetlb
     MOCKER(find_vma).stubs().will(returnValue(&vma));
     MOCKER(is_vm_hugetlb_page).stubs().will(returnValue(true));
     MOCKER(hva_to_hpa_ham).stubs()
@@ -402,7 +405,7 @@ TEST_F(AccessedBitTest, hvaToHpaTest)
 }
 
 extern "C" struct vm_area_struct *get_vma_if_huge_page(struct kvm *kvm, unsigned long host_va);
-extern "C" int scan_kvm_memslots(struct kvm *kvm, pid_t pid, int page_size, scan_type type);
+extern "C" int scan_kvm_memslots(struct kvm *kvm, struct access_pid *ap, int page_size);
 TEST_F(AccessedBitTest, scanKvmMemslotsWithNullKvm)
 {
     int ret;
@@ -416,12 +419,12 @@ TEST_F(AccessedBitTest, scanKvmMemslotsWithNullKvm)
         .arch = arch
     };
     struct kvm_memslots slots;
-
-    ret = scan_kvm_memslots(&kvm, 1, 0, STATISTIC_SCAN);
-    EXPECT_EQ(-EINVAL, ret);
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
 
     MOCKER(kvm_memslots).stubs().will(returnValue((struct kvm_memslots *)nullptr));
-    ret = scan_kvm_memslots(&kvm, 1, 0, STATISTIC_SCAN);
+    ret = scan_kvm_memslots(&kvm, &ap, PAGE_SIZE_4K);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -704,7 +707,7 @@ extern "C" bool IS_ERR(const void *ptr);
 extern "C" struct mm_struct *mock_get_mm_by_pid(pid_t pid);
 extern "C" int take_vma_snapshot(struct mm_struct *mm,
                                  struct smap_vma_struct **vma_arr, int *vma_count);
-TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_fail)
+TEST_F(AccessedBitTest, scan_accessed_bit_forward_smallpage_fail)
 {
     struct mm_struct mm;
     struct access_pid ap;
@@ -712,11 +715,11 @@ TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_fail)
     ap.type = NORMAL_SCAN;
 
     MOCKER(mock_get_mm_by_pid).stubs().will(returnValue(static_cast<struct mm_struct *>(nullptr)));
-    int ret = scan_accessed_bit_forward_mm(&ap, PAGE_SIZE_4K);
+    int ret = scan_accessed_bit_forward_smallpage(&ap, PAGE_SIZE_4K);
     EXPECT_EQ(-EINVAL, ret);
 }
 
-TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_success)
+TEST_F(AccessedBitTest, scan_accessed_bit_forward_smallpage_success)
 {
     struct mm_struct mm;
     struct access_pid ap;
@@ -728,16 +731,16 @@ TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_success)
     MOCKER(IS_ERR).stubs().will(returnValue(false));
     MOCKER(take_vma_snapshot).stubs().will(returnValue(0));
     MOCKER(kfree).stubs().will(ignoreReturnValue());
-    int ret = scan_accessed_bit_forward_mm(&ap, PAGE_SIZE_4K);
+    int ret = scan_accessed_bit_forward_smallpage(&ap, PAGE_SIZE_4K);
     EXPECT_EQ(0, ret);
 }
 
-TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_invalid_page)
+TEST_F(AccessedBitTest, scan_accessed_bit_forward_smallpage_invalid_page)
 {
     struct access_pid ap;
     ap.pid = 1;
     ap.type = NORMAL_SCAN;
-    int ret = scan_accessed_bit_forward_mm(&ap, PAGE_SIZE_2M);
+    int ret = scan_accessed_bit_forward_smallpage(&ap, PAGE_SIZE_2M);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -1102,15 +1105,15 @@ TEST_F(AccessedBitTest, GetVmaIfHugePageIsHugetlb)
     EXPECT_NE(nullptr, ret);
 }
 
-// ========== DT supplement: scan_accessed_bit_forward_vm ==========
+// ========== DT supplement: scan_accessed_bit_forward_hugepage ==========
 
-extern "C" int scan_accessed_bit_forward_vm(struct access_pid *ap, int page_size);
+extern "C" int scan_accessed_bit_forward_hugepage(struct access_pid *ap, int page_size);
 TEST_F(AccessedBitTest, ScanAccessedBitForwardVmInvalidPageSize)
 {
     struct access_pid ap;
     ap.pid = 1;
     ap.type = NORMAL_SCAN;
-    int ret = scan_accessed_bit_forward_vm(&ap, PAGE_SIZE_4K);
+    int ret = scan_accessed_bit_forward_hugepage(&ap, PAGE_SIZE_4K);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -1119,7 +1122,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmNoScan)
     struct access_pid ap;
     ap.pid = 1;
     ap.type = NO_SCAN;
-    int ret = scan_accessed_bit_forward_vm(&ap, PAGE_SIZE_2M);
+    int ret = scan_accessed_bit_forward_hugepage(&ap, PAGE_SIZE_2M);
     EXPECT_EQ(0, ret);
 }
 
@@ -1129,7 +1132,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmFindPidFail)
     ap.pid = 1;
     ap.type = NORMAL_SCAN;
     MOCKER(find_get_pid).stubs().will(returnValue((struct pid*)nullptr));
-    int ret = scan_accessed_bit_forward_vm(&ap, PAGE_SIZE_2M);
+    int ret = scan_accessed_bit_forward_hugepage(&ap, PAGE_SIZE_2M);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -1141,7 +1144,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmGetTaskFail)
     ap.type = NORMAL_SCAN;
     MOCKER(find_get_pid).stubs().will(returnValue(&pid_s));
     MOCKER(get_pid_task).stubs().will(returnValue((struct task_struct*)nullptr));
-    int ret = scan_accessed_bit_forward_vm(&ap, PAGE_SIZE_2M);
+    int ret = scan_accessed_bit_forward_hugepage(&ap, PAGE_SIZE_2M);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -1155,7 +1158,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmGetKvmFileFail)
     MOCKER(find_get_pid).stubs().will(returnValue(&pid_s));
     MOCKER(get_pid_task).stubs().will(returnValue(&task));
     MOCKER(get_kvm_file_from_task).stubs().will(returnValue((struct file*)nullptr));
-    int ret = scan_accessed_bit_forward_vm(&ap, PAGE_SIZE_2M);
+    int ret = scan_accessed_bit_forward_hugepage(&ap, PAGE_SIZE_2M);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -1580,3 +1583,434 @@ TEST_F(AccessedBitTest, ProcessScanResultsBothFallbacksFail)
     GlobalMockObject::verify();
 }
 
+// ========== DT supplement: 4K VM scanning (commit 9abf4e3c) ==========
+
+extern "C" int hva_to_hpa_4k(struct kvm *kvm, u64 host_va, struct access_pid *ap, bool is_young);
+
+TEST_F(AccessedBitTest, StubPteOffsetReturnsNullWithStubs)
+{
+    /* With test stubs pgd_present always returns 0,
+       so smap_pte_offset always returns NULL */
+    struct mm_struct mm;
+    pte_t *ret = smap_pte_offset(&mm, 0x1000);
+    EXPECT_EQ(nullptr, ret);
+}
+
+TEST_F(AccessedBitTest, HvaToHpa4kNullKvm)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
+    int ret = hva_to_hpa_4k(nullptr, 0x1000, &ap, true);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(AccessedBitTest, HvaToHpa4kStubPteOffsetReturnsNull)
+{
+    struct mm_struct mm;
+    struct kvm kvm = { .mm = &mm };
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
+
+    MOCKER(smap_pte_offset).stubs().will(returnValue((pte_t *)nullptr));
+    int ret = hva_to_hpa_4k(&kvm, 0x1000, &ap, true);
+    EXPECT_EQ(-EFAULT, ret);
+}
+
+TEST_F(AccessedBitTest, HvaToHpa4kSuccess)
+{
+    struct mm_struct mm;
+    struct kvm kvm = { .mm = &mm };
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+    pte_t pte_storage = { .pte = 0x1000 };
+
+    MOCKER(smap_pte_offset).stubs().will(returnValue(&pte_storage));
+    int ret = hva_to_hpa_4k(&kvm, 0x1000, &ap, true);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(AccessedBitTest, HvaToHpaNonHuge4kPath)
+{
+    struct mm_struct mm;
+    struct kvm kvm = { .mm = &mm };
+    struct vm_area_struct vma;
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
+
+    MOCKER(find_vma).stubs().will(returnValue(&vma));
+    MOCKER(is_vm_hugetlb_page).stubs().will(returnValue(false));
+    MOCKER(smap_pte_offset).stubs().will(returnValue((pte_t *)nullptr));
+    int ret = hva_to_hpa(&kvm, 0x1000, &ap, true);
+    EXPECT_EQ(-EFAULT, ret);
+}
+
+TEST_F(AccessedBitTest, HvaToHpaNonHuge4kPathSuccess)
+{
+    struct mm_struct mm;
+    struct kvm kvm = { .mm = &mm };
+    struct vm_area_struct vma;
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+    pte_t pte_storage = { .pte = 0x2000 };
+
+    MOCKER(find_vma).stubs().will(returnValue(&vma));
+    MOCKER(is_vm_hugetlb_page).stubs().will(returnValue(false));
+    MOCKER(smap_pte_offset).stubs().will(returnValue(&pte_storage));
+    int ret = hva_to_hpa(&kvm, 0x1000, &ap, true);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(AccessedBitTest, ScanKvmMemslotsNullPgt)
+{
+    struct mm_struct mm;
+    struct kvm_arch arch = { .mmu = { 0 } };
+    struct kvm kvm = { .mm = &mm, .arch = arch };
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
+    int ret = scan_kvm_memslots(&kvm, &ap, PAGE_SIZE_4K);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(AccessedBitTest, ScanKvmMemslotsNullSlots)
+{
+    struct mm_struct mm;
+    struct kvm_pgtable pgt;
+    struct kvm_arch arch = { .mmu = { 0 } };
+    arch.mmu.pgt = &pgt;
+    struct kvm kvm = { .mm = &mm, .arch = arch };
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
+    MOCKER(kvm_memslots).stubs().will(returnValue((struct kvm_memslots *)nullptr));
+    int ret = scan_kvm_memslots(&kvm, &ap, PAGE_SIZE_4K);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(AccessedBitTest, ScanKvmMemslotsStatScan4kRejected)
+{
+    struct mm_struct mm;
+    struct kvm_pgtable pgt;
+    struct kvm_arch arch = { .mmu = { 0 } };
+    arch.mmu.pgt = &pgt;
+    struct kvm kvm = { .mm = &mm, .arch = arch };
+    struct kvm_memslots slots;
+    struct access_pid ap;
+    ap.type = STATISTIC_SCAN;
+    ap.pid = 1;
+    g_pagesize_huge = PAGE_SIZE_2M;
+    MOCKER(kvm_memslots).stubs().will(returnValue(&slots));
+    int ret = scan_kvm_memslots(&kvm, &ap, PAGE_SIZE_4K);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int scan_forward_vm(struct access_pid *ap, int page_size);
+TEST_F(AccessedBitTest, ScanForwardVm4kNullKvmData)
+{
+    struct access_pid ap;
+    struct pid pid_s;
+    struct task_struct task;
+    struct file filp;
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    filp.private_data = nullptr;
+    MOCKER(find_get_pid).stubs().will(returnValue(&pid_s));
+    MOCKER(get_pid_task).stubs().will(returnValue(&task));
+    MOCKER(get_kvm_file_from_task).stubs().will(returnValue(&filp));
+    int ret = scan_forward_vm(&ap, PAGE_SIZE_4K);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(AccessedBitTest, ScanForwardVm4kCallsScanKvmMemslots4k)
+{
+    struct access_pid ap;
+    struct pid pid_s;
+    struct task_struct task;
+    struct file filp;
+    struct mm_struct mm;
+    struct kvm_pgtable pgt;
+    struct kvm_arch arch = { .mmu = { 0 } };
+    arch.mmu.pgt = &pgt;
+    struct kvm kvm_tmp = { .mm = &mm, .arch = arch };
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    filp.private_data = &kvm_tmp;
+    MOCKER(find_get_pid).stubs().will(returnValue(&pid_s));
+    MOCKER(get_pid_task).stubs().will(returnValue(&task));
+    MOCKER(get_kvm_file_from_task).stubs().will(returnValue(&filp));
+    MOCKER(pre_scan_kvm_memslots).stubs().will(returnValue(1));
+    MOCKER(post_scan_kvm_memslots).stubs();
+    MOCKER(kvm_memslots).stubs().will(returnValue((struct kvm_memslots *)nullptr));
+    int ret = scan_forward_vm(&ap, PAGE_SIZE_4K);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(AccessedBitTest, ScanForwardVmHugePageSize)
+{
+    struct access_pid ap;
+    struct pid pid_s;
+    struct task_struct task;
+    struct file filp;
+    struct mm_struct mm;
+    struct kvm_pgtable pgt;
+    struct kvm_arch arch = { .mmu = { 0 } };
+    arch.mmu.pgt = &pgt;
+    struct kvm kvm_tmp = { .mm = &mm, .arch = arch };
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    filp.private_data = &kvm_tmp;
+    g_pagesize_huge = PAGE_SIZE_2M;
+    MOCKER(find_get_pid).stubs().will(returnValue(&pid_s));
+    MOCKER(get_pid_task).stubs().will(returnValue(&task));
+    MOCKER(get_kvm_file_from_task).stubs().will(returnValue(&filp));
+    MOCKER(pre_scan_kvm_memslots).stubs().will(returnValue(1));
+    MOCKER(post_scan_kvm_memslots).stubs();
+    MOCKER(kvm_memslots).stubs().will(returnValue((struct kvm_memslots *)nullptr));
+    int ret = scan_forward_vm(&ap, PAGE_SIZE_2M);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(AccessedBitTest, ScanAccessedBitForwardMmTypeVmNullKvm)
+{
+    struct access_pid ap;
+    struct pid pid_s;
+    struct task_struct task;
+    struct file filp;
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    filp.private_data = nullptr;
+    process_type = TYPE_VM;
+    MOCKER(find_get_pid).stubs().will(returnValue(&pid_s));
+    MOCKER(get_pid_task).stubs().will(returnValue(&task));
+    MOCKER(get_kvm_file_from_task).stubs().will(returnValue(&filp));
+    int ret = scan_accessed_bit_forward_smallpage(&ap, PAGE_SIZE_4K);
+    EXPECT_EQ(-EINVAL, ret);
+    process_type = TYPE_PROC;
+}
+
+TEST_F(AccessedBitTest, ScanAccessedBitForwardMmTypeVmSuccess)
+{
+    struct access_pid ap;
+    struct pid pid_s;
+    struct task_struct task;
+    struct file filp;
+    struct mm_struct mm;
+    struct kvm_pgtable pgt;
+    struct kvm_arch arch = { .mmu = { 0 } };
+    arch.mmu.pgt = &pgt;
+    struct kvm kvm_tmp = { .mm = &mm, .arch = arch };
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    filp.private_data = &kvm_tmp;
+    process_type = TYPE_VM;
+    MOCKER(find_get_pid).stubs().will(returnValue(&pid_s));
+    MOCKER(get_pid_task).stubs().will(returnValue(&task));
+    MOCKER(get_kvm_file_from_task).stubs().will(returnValue(&filp));
+    MOCKER(pre_scan_kvm_memslots).stubs().will(returnValue(1));
+    MOCKER(post_scan_kvm_memslots).stubs();
+    MOCKER(kvm_memslots).stubs().will(returnValue((struct kvm_memslots *)nullptr));
+    int ret = scan_accessed_bit_forward_smallpage(&ap, PAGE_SIZE_4K);
+    EXPECT_EQ(0, ret);
+    process_type = TYPE_PROC;
+}
+
+TEST_F(AccessedBitTest, ScanAccessedBitForwardMmTypeProc)
+{
+    struct mm_struct mm;
+    struct access_pid ap;
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    process_type = TYPE_PROC;
+    MOCKER(mock_get_mm_by_pid).stubs().will(returnValue(&mm));
+    MOCKER(IS_ERR).stubs().will(returnValue(false));
+    MOCKER(take_vma_snapshot).stubs().will(returnValue(0));
+    MOCKER(kfree).stubs().will(ignoreReturnValue());
+    int ret = scan_accessed_bit_forward_smallpage(&ap, PAGE_SIZE_4K);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(AccessedBitTest, ScanAccessedBitForwardVmHugePageRenamed)
+{
+    struct access_pid ap;
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    g_pagesize_huge = PAGE_SIZE_2M;
+    MOCKER(find_get_pid).stubs().will(returnValue((struct pid *)nullptr));
+    int ret = scan_accessed_bit_forward_hugepage(&ap, PAGE_SIZE_2M);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+// ========== DT supplement: smap_bulk_pte_cb ==========
+
+extern "C" int kvm_pgtable_walk(struct kvm_pgtable *pgt, u64 addr, u64 size,
+                                struct kvm_pgtable_walker *walker);
+extern "C" int add_to_bm_page(u64 paddr, struct access_pid *ap);
+
+struct smap_bulk_memslot_ctx {
+    struct kvm *kvm;
+    struct kvm_memory_slot *memslot;
+    struct access_pid *ap;
+};
+
+extern "C" int smap_bulk_pte_cb(u64 gpa, u64 hpa, bool young, bool pte_valid, void *arg);
+
+TEST_F(AccessedBitTest, BulkPteCbColdNotLastScanSkips)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    /* young=false, last_scanning=false → early return */
+    int ret = smap_bulk_pte_cb(0x1000, 0x2000, false, true, &ctx);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(AccessedBitTest, BulkPteCbValidYoungCallsActcAddFast)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    MOCKER(actc_data_add_fast).expects(exactly(1));
+    int ret = smap_bulk_pte_cb(0x1000, 0x2000, true, true, &ctx);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(AccessedBitTest, BulkPteCbValidLastScanCallsAddToBmPage)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    MOCKER(actc_data_add_fast).stubs();
+    MOCKER(add_to_bm_page).expects(exactly(1)).will(returnValue(0));
+    int ret = smap_bulk_pte_cb(0x1000, 0x2000, true, true, &ctx);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(AccessedBitTest, BulkPteCbInvalidPteCallsHvaToHpa)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    /* gpa=0x1000, PAGE_SHIFT=12, gfn = 0x1000 >> 12 = 1
+       gfn_to_hva_memslot returns 0 (stub) → hva_to_hpa called with hva=0 */
+    MOCKER(hva_to_hpa).expects(exactly(1)).will(returnValue(0));
+    int ret = smap_bulk_pte_cb(0x1000, 0x2000, true, false, &ctx);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(AccessedBitTest, BulkPteCbColdLastScanCallsHvaToHpa)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    /* young=false but last_scanning=true → does NOT skip.
+       pte_valid=true → add_to_bm_page(hpa, ap) */
+    MOCKER(add_to_bm_page).expects(exactly(1)).will(returnValue(0));
+    int ret = smap_bulk_pte_cb(0x1000, 0x2000, false, true, &ctx);
+    EXPECT_EQ(0, ret);
+}
+
+// ========== DT supplement: smap_bulk_hole_cb ==========
+
+extern "C" void smap_bulk_hole_cb(u64 gpa_start, u64 gpa_end, void *arg);
+
+TEST_F(AccessedBitTest, BulkHoleCbNotLastScanSkips)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    /* Not last scan → early return, no hva_to_hpa call */
+    smap_bulk_hole_cb(0x1000, 0x3000, &ctx);
+}
+
+TEST_F(AccessedBitTest, BulkHoleCbLastScanCallsHvaToHpa)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm_obj = {};
+    struct kvm_memory_slot memslot = {};
+    struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+
+    /* Last scan: iterates from gfn=1 to gfn=2 (2 pages) */
+    MOCKER(hva_to_hpa).expects(exactly(2)).will(returnValue(0));
+    smap_bulk_hole_cb(0x1000, 0x3000, &ctx);
+}
+
+// ========== DT supplement: process_memslot_pages_4k ==========
+
+extern "C" int process_memslot_pages_4k(struct kvm *kvm,
+                                        struct kvm_memory_slot *memslot,
+                                        struct access_pid *ap);
+
+TEST_F(AccessedBitTest, ProcessMemslotPages4kCallsBulkWalk)
+{
+    struct mm_struct mm;
+    struct kvm_pgtable pgt;
+    struct kvm_arch arch = { .mmu = { 0 } };
+    arch.mmu.pgt = &pgt;
+    struct kvm kvm_obj = { .mm = &mm, .arch = arch };
+
+    struct kvm_memory_slot memslot;
+    memslot.base_gfn = 1;
+    memslot.npages = 512;
+    memslot.userspace_addr = 0x100000;
+
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    /* memslot_start = 1 << 12 = 0x1000
+       memslot_end = (1+512) << 12 = 0x201000
+       size = 0x201000 - 0x1000 = 0x200000 */
+    MOCKER(kvm_pgtable_walk).stubs().will(returnValue(0));
+    int ret = process_memslot_pages_4k(&kvm_obj, &memslot, &ap);
+    EXPECT_EQ(0, ret);
+}

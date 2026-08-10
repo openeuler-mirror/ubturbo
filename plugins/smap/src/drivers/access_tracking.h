@@ -19,6 +19,7 @@
 
 extern u32 g_pagesize_huge;
 extern unsigned int enable_hist;
+extern unsigned int process_type;
 
 enum access_page_mode {
 	PAGE_MODE_4K = 0,
@@ -29,6 +30,11 @@ enum hist_status {
 	DISABLE_HIST,
 	ENABLE_HIST,
 	NR_STATUS_ARGS,
+};
+
+enum smap_process_type {
+	TYPE_PROC,
+	TYPE_VM,
 };
 
 #define AB_ACTC_ELEM_SIZE 16
@@ -80,7 +86,6 @@ static inline int get_page_size(struct access_tracking_dev *adev)
 
 void cancel_ap_scan_work(struct access_pid *ap);
 int set_scan_cpus(u32 cpu_start, u32 cpu_end);
-bool is_access_hugepage(void);
 void submit_one_work(struct access_pid *ap);
 ktime_t calc_time_us(ktime_t start_time);
 #endif /* _SRC_ACCESS_TRACKING_H */

@@ -273,7 +273,7 @@ TEST_F(AccessTrackingTest, drivers_work_func)
     ap.cur_times = 0;
     ap.ntimes = 10;
     ap.pid = 1;
-    MOCKER(scan_accessed_bit_forward_vm).stubs().will(returnValue(0));
+    MOCKER(scan_accessed_bit_forward_hugepage).stubs().will(returnValue(0));
     drivers_work_func(&ap.scan_work.work);
     EXPECT_EQ(1, ap.cur_times);
 

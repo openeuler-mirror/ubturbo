@@ -176,42 +176,6 @@ bool PidIsValid(pid_t pid)
     return access(path, F_OK) == 0;
 }
 
-int IsQemuTask(pid_t pid)
-{
-    char comm[BUFFER_SIZE];
-    char cmdBuf[BUFFER_SIZE];
-    int ret = snprintf_s(cmdBuf, sizeof(cmdBuf), sizeof(cmdBuf) - 1, "%s %d comm %s", CAT_SCRIPT_CAT_PATH, pid,
-                         CAT_SCRIPT_TAIL);
-    if (ret < 0) {
-        SMAP_LOGGER_ERROR("Failed to generate cmd string, ret is %d.", ret);
-        return -EINVAL;
-    }
-    SMAP_LOGGER_INFO("Before open comm file");
-    FILE *file = popen(cmdBuf, "r");
-    if (!file) {
-        SMAP_LOGGER_ERROR("Failed to open file, errno is %d.", errno);
-        return -EINVAL;
-    }
-    if (fgets(comm, sizeof(comm), file)) {
-        SMAP_LOGGER_DEBUG("Skip the first line of comm file.");
-    }
-    if (fgets(comm, sizeof(comm), file)) {
-        SMAP_LOGGER_INFO("After fgets comm file");
-        pclose(file);
-        if ((strncmp(comm, VM_NAME_STR, PID_NAME_LEN) == 0) ||
-            (strncmp(comm, VM_KVM_NAME_STR, PID_KVM_NAME_LEN) == 0)) {
-            ret = VM_TYPE;
-        } else {
-            ret = PROCESS_TYPE;
-        }
-        return ret;
-    }
-    SMAP_LOGGER_ERROR("Error occur in fgets comm file");
-
-    (void)pclose(file);
-    return -1;
-}
-
 void LinkedListAdd(ProcessAttr **head, ProcessAttr **add)
 {
     (*add)->next = *head;
@@ -381,11 +345,6 @@ static int CheckPid(pid_t pid)
     if (!PidIsValid(pid)) {
         SMAP_LOGGER_ERROR("Input pid %d is invalid.", pid);
         return -ESRCH;
-    }
-    ret = IsQemuTask(pid);
-    if (ret != type) {
-        SMAP_LOGGER_ERROR("Pid %d type(%d) conflict with current pid type(%d).", pid, ret, type);
-        return -EINVAL;
     }
     return 0;
 }

@@ -369,3 +369,77 @@ bool smap_kvm_pgtable_stage2_is_young(struct kvm_pgtable *pgt, u64 addr)
 {
 	return smap_kvm_pgtable_stage2_test_clear_young(pgt, addr, false);
 }
+
+/*
+ * smap_stage2_range_walker — bulk leaf callback for stage-2 mkold range walk.
+ *
+ * Called for each leaf PTE in the range. Reads the access flag, invokes the
+ * caller's per-PTE callback (which typically records the HVA and updates
+ * actc_data), then clears AF via cmpxchg. On cmpxchg race returns -EAGAIN;
+ * the walk continues because HANDLE_FAULT is not set.
+ *
+ * Counters in struct smap_stage2_range_data are updated for each valid PTE
+ * so the caller can decide (e.g. via suitable_to_scan) whether to mark the
+ * enclosing PMD as hot in the bloom filter.
+ */
+static int smap_stage2_range_walker(const struct kvm_pgtable_visit_ctx *ctx,
+				    enum kvm_pgtable_walk_flags visit)
+{
+	struct smap_stage2_range_data *data = ctx->arg;
+	kvm_pte_t new;
+	bool pte_valid;
+	bool young;
+	u64 hpa;
+
+#ifdef KERNEL_VELINUX
+	if (ctx->level < KVM_PGTABLE_LAST_LEVEL) {
+#else
+	if (ctx->level < KVM_PGTABLE_MAX_LEVELS - 1) {
+#endif
+		u64 hole_end = ctx->addr + kvm_granule_size(ctx->level);
+		data->on_hole(ctx->addr, hole_end, data->cb_arg);
+		return 0;
+	}
+
+	pte_valid = kvm_pte_valid(ctx->old);
+	new = ctx->old & ~KVM_PTE_LEAF_ATTR_LO_S2_AF;
+	young = (new != ctx->old);
+	hpa = kvm_pte_to_phys(ctx->old);
+
+	data->total_ptes++;
+	(void)data->on_pte(ctx->addr, hpa, young, pte_valid, data->cb_arg);
+
+	if (pte_valid && young) {
+		data->young_ptes++;
+		stage2_try_set_pte(ctx, new);
+	}
+
+	return 0;
+}
+
+/*
+ * smap_kvm_pgtable_stage2_mkold_range — bulk test-and-clear AF over a GPA range.
+ *
+ * Walks the stage-2 page table for [addr, addr+size), calling @on_pte for
+ * each valid leaf PTE whose access flag is set. The upper page table levels
+ * (PGD, PUD, PMD) are descended only once per invocation, eliminating the
+ * redundant descents incurred by per-4K-page calls.
+ *
+ * @data->total_ptes and @data->young_ptes are set on return so the caller
+ * can update the bloom filter at PMD granularity.
+ */
+int smap_kvm_pgtable_stage2_mkold_range(struct kvm_pgtable *pgt, u64 addr,
+					u64 size,
+					struct smap_stage2_range_data *data)
+{
+	struct kvm_pgtable_walker walker = {
+		.cb = smap_stage2_range_walker,
+		.arg = data,
+		.flags = KVM_PGTABLE_WALK_LEAF | KVM_PGTABLE_WALK_SHARED,
+	};
+
+	data->total_ptes = 0;
+	data->young_ptes = 0;
+
+	return kvm_pgtable_walk(pgt, addr, size, &walker);
+}

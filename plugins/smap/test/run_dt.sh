@@ -167,6 +167,7 @@ replace_string "${code_dir}/src/drivers/accessed_bit.c" "remote_ram_list" "drive
 replace_string "${code_dir}/src/drivers/accessed_bit.c" "walk->private" "walk->private_data" "true"
 replace_string "${code_dir}/src/drivers/accessed_bit.c" "get_mm_by_pid(" "mock_get_mm_by_pid(" "true"
 replace_string "${code_dir}/src/drivers/accessed_bit.c" "calc_paddr_acidx_iomem" "drivers_calc_paddr_acidx_iomem" "true"
+replace_string "${code_dir}/src/drivers/accessed_bit.c" "__pte_offset_map" "smap__pte_offset_map"
 replace_string "${code_dir}/src/drivers/accessed_bit.h" "remote_ram_list" "drivers_remote_ram_list"
 
 replace_string "${code_dir}/src/drivers/access_tracking_wrapper.c" "__pte_offset_map" "drivers__pte_offset_map"
