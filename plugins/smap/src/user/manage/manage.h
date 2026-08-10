@@ -476,6 +476,7 @@ typedef struct {
     uint64_t nrHotPage; // 热页数量
     uint16_t scanPeriod; // 扫描周期
     uint16_t scanMode; // 扫描模式
+    bool trackingEnabled; // tracking当前是否处于enable状态
 } TrackingAttr;
 
 typedef struct { // tracking设备与迁移设备的fd
