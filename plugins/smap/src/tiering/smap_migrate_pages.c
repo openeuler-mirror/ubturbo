@@ -21,9 +21,7 @@
 #include "dump_info.h"
 #include "smap_migrate_wrapper.h"
 #include "common.h"
-#ifdef CRITICAL_OFF
 #include "critical.h"
-#endif
 #include "smap_migrate_pages.h"
 
 #define MAX_MIGRATE_NUMA_RETRY_TIME 10
