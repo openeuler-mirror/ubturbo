@@ -492,7 +492,8 @@ int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][
                 }
                 continue;
             }
-            uint32_t swapPages = MIN(localToRemote, remoteToLocal);
+            uint32_t swapPages =
+                (strategy->ubBwRestrict[remoteNid] == UB_BW_SWAP_STOP) ? 0 : MIN(localToRemote, remoteToLocal);
             uint32_t demotePages = localToRemote - swapPages;
             uint32_t promotePages = remoteToLocal - swapPages;
 

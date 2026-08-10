@@ -61,6 +61,7 @@ typedef struct {
     uint32_t scanCpuMin;
     uint32_t scanCpuMax;
     bool scanCpuEnable;
+    uint32_t ubBwThreshold;
 } StrategyConfig;
 
 typedef struct {
@@ -980,4 +981,62 @@ TEST_F(PeriodConfigTest, PeriodConfigReadTestSuccess)
     MOCKER(PeriodConifgReset).stubs().will(ignoreReturnValue());
 
     StrategyConfigRead(configFile);
+}
+
+
+extern "C" uint32_t GetUbBwThresholdConfig(void);
+TEST_F(PeriodConfigTest, GetUbBwThresholdConfigTest)
+{
+    g_strategyConfig.ubBwThreshold = 0;
+    uint32_t ret = GetUbBwThresholdConfig();
+    EXPECT_EQ(0, ret);
+
+    g_strategyConfig.ubBwThreshold = 1000;
+    ret = GetUbBwThresholdConfig();
+    EXPECT_EQ(1000, ret);
+
+    g_strategyConfig.ubBwThreshold = 65535;
+    ret = GetUbBwThresholdConfig();
+    EXPECT_EQ(65535, ret);
+}
+
+extern "C" int32_t ConfigUbBwThreshold(char *substr, char *value);
+TEST_F(PeriodConfigTest, ConfigUbBwThresholdReadFail)
+{
+    char *substr = "smap.ub.bw.threshold";
+    char *value = "abc";
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
+    int32_t ret = ConfigUbBwThreshold(substr, value);
+    EXPECT_EQ(-1, ret);
+}
+
+TEST_F(PeriodConfigTest, ConfigUbBwThresholdOutOfRange)
+{
+    char *substr = "smap.ub.bw.threshold";
+    char *value = "99999";
+    g_tmpStrategyConfig.ubBwThreshold = 99999;
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
+    int32_t ret = ConfigUbBwThreshold(substr, value);
+    EXPECT_EQ(RETURN_ERROR, ret);
+}
+
+TEST_F(PeriodConfigTest, ConfigUbBwThresholdSuccess)
+{
+    char *substr = "smap.ub.bw.threshold";
+    char *value = "1000";
+    g_tmpStrategyConfig.ubBwThreshold = 1000;
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
+    int32_t ret = ConfigUbBwThreshold(substr, value);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(PeriodConfigTest, ConfigUbBwThresholdZeroAllowed)
+{
+    char *substr = "smap.ub.bw.threshold";
+    char *value = "0";
+    g_tmpStrategyConfig.ubBwThreshold = 0;
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
+    int32_t ret = ConfigUbBwThreshold(substr, value);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(0, g_tmpStrategyConfig.ubBwThreshold);
 }

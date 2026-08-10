@@ -2117,6 +2117,154 @@ TEST_F(MigrationTest, TestPostMigrationSkipsEmptyCompEntryAndFreezes)
     EXPECT_EQ(PROC_IDLE, current.state);
 }
 
+extern "C" void ApplyUbBwStop(ProcessAttr *current, struct ProcessManager *manager);
+extern "C" void GetUbFluxMb(void);
+extern "C" int ConfigUbWatch(uint32_t duration_ms);
+extern "C" UbBwRestrictType ubBwRestrict[MAX_NODES];
+
+TEST_F(MigrationTest, TestApplyUbBwStopThresholdZero)
+{
+    ProcessAttr current = {};
+    struct ProcessManager manager = {};
+    manager.ubBwMonitor.ubBwThreshold = 0;
+    manager.ubBwMonitor.currentFluxRet = 0;
+    current.strategyAttr.nrMigratePages[0][1] = 100;
+    current.strategyAttr.nrMigratePages[1][0] = 200;
+
+    ApplyUbBwStop(&current, &manager);
+    EXPECT_EQ(100, current.strategyAttr.nrMigratePages[0][1]);
+    EXPECT_EQ(200, current.strategyAttr.nrMigratePages[1][0]);
+}
+
+TEST_F(MigrationTest, TestApplyUbBwStopFluxRetFailed)
+{
+    ProcessAttr current = {};
+    struct ProcessManager manager = {};
+    manager.ubBwMonitor.ubBwThreshold = 1000;
+    manager.ubBwMonitor.currentFluxRet = -1;
+    current.strategyAttr.nrMigratePages[0][1] = 100;
+
+    ApplyUbBwStop(&current, &manager);
+    EXPECT_EQ(100, current.strategyAttr.nrMigratePages[0][1]);
+}
+
+TEST_F(MigrationTest, TestApplyUbBwStopBwExceedThreshold)
+{
+    ProcessAttr current = {};
+    struct ProcessManager manager = {};
+    manager.ubBwMonitor.ubBwThreshold = 500;
+    manager.ubBwMonitor.currentFluxRet = 0;
+    manager.ubBwMonitor.currentFluxMb.len = 1;
+    manager.ubBwMonitor.currentFluxMb.flux[0].numaId = 2;
+    manager.ubBwMonitor.currentFluxMb.flux[0].readMb = 300;
+    manager.ubBwMonitor.currentFluxMb.flux[0].writeMb = 300;
+    current.strategyAttr.nrMigratePages[0][2] = 100;
+    current.strategyAttr.nrMigratePages[2][0] = 200;
+    current.strategyAttr.nrMigratePages[1][2] = 50;
+    current.strategyAttr.nrMigratePages[2][1] = 60;
+    current.strategyAttr.nrMigratePages[0][1] = 300;
+
+    ApplyUbBwStop(&current, &manager);
+    /* ApplyUbBwStop only sets ubBwRestrict flag; nrMigratePages cleared by strategy layer */
+    EXPECT_EQ(UB_BW_SWAP_STOP, current.strategyAttr.ubBwRestrict[2]);
+    EXPECT_EQ(UB_BW_NORMAL, current.strategyAttr.ubBwRestrict[0]);
+    EXPECT_EQ(UB_BW_NORMAL, current.strategyAttr.ubBwRestrict[1]);
+}
+
+TEST_F(MigrationTest, TestApplyUbBwStopBwBelowThreshold)
+{
+    ProcessAttr current = {};
+    struct ProcessManager manager = {};
+    manager.ubBwMonitor.ubBwThreshold = 1000;
+    manager.ubBwMonitor.currentFluxRet = 0;
+    manager.ubBwMonitor.currentFluxMb.len = 1;
+    manager.ubBwMonitor.currentFluxMb.flux[0].numaId = 2;
+    manager.ubBwMonitor.currentFluxMb.flux[0].readMb = 300;
+    manager.ubBwMonitor.currentFluxMb.flux[0].writeMb = 300;
+    current.strategyAttr.nrMigratePages[0][2] = 100;
+
+    ApplyUbBwStop(&current, &manager);
+    EXPECT_EQ(100, current.strategyAttr.nrMigratePages[0][2]);
+    EXPECT_EQ(UB_BW_NORMAL, current.strategyAttr.ubBwRestrict[2]);
+}
+
+TEST_F(MigrationTest, TestApplyUbBwStopMultipleNumaMixed)
+{
+    ProcessAttr current = {};
+    struct ProcessManager manager = {};
+    manager.ubBwMonitor.ubBwThreshold = 500;
+    manager.ubBwMonitor.currentFluxRet = 0;
+    manager.ubBwMonitor.currentFluxMb.len = 2;
+    manager.ubBwMonitor.currentFluxMb.flux[0].numaId = 1;
+    manager.ubBwMonitor.currentFluxMb.flux[0].readMb = 400;
+    manager.ubBwMonitor.currentFluxMb.flux[0].writeMb = 200;
+    manager.ubBwMonitor.currentFluxMb.flux[1].numaId = 3;
+    manager.ubBwMonitor.currentFluxMb.flux[1].readMb = 100;
+    manager.ubBwMonitor.currentFluxMb.flux[1].writeMb = 100;
+    current.strategyAttr.nrMigratePages[0][1] = 100;
+    current.strategyAttr.nrMigratePages[1][0] = 200;
+    current.strategyAttr.nrMigratePages[0][3] = 50;
+    current.strategyAttr.nrMigratePages[3][0] = 60;
+
+    ApplyUbBwStop(&current, &manager);
+    /* ApplyUbBwStop only sets ubBwRestrict flag; nrMigratePages cleared by strategy layer */
+    EXPECT_EQ(UB_BW_SWAP_STOP, current.strategyAttr.ubBwRestrict[1]);
+    EXPECT_EQ(UB_BW_NORMAL, current.strategyAttr.ubBwRestrict[3]);
+}
+
+TEST_F(MigrationTest, TestScanMigrateWorkThresholdZeroSkipQuery)
+{
+    int ret;
+    ProcessAttr process = { .pid = 1025 };
+    struct ProcessManager manager = { .processes = &process };
+    ThreadCtx ctx = { .processManager = &manager };
+    manager.ubBwMonitor.ubBwThreshold = 0;
+    manager.ubBwMonitor.currentFluxRet = 0;
+
+    MOCKER(DisableTracking).stubs().will(returnValue(0));
+    MOCKER(StrategyConfigRead).stubs().will(ignoreReturnValue());
+    MOCKER(GetUbBwThresholdConfig).stubs().will(returnValue((uint32_t)0));
+    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(true));
+    MOCKER(SetAdaptMem).stubs().will(ignoreReturnValue());
+    MOCKER(GetAdaptiveRatioEnableConfig).stubs().will(returnValue(true));
+    MOCKER(CheckAndRemoveInvalidProcess).stubs();
+    MOCKER(PerformMigrationPreparation).stubs().will(returnValue(0));
+    MOCKER(UpdateScene).stubs();
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(UpdatePeriodFromConfig).stubs().will(ignoreReturnValue());
+    MOCKER(PerformMigration).stubs().will(returnValue(0));
+    MOCKER(EnableTracking).stubs().will(returnValue(0));
+    ret = ScanMigrateWork(&ctx);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(MigrationTest, TestScanMigrateWorkThresholdNonZeroQueryAndConfig)
+{
+    int ret;
+    ProcessAttr process = { .pid = 1025 };
+    struct ProcessManager manager = { .processes = &process };
+    ThreadCtx ctx = { .processManager = &manager };
+    manager.ubBwMonitor.ubBwThreshold = 1000;
+
+    MOCKER(GetUbFluxMb).stubs().will(ignoreReturnValue());
+    MOCKER(DisableTracking).stubs().will(returnValue(0));
+    MOCKER(StrategyConfigRead).stubs().will(ignoreReturnValue());
+    MOCKER(GetUbBwThresholdConfig).stubs().will(returnValue((uint32_t)1000));
+    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
+    MOCKER(CheckAndRemoveInvalidProcess).stubs();
+    MOCKER(PerformMigrationPreparation).stubs().will(returnValue(0));
+    MOCKER(UpdateScene).stubs();
+    MOCKER(HandleScene).stubs().will(returnValue(0));
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(PerformMigration).stubs().will(returnValue(0));
+    MOCKER(ConfigUbWatch).stubs().will(returnValue(0));
+    MOCKER(EnableTracking).stubs().will(returnValue(0));
+    ret = ScanMigrateWork(&ctx);
+    EXPECT_EQ(0, ret);
+}
+
 TEST_F(MigrationTest, TestBuildMigrationMsgL2NodeCriticalErr)
 {
     int ret;

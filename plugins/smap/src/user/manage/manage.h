@@ -115,6 +115,11 @@ typedef enum {
     SWAP,
 } MigrateDirection;
 
+typedef enum {
+    UB_BW_NORMAL = 0,
+    UB_BW_SWAP_STOP,
+} UbBwRestrictType;
+
 typedef enum { MMAP_PARIVATE, MMAP_SHARED, NR_MMAP_TYPE } MmapType;
 
 enum {
@@ -335,6 +340,7 @@ typedef struct {
     uint32_t nrMigratePages[MAX_NODES][MAX_NODES]; // 水线场景：消减后的迁移量；密度场景：接口设置的比例
     uint32_t remoteNrPagesAfterMigrate[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 迁移后记录账本
     MigrateDirection dir[MAX_NODES]; // 算法决策各numa的迁出的方向 demote/promote/swap
+    UbBwRestrictType ubBwRestrict[MAX_NODES]; // 各NUMA的UB带宽限制策略
     SeparateParam separateParam;
 } StrategyAttribute;
 
@@ -493,6 +499,12 @@ struct RemoteNumaInfo {
     struct RemoteNumaUsedInfo privateUsedInfo[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
 };
 
+struct UbBwMonitor {
+    uint32_t ubBwThreshold; // UB带宽阈值(MB/s)
+    struct UbFluxMbStatistic currentFluxMb; // 当前周期UB带宽数据
+    int currentFluxRet; // 当前周期UB带宽查询结果
+};
+
 struct ProcessManager {
     ProcessAttr *processes;
     uint16_t smapMigTime; // 扫描次数
@@ -506,9 +518,7 @@ struct ProcessManager {
     struct RemoteNumaInfo remoteNumaInfo; // 借用远端内存数量
     EnvMutex lock;
     EnvMutex threadLock;
-    uint32_t ubBwThreshold; // UB带宽阈值(MB/s)
-    struct UbFluxMbStatistic currentFluxMb; // 当前周期UB带宽数据
-    int currentFluxRet; // 当前周期UB带宽查询结果
+    struct UbBwMonitor ubBwMonitor; // UB带宽监控
 };
 
 struct ProcessMemBitmap {

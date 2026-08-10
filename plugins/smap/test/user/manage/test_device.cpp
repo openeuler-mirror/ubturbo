@@ -380,3 +380,73 @@ TEST_F(DeviceTest, TestIsNumaCriticalErrCloseFailed)
     bool ret = IsNumaCriticalErr(4);
     EXPECT_TRUE(ret);
 }
+
+extern "C" void GetUbFluxMb(void);
+TEST_F(DeviceTest, TestGetUbFluxMbAllNodesFail)
+{
+    struct ProcessManager *pm = GetProcessManager();
+    int savedFds[MAX_NODES];
+    for (int i = 0; i < MAX_NODES; i++) {
+        savedFds[i] = pm->fds.nodes[i];
+        pm->fds.nodes[i] = -1;
+    }
+    pm->ubBwMonitor.ubBwThreshold = 500;
+
+    GetUbFluxMb();
+    EXPECT_NE(0, pm->ubBwMonitor.currentFluxRet);
+
+    for (int i = 0; i < MAX_NODES; i++) {
+        pm->fds.nodes[i] = savedFds[i];
+    }
+}
+
+TEST_F(DeviceTest, TestGetUbFluxMbSuccess)
+{
+    struct ProcessManager *pm = GetProcessManager();
+    int savedFd = pm->fds.nodes[LOCAL_NUMA_NUM];
+    pm->fds.nodes[LOCAL_NUMA_NUM] = 10;
+    pm->ubBwMonitor.ubBwThreshold = 500;
+
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl))
+        .stubs()
+        .will(returnValue(0));
+
+    GetUbFluxMb();
+    EXPECT_EQ(0, pm->ubBwMonitor.currentFluxRet);
+
+    pm->fds.nodes[LOCAL_NUMA_NUM] = savedFd;
+}
+
+extern "C" int ConfigUbWatch(uint32_t durationMs);
+TEST_F(DeviceTest, TestConfigUbWatchAllNodesFail)
+{
+    struct ProcessManager *pm = GetProcessManager();
+    int savedFds[MAX_NODES];
+    for (int i = 0; i < MAX_NODES; i++) {
+        savedFds[i] = pm->fds.nodes[i];
+        pm->fds.nodes[i] = -1;
+    }
+
+    int ret = ConfigUbWatch(2000);
+    EXPECT_EQ(-ENODEV, ret);
+
+    for (int i = 0; i < MAX_NODES; i++) {
+        pm->fds.nodes[i] = savedFds[i];
+    }
+}
+
+TEST_F(DeviceTest, TestConfigUbWatchSuccess)
+{
+    struct ProcessManager *pm = GetProcessManager();
+    int savedFd = pm->fds.nodes[LOCAL_NUMA_NUM];
+    pm->fds.nodes[LOCAL_NUMA_NUM] = 10;
+
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl))
+        .stubs()
+        .will(returnValue(0));
+
+    int ret = ConfigUbWatch(2000);
+    EXPECT_EQ(0, ret);
+
+    pm->fds.nodes[LOCAL_NUMA_NUM] = savedFd;
+}

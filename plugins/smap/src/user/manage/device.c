@@ -311,27 +311,42 @@ void DeinitTrackingDev(struct ProcessManager *manager)
     }
 }
 
-int GetUbFluxMb(struct UbFluxMbStatistic *result)
+void GetUbFluxMb(void)
 {
     struct ProcessManager *manager = GetProcessManager();
-    int i;
+    int i, ret = -ENODEV;
 
-    if (!result) {
-        SMAP_LOGGER_ERROR("result is null, GetUbFluxMb failed.");
-        return -EINVAL;
+    // ubBwThreshold == 0 表示不开启迁移限制：跳过带宽查询与流量统计
+    if (!IsBwMonitorEnabled(manager)) {
+        return;
     }
+
+    struct UbFluxMbStatistic *result = &(manager->ubBwMonitor.currentFluxMb);
 
     /* ub_watch only implemented by remote NUMA tracking_nodes */
     for (i = LOCAL_NUMA_NUM; i < MAX_NODES; i++) {
         if (manager->fds.nodes[i] >= 0) {
-            if (ioctl(manager->fds.nodes[i], SMAP_IOCTL_UB_WATCH_CMD, result) >= 0) {
-                return 0;
+            ret = ioctl(manager->fds.nodes[i], SMAP_IOCTL_UB_WATCH_CMD, result);
+            if (ret == 0) {
+                break;
             }
         }
     }
 
-    SMAP_LOGGER_ERROR("ioctl SMAP_IOCTL_UB_WATCH_CMD failed on all remote nodes.");
-    return -ENODEV;
+    manager->ubBwMonitor.currentFluxRet = ret;
+    if (manager->ubBwMonitor.currentFluxRet) {
+        SMAP_LOGGER_ERROR("ioctl SMAP_IOCTL_UB_WATCH_CMD failed on all remote nodes.");
+        return;
+    }
+
+    for (int i = 0; i < manager->ubBwMonitor.currentFluxMb.len; i++) {
+        uint32_t totalBw =
+            manager->ubBwMonitor.currentFluxMb.flux[i].readMb + manager->ubBwMonitor.currentFluxMb.flux[i].writeMb;
+        SMAP_LOGGER_INFO("UB business flux: numaId: %d, readMb: %uMB/s, writeMb: %uMB/s, total: %uMB/s",
+                         manager->ubBwMonitor.currentFluxMb.flux[i].numaId,
+                         manager->ubBwMonitor.currentFluxMb.flux[i].readMb,
+                         manager->ubBwMonitor.currentFluxMb.flux[i].writeMb, totalBw);
+    }
 }
 
 int ConfigUbWatch(uint32_t durationMs)

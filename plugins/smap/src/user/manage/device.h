@@ -40,8 +40,13 @@ void DeinitTrackingDev(struct ProcessManager *manager);
 bool IsNumaCriticalErr(int nid);
 
 struct UbFluxMbStatistic;
-int GetUbFluxMb(struct UbFluxMbStatistic *result);
+void GetUbFluxMb(void);
 
 int ConfigUbWatch(uint32_t durationMs);
+
+static inline bool IsBwMonitorEnabled(struct ProcessManager *manager)
+{
+    return (manager->ubBwMonitor.ubBwThreshold > 0);
+}
 
 #endif /* __DEVICE_H__ */

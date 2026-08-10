@@ -1151,6 +1151,11 @@ static int CleanStrategyAttribute(struct ProcessManager *manager)
                 return ret;
             }
         }
+        ret = memset_s(strAttr->ubBwRestrict, sizeof(strAttr->ubBwRestrict), 0, sizeof(strAttr->ubBwRestrict));
+        if (ret != EOK) {
+            EnvMutexUnlock(&manager->lock);
+            return ret;
+        }
     }
     EnvMutexUnlock(&manager->lock);
     return 0;
@@ -1334,6 +1339,29 @@ static void NumaSwapMemPool(ProcessAttr *current)
     }
 }
 
+static void ApplyUbBwStop(ProcessAttr *current, struct ProcessManager *manager)
+{
+    uint32_t threshold = manager->ubBwMonitor.ubBwThreshold;
+    if (!IsBwMonitorEnabled(manager) || manager->ubBwMonitor.currentFluxRet) {
+        return;
+    }
+
+    for (int nid = 0; nid < MAX_NODES; nid++)
+        current->strategyAttr.ubBwRestrict[nid] = UB_BW_NORMAL;
+
+    for (int i = 0; i < manager->ubBwMonitor.currentFluxMb.len; i++) {
+        int nid = manager->ubBwMonitor.currentFluxMb.flux[i].numaId;
+        uint32_t totalBw =
+            manager->ubBwMonitor.currentFluxMb.flux[i].readMb + manager->ubBwMonitor.currentFluxMb.flux[i].writeMb;
+
+        if (totalBw >= threshold) {
+            current->strategyAttr.ubBwRestrict[nid] = UB_BW_SWAP_STOP;
+            SMAP_LOGGER_INFO("UB BW threshold: numa %d bw %uMB/s >= threshold %uMB/s, set UB_BW_SWAP_STOP flag.", nid,
+                             totalBw, threshold);
+        }
+    }
+}
+
 static void NumaMigReduceDeal(ProcessAttr *current)
 {
     if (current->migrateMode == MIG_MEMSIZE_MODE) {
@@ -1416,6 +1444,7 @@ static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
             ret = -EOVERFLOW;
             break;
         }
+        ApplyUbBwStop(current, manager);
         current->state = PROC_MIGRATE;
         candidatePids[candidateCnt++] = current->pid;
         SMAP_LOGGER_DEBUG("change pid %d state from idle to migrate.", current->pid);
@@ -1721,21 +1750,6 @@ int ScanMigrateWork(ThreadCtx *ctx)
 {
     int ret = 0;
     struct ProcessManager *manager = ctx->processManager;
-    ProcessAttr *current;
-
-    // ubBwThreshold == 0 表示不开启迁移限制：跳过带宽查询与流量统计
-    if (manager->ubBwThreshold > 0) {
-        // 查询带宽（纯业务带宽：测量窗口在上一周期结束后、本周期开始前）
-        manager->currentFluxRet = GetUbFluxMb(&manager->currentFluxMb);
-        if (manager->currentFluxRet == 0) {
-            for (int i = 0; i < manager->currentFluxMb.len; i++) {
-                uint32_t totalBw = manager->currentFluxMb.flux[i].readMb + manager->currentFluxMb.flux[i].writeMb;
-                SMAP_LOGGER_INFO("UB business flux: numaId: %d, readMb: %uMB/s, writeMb: %uMB/s, total: %uMB/s",
-                                 manager->currentFluxMb.flux[i].numaId, manager->currentFluxMb.flux[i].readMb,
-                                 manager->currentFluxMb.flux[i].writeMb, totalBw);
-            }
-        }
-    }
 
     ret = DisableTracking(manager);
     if (ret) {
@@ -1744,7 +1758,7 @@ int ScanMigrateWork(ThreadCtx *ctx)
     }
     SMAP_LOGGER_DEBUG("Tracking disabled.");
     StrategyConfigRead(STRATEGY_CONFIG_PATH); // 从配置文件中读取策略配置
-    manager->ubBwThreshold = GetUbBwThresholdConfig();
+    manager->ubBwMonitor.ubBwThreshold = GetUbBwThresholdConfig();
     if (GetFileConfSwitchConfig()) {
         SetAdaptMem(GetAdaptiveRatioEnableConfig());
     }
@@ -1755,6 +1769,9 @@ int ScanMigrateWork(ThreadCtx *ctx)
         SMAP_LOGGER_DEBUG("Migration preparation failed: %d.", ret);
         goto out;
     }
+
+    GetUbFluxMb();
+
     // 更新虚机所处的场景
     UpdateScene(manager);
     SMAP_LOGGER_DEBUG("Scene updated.");
@@ -1778,7 +1795,7 @@ int ScanMigrateWork(ThreadCtx *ctx)
     ret = PerformMigration(manager);
     SMAP_LOGGER_INFO("Migration result: %d.", ret);
     // 迁移结束后：仅在开启带宽限制时配置ub_watch开启统计（下周期查询时得到纯业务带宽）
-    if (manager->ubBwThreshold > 0) {
+    if (IsBwMonitorEnabled(manager)) {
         ConfigUbWatch(ctx->period);
     }
 out:
