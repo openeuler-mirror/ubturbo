@@ -21,6 +21,7 @@
 #include <linux/ktime.h>
 #include <linux/spinlock.h>
 #include <linux/cpumask.h>
+#include <linux/fs.h>
 #include <linux/smp.h>
 
 #include "check.h"
@@ -32,6 +33,17 @@
 #include "access_pid.h"
 #include "hist_ops.h"
 #include "access_tracking.h"
+
+#define WORKQ_FILE_PATH_LEN 64
+#define WORKQ_FILE_BUF_LEN 512
+
+struct set_scan_cpus_work {
+	struct work_struct work;
+	u32 cpu_start;
+	u32 cpu_end;
+	int result;
+	struct completion done;
+};
 
 #define MAX_SCAN_TIME 100000 /* 100s */
 #define MS_TO_US 1000
@@ -71,43 +83,82 @@ void cancel_ap_scan_work(struct access_pid *ap)
 		cancel_delayed_work_sync(&ap->scan_work);
 }
 
-int set_scan_cpus(u32 cpu_start, u32 cpu_end)
+static void set_scan_cpus_work_fn(struct work_struct *work)
 {
-#ifdef KERNEL_OPENEULER
+	struct set_scan_cpus_work *sw =
+		container_of(work, struct set_scan_cpus_work, work);
 	u32 cpu_index;
-	struct workqueue_attrs *attrs;
 	struct access_tracking_dev *adev;
+	struct file *filp;
+	char path[WORKQ_FILE_PATH_LEN];
+	char buf[WORKQ_FILE_BUF_LEN];
+	ssize_t ret;
+	loff_t pos = 0;
+	struct cpumask mask;
 
-	attrs = alloc_workqueue_attrs();
-	if (!attrs)
-		return -ENOMEM;
+	adev = get_first_access_dev();
+	if (!adev || !adev->scanq) {
+		sw->result = -EINVAL;
+		goto out;
+	}
 
-	cpumask_clear(attrs->cpumask);
-	for (cpu_index = cpu_start; cpu_index <= cpu_end; cpu_index++) {
+	for (cpu_index = sw->cpu_start; cpu_index <= sw->cpu_end; cpu_index++) {
 		if (!cpu_online(cpu_index)) {
 			pr_err("cpu %d is not online, cannot be used for scan\n",
 			       cpu_index);
-			free_workqueue_attrs(attrs);
-			return -EINVAL;
-		}
-		cpumask_set_cpu(cpu_index, attrs->cpumask);
-	}
-
-	adev = get_first_access_dev();
-	if (adev && adev->scanq) {
-		if (apply_workqueue_attrs(adev->scanq, attrs)) {
-			pr_err("failed to apply workqueue attrs for scan cpu range\n");
-			free_workqueue_attrs(attrs);
-			return -EINVAL;
+			sw->result = -EINVAL;
+			goto out;
 		}
 	}
 
-	free_workqueue_attrs(attrs);
-#else
-	pr_warn("set scan cpus is not supported on this kernel version\n");
-#endif
+	scnprintf(path, sizeof(path),
+		  "/sys/devices/virtual/workqueue/%s/cpumask",
+		  adev->workq_name);
 
-	return 0;
+	cpumask_clear(&mask);
+	for (cpu_index = sw->cpu_start; cpu_index <= sw->cpu_end; cpu_index++)
+		cpumask_set_cpu(cpu_index, &mask);
+
+	scnprintf(buf, sizeof(buf), "%*pb\n", cpumask_pr_args(&mask));
+
+	filp = filp_open(path, O_WRONLY, 0);
+	if (IS_ERR(filp)) {
+		pr_err("failed to open workqueue cpumask sysfs: %s\n", path);
+		sw->result = PTR_ERR(filp);
+		goto out;
+	}
+
+	ret = kernel_write(filp, buf, strlen(buf), &pos);
+	filp_close(filp, NULL);
+
+	if (ret < 0) {
+		pr_err("failed to write workqueue cpumask: %zd\n", ret);
+		sw->result = ret;
+		goto out;
+	}
+
+	sw->result = 0;
+out:
+	complete(&sw->done);
+}
+
+int set_scan_cpus(u32 cpu_start, u32 cpu_end)
+{
+	struct set_scan_cpus_work sw;
+
+	INIT_WORK(&sw.work, set_scan_cpus_work_fn);
+	sw.cpu_start = cpu_start;
+	sw.cpu_end = cpu_end;
+	sw.result = 0;
+	init_completion(&sw.done);
+
+	queue_work(system_unbound_wq, &sw.work);
+	wait_for_completion(&sw.done);
+
+	pr_info("set scan cpus from %u to %u, result: %d\n", cpu_start, cpu_end,
+		sw.result);
+
+	return sw.result;
 }
 
 void submit_one_work(struct access_pid *ap)
@@ -141,8 +192,10 @@ static void submit_scan_works(struct access_tracking_dev *adev)
 static int create_scan_workqueue(void)
 {
 	struct access_tracking_dev *adev = get_first_access_dev();
-	adev->scanq =
-		alloc_workqueue("accessbit_workq", WQ_UNBOUND, WQ_MAX_THREADS);
+	scnprintf(adev->workq_name, sizeof(adev->workq_name),
+		  "accessbit_workq");
+	adev->scanq = alloc_workqueue(adev->workq_name, WQ_UNBOUND | WQ_SYSFS,
+				      WQ_MAX_THREADS);
 	if (!adev->scanq) {
 		pr_err("unable to init access bit workqueue\n");
 		return -ENOMEM;
