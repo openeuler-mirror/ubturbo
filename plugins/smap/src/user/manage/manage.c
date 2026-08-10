@@ -984,8 +984,8 @@ static void SetBasicProcessConfig(ProcessAttr *attr, ProcessParam *param)
     SMAP_LOGGER_INFO("Pid: %d local numa cnt: %d, remote numa cnt: %d.", attr->pid, localNumaCnt, attr->remoteNumaCnt);
 }
 
-/* Handle multi-NUMA VM scenario: VM with multiple local or remote NUMAs */
-static void SetMultiNumaVmConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
+/* Handle multi-NUMA configuration while preserving the Pair account. */
+static void SetMultiNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
 {
     for (int i = 0; i < param->count; i++) {
         int remoteNid = param->numaParam[i].nid;
@@ -993,12 +993,12 @@ static void SetMultiNumaVmConfig(ProcessAttr *attr, ProcessParam *param, int nrL
 
         attr->migrateParam[i].nid = remoteNid;
         attr->migrateParam[i].memSize = param->numaParam[i].memSize;
-        SMAP_LOGGER_INFO("Multi-NUMA VM destNid: %d, memSize: %lu", remoteNid, attr->migrateParam[i].memSize);
+        SMAP_LOGGER_INFO("Multi-NUMA config destNid: %d, memSize: %lu", remoteNid, attr->migrateParam[i].memSize);
 
         /* Set the same ratio for all local NUMAs */
         for (int j = 0; j < nrLocalNuma && j < LOCAL_NUMA_NUM; j++) {
             attr->strategyAttr.initRemoteMemRatio[j][l2Index] = param->numaParam[i].ratio;
-            SMAP_LOGGER_INFO("Multi-NUMA VM destNid: %d, ratio: %d", remoteNid, param->numaParam[i].ratio);
+            SMAP_LOGGER_INFO("Multi-NUMA config destNid: %d, ratio: %d", remoteNid, param->numaParam[i].ratio);
         }
         AddAttrL2(attr, remoteNid);
     }
@@ -1241,7 +1241,6 @@ static int UpdateProcessMigrateConfig(ProcessAttr *attr, const ProcessTargetConf
 {
     int nrLocalNuma = GetNrLocalNuma();
     int localNumaCnt = GetL1Count(attr->numaAttr.numaNodes);
-    bool isVm = GetPidType(&g_processManager) == VM_TYPE;
     ProcessParam param;
 
     attr->migrateMode = config->migrateMode;
@@ -1259,8 +1258,8 @@ static int UpdateProcessMigrateConfig(ProcessAttr *attr, const ProcessTargetConf
     }
 
     TargetConfigToProcessParam(attr, config, &param);
-    if (isVm && (config->count > 1 || localNumaCnt > 1)) {
-        SetMultiNumaVmConfig(attr, &param, nrLocalNuma);
+    if (config->count > 1 || localNumaCnt > 1) {
+        SetMultiNumaConfig(attr, &param, nrLocalNuma);
         return 0;
     }
     if (!observation || !observation->residentValid) {

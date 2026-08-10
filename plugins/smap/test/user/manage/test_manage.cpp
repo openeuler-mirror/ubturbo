@@ -56,6 +56,27 @@ private:
     ThreadCtx context_;
 };
 
+class ScopedPageSize {
+public:
+    explicit ScopedPageSize(uint32_t pageSize)
+        : normalPageSize_(g_pageSizeNormal),
+          trackingPageSize_(g_processManager.tracking.pageSize)
+    {
+        g_pageSizeNormal = pageSize;
+        g_processManager.tracking.pageSize = pageSize;
+    }
+
+    ~ScopedPageSize()
+    {
+        g_pageSizeNormal = normalPageSize_;
+        g_processManager.tracking.pageSize = trackingPageSize_;
+    }
+
+private:
+    uint32_t normalPageSize_;
+    uint32_t trackingPageSize_;
+};
+
 static int AddAffinityLocalForTest(pid_t pid, uint32_t *nodeBitmap);
 static int AddCandidateResidentForTest(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
                                        uint64_t numaPages[MAX_NODES]);
@@ -63,6 +84,8 @@ static int AddEmptyCandidateResidentForTest(pid_t pid, bool hugeFlag, uint32_t *
                                             uint64_t numaPages[MAX_NODES]);
 static int AddUnexpectedRemoteResidentForTest(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
                                               uint64_t numaPages[MAX_NODES]);
+static int AddPairRemoteResidentForTest(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
+                                        uint64_t numaPages[MAX_NODES]);
 
 static int fake_sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t *mask)
 {
@@ -1127,6 +1150,19 @@ static int AddUnexpectedRemoteResidentForTest(pid_t pid, bool hugeFlag, uint32_t
     return 0;
 }
 
+static int AddPairRemoteResidentForTest(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
+                                        uint64_t numaPages[MAX_NODES])
+{
+    (void)pid;
+    (void)hugeFlag;
+    *residentLocalMask |= BIT(0) | BIT(1);
+    numaPages[0] = 61866;
+    numaPages[1] = 10564;
+    numaPages[3] = 36174;
+    numaPages[12] = 36194;
+    return 0;
+}
+
 static ProcessParam InitCandidateTest(ProcessAttr *active, int nrLocalNuma = 4)
 {
     active->pid = 123;
@@ -1286,6 +1322,37 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateRejectsUnexpectedRemote)
 
     EXPECT_EQ(-EINVAL, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
     EXPECT_EQ(nullptr, candidate.prepared);
+}
+
+TEST_F(ManageTest, TestPrepareProcessManageCandidateKeepsPairAccountFor4KMultiNuma)
+{
+    ProcessAttr active = {};
+    ProcessParam param = InitCandidateTest(&active, 2);
+    ProcessManageCandidate candidate = {};
+    ScopedPageSize normalPageSize(4096);
+
+    active.numaAttr.numaNodes = BIT(0) | BIT(1) | BIT(3) | BIT(12);
+    active.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
+    active.strategyAttr.remoteNrPagesAfterMigrate[0][1] = 36174;
+    active.strategyAttr.remoteNrPagesAfterMigrate[1][10] = 36194;
+
+    param.count = 2;
+    param.numaParam[0] = {3, 0, 0, MIG_RATIO_MODE};
+    param.numaParam[1] = {12, 0, 0, MIG_RATIO_MODE};
+
+    MOCKER(CheckPid).expects(once()).will(returnValue(0));
+    MOCKER(SetLocalNumaByCpu).expects(once()).will(returnValue(-EIO));
+    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddPairRemoteResidentForTest));
+
+    ASSERT_EQ(0, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
+    ASSERT_NE(nullptr, candidate.prepared);
+    EXPECT_EQ(36174U, candidate.prepared->strategyAttr.remoteNrPagesAfterMigrate[0][1]);
+    EXPECT_EQ(0U, candidate.prepared->strategyAttr.remoteNrPagesAfterMigrate[1][1]);
+    EXPECT_EQ(0U, candidate.prepared->strategyAttr.remoteNrPagesAfterMigrate[0][10]);
+    EXPECT_EQ(36194U, candidate.prepared->strategyAttr.remoteNrPagesAfterMigrate[1][10]);
+    EXPECT_EQ(3, candidate.prepared->migrateParam[0].nid);
+    EXPECT_EQ(12, candidate.prepared->migrateParam[1].nid);
+    DiscardProcessManageCandidate(&candidate);
 }
 
 extern "C" int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap);
