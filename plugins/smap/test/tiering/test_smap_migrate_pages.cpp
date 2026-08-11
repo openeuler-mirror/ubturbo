@@ -23,7 +23,7 @@
 #include "smap_migrate_pages.h"
 #include "smap_migrate_wrapper.h"
 #include "tracking_manage.h"
-#include "acpi_mem.h"
+#include "iomem.h"
 #include "common.h"
 #include "migrate_task.h"
 #include "numa.h"
@@ -89,13 +89,6 @@ protected:
     void TearDown() override
     {
         cout << "[Phase TearDown Begin]" << endl;
-        struct acpi_mem_segment *mem;
-        struct acpi_mem_segment *ams_tmp;
-        list_for_each_entry_safe(mem, ams_tmp, &acpi_mem.mem, segment) {
-            list_del(&mem->segment);
-            kfree(mem);
-        }
-        acpi_mem.len = 0;
         GlobalMockObject::verify();
         cout << "[Phase TearDown End]" << endl;
     }

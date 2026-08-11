@@ -125,9 +125,9 @@ struct obmm_ext_addr {
 
 extern int (*fp_migrate_pages)(struct list_head *from,
 			       new_folio_t get_new_folio,
-			       free_folio_t put_new_folio,
-			       unsigned long private, enum migrate_mode mode,
-			       int reason, unsigned int *ret_succeeded);
+			       free_folio_t put_new_folio, unsigned long priv,
+			       enum migrate_mode mode, int reason,
+			       unsigned int *ret_succeeded);
 extern void (*fp_putback_movable_pages)(struct list_head *l);
 extern bool (*fp_isolate_folio_to_list)(struct folio *folio,
 					struct list_head *list);

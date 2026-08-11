@@ -52,7 +52,7 @@ TEST_F(AccessTrackingTest, is_access_hugepage)
     (void)is_access_hugepage();
 }
 
-extern "C" void drivers_init_actc_data(struct access_tracking_dev *adev);
+extern "C" void access_init_actc_data(struct access_tracking_dev *adev);
 extern "C" void access_tracking_enable(struct device *ldev);
 extern "C" int actc_buffer_reinit(struct access_tracking_dev *adev);
 TEST_F(AccessTrackingTest, access_tracking_enable)
@@ -76,13 +76,13 @@ TEST_F(AccessTrackingTest, access_tracking_disable)
         list_del(&dev.list);
 }
 
-TEST_F(AccessTrackingTest, init_actc_data)
+TEST_F(AccessTrackingTest, access_init_actc_data)
 {
     struct access_tracking_dev adev;
     adev.page_count = 1;
     actc_t data = 0;
     adev.access_bit_actc_data = &data;
-    drivers_init_actc_data(&adev);
+    access_init_actc_data(&adev);
     EXPECT_EQ(0, adev.access_bit_actc_data[0]);
 }
 
@@ -110,18 +110,6 @@ TEST_F(AccessTrackingTest, calc_access_len_v2)
     MOCKER(get_node_actc_len).stubs().will(returnValue((u64)2));
     ret = calc_access_len_v2(&adev);
     EXPECT_EQ(2, ret);
-}
-
-extern "C" int access_tracking_mode_set(struct device *ldev, u8 mode);
-TEST_F(AccessTrackingTest, access_tracking_mode_set)
-{
-    struct access_tracking_dev adev;
-    int ret = access_tracking_mode_set(&adev.ldev, 100);
-    EXPECT_EQ(-EPERM, ret);
-
-    adev.access_bit_actc_data = nullptr;
-    ret = access_tracking_mode_set(&adev.ldev, ACCESS_MODE_AND);
-    EXPECT_EQ(0, ret);
 }
 
 extern "C" void access_print_acpi_mem(void);
@@ -261,8 +249,8 @@ TEST_F(AccessTrackingTest, access_tracking_add_two)
 
 extern "C" void adev_buffer_down_read(void);
 extern "C" void adev_buffer_up_read(void);
-extern "C" void drivers_work_func(struct work_struct *work);
-TEST_F(AccessTrackingTest, drivers_work_func)
+extern "C" void access_work_func(struct work_struct *work);
+TEST_F(AccessTrackingTest, access_work_func)
 {
     struct access_pid ap;
     struct access_tracking_dev adev;
@@ -274,17 +262,17 @@ TEST_F(AccessTrackingTest, drivers_work_func)
     ap.ntimes = 10;
     ap.pid = 1;
     MOCKER(scan_accessed_bit_forward_vm).stubs().will(returnValue(0));
-    drivers_work_func(&ap.scan_work.work);
+    access_work_func(&ap.scan_work.work);
     EXPECT_EQ(1, ap.cur_times);
 
     ap.ntimes = 1;
     ap.type = STATISTIC_SCAN;
-    drivers_work_func(&ap.scan_work.work);
+    access_work_func(&ap.scan_work.work);
     EXPECT_EQ(2, ap.cur_times);
     list_del(&adev.list);
 }
 
-extern "C" void drivers_work_func(struct work_struct *work);
+extern "C" void access_work_func(struct work_struct *work);
 extern "C" int __init access_tracking_init(void);
 TEST_F(AccessTrackingTest, access_tracking_init)
 {
@@ -296,7 +284,7 @@ TEST_F(AccessTrackingTest, access_tracking_init)
 
     GlobalMockObject::verify();
     MOCKER(init_acpi_mem).stubs().will(returnValue(0));
-    MOCKER(drivers_refresh_remote_ram).stubs().will(returnValue(3));
+    MOCKER(refresh_remote_ram).stubs().will(returnValue(3));
     MOCKER(reset_acpi_mem).stubs();
     ret = access_tracking_init();
     EXPECT_EQ(3, ret);
@@ -307,7 +295,7 @@ extern "C" int create_scan_workqueue(void);
 TEST_F(AccessTrackingTest, access_tracking_init_two)
 {
     MOCKER(init_acpi_mem).stubs().will(returnValue(0));
-    MOCKER(drivers_refresh_remote_ram).stubs().will(returnValue(0));
+    MOCKER(refresh_remote_ram).stubs().will(returnValue(0));
     MOCKER(release_remote_ram).stubs();
     MOCKER(reset_acpi_mem).stubs();
 
@@ -316,7 +304,7 @@ TEST_F(AccessTrackingTest, access_tracking_init_two)
     seg->numa_node = 1;
     seg->start = 1;
     seg->end = 10;
-    list_add(&seg->node, &drivers_remote_ram_list);
+    list_add(&seg->node, &remote_ram_list);
     MOCKER(access_ioctl_init).stubs().will(returnValue(0));
     MOCKER(access_tracking_add).stubs().will(returnValue(0));
     MOCKER(create_scan_workqueue).stubs().will(returnValue(0));

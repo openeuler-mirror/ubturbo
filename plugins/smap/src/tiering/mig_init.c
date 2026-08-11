@@ -16,7 +16,6 @@
 #include <linux/mm.h>
 
 #include "common.h"
-#include "acpi_mem.h"
 #include "iomem.h"
 #include "smap_migrate_pages.h"
 #ifdef CRITICAL_OFF

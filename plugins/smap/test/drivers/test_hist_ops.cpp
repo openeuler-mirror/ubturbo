@@ -39,7 +39,7 @@ protected:
     }
 };
 
-extern list_head drivers_remote_ram_list;
+extern list_head remote_ram_list;
 extern "C" struct smap_hist_dev g_smap_hist_dev;
 extern "C" int ub_hist_init(void);
 
@@ -516,7 +516,7 @@ TEST_F(HistOpsTest, addr_segs_init)
 {
     int ret;
     struct smap_hist_dev dev;
-    INIT_LIST_HEAD(&drivers_remote_ram_list);
+    INIT_LIST_HEAD(&remote_ram_list);
     nr_local_numa = 1;
     struct ram_segment newdata1 = {
         .numa_node = 0,
@@ -529,8 +529,8 @@ TEST_F(HistOpsTest, addr_segs_init)
         .start = 0x1000,
         .end = 0x401000,
     };
-    list_add(&newdata1.node, &drivers_remote_ram_list);
-    list_add(&newdata2.node, &drivers_remote_ram_list);
+    list_add(&newdata1.node, &remote_ram_list);
+    list_add(&newdata2.node, &remote_ram_list);
     ret = addr_segs_init(&dev, SIZE_2M);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(2, dev.pgcount);
@@ -804,11 +804,11 @@ TEST_F(HistOpsTest, update_actc_direct_to_hdev)
     init_rwsem(&hdev.buffer_lock);
 
     /* Setup ram_segment list */
-    INIT_LIST_HEAD(&drivers_remote_ram_list);
+    INIT_LIST_HEAD(&remote_ram_list);
     rseg.start = 0;
     rseg.end = 0xFFFF;
     rseg.numa_node = 0;
-    list_add(&rseg.node, &drivers_remote_ram_list);
+    list_add(&rseg.node, &remote_ram_list);
 
     /* Setup access_dev list so find_hdev_by_node can find our hdev */
     INIT_LIST_HEAD(&access_dev);
@@ -861,11 +861,11 @@ TEST_F(HistOpsTest, update_actc_direct_overflow_handling)
     init_rwsem(&hdev.buffer_lock);
 
     /* Setup lists */
-    INIT_LIST_HEAD(&drivers_remote_ram_list);
+    INIT_LIST_HEAD(&remote_ram_list);
     rseg.start = 0;
     rseg.end = 0xFFFF;
     rseg.numa_node = 0;
-    list_add(&rseg.node, &drivers_remote_ram_list);
+    list_add(&rseg.node, &remote_ram_list);
 
     INIT_LIST_HEAD(&access_dev);
     list_add(&hdev.list, &access_dev);

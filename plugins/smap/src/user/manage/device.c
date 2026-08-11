@@ -36,11 +36,6 @@ typedef enum {
     PGSIZE_TWO_MB = 9,
 } PageSize;
 
-typedef enum {
-    ACCESS_MODE_SUM = 5,
-    MODE_MAX,
-} ScanMode;
-
 static int SendCmdToAllNodes(int fds[], unsigned long cmd, int arg)
 {
     int i;
@@ -146,9 +141,6 @@ static int ConfigTrackingDev(int *trackingFds, uint32_t pageSize)
 {
     int ret = 0;
     int arg;
-    arg = ACCESS_MODE_SUM;
-    ret |= SendCmdToAllNodes(trackingFds, SMAP_IOCTL_MODE_SET_CMD, arg);
-
     arg = pageSize == PAGESIZE_2M ? PGSIZE_TWO_MB : PGSIZE_FOUR_KB;
     ret |= SendCmdToAllNodes(trackingFds, SMAP_IOCTL_PAGE_SIZE_SET_CMD, arg);
 

@@ -472,10 +472,6 @@ struct MigPidRemoteNumaIoctlMsg {
 // 反向扫描参数，所有process共享
 typedef struct {
     uint32_t pageSize;
-    uint64_t nrColdPage; // 冷页数量
-    uint64_t nrHotPage; // 热页数量
-    uint16_t scanPeriod; // 扫描周期
-    uint16_t scanMode; // 扫描模式
     bool trackingEnabled; // tracking当前是否处于enable状态
 } TrackingAttr;
 
@@ -508,7 +504,6 @@ struct UbBwMonitor {
 
 struct ProcessManager {
     ProcessAttr *processes;
-    uint16_t smapMigTime; // 扫描次数
     SceneInfo sceneInfo;
     uint16_t nr[TYPE_MAX];
     uint16_t nrThread; // 线程数量
@@ -791,19 +786,9 @@ static inline int GetAttrL1(ProcessAttr *attr)
     return GetL1(attr->numaAttr.numaNodes);
 }
 
-static inline void SetAttrL1(ProcessAttr *attr, int nid)
-{
-    SetL1(&attr->numaAttr.numaNodes, nid);
-}
-
 static inline bool EqualToAttrL1(ProcessAttr *attr, int nid)
 {
     return EqualToL1(attr->numaAttr.numaNodes, nid);
-}
-
-static inline bool NotEqualToAttrL1(ProcessAttr *attr, int nid)
-{
-    return !EqualToAttrL1(attr, nid);
 }
 
 static inline bool InAttrL1(ProcessAttr *attr, int nid)

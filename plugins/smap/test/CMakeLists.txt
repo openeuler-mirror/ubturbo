@@ -74,8 +74,7 @@ list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/smap_debugfs.c)
 
 #tracking_manage
 list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/tracking_manage.c)
-# acpi_mem
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/acpi_mem.c)
+# acpi_helper
 list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/acpi_helper.c)
 
 # pid

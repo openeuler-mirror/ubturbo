@@ -17,9 +17,8 @@
 
 #include "numa.h"
 #include "rmap.h"
-#include "acpi_mem.h"
-#include "dump_info.h"
 #include "iomem.h"
+#include "dump_info.h"
 #include "smap_migrate_wrapper.h"
 #include "common.h"
 #ifdef CRITICAL_OFF

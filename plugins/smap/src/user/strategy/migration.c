@@ -620,7 +620,7 @@ static void FreeMigList(struct MigList mList[MAX_NODES][MAX_NODES])
     }
 }
 
-static void InitMigList(struct MigList mList[MAX_NODES][MAX_NODES], int pid)
+static void StrategyInitMigList(struct MigList mList[MAX_NODES][MAX_NODES], int pid)
 {
     for (int from = 0; from < MAX_NODES; from++) {
         for (int to = 0; to < MAX_NODES; to++) {
@@ -660,7 +660,7 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
         return -EINVAL;
     }
     struct MigList migList[MAX_NODES][MAX_NODES];
-    InitMigList(migList, process->pid);
+    StrategyInitMigList(migList, process->pid);
     ret = RunStrategy(process, migList, MAX_NODES);
     if (ret) {
         SMAP_LOGGER_ERROR("Run strategy for pid %d failed: %d.", process->pid, ret);
@@ -1726,7 +1726,7 @@ static void UpdatePeriodFromConfig(ThreadCtx *ctx)
     }
 }
 
-static void UpdateMigrateModeAndScanCpu(void)
+static void MigrationUpdateMigrateModeAndScanCpu(void)
 {
     if (GetMigrateModeEnableConfig()) {
         if (GetMigrateModeChanged()) {
@@ -1800,7 +1800,7 @@ int ScanMigrateWork(ThreadCtx *ctx)
     ConfigRatios(manager);
     SMAP_LOGGER_DEBUG("Ratio configured.");
     // 处理迁移参数
-    UpdateMigrateModeAndScanCpu();
+    MigrationUpdateMigrateModeAndScanCpu();
     if (GetFileConfSwitchConfig()) {
         SMAP_LOGGER_DEBUG("Updating period from config.");
         UpdatePeriodFromConfig(ctx);

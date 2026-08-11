@@ -14,7 +14,6 @@
 struct tracking_operations {
 	void (*tracking_enable)(struct device *ldev);
 	int (*tracking_disable)(struct device *ldev);
-	int (*tracking_mode_set)(struct device *ldev, u8 trk_mode);
 	int (*tracking_set_page_size)(struct device *ldev, u8 page_size);
 	int (*tracking_set_sample_rate)(struct device *ldev, u32 sample_rate);
 	int (*tracking_read)(struct device *ldev, void *buffer, u32 length);
@@ -31,20 +30,6 @@ struct tracking_dev {
 	int id;
 	const struct tracking_operations *ops;
 	void *trk_node_device;
-};
-
-enum MODE_TYPE {
-	ACTC_MODE = 0,
-	CPI_MODE_SUM = 2,
-	ACCESS_MODE_AND = 4,
-	ACCESS_MODE_SUM = 5,
-	ACCESS_MODE_OR = 6,
-	MEBS_MODE = 7,
-	MEBS_MODE_4B = 8,
-	MEBS_MODE_6B = 9,
-	PLDA_HDT_MODE = 10,
-	PLDA_HDT_DECAY_MODE = 11,
-	MODE_MAX
 };
 
 enum MAP_MODE_TYPE {
