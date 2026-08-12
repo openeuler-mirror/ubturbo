@@ -1856,10 +1856,11 @@ static bool CheckUbFeatureUbDma(void)
 static void MigrateAndCpuConfig(void)
 {
     if (GetMigrateModeEnableConfig()) {
-        IoctlUpdateUbDmaAvail(GetMigrateModeConfig());
-    } else {
-        unsigned int val = CheckUbFeatureUbDma() ? 1 : 0;
-        IoctlUpdateUbDmaAvail(val);
+        unsigned int mode = GetMigrateModeConfig();
+        if (mode == MIGRATE_MODE_URMA) {
+            mode = CheckUbFeatureUbDma() ? MIGRATE_MODE_URMA : MIGRATE_MODE_LD_ST;
+        }
+        IoctlUpdateUbDmaAvail(mode);
     }
 
     if (GetScanCpuEnableConfig()) {
