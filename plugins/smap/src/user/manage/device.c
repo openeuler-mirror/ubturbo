@@ -71,7 +71,11 @@ static int FindFdByNode(int fds[], int fdsLength)
 
 int EnableTracking(struct ProcessManager *manager)
 {
-    return SendCmdToAllNodes(manager->fds.nodes, SMAP_IOCTL_TRACKING_CMD, 1);
+    int ret = SendCmdToAllNodes(manager->fds.nodes, SMAP_IOCTL_TRACKING_CMD, 1);
+    if (!ret) {
+        manager->tracking.trackingEnabled = true;
+    }
+    return ret;
 }
 
 static inline int DisableTrackingInternal(struct ProcessManager *manager)
@@ -90,6 +94,9 @@ int DisableTracking(struct ProcessManager *manager)
         }
         SMAP_LOGGER_DEBUG("Scanning still in progress, will retry.");
         usleep(DISABLE_TRACKING_RETRY_DELAY_US);
+    }
+    if (!ret) {
+        manager->tracking.trackingEnabled = false;
     }
     return ret;
 }

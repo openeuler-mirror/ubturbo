@@ -1745,11 +1745,32 @@ static void UpdateMigrateModeAndScanCpu(void)
     }
 }
 
+// 无管理进程时仅在tracking仍enable时关闭一次，之后直接跳过整个周期，
+// 避免内核空转扫描和重复disable；新进程加入后下一周期恢复正常流程
+static bool SkipCycleIfNoProcess(struct ProcessManager *manager, int *ret)
+{
+    if (manager->processes) {
+        return false;
+    }
+    if (manager->tracking.trackingEnabled) {
+        SMAP_LOGGER_DEBUG("No managed process, disable tracking and skip cycle.");
+        *ret = DisableTracking(manager);
+        if (*ret) {
+            SMAP_LOGGER_ERROR("Disable tracking failed! ret:%d.", *ret);
+        }
+    }
+    return true;
+}
+
 // 管理线程函数
 int ScanMigrateWork(ThreadCtx *ctx)
 {
     int ret = 0;
     struct ProcessManager *manager = ctx->processManager;
+
+    if (SkipCycleIfNoProcess(manager, &ret)) {
+        return ret;
+    }
 
     ret = DisableTracking(manager);
     if (ret) {

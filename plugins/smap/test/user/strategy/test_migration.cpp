@@ -550,6 +550,31 @@ TEST_F(MigrationTest, TestScanMigrateWorkTwo)
     EXPECT_EQ(-1, ret);
 }
 
+TEST_F(MigrationTest, TestScanMigrateWorkNoProcess)
+{
+    int ret;
+    struct ProcessManager manager = {.processes = nullptr};
+    ThreadCtx ctx = {.processManager = &manager};
+
+    // trackingEnabled=false时不应调用DisableTracking，直接返回0
+    manager.tracking.trackingEnabled = false;
+    ret = ScanMigrateWork(&ctx);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(MigrationTest, TestScanMigrateWorkNoProcessDisableTracking)
+{
+    int ret;
+    struct ProcessManager manager = {.processes = nullptr};
+    ThreadCtx ctx = {.processManager = &manager};
+
+    // trackingEnabled=true时应调用一次DisableTracking并返回0
+    manager.tracking.trackingEnabled = true;
+    MOCKER(DisableTracking).stubs().will(returnValue(0));
+    ret = ScanMigrateWork(&ctx);
+    EXPECT_EQ(0, ret);
+}
+
 extern "C" uint32_t g_pageSizeHuge;
 extern "C" int SetMigrateThreadNum(struct MigrateMsg *mMsg, uint64_t migratePages, bool isForcedSingleThread);
 TEST_F(MigrationTest, TestSetMigrateThreadNum)
