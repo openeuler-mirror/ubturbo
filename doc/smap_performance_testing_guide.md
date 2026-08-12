@@ -483,6 +483,8 @@ smap.group.swap.min.freq.gain = 0
 smap.zero.freq.migrate.enable = true
 smap.adaptive.ratio.enable = true
 smap.period.file.config.switch = false
+smap.migrate.mode.enable = false
+smap.migrate.mode = 1
 ```
 
 配置文件说明如[表1](#table1)所示。
@@ -503,6 +505,8 @@ smap.period.file.config.switch = false
 |10|smap.zero.freq.migrate.enable|默认值：true<br>取值范围：<br>- false<br>- true|虚机场景，是否交换本地0页与远端有频次的页面。|
 |11|smap.adaptive.ratio.enable|默认值：true<br>取值范围：<br>- false<br>- true|虚机场景自适应调整虚机内存比例的开关。|
 |12|smap.period.file.config.switch|默认值：false<br>取值范围：<br>- false：系统采用算法配置周期。<br>- true：使用配置文件配置的周期。|配置周期开关。|
+|13|smap.migrate.mode.enable|默认值：false<br>取值范围：<br>- false<br>- true|迁移方式配置开关。设置为true时启用配置文件中指定的迁移方式；设置为false时系统默认采用LD/ST方式。|
+|14|smap.migrate.mode|默认值：1<br>取值范围：[0,2]|内存迁移方式。0：LD/ST方式，使用CPU load/store指令进行页面迁移；1：URMA方式，使用UB DMA offloading进行页面迁移，需硬件支持，若硬件不支持则自动回退为LD/ST方式。|
 
 > [!NOTE] 说明 
 >
@@ -525,3 +529,23 @@ smap.period.file.config.switch = false
 ```
 
 迁移周期不能小于扫描周期。
+
+### 迁移方式
+
+SMAP内存迁移支持两种底层迁移方式，通过配置参数`smap.migrate.mode.enable`和`smap.migrate.mode`控制：
+
+- **LD/ST方式（取值：0）**：使用CPU load/store指令进行页面拷贝迁移。该方式不依赖特定硬件能力，为系统默认迁移方式。
+- **URMA方式（取值：1）**：使用UB DMA offloading进行页面迁移，可降低迁移过程中的CPU开销。该方式需要硬件支持UB DMA能力，若硬件不支持则自动回退为LD/ST方式。
+
+迁移方式选择逻辑如下：
+
+1. 当`smap.migrate.mode.enable = false`（默认）时，系统不下发迁移方式配置，内核默认采用LD/ST方式。
+2. 当`smap.migrate.mode.enable = true`时，系统读取`smap.migrate.mode`配置值：
+   - 若配置为0（LD/ST），直接采用LD/ST方式。
+   - 若配置为1（URMA），系统自动检测硬件是否支持UB DMA：支持则采用URMA方式，不支持则自动回退为LD/ST方式。
+
+>[!NOTE] 说明
+>
+> - 修改迁移方式配置后，SMAP会在下一次迁移周期生效，无需重启服务。
+> - URMA方式仅在硬件支持UB DMA offloading时才能生效，否则将自动回退。
+> - 在不支持`CONFIG_MIGRATE_PAGES_DMA_OFFLOADING`的内核上，URMA方式不可用。
