@@ -348,7 +348,7 @@ typedef struct {
     uint32_t scanTime;
     ScanType scanType; // 标识添加进程组件 HAM/普通冷热
     uint64_t actcLen[MAX_NODES];
-    ActcData *actcData[MAX_NODES]; // actc数据
+    ActcData *actcData[MAX_NODES]; // actc数据，按nid偏移指向同一连续缓冲区，第一个非空即缓冲区起始
     ActCount actCount[MAX_NODES]; // 统计数据
     uint32_t selectedBuckets[MAX_NODES][FREQ_BUCKETS_SIZE]; // 已选频次为freq的页面数
 } ScanAttribute;
