@@ -84,6 +84,7 @@ void set_remote_migrate_mode(unsigned int mode)
 #else
 void set_remote_migrate_mode(unsigned int mode)
 {
+	pr_info("config MIGRATE_PAGES_DMA_OFFLOADING is not enabled, remote migrate mode is not supported\n");
 }
 #endif
 

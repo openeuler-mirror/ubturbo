@@ -27,6 +27,9 @@ extern "C" {
 #define DEFAULT_MIGRATE_PERIOD 2000
 #define MIN_MIGRATE_PERIOD 500
 
+#define MIGRATE_MODE_URMA 1
+#define MIGRATE_MODE_LD_ST 0
+
 uint32_t GetScanPeriodConfig(void);
 
 uint32_t GetMigratePeriodConfig(void);
