@@ -819,9 +819,10 @@ struct mig_batch {
 /*
  * struct mig_stats - cross-entry migration statistics accumulated over one ioctl.
  *
- * Throttled down from do_migrate through process_mig_entry/migrate_one_batch/
- * collect_one_folio as a single pointer in place of four counter pointers.
- * pre_migrate_num is reset per entry by process_mig_entry.
+ * Throttled down from do_migrate through migrate_pid_interleaved/
+ * migrate_one_batch/collect_one_folio as a single pointer in place of four
+ * counter pointers. pre_migrate_num accumulates across one do_migrate call
+ * (debug logging only).
  */
 struct mig_stats {
 	unsigned int mig_num;
@@ -930,6 +931,9 @@ static int migrate_one_batch(int idx, struct migrate_msg *msg,
 		return nr_remain - batch.cnt;
 	}
 
+	pr_debug("migrate_one_batch: [%d] pid %d from %d to %d nr %u\n", idx,
+		 mig_list[idx].pid, mig_list[idx].from, mig_list[idx].to,
+		 batch.cnt);
 	batch_failed = smu_migrate(batch.folios, batch.nr_folios,
 				   mig_list[idx].to, &msg->mul_mig);
 	mig_list[idx].failed_mig_nr += batch_failed;
@@ -951,21 +955,13 @@ static int migrate_one_batch(int idx, struct migrate_msg *msg,
 }
 
 /*
- * process_mig_entry - migrate all folios of a single mig_list entry.
- *
- * Validates the entry, then drives migrate_one_batch over the folios in
- * NR_BATCHED_MIGRATION sized batches until done. Returns 0 on success,
- * -EINVAL if the from/to node, nr is invalid, or a critical node error
- * occurs (caller skips the entry), or -ENOMEM if a batch folio array cannot
- * be allocated (caller aborts the whole ioctl). pre_migrate_num is reset
- * here so it accumulates per entry.
+ * init_mig_entry - validate and initialize one mig_list entry before its
+ * first batch. Resets the per-entry failure counters and seeds the entry's
+ * remaining count in the caller's nr_remain array. Returns 0 on success or
+ * -EINVAL if the entry is invalid (caller marks it done and skips it).
  */
-static int process_mig_entry(int idx, struct migrate_msg *msg,
-			     struct mig_list *mig_list, struct mig_stats *stats)
+static int init_mig_entry(int idx, struct mig_list *mig_list, u64 *nr_remain)
 {
-	u64 nr_remain;
-	int ret;
-
 	pr_debug("[%d] pid %d from %d to %d nr %llu\n", idx, mig_list[idx].pid,
 		 mig_list[idx].from, mig_list[idx].to, mig_list[idx].nr);
 
@@ -982,17 +978,81 @@ static int process_mig_entry(int idx, struct migrate_msg *msg,
 		return -EINVAL;
 	}
 
-	nr_remain = mig_list[idx].nr;
 	mig_list[idx].failed_pre_migrated_nr = 0;
 	mig_list[idx].failed_mig_nr = 0;
-	stats->pre_migrate_num = 0;
+	nr_remain[idx] = mig_list[idx].nr;
+	return 0;
+}
 
-	while (nr_remain > 0) {
-		ret = migrate_one_batch(idx, msg, mig_list, nr_remain, stats);
-		if (ret < 0)
-			return ret;
-		nr_remain = ret;
-	}
+/*
+ * run_one_batch - run one migrate_one_batch for entry i and update its
+ * remaining count. Returns 0 after a step (entry advanced, finished, or
+ * skipped due to -EINVAL), or a negative errno to abort the whole ioctl.
+ * nr_remain[i] == 0 after this call means the entry is done.
+ */
+static int run_one_batch(int i, struct migrate_msg *msg,
+			 struct mig_list *mig_list, u64 *nr_remain,
+			 struct mig_stats *stats)
+{
+	int r = migrate_one_batch(i, msg, mig_list, nr_remain[i], stats);
+
+	if (r < 0 && r != -EINVAL)
+		return r;
+	if (r == -EINVAL || r == 0)
+		nr_remain[i] = 0;
+	else
+		nr_remain[i] = r;
+	return 0;
+}
+
+/*
+ * migrate_pid_interleaved - drive the interleaved cold/hot swap for one pid.
+ *
+ * Entries of this pid are already initialized by do_migrate (nr_remain > 0 for
+ * active, 0 for done/skipped). Drains the back (promotion, from a remote node)
+ * and out (demotion, from a local node) directions one NR_BATCHED_MIGRATION
+ * batch at a time in alternation: one back batch, one out batch, ... until
+ * neither direction has work left. Each pass picks the first still-active
+ * entry of the requested direction. Returns 0 on completion, or a negative
+ * errno to abort the whole ioctl.
+ */
+static int migrate_pid_interleaved(int index, struct migrate_msg *msg,
+				   struct mig_list *mig_list, u64 *nr_remain,
+				   struct mig_stats *stats)
+{
+	pid_t cur_pid = mig_list[index].pid;
+	bool progressed;
+	int i;
+
+	do {
+		int ret;
+
+		progressed = false;
+
+		/* one back (promotion) batch: first active remote-source entry */
+		for (i = index; i < msg->cnt; i++) {
+			if (mig_list[i].pid != cur_pid || nr_remain[i] == 0 ||
+			    mig_list[i].from < nr_local_numa)
+				continue;
+			ret = run_one_batch(i, msg, mig_list, nr_remain, stats);
+			if (ret)
+				return ret;
+			progressed = true;
+			break;
+		}
+
+		/* one out (demotion) batch: first active local-source entry */
+		for (i = index; i < msg->cnt; i++) {
+			if (mig_list[i].pid != cur_pid || nr_remain[i] == 0 ||
+			    mig_list[i].from >= nr_local_numa)
+				continue;
+			ret = run_one_batch(i, msg, mig_list, nr_remain, stats);
+			if (ret)
+				return ret;
+			progressed = true;
+			break;
+		}
+	} while (progressed);
 
 	return 0;
 }
@@ -1000,69 +1060,43 @@ static int process_mig_entry(int idx, struct migrate_msg *msg,
 /*
  * do_migrate - drive the cold/hot swap for a batch of mig_list entries.
  *
- * Entries are grouped and processed per pid: for each pid, promotion
- * (migrate-back, from a remote node) is issued before demotion (migrate-out,
- * from a local node). Although a pid's own promotion still runs before its own
- * demotion, grouping per pid interleaves the directions across pids as
- * (back, out, back, out, ...): each pid's demotion frees local memory before
- * the next pid's promotion needs it. This avoids the previous behavior where
- * every pid's promotion ran first and exhausted local memory, leaving later
- * pids unable to migrate back. Pids are visited in order of first appearance
- * in mig_list.
+ * Pre-inits every mig_list entry (valid entries get nr_remain = nr > 0,
+ * invalid ones are left at 0 = skip), then groups entries per pid (visited
+ * in order of first appearance) and hands each pid to
+ * migrate_pid_interleaved, which alternates migrate-back and migrate-out one
+ * NR_BATCHED_MIGRATION batch at a time instead of draining one direction
+ * fully before starting the other. Entry state lives solely in nr_remain:
+ * 0 means done/skipped, > 0 means still active.
  */
 int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 {
-	int i, index;
-	int ret;
+	int i, index, ret;
 	struct mig_stats stats = { 0 };
-	int *done;
+	u64 *nr_remain;
 
 	memset(nr_abnormal, 0, sizeof(nr_abnormal));
-	if (msg->cnt == 0) {
+	if (msg->cnt == 0)
 		return 0;
-	}
 
-	done = kzalloc(msg->cnt * sizeof(*done), GFP_KERNEL);
-	if (!done)
+	nr_remain = vzalloc(msg->cnt * sizeof(*nr_remain));
+	if (!nr_remain)
 		return -ENOMEM;
 
+	for (i = 0; i < msg->cnt; i++)
+		(void)init_mig_entry(i, mig_list, nr_remain);
+
 	for (index = 0; index < msg->cnt; index++) {
-		pid_t cur_pid;
-
-		if (done[index])
+		if (nr_remain[index] == 0)
 			continue;
-		cur_pid = mig_list[index].pid;
-
-		/* Phase 1: promotion (migrate-back) for this pid. */
-		for (i = index; i < msg->cnt; i++) {
-			if (done[i] || mig_list[i].pid != cur_pid)
-				continue;
-			if (mig_list[i].from < nr_local_numa)
-				continue;
-			done[i] = 1;
-			ret = process_mig_entry(i, msg, mig_list, &stats);
-			if (ret && ret != -EINVAL) {
-				kfree(done);
-				return ret;
-			}
-		}
-
-		/* Phase 2: demotion (migrate-out) for this pid, frees local memory for the next pid. */
-		for (i = index; i < msg->cnt; i++) {
-			if (done[i] || mig_list[i].pid != cur_pid)
-				continue;
-			if (mig_list[i].from >= nr_local_numa)
-				continue;
-			done[i] = 1;
-			ret = process_mig_entry(i, msg, mig_list, &stats);
-			if (ret && ret != -EINVAL) {
-				kfree(done);
-				return ret;
-			}
+		ret = migrate_pid_interleaved(index, msg, mig_list, nr_remain,
+					      &stats);
+		if (ret) {
+			vfree(nr_remain);
+			return ret;
 		}
 	}
 
-	kfree(done);
+	vfree(nr_remain);
 	pr_debug("non anon page number: %u\n", stats.non_anon_num);
 	return stats.failed_num;
 }

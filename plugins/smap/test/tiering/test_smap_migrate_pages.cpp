@@ -97,6 +97,7 @@ protected:
         }
         acpi_mem.len = 0;
         GlobalMockObject::verify();
+        GlobalMockObject::reset();
         cout << "[Phase TearDown End]" << endl;
     }
 };
@@ -646,12 +647,10 @@ extern "C" int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list);
 TEST_F(SmapMigratePagesTest, DoMigrateTestOnce)
 {
     int ret = 0;
-    int arr;
     struct migrate_msg *msg = (struct migrate_msg *)kmalloc(sizeof(struct migrate_msg), GFP_KERNEL);
     struct mig_list *mig_list = (struct mig_list *)kmalloc(sizeof(struct mig_list), GFP_KERNEL);
 
     msg->cnt = 0;
-    MOCKER(kzalloc).stubs().will(returnValue((void*)&arr));
     ret = do_migrate(msg, nullptr);
     EXPECT_EQ(0, ret);
     kfree(msg);
@@ -694,14 +693,15 @@ TEST_F(SmapMigratePagesTest, DoMigrateMultiListFailed)
     EXPECT_EQ(0, mig_list[1].failed_pre_migrated_nr);
 }
 
-// do_migrate must group entries per pid and, within each pid, run promotion
-// (migrate-back, from a remote node) before demotion (migrate-out, from a
-// local node). smu_migrate returns a distinct value per call so the call order
-// is reflected in per-entry failed_mig_nr. Expected call order is
-// idx1->10, idx0->20, idx3->30, idx2->40 (per-pid, back before out). The old
-// global "promotion before demotion" order would yield 10/20/30/40 mapped to
-// idx1/idx3/idx0/idx2 i.e. 30/10/40/20, which is distinguishable.
-TEST_F(SmapMigratePagesTest, DoMigratePerPidPromotionBeforeDemotion)
+// do_migrate must group entries per pid and, within each pid, interleave
+// migrate-back (promotion, from a remote node) and migrate-out (demotion,
+// from a local node) one batch at a time. smu_migrate returns a distinct value
+// per call so the call order is reflected in per-entry failed_mig_nr. With one
+// back and one out entry per pid (nr=1, i.e. one batch each), the per-pid call
+// order is idx1->10, idx0->20, idx3->30, idx2->40. The old "all back then all
+// out per pid" order would be identical here (single batch per direction), so
+// DoMigratePerPidInterleavedBatchedMultiEntry covers the multi-entry case.
+TEST_F(SmapMigratePagesTest, DoMigratePerPidInterleavedBatched)
 {
     struct page p_page;
     struct migrate_msg msg;
@@ -762,14 +762,81 @@ TEST_F(SmapMigratePagesTest, DoMigratePerPidPromotionBeforeDemotion)
     nr_local_numa = saved_nr_local_numa;
 }
 
-TEST_F(SmapMigratePagesTest, DoMigrateKzallocFailed)
+// do_migrate must interleave migrate-back and migrate-out per pid one batch
+// at a time. With a single pid carrying two back entries and two out entries
+// (each nr=1, i.e. one batch), the interleaved call order is
+// idx0->10, idx1->20, idx2->30, idx3->40. The previous "all back then all out
+// per pid" order would be idx0->10, idx2->20, idx1->30, idx3->40 (i.e.
+// idx1=30/idx2=20), distinguishable from the expected idx1=20/idx2=30.
+TEST_F(SmapMigratePagesTest, DoMigratePerPidInterleavedBatchedMultiEntry)
+{
+	struct page p_page;
+	struct migrate_msg msg;
+	struct mig_list mig_list[4];
+	u64 addrs[4] = { 0x100000, 0x200000, 0x300000, 0x400000 };
+	unsigned int nr_folios = 1;
+	int saved_nr_local_numa = nr_local_numa;
+
+	nr_local_numa = 4;
+	msg.cnt = 4;
+	msg.mul_mig.page_size = 0x1000;
+	msg.mig_list = mig_list;
+
+	/* one pid: back, out, back, out (each nr=1) */
+	mig_list[0].addr = &addrs[0];
+	mig_list[0].pid = 1;
+	mig_list[0].from = 4;
+	mig_list[0].to = 0;
+	mig_list[0].nr = 1;
+	mig_list[1].addr = &addrs[1];
+	mig_list[1].pid = 1;
+	mig_list[1].from = 0;
+	mig_list[1].to = 4;
+	mig_list[1].nr = 1;
+	mig_list[2].addr = &addrs[2];
+	mig_list[2].pid = 1;
+	mig_list[2].from = 4;
+	mig_list[2].to = 0;
+	mig_list[2].nr = 1;
+	mig_list[3].addr = &addrs[3];
+	mig_list[3].pid = 1;
+	mig_list[3].from = 0;
+	mig_list[3].to = 4;
+	mig_list[3].nr = 1;
+
+	MOCKER(pfn_valid).stubs().will(returnValue(true));
+	MOCKER(pfn_to_online_page).stubs().will(returnValue(&p_page));
+	MOCKER(is_filter_anon).stubs().will(returnValue(false));
+	MOCKER(is_filter_4k).stubs().will(returnValue(-1));
+	MOCKER(smap_add_page_for_migration)
+		.stubs()
+		.with(any(), any(), outBoundP(&nr_folios, sizeof(nr_folios)),
+		      any(), any())
+		.will(returnValue(0));
+	MOCKER(smu_migrate)
+		.stubs()
+		.will(returnValue(10))
+		.then(returnValue(20))
+		.then(returnValue(30))
+		.then(returnValue(40));
+	int ret = do_migrate(&msg, mig_list);
+	EXPECT_EQ(100, ret);
+	EXPECT_EQ(10, mig_list[0].failed_mig_nr);
+	EXPECT_EQ(20, mig_list[1].failed_mig_nr);
+	EXPECT_EQ(30, mig_list[2].failed_mig_nr);
+	EXPECT_EQ(40, mig_list[3].failed_mig_nr);
+
+	nr_local_numa = saved_nr_local_numa;
+}
+
+TEST_F(SmapMigratePagesTest, DoMigrateVzallocFailed)
 {
     int ret = 0;
     struct migrate_msg *msg = (struct migrate_msg *)kmalloc(sizeof(struct migrate_msg), GFP_KERNEL);
     struct mig_list *mig_list = (struct mig_list *)kmalloc(sizeof(struct mig_list), GFP_KERNEL);
     msg->cnt = 1;
 
-    MOCKER(kzalloc).stubs().will(returnValue((void*)nullptr));
+    MOCKER(vzalloc).stubs().will(returnValue((void *)nullptr));
     ret = do_migrate(msg, mig_list);
     EXPECT_EQ(-ENOMEM, ret);
     kfree(msg);
@@ -780,7 +847,6 @@ TEST_F(SmapMigratePagesTest, DoMigrateSingleListSuccess)
 {
     struct page page;
     int ret = 0;
-    int arr[1] = {0};
     struct migrate_msg *msg = (struct migrate_msg *)kmalloc(sizeof(struct migrate_msg), GFP_KERNEL);
     struct mig_list *mig_list = (struct mig_list *)kmalloc(sizeof(struct mig_list), GFP_KERNEL);
     mig_list[0].from = NUMA_NO_NODE + 1;
@@ -788,7 +854,6 @@ TEST_F(SmapMigratePagesTest, DoMigrateSingleListSuccess)
     msg->cnt = 1;
     msg->mig_list = mig_list;
     unsigned int nr_folios = 1;
-    MOCKER(kzalloc).stubs().will(returnValue((void*)arr));
     MOCKER(pfn_valid).stubs().will(returnValue(true));
     MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(is_filter_4k).stubs().will(returnValue(-1));
@@ -797,7 +862,6 @@ TEST_F(SmapMigratePagesTest, DoMigrateSingleListSuccess)
         .with(any(), any(), outBoundP(&nr_folios, sizeof(nr_folios)), any(), any())
         .will(returnValue(0));
     MOCKER(smu_migrate).stubs().will(returnValue(0));
-    MOCKER(kfree).stubs().will(ignoreReturnValue());
     ret = do_migrate(msg, mig_list);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(0, mig_list[0].failed_mig_nr);
@@ -809,7 +873,6 @@ TEST_F(SmapMigratePagesTest, DoMigrateSingleListSuccess)
 TEST_F(SmapMigratePagesTest, DoMigrateNoValidNid)
 {
     int ret = 0;
-    int arr[1] = {1};
     struct migrate_msg *msg = (struct migrate_msg *)kmalloc(sizeof(struct migrate_msg), GFP_KERNEL);
     struct mig_list *mig_list = (struct mig_list *)kmalloc(sizeof(struct mig_list), GFP_KERNEL);
     mig_list[0].from = NUMA_NO_NODE;
@@ -817,8 +880,6 @@ TEST_F(SmapMigratePagesTest, DoMigrateNoValidNid)
     msg->cnt = 1;
     msg->mig_list = mig_list;
 
-    MOCKER(kzalloc).stubs().will(returnValue((void*)arr));
-    MOCKER(kfree).stubs().will(ignoreReturnValue());
     ret = do_migrate(msg, mig_list);
     EXPECT_EQ(0, ret);
     kfree(msg);
@@ -829,7 +890,6 @@ TEST_F(SmapMigratePagesTest, DoMigrateSingleListFailed)
 {
     struct page page;
     int ret = 0;
-    int arr[1] = {0};
     unsigned int nr_folios = 1;
     struct migrate_msg *msg = (struct migrate_msg *)kmalloc(sizeof(struct migrate_msg), GFP_KERNEL);
     struct mig_list *mig_list = (struct mig_list *)kmalloc(sizeof(struct mig_list), GFP_KERNEL);
@@ -838,7 +898,6 @@ TEST_F(SmapMigratePagesTest, DoMigrateSingleListFailed)
     msg->cnt = 1;
     msg->mig_list = mig_list;
 
-    MOCKER(kzalloc).stubs().will(returnValue((void*)arr));
     MOCKER(pfn_valid).stubs().will(returnValue(true));
     MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(is_filter_4k).stubs().will(returnValue(-1));
@@ -847,7 +906,6 @@ TEST_F(SmapMigratePagesTest, DoMigrateSingleListFailed)
         .with(any(), any(), outBoundP(&nr_folios, sizeof(nr_folios)), any(), any())
         .will(returnValue(1));
     MOCKER(smu_migrate).stubs().will(returnValue(1));
-    MOCKER(kfree).stubs().will(ignoreReturnValue());
     ret = do_migrate(msg, mig_list);
     EXPECT_EQ(1, ret);
     EXPECT_EQ(1, mig_list[0].failed_mig_nr);
@@ -860,8 +918,6 @@ TEST_F(SmapMigratePagesTest, DoMigrate4KPageIsPageTransHuge)
 {
     struct page page;
     int ret = 0;
-    int arr[1] = {0};
-    unsigned int nr_folios = 1;
     struct migrate_msg *msg = (struct migrate_msg *)kmalloc(sizeof(struct migrate_msg), GFP_KERNEL);
     struct mig_list *mig_list = (struct mig_list *)kmalloc(sizeof(struct mig_list), GFP_KERNEL);
     mig_list[0].from = NUMA_NO_NODE + 1;
@@ -869,10 +925,8 @@ TEST_F(SmapMigratePagesTest, DoMigrate4KPageIsPageTransHuge)
     msg->cnt = 1;
     msg->mig_list = mig_list;
 
-    MOCKER(kzalloc).stubs().will(returnValue((void*)arr));
     MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(is_filter_4k).stubs().will(returnValue(0)); // page is PageTransHuge
-    MOCKER(kfree).stubs().will(ignoreReturnValue());
     ret = do_migrate(msg, mig_list);
     EXPECT_EQ(0, ret);
     kfree(msg);
@@ -1010,7 +1064,6 @@ TEST_F(SmapMigratePagesTest, DoMigrateNrFoliosZeroGotoAgainFiltered)
     // First batch: all pages filtered by is_filter_4k, nr_folios = 0
     // Second batch: page passes filter, added for migration
     struct page page;
-    int arr[1] = {0};
     unsigned int nr_folios = 1;
     const u64 nr_total = NR_BATCHED_MIGRATION + 1;
     struct migrate_msg *msg = (struct migrate_msg *)kmalloc(sizeof(struct migrate_msg), GFP_KERNEL);
@@ -1027,7 +1080,6 @@ TEST_F(SmapMigratePagesTest, DoMigrateNrFoliosZeroGotoAgainFiltered)
     msg->mul_mig.page_size = 0x1000;
     msg->mig_list = mig_list;
 
-    MOCKER(kzalloc).stubs().will(returnValue((void*)arr));
     MOCKER(pfn_valid).stubs().will(returnValue(true));
     MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(is_filter_4k).stubs().will(repeat(0, NR_BATCHED_MIGRATION)).then(returnValue(-1));
@@ -1036,7 +1088,6 @@ TEST_F(SmapMigratePagesTest, DoMigrateNrFoliosZeroGotoAgainFiltered)
         .with(any(), any(), outBoundP(&nr_folios, sizeof(nr_folios)), any(), any())
         .will(returnValue(0));
     MOCKER(smu_migrate).stubs().will(returnValue(0));
-    MOCKER(kfree).stubs().will(ignoreReturnValue());
 
     int ret = do_migrate(msg, mig_list);
     EXPECT_EQ(0, ret);
