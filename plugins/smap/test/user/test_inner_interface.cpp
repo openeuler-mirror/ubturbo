@@ -10,6 +10,7 @@
 
 #include "manage/manage.h"
 #include "smap_inner_interface.h"
+#include "smap_log_core.h"
 
 const double TEST_DEFAULT_LOCAL_MEM_RATIO = 75.0;
 
@@ -85,4 +86,60 @@ TEST_F(InnerInterfaceTest, TestSmapQueryVmMemRatio)
     ret = SmapQueryVmMemRatio(&msg);
     EXPECT_EQ(1, msg.vr[0].pid);
     EXPECT_EQ(HUNDRED - TEST_DEFAULT_LOCAL_MEM_RATIO, msg.vr[0].ratio);
+}
+
+/* --- SmapSetLogLevel tests --- */
+
+TEST_F(InnerInterfaceTest, TestSmapSetLogLevelValidDebug)
+{
+    SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_INFO);
+    int ret = SmapSetLogLevel(SMAP_LOG_CORE_DEBUG);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(SMAP_LOG_CORE_DEBUG, SmapLogCoreGetMinLogLevel());
+}
+
+TEST_F(InnerInterfaceTest, TestSmapSetLogLevelValidInfo)
+{
+    SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_DEBUG);
+    int ret = SmapSetLogLevel(SMAP_LOG_CORE_INFO);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(SMAP_LOG_CORE_INFO, SmapLogCoreGetMinLogLevel());
+}
+
+TEST_F(InnerInterfaceTest, TestSmapSetLogLevelValidWarn)
+{
+    int ret = SmapSetLogLevel(SMAP_LOG_CORE_WARN);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(SMAP_LOG_CORE_WARN, SmapLogCoreGetMinLogLevel());
+}
+
+TEST_F(InnerInterfaceTest, TestSmapSetLogLevelValidError)
+{
+    int ret = SmapSetLogLevel(SMAP_LOG_CORE_ERROR);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(SMAP_LOG_CORE_ERROR, SmapLogCoreGetMinLogLevel());
+}
+
+TEST_F(InnerInterfaceTest, TestSmapSetLogLevelInvalidNegative)
+{
+    int ret = SmapSetLogLevel(-1);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InnerInterfaceTest, TestSmapSetLogLevelInvalidTooLarge)
+{
+    int ret = SmapSetLogLevel(SMAP_LOG_CORE_BUTT);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(InnerInterfaceTest, TestSmapSetLogLevelRevertDebugToInfo)
+{
+    /* Set to DEBUG first */
+    SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_DEBUG);
+    EXPECT_EQ(SMAP_LOG_CORE_DEBUG, SmapLogCoreGetMinLogLevel());
+
+    /* Revert to INFO */
+    int ret = SmapSetLogLevel(SMAP_LOG_CORE_INFO);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(SMAP_LOG_CORE_INFO, SmapLogCoreGetMinLogLevel());
 }

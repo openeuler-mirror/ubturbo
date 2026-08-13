@@ -135,7 +135,7 @@ void RackLoggerManager::LogToSyslog(TurboLoggerEntry &loggerEntry)
     auto level = loggerEntry.GetLogLevel();
     auto syslogLevel = LogToSyslogLevel(level);
     openlog("ubturbo", 0, 0);
-    syslog(syslogLevel, "%s", loggerEntry.GetSyslogAsString());
+    syslog(syslogLevel, "%s", loggerEntry.GetSyslogAsString().c_str());
     closelog();
 }
 bool RackLoggerManager::IsSysLog(TurboLoggerEntry &rackLoggerEntry)

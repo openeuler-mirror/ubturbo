@@ -154,38 +154,54 @@ RetCode SmapEnableNodeHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffe
 void SmapToTurboLog(int level, const char *str, const char *moduleName)
 {
     LoggerLevel logLevel = static_cast<LoggerLevel>(level);
+    turbo::log::TurboLogLevel turboLevel;
     switch (logLevel) {
         case LoggerLevel::LOGGER_INFO_LEVEL:
-            UBTURBO_LOG_INFO(MODULE_NAME, MODULE_CODE) << "[" << moduleName << "]" << str;
+            turboLevel = turbo::log::TurboLogLevel::INFO;
             break;
         case LoggerLevel::LOGGER_WARNING_LEVEL:
-            UBTURBO_LOG_WARN(MODULE_NAME, MODULE_CODE) << "[" << moduleName << "]" << str;
+            turboLevel = turbo::log::TurboLogLevel::WARN;
             break;
         case LoggerLevel::LOGGER_ERROR_LEVEL:
-            UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[" << moduleName << "]" << str;
+            turboLevel = turbo::log::TurboLogLevel::ERROR;
             break;
         default:
-            UBTURBO_LOG_DEBUG(MODULE_NAME, MODULE_CODE) << "[" << moduleName << "]" << str;
+            turboLevel = turbo::log::TurboLogLevel::DEBUG;
+            break;
     }
+    if (!turbo::log::TurboIsLog(turboLevel)) {
+        return;
+    }
+    turbo::log::TurboLoggerEntry entry(MODULE_NAME, turboLevel, nullptr, nullptr, 0);
+    entry << "[" << moduleName << "]" << str;
+    turbo::log::TurboLog() == entry;
 }
 
 const std::string SMAP_LOG_MODULE = "[Smap]";
 void SmapHandlerMsgToTurboLog(int level, const char *str, const char *moduleName)
 {
     LoggerLevel logLevel = static_cast<LoggerLevel>(level);
+    turbo::log::TurboLogLevel turboLevel;
     switch (logLevel) {
         case LoggerLevel::LOGGER_INFO_LEVEL:
-            UBTURBO_LOG_INFO(MODULE_NAME, MODULE_CODE) << SMAP_LOG_MODULE << str;
+            turboLevel = turbo::log::TurboLogLevel::INFO;
             break;
         case LoggerLevel::LOGGER_WARNING_LEVEL:
-            UBTURBO_LOG_WARN(MODULE_NAME, MODULE_CODE) << SMAP_LOG_MODULE << str;
+            turboLevel = turbo::log::TurboLogLevel::WARN;
             break;
         case LoggerLevel::LOGGER_ERROR_LEVEL:
-            UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << SMAP_LOG_MODULE << str;
+            turboLevel = turbo::log::TurboLogLevel::ERROR;
             break;
         default:
-            UBTURBO_LOG_DEBUG(MODULE_NAME, MODULE_CODE) << SMAP_LOG_MODULE << str;
+            turboLevel = turbo::log::TurboLogLevel::DEBUG;
+            break;
     }
+    if (!turbo::log::TurboIsLog(turboLevel)) {
+        return;
+    }
+    turbo::log::TurboLoggerEntry entry(MODULE_NAME, turboLevel, nullptr, nullptr, 0);
+    entry << SMAP_LOG_MODULE << str;
+    turbo::log::TurboLog() == entry;
 }
 
 RetCode SmapInitHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
