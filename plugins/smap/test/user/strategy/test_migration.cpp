@@ -565,11 +565,10 @@ TEST_F(MigrationTest, TestScanMigrateWorkNoProcess)
 {
     int ret;
     struct ProcessManager manager = {.processes = nullptr};
-    ThreadCtx ctx = {.processManager = &manager};
 
     // trackingEnabled=false时不应调用DisableTracking，直接返回0
     manager.tracking.trackingEnabled = false;
-    ret = ScanMigrateWork(&ctx);
+    ret = ScanMigrateWork(&manager);
     EXPECT_EQ(0, ret);
 }
 
@@ -577,12 +576,11 @@ TEST_F(MigrationTest, TestScanMigrateWorkNoProcessDisableTracking)
 {
     int ret;
     struct ProcessManager manager = {.processes = nullptr};
-    ThreadCtx ctx = {.processManager = &manager};
 
     // trackingEnabled=true时应调用一次DisableTracking并返回0
     manager.tracking.trackingEnabled = true;
     MOCKER(DisableTracking).stubs().will(returnValue(0));
-    ret = ScanMigrateWork(&ctx);
+    ret = ScanMigrateWork(&manager);
     EXPECT_EQ(0, ret);
 }
 
@@ -1409,7 +1407,7 @@ TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanWithPages)
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(UpdateScanTime).stubs().will(returnValue(0));
 
-    UpdatePeriodFromConfig(&ctx);
+    UpdatePeriodFromConfig(&manager);
     EXPECT_FALSE(current.isFirstScan);
 }
 
@@ -1848,7 +1846,7 @@ TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuMigrateModeChanged)
     MOCKER(GetMigrateModeConfig).stubs().will(returnValue((uint32_t)2));
     MOCKER(IoctlUpdateUbDmaAvail).stubs().will(ignoreReturnValue());
     MOCKER(SetMigrateModeChanged).stubs().will(ignoreReturnValue());
-    MOCKER(GetScanCpuEnableConfig).stubs().will(returnValue(false));
+    MOCKER(GetScanCpuChanged).stubs().will(returnValue(false));
 
     MigrationUpdateMigrateModeAndScanCpu();
 }
@@ -1856,7 +1854,6 @@ TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuMigrateModeChanged)
 TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuScanCpuChanged)
 {
     MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(false));
-    MOCKER(GetScanCpuEnableConfig).stubs().will(returnValue(true));
     MOCKER(GetScanCpuChanged).stubs().will(returnValue(true));
     MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)1));
     MOCKER(GetScanCpuMaxConfig).stubs().will(returnValue((uint32_t)3));
@@ -1870,7 +1867,7 @@ TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuNoChange)
 {
     MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(true));
     MOCKER(GetMigrateModeChanged).stubs().will(returnValue(false));
-    MOCKER(GetScanCpuEnableConfig).stubs().will(returnValue(false));
+    MOCKER(GetScanCpuChanged).stubs().will(returnValue(false));
 
     MigrationUpdateMigrateModeAndScanCpu();
 }
@@ -2235,7 +2232,6 @@ TEST_F(MigrationTest, TestScanMigrateWorkThresholdZeroSkipQuery)
     int ret;
     ProcessAttr process = { .pid = 1025 };
     struct ProcessManager manager = { .processes = &process };
-    ThreadCtx ctx = { .processManager = &manager };
     manager.ubBwMonitor.ubBwThreshold = 0;
     manager.ubBwMonitor.currentFluxRet = 0;
 
@@ -2253,7 +2249,7 @@ TEST_F(MigrationTest, TestScanMigrateWorkThresholdZeroSkipQuery)
     MOCKER(UpdatePeriodFromConfig).stubs().will(ignoreReturnValue());
     MOCKER(PerformMigration).stubs().will(returnValue(0));
     MOCKER(EnableTracking).stubs().will(returnValue(0));
-    ret = ScanMigrateWork(&ctx);
+    ret = ScanMigrateWork(&manager);
     EXPECT_EQ(0, ret);
 }
 
@@ -2262,7 +2258,6 @@ TEST_F(MigrationTest, TestScanMigrateWorkThresholdNonZeroQueryAndConfig)
     int ret;
     ProcessAttr process = { .pid = 1025 };
     struct ProcessManager manager = { .processes = &process };
-    ThreadCtx ctx = { .processManager = &manager };
     manager.ubBwMonitor.ubBwThreshold = 1000;
 
     MOCKER(GetUbFluxMb).stubs().will(ignoreReturnValue());
@@ -2279,7 +2274,7 @@ TEST_F(MigrationTest, TestScanMigrateWorkThresholdNonZeroQueryAndConfig)
     MOCKER(PerformMigration).stubs().will(returnValue(0));
     MOCKER(ConfigUbWatch).stubs().will(returnValue(0));
     MOCKER(EnableTracking).stubs().will(returnValue(0));
-    ret = ScanMigrateWork(&ctx);
+    ret = ScanMigrateWork(&manager);
     EXPECT_EQ(0, ret);
 }
 
@@ -2330,7 +2325,6 @@ TEST_F(MigrationTest, TestScanMigrateWorkCallsUpdateRemoteNumaCriticalErr)
     int ret;
     ProcessAttr process = {.pid = 1025};
     struct ProcessManager manager = {.processes = &process};
-    ThreadCtx ctx = {.processManager = &manager};
 
     MOCKER(DisableTracking).stubs().will(returnValue(0));
     MOCKER(StrategyConfigRead).stubs().will(ignoreReturnValue());
@@ -2343,6 +2337,6 @@ TEST_F(MigrationTest, TestScanMigrateWorkCallsUpdateRemoteNumaCriticalErr)
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(UpdateRemoteNumaCriticalErr).stubs();
     MOCKER(PerformMigration).stubs().will(returnValue(0));
-    ret = ScanMigrateWork(&ctx);
+    ret = ScanMigrateWork(&manager);
     EXPECT_EQ(0, ret);
 }

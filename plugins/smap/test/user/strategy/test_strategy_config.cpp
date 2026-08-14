@@ -60,7 +60,6 @@ typedef struct {
     bool scanCpuChanged;
     uint32_t scanCpuMin;
     uint32_t scanCpuMax;
-    bool scanCpuEnable;
     uint32_t ubBwThreshold;
 } StrategyConfig;
 
@@ -212,17 +211,6 @@ TEST_F(PeriodConfigTest, GetScanCpuMaxConfigTest)
     EXPECT_EQ(3, ret);
 }
 
-extern "C" bool GetScanCpuEnableConfig(void);
-TEST_F(PeriodConfigTest, GetScanCpuEnableConfigTest)
-{
-    g_strategyConfig.scanCpuEnable = true;
-    bool ret = GetScanCpuEnableConfig();
-    EXPECT_EQ(true, ret);
-    g_strategyConfig.scanCpuEnable = false;
-    ret = GetScanCpuEnableConfig();
-    EXPECT_EQ(false, ret);
-}
-
 extern "C" bool GetScanCpuChanged(void);
 TEST_F(PeriodConfigTest, GetScanCpuChangedTest)
 {
@@ -311,39 +299,23 @@ TEST_F(PeriodConfigTest, ConfigScanCpuTestMinGreaterThanMax)
     EXPECT_EQ(-1, ret);
 }
 
-extern "C" int32_t ConfigScanCpuEnable(char *substr, char *value);
-TEST_F(PeriodConfigTest, ConfigScanCpuEnableTest)
-{
-    char *substr = "smap.scan.cpu.enable";
-    char *value1 = "true";
-    g_tmpStrategyConfig.scanCpuEnable = false;
-    int32_t ret = ConfigScanCpuEnable(substr, value1);
-    EXPECT_EQ(true, g_tmpStrategyConfig.scanCpuEnable);
-    EXPECT_EQ(0, ret);
-
-    char *value2 = "false";
-    g_tmpStrategyConfig.scanCpuEnable = true;
-    ret = ConfigScanCpuEnable(substr, value2);
-    EXPECT_EQ(false, g_tmpStrategyConfig.scanCpuEnable);
-    EXPECT_EQ(0, ret);
-
-    char *value3 = "invalid";
-    ret = ConfigScanCpuEnable(substr, value3);
-    EXPECT_EQ(-1, ret);
-}
-
+// UpdateMigrateModeAndScanCpu 只负责"置位"变更标志（消费标志并下发 ioctl 的是
+// migration.c 的 MigrationUpdateMigrateModeAndScanCpu，其用例见 test_migration.cpp）
 extern "C" void UpdateMigrateModeAndScanCpu(void);
 TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuMigrateModeChanged)
 {
     g_strategyConfig.migrateMode = 1;
-    g_strategyConfig.migrateModeEnable = true;
+    g_strategyConfig.migrateModeEnable = false;
+    g_strategyConfig.scanCpuMin = 1;
+    g_strategyConfig.scanCpuMax = 3;
     g_tmpStrategyConfig.migrateMode = 2;
     g_tmpStrategyConfig.migrateModeEnable = true;
-    g_tmpStrategyConfig.migrateModeChanged = false;
-    g_strategyConfig.scanCpuEnable = false;
+    g_tmpStrategyConfig.scanCpuMin = 1;
+    g_tmpStrategyConfig.scanCpuMax = 3;
 
     UpdateMigrateModeAndScanCpu();
     EXPECT_EQ(2, g_strategyConfig.migrateMode);
+    EXPECT_EQ(true, g_strategyConfig.migrateModeEnable);
     EXPECT_EQ(true, g_strategyConfig.migrateModeChanged);
     EXPECT_EQ(true, g_tmpStrategyConfig.migrateModeChanged);
 }
@@ -351,29 +323,37 @@ TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuMigrateModeChanged)
 TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuMigrateModeNoChange)
 {
     g_strategyConfig.migrateMode = 1;
-    g_strategyConfig.migrateModeEnable = true;
+    g_strategyConfig.migrateModeEnable = false;
+    g_strategyConfig.migrateModeChanged = false;
+    g_strategyConfig.scanCpuMin = 1;
+    g_strategyConfig.scanCpuMax = 3;
     g_tmpStrategyConfig.migrateMode = 1;
     g_tmpStrategyConfig.migrateModeEnable = true;
-    g_strategyConfig.scanCpuEnable = false;
+    g_tmpStrategyConfig.migrateModeChanged = false;
+    g_tmpStrategyConfig.scanCpuMin = 1;
+    g_tmpStrategyConfig.scanCpuMax = 3;
 
     UpdateMigrateModeAndScanCpu();
     EXPECT_EQ(1, g_strategyConfig.migrateMode);
+    EXPECT_EQ(true, g_strategyConfig.migrateModeEnable);
+    EXPECT_EQ(false, g_strategyConfig.migrateModeChanged);
+    EXPECT_EQ(false, g_tmpStrategyConfig.migrateModeChanged);
 }
 
 TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuScanCpuChanged)
 {
     g_strategyConfig.migrateModeEnable = false;
-    g_strategyConfig.scanCpuEnable = true;
+    g_strategyConfig.migrateModeChanged = false;
+    g_strategyConfig.scanCpuChanged = false;
     g_strategyConfig.scanCpuMin = 1;
     g_strategyConfig.scanCpuMax = 3;
-    g_tmpStrategyConfig.scanCpuEnable = true;
-    g_tmpStrategyConfig.scanCpuMin = 2;
-    g_tmpStrategyConfig.scanCpuMax = 4;
-    g_tmpStrategyConfig.scanCpuChanged = false;
+    g_tmpStrategyConfig.migrateModeEnable = false;
+    g_tmpStrategyConfig.scanCpuMin = 5;
+    g_tmpStrategyConfig.scanCpuMax = 7;
 
     UpdateMigrateModeAndScanCpu();
-    EXPECT_EQ(2, g_strategyConfig.scanCpuMin);
-    EXPECT_EQ(4, g_strategyConfig.scanCpuMax);
+    EXPECT_EQ(5, g_strategyConfig.scanCpuMin);
+    EXPECT_EQ(7, g_strategyConfig.scanCpuMax);
     EXPECT_EQ(true, g_strategyConfig.scanCpuChanged);
     EXPECT_EQ(true, g_tmpStrategyConfig.scanCpuChanged);
 }
@@ -381,9 +361,17 @@ TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuScanCpuChanged)
 TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuNoChange)
 {
     g_strategyConfig.migrateModeEnable = false;
-    g_strategyConfig.scanCpuEnable = false;
+    g_strategyConfig.migrateModeChanged = false;
+    g_strategyConfig.scanCpuChanged = false;
+    g_strategyConfig.scanCpuMin = 1;
+    g_strategyConfig.scanCpuMax = 3;
+    g_tmpStrategyConfig.migrateModeEnable = false;
+    g_tmpStrategyConfig.scanCpuMin = 1;
+    g_tmpStrategyConfig.scanCpuMax = 3;
 
     UpdateMigrateModeAndScanCpu();
+    EXPECT_EQ(false, g_strategyConfig.migrateModeChanged);
+    EXPECT_EQ(false, g_strategyConfig.scanCpuChanged);
 }
 
 extern "C" int32_t ConfigReadValueToInt(char *pvalue, uint32_t *resultvalue);
@@ -836,7 +824,6 @@ TEST_F(PeriodConfigTest, InitPeriodConfigTest)
     EXPECT_EQ(false, g_strategyConfig.migrateModeEnable);
     EXPECT_EQ(0, g_strategyConfig.scanCpuMin);
     EXPECT_EQ(0, g_strategyConfig.scanCpuMax);
-    EXPECT_EQ(false, g_strategyConfig.scanCpuEnable);
     EXPECT_EQ(false, g_strategyConfig.scanCpuChanged);
 }
 

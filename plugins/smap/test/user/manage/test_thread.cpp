@@ -72,6 +72,8 @@ TEST_F(ThreadTest, TestDestroyScanMigrateThread)
     int ret;
     struct ProcessManager pm = { 0 };
 
+    // pthread_t 非零时才执行 join，模拟线程已成功创建
+    pm.scanMigrateThread = (pthread_t)1;
     MOCKER(pthread_join).expects(once()).will(ignoreReturnValue());
     ret = DestroyScanMigrateThread(&pm);
     EXPECT_EQ(0, ret);

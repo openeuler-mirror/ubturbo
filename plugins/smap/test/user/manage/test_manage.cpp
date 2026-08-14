@@ -5,11 +5,13 @@
  */
 
 #include <cstdlib>
+#include <cstring>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
 #include "manage/access_ioctl.h"
 #include "manage/manage.h"
+#include "manage/smap_config.h"
 #include "manage/thread.h"
 #include "securec.h"
 #include "strategy/strategy_config.h"
@@ -39,20 +41,18 @@ extern "C" void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
 
 class ScopedMigrationPeriod {
 public:
-    explicit ScopedMigrationPeriod(uint32_t period) : previous_(g_processManager.threadCtx[0]), context_()
+    explicit ScopedMigrationPeriod(uint32_t period) : previous_(g_processManager.migPeriod)
     {
-        context_.period = period;
-        g_processManager.threadCtx[0] = &context_;
+        g_processManager.migPeriod = period;
     }
 
     ~ScopedMigrationPeriod()
     {
-        g_processManager.threadCtx[0] = previous_;
+        g_processManager.migPeriod = previous_;
     }
 
 private:
-    void *previous_;
-    ThreadCtx context_;
+    uint32_t previous_;
 };
 
 class ScopedPageSize {
@@ -4146,7 +4146,7 @@ struct AllPairTargetResult {
 
 static void InitPairTargetManager(ProcessManager *manager, int nrLocalNuma)
 {
-    *manager = {};
+    memset(manager, 0, sizeof(*manager));
     manager->nrLocalNuma = nrLocalNuma;
     manager->tracking.pageSize = PAGESIZE_4K;
     EnvMutexInit(&manager->lock);
