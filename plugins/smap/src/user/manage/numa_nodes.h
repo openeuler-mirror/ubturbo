@@ -14,7 +14,11 @@
 
 #define NUMA_NO_NODE (-1)
 
+#ifndef USE_DT
+#define LOCAL_NUMA_BITS 8
+#else
 #define LOCAL_NUMA_BITS 4
+#endif
 #define REMOTE_NUMA_BITS 18
 #define MAX_NODES (LOCAL_NUMA_BITS + REMOTE_NUMA_BITS)
 

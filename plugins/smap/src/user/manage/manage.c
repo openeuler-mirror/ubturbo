@@ -41,7 +41,6 @@
 static struct ProcessManager g_processManager;
 
 static char g_mmapTypeName[][MMAP_TYPE_STRING_LEN] = { "mmap_private", "mmap_shared" };
-static char *g_nodePattern[LOCAL_NUMA_NUM] = { " N0=", " N1=", " N2=", " N3=" };
 
 uint32_t g_pageSizeNormal;
 uint32_t g_pageSizeHuge;
@@ -1919,6 +1918,7 @@ static void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag)
     int i;
     int nrLocalNuma = GetNrLocalNuma();
     char *substr = NULL;
+    char pattern[NUMA_MAPS_MAX_PATTERN_LEN];
 
     /*
      * It's possible that there are multiple Nx= in one line,
@@ -1928,7 +1928,12 @@ static void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag)
         if (hugeFlag && !IsNumaMapLineHuge(line)) {
             continue;
         }
-        substr = strstr(line, g_nodePattern[i]);
+        int ret = snprintf_s(pattern, sizeof(pattern), sizeof(pattern) - 1, " N%d=", i);
+        if (ret < 0) {
+            SMAP_LOGGER_ERROR("Set local numa pattern failed, nid %d.", i);
+            continue;
+        }
+        substr = strstr(line, pattern);
         if (substr) {
             AddL1(nodeBitmap, i);
         }
