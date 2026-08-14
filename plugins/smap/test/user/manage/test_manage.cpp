@@ -2720,6 +2720,14 @@ static uint64_t KBToPages(uint64_t kb, uint32_t pageSize)
 // Global NUMA page snapshot for single-remote configuration tests.
 static uint64_t g_testPagesPerNuma[MAX_NODES] = {0};
 
+static int MockGetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge)
+{
+    (void)pid;
+    (void)onlyHuge;
+    memcpy(numaPages, g_testPagesPerNuma, sizeof(g_testPagesPerNuma));
+    return 0;
+}
+
 extern "C" int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma,
                                          const uint64_t pagesPerNuma[MAX_NODES]);
 extern "C" void MigratePagesToRemote(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES],
@@ -2890,6 +2898,225 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_DecreaseMigration)
     EXPECT_EQ(expectedMemSize, attr.strategyAttr.memSize[0][0]);
     EXPECT_EQ((uint32_t)existingPages, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
     EXPECT_EQ(1 * GIB / KIB, attr.migrateParam[0].memSize);
+}
+
+/*
+ * Test ProcessAddManage for an already-managed pid: increasing memSize re-arms
+ * high-frequency (first) scan so the next round migrates the added demand fast.
+ * Expected: isFirstScan becomes true when new memSize > old memSize.
+ */
+/*
+ * Test PrepareProcessManageCandidate: increasing memSize on an already-managed
+ * pid re-arms high-frequency scan (isFirstScan + scanTime).
+ * The memSize-increase feature lives in PrepareProcessManageCandidate, not
+ * ProcessAddManage — ProcessAddManage is not the migrate-out path.
+ */
+extern "C" int ConfigureMigrationTargetsWithCapacityPolicy(ProcessAttr *attr, const ProcessTargetConfig *config,
+                                                            bool ignoreRemoteCapacity);
+
+static int SetIncreasedMemSizeForTest(ProcessAttr *attr, const ProcessTargetConfig *config, bool ignoreRemoteCapacity)
+{
+    (void)config;
+    (void)ignoreRemoteCapacity;
+    attr->remoteNumaCnt = 1;
+    attr->migrateParam[0].nid = 4;
+    attr->migrateParam[0].memSize = 3 * GIB / KIB;  // increased: 1GB -> 3GB
+    return 0;
+}
+
+static int SetDecreasedMemSizeForTest(ProcessAttr *attr, const ProcessTargetConfig *config, bool ignoreRemoteCapacity)
+{
+    (void)config;
+    (void)ignoreRemoteCapacity;
+    attr->remoteNumaCnt = 1;
+    attr->migrateParam[0].nid = 4;
+    attr->migrateParam[0].memSize = 1 * GIB / KIB;  // decreased: 3GB -> 1GB
+    return 0;
+}
+
+static int SetUnchangedMemSizeForTest(ProcessAttr *attr, const ProcessTargetConfig *config, bool ignoreRemoteCapacity)
+{
+    (void)config;
+    (void)ignoreRemoteCapacity;
+    attr->remoteNumaCnt = 1;
+    attr->migrateParam[0].nid = 4;
+    attr->migrateParam[0].memSize = 2 * GIB / KIB;  // unchanged: 2GB -> 2GB
+    return 0;
+}
+
+TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeIncreaseRearmsHighFreqScan)
+{
+    ProcessAttr active = {};
+    active.pid = 1234;
+    active.remoteNumaCnt = 1;
+    active.migrateParam[0].nid = 4;
+    active.migrateParam[0].memSize = 1 * GIB / KIB;  // old target: 1GB
+    active.isFirstScan = false;
+    active.scanTime = 1000;  // low-freq scan
+    g_processManager.processes = &active;
+    g_processManager.nrLocalNuma = 4;
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+
+    ProcessParam param = {};
+    param.pid = 1234;
+    param.scanType = NORMAL_SCAN;
+    param.count = 1;
+    param.numaParam[0].nid = 4;
+    param.numaParam[0].memSize = 3 * GIB / KIB;    // new target: 3GB (increased)
+    param.numaParam[0].ratio = 50;
+    param.numaParam[0].migrateMode = MIG_MEMSIZE_MODE;
+
+    ProcessManageCandidate candidate = {};
+
+    MOCKER(CheckPid).stubs().will(returnValue(0));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&active));
+    MOCKER(ConfigureMigrationTargetsWithCapacityPolicy).stubs().will(invoke(SetIncreasedMemSizeForTest));
+
+    int ret = PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate);
+    EXPECT_EQ(0, ret);
+    ASSERT_NE(nullptr, candidate.prepared);
+    EXPECT_TRUE(candidate.prepared->isFirstScan);      // memSize grew -> re-arm high-freq scan
+    EXPECT_EQ(DEFAULT_SCAN_PERIOD, candidate.prepared->scanTime);  // scanTime reset to default
+
+    DiscardProcessManageCandidate(&candidate);
+    g_processManager.processes = nullptr;
+}
+
+/*
+ * Test PrepareProcessManageCandidate: decreasing memSize must NOT
+ * enter high-frequency scan.
+ * Expected: isFirstScan stays false when new memSize < old memSize.
+ */
+TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeDecreaseKeepsNormalScan)
+{
+    ProcessAttr active = {};
+    active.pid = 1234;
+    active.remoteNumaCnt = 1;
+    active.migrateParam[0].nid = 4;
+    active.migrateParam[0].memSize = 3 * GIB / KIB;  // old target: 3GB
+    active.isFirstScan = false;
+    active.scanTime = 1000;
+    g_processManager.processes = &active;
+    g_processManager.nrLocalNuma = 4;
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+
+    ProcessParam param = {};
+    param.pid = 1234;
+    param.scanType = NORMAL_SCAN;
+    param.count = 1;
+    param.numaParam[0].nid = 4;
+    param.numaParam[0].memSize = 1 * GIB / KIB;    // new target: 1GB (decreased)
+    param.numaParam[0].ratio = 25;
+    param.numaParam[0].migrateMode = MIG_MEMSIZE_MODE;
+
+    ProcessManageCandidate candidate = {};
+
+    MOCKER(CheckPid).stubs().will(returnValue(0));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&active));
+    MOCKER(ConfigureMigrationTargetsWithCapacityPolicy).stubs().will(invoke(SetDecreasedMemSizeForTest));
+
+    int ret = PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate);
+    EXPECT_EQ(0, ret);
+    ASSERT_NE(nullptr, candidate.prepared);
+    EXPECT_FALSE(candidate.prepared->isFirstScan);  // memSize shrank -> no high-freq scan
+    EXPECT_NE(DEFAULT_SCAN_PERIOD, candidate.prepared->scanTime);  // scanTime unchanged
+
+    DiscardProcessManageCandidate(&candidate);
+    g_processManager.processes = nullptr;
+}
+
+/*
+ * Test PrepareProcessManageCandidate: equal memSize must NOT enter
+ * high-frequency scan.
+ * Expected: isFirstScan stays false when new memSize == old memSize.
+ */
+TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeUnchangedKeepsNormalScan)
+{
+    ProcessAttr active = {};
+    active.pid = 1234;
+    active.remoteNumaCnt = 1;
+    active.migrateParam[0].nid = 4;
+    active.migrateParam[0].memSize = 2 * GIB / KIB;  // old target: 2GB
+    active.isFirstScan = false;
+    active.scanTime = 1000;
+    g_processManager.processes = &active;
+    g_processManager.nrLocalNuma = 4;
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_4K;
+
+    ProcessParam param = {};
+    param.pid = 1234;
+    param.scanType = NORMAL_SCAN;
+    param.count = 1;
+    param.numaParam[0].nid = 4;
+    param.numaParam[0].memSize = 2 * GIB / KIB;   // new target: 2GB (unchanged)
+    param.numaParam[0].ratio = 50;
+    param.numaParam[0].migrateMode = MIG_MEMSIZE_MODE;
+
+    ProcessManageCandidate candidate = {};
+
+    MOCKER(CheckPid).stubs().will(returnValue(0));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&active));
+    MOCKER(ConfigureMigrationTargetsWithCapacityPolicy).stubs().will(invoke(SetUnchangedMemSizeForTest));
+
+    int ret = PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate);
+    EXPECT_EQ(0, ret);
+    ASSERT_NE(nullptr, candidate.prepared);
+    EXPECT_FALSE(candidate.prepared->isFirstScan);  // memSize unchanged -> no high-freq scan
+    EXPECT_NE(DEFAULT_SCAN_PERIOD, candidate.prepared->scanTime);  // scanTime unchanged
+
+    DiscardProcessManageCandidate(&candidate);
+    g_processManager.processes = nullptr;
+}
+
+/*
+ * Test PrepareProcessManageCandidate: memSize increase in 2M (huge) mode
+ * must NOT trigger high-frequency scan reset.
+ * The memSize-increase scanTime reset is limited to 4K (normal) mode only.
+ */
+TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeIncreaseHugeModeNoReset)
+{
+    ProcessAttr active = {};
+    active.pid = 1234;
+    active.remoteNumaCnt = 1;
+    active.migrateParam[0].nid = 4;
+    active.migrateParam[0].memSize = 1 * GIB / KIB;  // old target: 1GB
+    active.isFirstScan = false;
+    active.scanTime = 1000;  // low-freq scan
+    g_processManager.processes = &active;
+    g_processManager.nrLocalNuma = 4;
+    g_pageSizeNormal = PAGESIZE_4K;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;  // 2M mode
+
+    ProcessParam param = {};
+    param.pid = 1234;
+    param.scanType = NORMAL_SCAN;
+    param.count = 1;
+    param.numaParam[0].nid = 4;
+    param.numaParam[0].memSize = 3 * GIB / KIB;    // new target: 3GB (increased)
+    param.numaParam[0].ratio = 50;
+    param.numaParam[0].migrateMode = MIG_MEMSIZE_MODE;
+
+    ProcessManageCandidate candidate = {};
+
+    MOCKER(CheckPid).stubs().will(returnValue(0));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&active));
+    MOCKER(ConfigureMigrationTargetsWithCapacityPolicy).stubs().will(invoke(SetIncreasedMemSizeForTest));
+
+    int ret = PrepareProcessManageCandidate(&param, VM_TYPE, &candidate);
+    EXPECT_EQ(0, ret);
+    ASSERT_NE(nullptr, candidate.prepared);
+    EXPECT_FALSE(candidate.prepared->isFirstScan);      // 2M mode -> no high-freq scan reset
+    EXPECT_NE(DEFAULT_SCAN_PERIOD, candidate.prepared->scanTime);  // scanTime unchanged
+
+    DiscardProcessManageCandidate(&candidate);
+    g_processManager.processes = nullptr;
 }
 
 /*
