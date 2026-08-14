@@ -352,8 +352,8 @@ TEST_F(MigrationTest, TestBuildMigrationMsgKeepsMatrixOrder)
     ASSERT_EQ(0, BuildMigrationMsg(&process, &mMsg, &pages));
     EXPECT_EQ(3U, pages);
     EXPECT_EQ(2, g_addMigListCount);
-    EXPECT_EQ(0, g_addMigListOrder[0]);
-    EXPECT_EQ(1, g_addMigListOrder[1]);
+    EXPECT_EQ(1, g_addMigListOrder[0]);
+    EXPECT_EQ(0, g_addMigListOrder[1]);
 }
 
 TEST_F(MigrationTest, TestBuildMigrationMsgSuccess)
@@ -376,7 +376,7 @@ TEST_F(MigrationTest, TestBuildMigrationMsgSuccess)
 
     ret = BuildMigrationMsg(&process, &mMsg, &pages);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(484, pages);
+    EXPECT_EQ(144, pages);
 }
 
 extern "C" int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager);

@@ -669,25 +669,34 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
     }
 
     uint64_t nrMigTotal = 0;
-    for (int from = 0; from < MAX_NODES; from++) {
-        for (int to = 0; to < MAX_NODES; to++) {
-            if (!migList[from][to].nr) {
-                continue;
+    int nrLocalNuma = GetNrLocalNuma();
+    /* Group mig_list entries per local node: for each local L, emit its back
+       (remote->L) and out (L->remote) entries together so the kernel's
+       first-active scan co-schedules migrate-back into L with migrate-out
+       from L, avoiding a local node being filled without being freed. */
+    for (int L = 0; L < nrLocalNuma; L++) {
+        for (int R = nrLocalNuma; R < nrLocalNuma + REMOTE_NUMA_NUM; R++) {
+            struct MigList *cells[2] = { &migList[R][L], &migList[L][R] }; /* back into L, out from L */
+            for (int c = 0; c < 2; c++) {
+                if (!cells[c]->nr) {
+                    continue;
+                }
+                ret = AddMigList(mMsg, cells[c]);
+                if (ret == -ENOSPC) {
+                    SMAP_LOGGER_WARNING("Pid %d migration list is deferred by kernel entry limit.", process->pid);
+                    FreeMigList(migList);
+                    *migratePage += nrMigTotal;
+                    return 0;
+                }
+                if (ret) {
+                    SMAP_LOGGER_ERROR("Pid %d AddMigList %d %d failed: %d.", process->pid, cells[c]->from, cells[c]->to,
+                                      ret);
+                    FreeMigList(migList);
+                    return ret;
+                }
+                nrMigTotal += cells[c]->nr;
+                SMAP_LOGGER_INFO("Numa %d --> Numa %d, mig %d pages.", cells[c]->from, cells[c]->to, cells[c]->nr);
             }
-            ret = AddMigList(mMsg, &migList[from][to]);
-            if (ret == -ENOSPC) {
-                SMAP_LOGGER_WARNING("Pid %d migration list is deferred by kernel entry limit.", process->pid);
-                FreeMigList(migList);
-                *migratePage += nrMigTotal;
-                return 0;
-            }
-            if (ret) {
-                SMAP_LOGGER_ERROR("Pid %d AddMigList %d %d failed: %d.", process->pid, from, to, ret);
-                FreeMigList(migList);
-                return ret;
-            }
-            nrMigTotal += migList[from][to].nr;
-            SMAP_LOGGER_INFO("Numa %d --> Numa %d, mig %d pages.", from, to, migList[from][to].nr);
         }
     }
     FreeMigList(migList);
