@@ -15,6 +15,8 @@
 #define pr_fmt(fmt) "smap_drv_acpi: " fmt
 
 int nr_local_numa = 0;
+EXPORT_SYMBOL(nr_local_numa);
+
 struct mem_info acpi_mem = {
 	.len = 0,
 	.mem = LIST_HEAD_INIT(acpi_mem.mem),

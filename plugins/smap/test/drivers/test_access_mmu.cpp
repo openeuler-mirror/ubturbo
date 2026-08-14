@@ -20,7 +20,7 @@
 
 #define PM_PRESENT BIT_ULL(63)
 extern "C" bool is_access_hugepage(void);
-extern "C" int drivers_nr_local_numa;
+extern "C" int nr_local_numa;
 
 using namespace std;
 
@@ -42,14 +42,14 @@ protected:
     void SetUp() override
     {
         cout << "[Phase SetUp Begin]" << endl;
-        saved_nr_local_numa = drivers_nr_local_numa;
-        drivers_nr_local_numa = 4;
+        saved_nr_local_numa = nr_local_numa;
+        nr_local_numa = 4;
         cout << "[Phase SetUp End]" << endl;
     }
     void TearDown() override
     {
         cout << "[Phase TearDown Begin]" << endl;
-        drivers_nr_local_numa = saved_nr_local_numa;
+        nr_local_numa = saved_nr_local_numa;
         GlobalMockObject::verify();
         cout << "[Phase TearDown End]" << endl;
     }
@@ -62,18 +62,18 @@ TEST_F(AccessMMUTest, MakePME)
     EXPECT_EQ(1, entry.pme);
 }
 
-extern "C" int mock_calc_paddr_acidx(u64 paddr, int *nid, u64 *index);
-extern "C" bool drivers_is_paddr_local(u64 pa);
-extern "C" int drivers_calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
+extern "C" int calc_paddr_acidx(u64 paddr, int *nid, u64 *index);
+extern "C" bool is_paddr_local(u64 pa);
+extern "C" int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
 TEST_F(AccessMMUTest, CalcPaddrACidx)
 {
     MOCKER(is_access_hugepage).stubs().will(returnValue(true));
-    MOCKER(drivers_is_paddr_local).stubs().will(returnValue(false));
-    MOCKER(drivers_calc_paddr_acidx_iomem).stubs().will(ignoreReturnValue());
+    MOCKER(is_paddr_local).stubs().will(returnValue(false));
+    MOCKER(calc_paddr_acidx_iomem).stubs().will(ignoreReturnValue());
 
     int nid = 0;
     u64 index = 1;
-    mock_calc_paddr_acidx((u64)0x00005000, &nid, &index);
+    calc_paddr_acidx((u64)0x00005000, &nid, &index);
     EXPECT_EQ(0, nid);
     EXPECT_EQ(1, index);
 }
@@ -84,12 +84,12 @@ TEST_F(AccessMMUTest, CalcPaddrACidxTwo)
     int nid;
     u64 index;
     MOCKER(is_access_hugepage).stubs().will(returnValue(true));
-    MOCKER(drivers_is_paddr_local).stubs().will(returnValue(true));
+    MOCKER(is_paddr_local).stubs().will(returnValue(true));
     MOCKER(calc_paddr_acidx_acpi).stubs().will(returnValue(0));
 
     nid = 0;
     index = 1;
-    int ret = mock_calc_paddr_acidx((u64)0x00005000, &nid, &index);
+    int ret = calc_paddr_acidx((u64)0x00005000, &nid, &index);
     EXPECT_EQ(0, ret);
 }
 
@@ -126,7 +126,7 @@ TEST_F(AccessMMUTest, set_non_anon_bm)
 extern "C" int add_to_bm_page(u64 paddr, struct access_pid *ap);
 TEST_F(AccessMMUTest, AddToBMPage)
 {
-    MOCKER(mock_calc_paddr_acidx).stubs().will(invoke(fake_calc_paddr_acidx));
+    MOCKER(calc_paddr_acidx).stubs().will(invoke(fake_calc_paddr_acidx));
 
     int ret = 0;
     struct access_pid ap = {
@@ -149,7 +149,7 @@ TEST_F(AccessMMUTest, AddToBMPageTwo)
         .numa_nodes = 0x11,
     };
 
-    MOCKER(mock_calc_paddr_acidx).stubs().will(returnValue(1));
+    MOCKER(calc_paddr_acidx).stubs().will(returnValue(1));
     ret = add_to_bm_page((u64)0x00005000, &ap);
     EXPECT_EQ(1, ret);
 
@@ -160,7 +160,7 @@ extern "C" void set_pa_prior(struct access_pid *ap, u64 vaddr);
 extern "C" int add_to_bm_hugepage(u64 vaddr, u64 paddr, struct access_pid *ap);
 TEST_F(AccessMMUTest, AddToBmHugepage)
 {
-    MOCKER(mock_calc_paddr_acidx).stubs().will(invoke(fake_calc_paddr_acidx));
+    MOCKER(calc_paddr_acidx).stubs().will(invoke(fake_calc_paddr_acidx));
 
     int ret = 0;
     struct access_pid ap = {
@@ -187,7 +187,7 @@ TEST_F(AccessMMUTest, AddToBmHugepageTwo)
     ap.bm_len[L1] = 2;
     ap.paddr_bm[L1] = (unsigned long *)malloc(sizeof(unsigned long) * 2);
 
-    MOCKER(mock_calc_paddr_acidx).stubs().will(returnValue(1));
+    MOCKER(calc_paddr_acidx).stubs().will(returnValue(1));
     ret = add_to_bm_hugepage((u64)0x00005000, 0, &ap);
     EXPECT_EQ(1, ret);
 }
@@ -397,16 +397,16 @@ TEST_F(AccessMMUTest, PagemapHugetlbRange)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" struct mm_struct *mock_get_mm_by_pid(pid_t pid);
+extern "C" struct mm_struct *get_mm_by_pid(pid_t pid);
 TEST_F(AccessMMUTest, GetMMByPid)
 {
-    struct mm_struct *mm = mock_get_mm_by_pid((pid_t)1);
+    struct mm_struct *mm = get_mm_by_pid((pid_t)1);
 
     EXPECT_EQ(ERR_PTR(-ESRCH), mm);
 
     struct task_struct task;
     MOCKER(get_pid_task).stubs().will(returnValue(&task));
-    mm = mock_get_mm_by_pid((pid_t)1);
+    mm = get_mm_by_pid((pid_t)1);
     EXPECT_EQ(nullptr, mm);
 }
 
@@ -418,7 +418,7 @@ TEST_F(AccessMMUTest, FillAPPAddrBM)
     struct mm_struct mm1;
     unsigned long start_vaddr = 0;
     MOCKER(IS_ERR).stubs().will(returnValue(false));
-    MOCKER(mock_get_mm_by_pid).stubs().will(returnValue(&mm1));
+    MOCKER(get_mm_by_pid).stubs().will(returnValue(&mm1));
     MOCKER(pos_to_addr).stubs().with(any(), any(), outBoundP(&start_vaddr, sizeof(start_vaddr)));
     MOCKER(walk_page_range).stubs().will(ignoreReturnValue());
     walk_pid_pagemap(&pm);

@@ -47,11 +47,6 @@ static inline uint32_t NrRemotePage(ProcessAttr *process)
     return pages;
 }
 
-static inline uint32_t NrTotalPages(ProcessAttr *process)
-{
-    return NrLocalPage(process) + NrRemotePage(process);
-}
-
 static inline int CheckActcDataValid(ProcessAttr *process)
 {
     bool nullFlag = true;

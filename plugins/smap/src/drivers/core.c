@@ -34,17 +34,6 @@ static struct class *tracking_class;
 static struct tracking_core_ctrl *trk_core_ctrl;
 static dev_t tracking_chr_devt;
 
-#define NUM 10
-void activate_stack_protect(void)
-{
-	int i;
-	int test_vec[NUM];
-	test_vec[NUM - 1] = NUM;
-	for (i = 0; i < NUM; i++) {
-		pr_info("%d", test_vec[i]);
-	}
-}
-
 static int node_cdev_open(struct inode *inode, struct file *file)
 {
 	struct tracking_node_dev *node_dev =
@@ -95,17 +84,6 @@ int node_tracking_set_page_size(struct tracking_node_dev *node_dev,
 	return 0;
 }
 
-int node_tracking_set_trk_mode(struct tracking_node_dev *node_dev, u8 mode)
-{
-	struct tracking_dev *trk_dev;
-	list_for_each_entry(trk_dev, &node_dev->dev_list, list) {
-		if (trk_dev->ops && trk_dev->ops->tracking_mode_set)
-			if (trk_dev->ops->tracking_mode_set(trk_dev->dev, mode))
-				return -EINVAL;
-	}
-	return 0;
-}
-
 static long handle_tracking_cmd(struct tracking_node_dev *node_dev,
 				unsigned long arg)
 {
@@ -115,20 +93,6 @@ static long handle_tracking_cmd(struct tracking_node_dev *node_dev,
 		node_tracking_enable(node_dev);
 		return 0;
 	}
-}
-
-static long handle_mode_set_cmd(struct tracking_node_dev *node_dev,
-				unsigned long arg)
-{
-	if (arg >= MODE_MAX) {
-		pr_err("invalid tracking mode: %lu passed to set\n", arg);
-		return -EINVAL;
-	}
-	if (node_tracking_set_trk_mode(node_dev, (u8)arg)) {
-		pr_err("unable to set tracking mode which is not supported\n");
-		return -EINVAL;
-	}
-	return 0;
 }
 
 static long handle_page_size_set_cmd(struct tracking_node_dev *node_dev,
@@ -192,8 +156,6 @@ static long node_cdev_user_ioctl(struct file *file, unsigned int cmd,
 	switch (cmd) {
 	case SMAP_IOCTL_TRACKING_CMD:
 		return handle_tracking_cmd(node_dev, arg);
-	case SMAP_IOCTL_MODE_SET_CMD:
-		return handle_mode_set_cmd(node_dev, arg);
 	case SMAP_IOCTL_PAGE_SIZE_SET_CMD:
 		return handle_page_size_set_cmd(node_dev, arg);
 	case SMAP_IOCTL_UB_WATCH_CMD:

@@ -194,7 +194,7 @@ TEST_F(MigrationTest, TestFreeMigList)
     EXPECT_EQ(nullptr, mlist[0][0].addr);
 }
 
-extern "C" void strategy_InitMigList(struct MigList mList[MAX_NODES][MAX_NODES], int pid);
+extern "C" void StrategyInitMigList(struct MigList mList[MAX_NODES][MAX_NODES], int pid);
 TEST_F(MigrationTest, TestInitMigList)
 {
     struct MigList mlist[MAX_NODES][MAX_NODES] = {0};
@@ -205,7 +205,7 @@ TEST_F(MigrationTest, TestInitMigList)
     mlist[0][0].from = 100;
     mlist[0][0].to = 200;
 
-    strategy_InitMigList(mlist, 12345);
+    StrategyInitMigList(mlist, 12345);
 
     EXPECT_EQ(0, mlist[0][0].nr);
     EXPECT_EQ(12345, mlist[0][0].pid);
@@ -1845,7 +1845,7 @@ TEST_F(MigrationTest, TestUpdateMigResultEight)
     EXPECT_EQ(99, attr2.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
 }
 
-extern "C" void UpdateMigrateModeAndScanCpu(void);
+extern "C" void MigrationUpdateMigrateModeAndScanCpu(void);
 extern "C" void IoctlUpdateUbDmaAvail(uint32_t value);
 extern "C" void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax);
 TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuMigrateModeChanged)
@@ -1857,7 +1857,7 @@ TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuMigrateModeChanged)
     MOCKER(SetMigrateModeChanged).stubs().will(ignoreReturnValue());
     MOCKER(GetScanCpuEnableConfig).stubs().will(returnValue(false));
 
-    UpdateMigrateModeAndScanCpu();
+    MigrationUpdateMigrateModeAndScanCpu();
 }
 
 TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuScanCpuChanged)
@@ -1870,7 +1870,7 @@ TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuScanCpuChanged)
     MOCKER(IoctlSetScanCpuRange).stubs().will(ignoreReturnValue());
     MOCKER(SetScanCpuChanged).stubs().will(ignoreReturnValue());
 
-    UpdateMigrateModeAndScanCpu();
+    MigrationUpdateMigrateModeAndScanCpu();
 }
 
 TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuNoChange)
@@ -1879,7 +1879,7 @@ TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuNoChange)
     MOCKER(GetMigrateModeChanged).stubs().will(returnValue(false));
     MOCKER(GetScanCpuEnableConfig).stubs().will(returnValue(false));
 
-    UpdateMigrateModeAndScanCpu();
+    MigrationUpdateMigrateModeAndScanCpu();
 }
 
 extern "C" int MigrateRemoteNuma(struct ProcessManager *manager, struct MigrateNumaIoctlMsg *msg);

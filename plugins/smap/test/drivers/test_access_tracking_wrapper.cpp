@@ -26,39 +26,39 @@ protected:
     }
 };
 
-extern "C" pte_t *drivers_smap__pte_offset_map_lock(struct mm_struct *mm,
+extern "C" pte_t *smap__pte_offset_map_lock(struct mm_struct *mm,
     pmd_t *pmd, unsigned long addr, spinlock_t **ptlp);
 TEST_F(AccessTrackingWrapperTest, PteOffestMapLock)
 {
-    pte_t *ret = drivers_smap__pte_offset_map_lock(nullptr, nullptr, 0, nullptr);
+    pte_t *ret = smap__pte_offset_map_lock(nullptr, nullptr, 0, nullptr);
     EXPECT_EQ(nullptr, ret);
 }
 
-extern "C" pte_t *drivers_smap__pte_offset_map(pmd_t *pmd, unsigned long addr,
+extern "C" pte_t *smap__pte_offset_map(pmd_t *pmd, unsigned long addr,
     pmd_t *pmdvalp);
 TEST_F(AccessTrackingWrapperTest, PteOffsetMap)
 {
     pmd_t pmd = {};
     pmd_t pmdval = {};
 
-    pte_t *ret = drivers_smap__pte_offset_map(&pmd, 0, &pmdval);
+    pte_t *ret = smap__pte_offset_map(&pmd, 0, &pmdval);
     EXPECT_EQ(nullptr, ret);
     EXPECT_EQ(1UL, pmdval.pmd);
 }
 
-extern "C" unsigned long drivers_pmdp_get_lockless_start(void);
-extern "C" void drivers_pmdp_get_lockless_end(unsigned long irqflags);
+extern "C" unsigned long pmdp_get_lockless_start(void);
+extern "C" void pmdp_get_lockless_end(unsigned long irqflags);
 TEST_F(AccessTrackingWrapperTest, LocklessHelpers)
 {
-    unsigned long flags = drivers_pmdp_get_lockless_start();
+    unsigned long flags = pmdp_get_lockless_start();
     EXPECT_EQ(0UL, flags);
-    drivers_pmdp_get_lockless_end(flags);
+    pmdp_get_lockless_end(flags);
 }
 
-extern "C" unsigned long drivers_pfn_to_bitidx(const struct page *page, unsigned long pfn);
+extern "C" unsigned long pfn_to_bitidx(const struct page *page, unsigned long pfn);
 TEST_F(AccessTrackingWrapperTest, PfnToBitidx)
 {
-    EXPECT_EQ(0UL, drivers_pfn_to_bitidx(nullptr, 0));
+    EXPECT_EQ(0UL, pfn_to_bitidx(nullptr, 0));
 }
 
 extern "C" int num_contig_ptes(unsigned long size, size_t *pgsize);

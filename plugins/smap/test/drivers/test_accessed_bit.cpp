@@ -482,7 +482,7 @@ TEST_F(AccessedBitTest, post_scan_kvm_memslots)
 }
 
 extern "C" unsigned long huge_page_size(struct hstate *h);
-extern "C" int drivers_calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
+extern "C" int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
 extern "C" int get_vma_numa_node(struct kvm *kvm, struct vm_area_struct *vma, unsigned long addr);
 TEST_F(AccessedBitTest, GetVmaNUmaNode)
 {
@@ -493,7 +493,7 @@ TEST_F(AccessedBitTest, GetVmaNUmaNode)
     MOCKER(huge_page_size).stubs().will(returnValue(PAGE_SIZE_2M));
     MOCKER(huge_pte_offset).stubs().will(returnValue(&pte));
     MOCKER(smap_huge_ptep_get).stubs().will(returnValue(pte));
-    MOCKER(drivers_calc_paddr_acidx_iomem).stubs().will(returnValue(1));
+    MOCKER(calc_paddr_acidx_iomem).stubs().will(returnValue(1));
     MOCKER(calc_paddr_acidx_acpi).stubs().will(returnValue(1));
     int ret = get_vma_numa_node(&kvm, nullptr, 0);
     EXPECT_EQ(NUMA_NO_NODE, ret);
@@ -701,7 +701,7 @@ TEST_F(AccessedBitTest, take_vma_snapshot)
 }
 
 extern "C" bool IS_ERR(const void *ptr);
-extern "C" struct mm_struct *mock_get_mm_by_pid(pid_t pid);
+extern "C" struct mm_struct *get_mm_by_pid(pid_t pid);
 extern "C" int take_vma_snapshot(struct mm_struct *mm,
                                  struct smap_vma_struct **vma_arr, int *vma_count);
 TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_fail)
@@ -711,7 +711,7 @@ TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_fail)
     ap.pid = 1;
     ap.type = NORMAL_SCAN;
 
-    MOCKER(mock_get_mm_by_pid).stubs().will(returnValue(static_cast<struct mm_struct *>(nullptr)));
+    MOCKER(get_mm_by_pid).stubs().will(returnValue(static_cast<struct mm_struct *>(nullptr)));
     int ret = scan_accessed_bit_forward_mm(&ap, PAGE_SIZE_4K);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -724,7 +724,7 @@ TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_success)
     ap.type = NORMAL_SCAN;
 
     GlobalMockObject::verify();
-    MOCKER(mock_get_mm_by_pid).stubs().will(returnValue(&mm));
+    MOCKER(get_mm_by_pid).stubs().will(returnValue(&mm));
     MOCKER(IS_ERR).stubs().will(returnValue(false));
     MOCKER(take_vma_snapshot).stubs().will(returnValue(0));
     MOCKER(kfree).stubs().will(ignoreReturnValue());
@@ -1218,7 +1218,7 @@ TEST_F(AccessedBitTest, FillPteVaIomemFallback)
     pw.nr_page[L2] = 0;
     walk.private_data = &pw;
     MOCKER(calc_paddr_acidx_acpi).stubs().will(returnValue(-1));
-    MOCKER(drivers_calc_paddr_acidx_iomem).stubs().will(returnValue(0));
+    MOCKER(calc_paddr_acidx_iomem).stubs().will(returnValue(0));
     int ret = fill_pte_va(&pte, 0x1000, 0x2000, &walk);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, pw.nr_page[L2]);
@@ -1427,7 +1427,7 @@ TEST_F(AccessedBitTest, UpdateStatisticScanNumWrapAround)
 }
 
 extern "C" int calc_paddr_acidx_acpi(u64 paddr, int *nid, u64 *pa_idx, int page_size);
-extern "C" int drivers_calc_paddr_acidx_iomem(u64 paddr, int *nid, u64 *pa_idx, int page_size);
+extern "C" int calc_paddr_acidx_iomem(u64 paddr, int *nid, u64 *pa_idx, int page_size);
 
 TEST_F(AccessedBitTest, ProcessScanResultsLocalNidFallbackToSearch)
 {
@@ -1470,7 +1470,7 @@ TEST_F(AccessedBitTest, ProcessScanResultsRemoteNidFallbackToSearch)
     pw.scan_result_cnt = 1;
 
     MOCKER(calc_paddr_acidx_iomem_known_nid).stubs().will(returnValue(-1));
-    MOCKER(drivers_calc_paddr_acidx_iomem).stubs().will(returnValue(0));
+    MOCKER(calc_paddr_acidx_iomem).stubs().will(returnValue(0));
     process_scan_results(&pw);
     GlobalMockObject::verify();
 }

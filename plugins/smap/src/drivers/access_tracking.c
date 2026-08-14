@@ -49,7 +49,7 @@ struct set_scan_cpus_work {
 #define MS_TO_US 1000
 #define DELAY_BUFFER_MS 8
 
-static void work_func(struct work_struct *work);
+static void access_work_func(struct work_struct *work);
 int calc_access_len(struct access_tracking_dev *adev);
 
 #define to_accessbit_dev(n) container_of(n, struct access_tracking_dev, ldev)
@@ -169,7 +169,7 @@ void submit_one_work(struct access_pid *ap)
 	/* check if work was already initialized */
 	cancel_ap_scan_work(ap);
 	init_completion(&ap->work_done);
-	INIT_DELAYED_WORK(&ap->scan_work, work_func);
+	INIT_DELAYED_WORK(&ap->scan_work, access_work_func);
 	queue_delayed_work(adev_head->scanq, &ap->scan_work,
 			   msecs_to_jiffies(ap->scan_time));
 }
@@ -216,7 +216,7 @@ static void destroy_scan_workqueue(void)
 	destroy_workqueue(adev->scanq);
 }
 
-static inline void init_actc_data(struct access_tracking_dev *adev)
+static inline void access_init_actc_data(struct access_tracking_dev *adev)
 {
 	size_t len = adev->page_count * sizeof(actc_t);
 
@@ -265,7 +265,7 @@ static int actc_buffer_reinit(struct access_tracking_dev *adev)
 	access_print_acpi_mem();
 	page_count = calc_access_len_v2(adev);
 	if (adev->page_count == page_count) {
-		init_actc_data(adev);
+		access_init_actc_data(adev);
 		return 0;
 	}
 	pr_debug(
@@ -321,7 +321,7 @@ static int access_tracking_disable(struct device *ldev)
 	 * 才能保证 disable 成功返回后不会再有新扫描任务被提交，避免迁移与
 	 * 扫描并发（prepare 重分配 bitmap 与迁移读侧竞态）。
 	 *
-	 * complete(&ap->work_done) 在 work_func 释放 ap_data.lock 读锁之后才
+	 * complete(&ap->work_done) 在 access_work_func 释放 ap_data.lock 读锁之后才
 	 * 调用，故 completion_done 为真时该 work 已不持读锁，此处持写锁检查
 	 * 不会与在跑的 work 互斥死锁。
 	 */
@@ -341,21 +341,6 @@ static int access_tracking_disable(struct device *ldev)
 	up_write(&ap_data.lock);
 
 	return all_complete ? 0 : -EBUSY;
-}
-
-static int access_tracking_mode_set(struct device *ldev, u8 mode)
-{
-	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
-
-	if (!(mode == ACCESS_MODE_AND || mode == ACCESS_MODE_SUM ||
-	      mode == ACCESS_MODE_OR)) {
-		pr_err("invalid access mode %u passed to access tracking set tracking mode\n",
-		       mode);
-		return -EPERM;
-	}
-
-	init_actc_data(adev);
-	return 0;
 }
 
 static int access_tracking_set_page_size(struct device *ldev,
@@ -383,7 +368,6 @@ static struct tracking_operations access_tracking_ops = {
 	.tracking_enable = access_tracking_enable,
 	.tracking_disable = access_tracking_disable,
 	.tracking_set_page_size = access_tracking_set_page_size,
-	.tracking_mode_set = access_tracking_mode_set,
 };
 
 int calc_access_len(struct access_tracking_dev *adev)
@@ -527,7 +511,7 @@ static void handle_statistic_scan(struct access_pid *ap, ktime_t start_time,
 		ap->pid, delay_buffer_ms, *scan_delay_ms);
 }
 
-static void work_func(struct work_struct *work)
+static void access_work_func(struct work_struct *work)
 {
 	int ret = 0;
 	int page_size;

@@ -47,8 +47,8 @@ TEST_F(TrackingManageTest, IsSmapPgHuge)
     EXPECT_EQ(false, ret);
 }
 
-extern "C" int refresh_remote_ram(void);
 extern "C" int iterate_obmm_dev(void);
+extern "C" void free_obmm_dev(void);
 extern "C" void destroy_workqueue(struct workqueue_struct *wq);
 extern "C" bool cancel_delayed_work_sync(struct delayed_work *dwork);
 extern "C" bool queue_delayed_work(struct workqueue_struct *wq,
@@ -56,8 +56,7 @@ extern "C" bool queue_delayed_work(struct workqueue_struct *wq,
     unsigned long delay);
 extern "C" void ham_exit(void);
 
-extern "C" void release_remote_ram(void);
-extern "C" void reset_acpi_mem(void);
+extern "C" void free_obmm_dev(void);
 extern "C" void exit_migrate(void);
 extern "C" void smap_dev_exit(void);
 extern "C" void smap_debugfs_mod_exit(void);
@@ -65,8 +64,7 @@ extern "C" void resource(void);
 TEST_F(TrackingManageTest, Resource)
 {
     MOCKER(cancel_delayed_work_sync).stubs().will(returnValue(true));
-    MOCKER(release_remote_ram).stubs().will(ignoreReturnValue());
-    MOCKER(reset_acpi_mem).stubs().will(ignoreReturnValue());
+    MOCKER(free_obmm_dev).stubs().will(ignoreReturnValue());
     MOCKER(destroy_workqueue).stubs().will(ignoreReturnValue());
     MOCKER(exit_migrate).stubs().will(ignoreReturnValue());
     MOCKER(smap_dev_exit).stubs().will(ignoreReturnValue());
@@ -155,7 +153,6 @@ TEST_F(TrackingManageTest, MigrateBackWorkFuncMarksTaskError)
     list_del(&task.task_node);
 }
 
-extern "C" int init_acpi_mem(void);
 extern "C" struct workqueue_struct *migrate_back_wq;
 extern "C" int __init tracking_init(void);
 TEST_F(TrackingManageTest, TestTrackingInit)
@@ -167,30 +164,21 @@ TEST_F(TrackingManageTest, TestTrackingInit)
     EXPECT_EQ(-1, ret);
 }
 
-TEST_F(TrackingManageTest, TestTrackingInitAcpiAndRemoteRamFailure)
+TEST_F(TrackingManageTest, TestTrackingInitObmmFailure)
 {
     int ret;
-    struct ram_segment seg = {};
-
-    INIT_LIST_HEAD(&remote_ram_list);
 
     MOCKER(smap_process_symbols).stubs().will(returnValue(0));
-    MOCKER(init_acpi_mem).stubs().will(returnValue(-1));
+    MOCKER(iterate_obmm_dev).stubs().will(returnValue(-1));
     ret = tracking_init();
     EXPECT_EQ(-1, ret);
 
     GlobalMockObject::verify();
-    INIT_LIST_HEAD(&remote_ram_list);
-    INIT_LIST_HEAD(&seg.node);
-    list_add(&seg.node, &remote_ram_list);
     MOCKER(smap_process_symbols).stubs().will(returnValue(0));
-    MOCKER(init_acpi_mem).stubs().will(returnValue(0));
-    MOCKER(refresh_remote_ram).stubs().will(returnValue(0));
-    MOCKER(release_remote_ram).stubs().will(ignoreReturnValue());
-    MOCKER(reset_acpi_mem).stubs().will(ignoreReturnValue());
+    MOCKER(iterate_obmm_dev).stubs().will(returnValue(0));
+    MOCKER(free_obmm_dev).stubs().will(ignoreReturnValue());
     ret = tracking_init();
     EXPECT_EQ(-EAGAIN, ret);
-    list_del(&seg.node);
 }
 
 extern "C" void resource(void);

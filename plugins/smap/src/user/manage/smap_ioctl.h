@@ -28,8 +28,6 @@
 
 #define SMAP_IOCTL_TRACKING_CMD _IOW('N', 0, unsigned long)
 
-#define SMAP_IOCTL_MODE_SET_CMD _IOW('N', 1, unsigned long)
-
 #define SMAP_IOCTL_MAP_MODE_CMD _IOW('N', 2, unsigned long)
 
 #define SMAP_IOCTL_GET_SIZE_CMD _IOR('N', 3, unsigned long)
