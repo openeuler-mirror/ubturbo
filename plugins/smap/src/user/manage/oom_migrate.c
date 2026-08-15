@@ -274,8 +274,10 @@ void FindPidMigrateSize(uint64_t size)
     /* 持锁只取快照，numa_maps 读与 move_pages 在锁外执行，避免 OOM 卡扫描线程。 */
     OomPidSnap snap[MAX_4K_PROCESSES_CNT];
     int n = 0;
-    EnvMutexLock(&manager->lock);
-    for (ProcessAttr *cur = manager->processes; cur != NULL && n < MAX_4K_PROCESSES_CNT; cur = cur->next) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t cnt = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < cnt && n < MAX_4K_PROCESSES_CNT; k++) {
+        ProcessAttr *cur = all[k]->attr;
         int l2 = GetAttrL2(cur);
         if (l2 == NUMA_NO_NODE) {
             continue; /* 未配置远端目标，跳过 */
@@ -287,7 +289,7 @@ void FindPidMigrateSize(uint64_t size)
         snap[n].l2 = l2;
         n++;
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, cnt);
 
     for (int i = 0; i < n && pageBudget > 0; i++) {
         int ret = MigratePidFromToL2(snap[i].pid, nrLocalNuma, snap[i].l2, pageSize, &pageBudget);

@@ -555,14 +555,14 @@ static int RecoverProcessConfig(char *processBase)
                              attr->targetConfig.targets[j].remoteNid, attr->targetConfig.targets[j].ratio,
                              attr->targetConfig.targets[j].memSizeKB);
         }
-        LinkedListAdd(&manager->processes, &attr);
+        PidSlotAdd(manager, attr);
         manager->nr[attr->type]++;
     }
     if (errFlag) {
-        attr = manager->processes;
-        while (attr) {
-            LinkedListRemove(&attr, &manager->processes);
-            attr = manager->processes;
+        for (int i = 0; i < MAX_PID_SLOTS; i++) {
+            if (EnvAtomicRead(&manager->slots[i].state) == PID_SLOT_INUSE) {
+                PidSlotRemove(manager, manager->slots[i].pid);
+            }
         }
         manager->nr[VM_TYPE] = manager->nr[PROCESS_TYPE] = 0;
         return -ENOMEM;
@@ -629,9 +629,11 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
     struct ProcessManager *manager = GetProcessManager();
     struct ProcessPayload *p, *tmp;
     int nrPayload = 0;
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
 
-    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
-        if (!attr->groupPolicy.enabled || attr->groupPolicy.groupCount <= 0) {
+    for (size_t i = 0; i < n; i++) {
+        if (!all[i]->attr->groupPolicy.enabled || all[i]->attr->groupPolicy.groupCount <= 0) {
             nrPayload++;
         }
     }
@@ -640,18 +642,21 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
     if (nrPayload == 0) {
         *payload = NULL;
         *len = 0;
-        SMAP_LOGGER_ERROR("Number of process payload is 0.");
+        SMAP_LOGGER_INFO("Number of process payload is 0.");
+        PidSlotReleaseRefs(all, n);
         return 0;
     }
 
     p = calloc(nrPayload, CONFIG_PROC_LEN);
     if (!p) {
         SMAP_LOGGER_ERROR("BuildAllProcessPayload calloc failed.");
+        PidSlotReleaseRefs(all, n);
         return -ENOMEM;
     }
 
     tmp = p;
-    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
+    for (size_t i = 0; i < n; i++) {
+        ProcessAttr *attr = all[i]->attr;
         if (attr->groupPolicy.enabled && attr->groupPolicy.groupCount > 0) {
             continue;
         }
@@ -670,6 +675,7 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
         if (ret) {
             SMAP_LOGGER_ERROR("Build pid %d effective target config payload failed: %d.", attr->pid, ret);
             free(p);
+            PidSlotReleaseRefs(all, n);
             return ret;
         }
         tmp++;
@@ -678,6 +684,7 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
     *payload = p;
     *len = nrPayload;
 
+    PidSlotReleaseRefs(all, n);
     return 0;
 }
 

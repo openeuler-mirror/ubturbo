@@ -402,6 +402,30 @@ struct ProcessAttribute {
 };
 typedef struct ProcessAttribute ProcessAttr;
 
+#define MAX_PID_SLOTS MAX_4K_PROCESSES_CNT
+
+enum {
+    PID_SLOT_FREE = 0,
+    PID_SLOT_RESERVED = 1,
+    PID_SLOT_INUSE = 2,
+    PID_SLOT_REMOVING = 3,
+};
+
+/*
+ * 并发 PID 管理：槽位数组 + 原子状态机（无锁增删）+ 每 pid 细粒度锁 + 引用计数延迟回收。
+ * - add: CAS FREE->RESERVED 抢槽，填元数据后发布 INUSE
+ * - remove: CAS INUSE->REMOVING 摘除，释放自身引用；引用归零由最后使用者回收
+ * - 读路径无锁扫描槽位，命中后取引用 + 加本 pid attrLock 读写
+ * aligned(64) 避免多槽位假共享。
+ */
+struct PidSlot {
+    EnvAtomic state;
+    pid_t pid;
+    ProcessAttr *attr;
+    EnvAtomic refs;
+    EnvMutex attrLock;
+} __attribute__((aligned(64)));
+
 /*
  * A prepared process update that is published only after access tracking has
  * accepted prepared->numaAttr.numaNodes. The prepared ProcessAttr is the
@@ -496,7 +520,7 @@ struct UbBwMonitor {
 };
 
 struct ProcessManager {
-    ProcessAttr *processes;
+    struct PidSlot slots[MAX_PID_SLOTS];
     SceneInfo sceneInfo;
     uint16_t nr[TYPE_MAX];
     uint16_t nrLocalNuma; // local numa数量
@@ -506,7 +530,6 @@ struct ProcessManager {
     EnvAtomic scanMigrateStop; // 扫描迁移线程停止标志
     pthread_t scanMigrateThread; // 扫描迁移线程
     struct RemoteNumaInfo remoteNumaInfo; // 借用远端内存数量
-    EnvMutex lock;
     EnvMutex threadLock;
     struct UbBwMonitor ubBwMonitor; // UB带宽监控
 };
@@ -626,8 +649,20 @@ bool CheckReadyMigrateBack(int destNid);
 RunMode GetRunMode(void);
 void SetRunMode(RunMode runMode);
 
-void LinkedListAdd(ProcessAttr **head, ProcessAttr **add);
-void LinkedListRemove(ProcessAttr **remove, ProcessAttr **head);
+void PidSlotInit(struct ProcessManager *manager);
+void PidSlotDestroy(struct ProcessManager *manager);
+int PidSlotAdd(struct ProcessManager *manager, ProcessAttr *attr);
+void PidSlotRemove(struct ProcessManager *manager, pid_t pid);
+bool PidSlotEmpty(struct ProcessManager *manager);
+struct PidSlot *PidSlotGetRef(pid_t pid);
+size_t PidSlotCollectRefs(struct ProcessManager *manager, struct PidSlot *arr[], size_t cap);
+void PidSlotReleaseRefs(struct PidSlot *arr[], size_t n);
+void PutProcessAttr(ProcessAttr *attr);
+
+static inline ProcessAttr *PidSlotAttr(struct PidSlot *s)
+{
+    return s ? s->attr : NULL;
+}
 
 static inline bool IsNodeInvalid(int nid)
 {
@@ -714,7 +749,6 @@ int IsPidArrayStateChangeReady(pid_t *pidArr, int len, int enable);
 int IsPidArrInState(pid_t *pidArr, int len, enum ProcessState state);
 bool IsAllL2NodePidInState(enum ProcessState state, int l2Node);
 int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg);
-ProcessAttr *GetProcessAttrLocked(pid_t pid);
 
 bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid);
 FILE *OpenNumaMaps(pid_t pid);

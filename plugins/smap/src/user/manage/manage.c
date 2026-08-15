@@ -373,11 +373,10 @@ int ProcessManagerInit(uint32_t pageType)
     g_processManager.fds.migrate = DEFAULT_FD;
     g_processManager.fds.access = DEFAULT_FD;
     g_processManager.fds.lock = DEFAULT_FD;
-    g_processManager.processes = NULL;
     g_processManager.ubBwMonitor.ubBwThreshold = GetUbBwThresholdConfig();
     g_processManager.ubBwMonitor.currentFluxRet = -ENODATA;
     RemoteNumaInfoInit();
-    EnvMutexInit(&g_processManager.lock);
+    PidSlotInit(&g_processManager);
     EnvMutexInit(&g_processManager.threadLock);
     InitSceneInfo(&g_processManager.sceneInfo, (PageType)pageType);
     g_runMode = WATERLINE_MODE;
@@ -437,10 +436,26 @@ int GetPidTypeFromComm(pid_t pid)
     return -1;
 }
 
-void LinkedListAdd(ProcessAttr **head, ProcessAttr **add)
+static int AtomicFetchAdd(EnvAtomic *a, int v)
 {
-    (*add)->next = *head;
-    *head = *add;
+    int oldv;
+    int newv;
+    do {
+        oldv = EnvAtomicRead(a);
+        newv = oldv + v;
+    } while (EnvAtomicCmpAndSwap(oldv, newv, a) != oldv);
+    return oldv;
+}
+
+static int AtomicFetchSub(EnvAtomic *a, int v)
+{
+    int oldv;
+    int newv;
+    do {
+        oldv = EnvAtomicRead(a);
+        newv = oldv - v;
+    } while (EnvAtomicCmpAndSwap(oldv, newv, a) != oldv);
+    return oldv;
 }
 
 void ResetActcData(ActcData *actcData[], int len)
@@ -468,30 +483,147 @@ static void FreeProceccesAttr(ProcessAttr *attr)
     free(attr);
 }
 
-void LinkedListRemove(ProcessAttr **remove, ProcessAttr **head)
+void PidSlotInit(struct ProcessManager *manager)
 {
-    if (*head == NULL || *remove == NULL) {
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        EnvAtomicSet(&manager->slots[i].state, PID_SLOT_FREE);
+        manager->slots[i].pid = 0;
+        manager->slots[i].attr = NULL;
+        EnvAtomicSet(&manager->slots[i].refs, 0);
+        EnvMutexInit(&manager->slots[i].attrLock);
+    }
+}
+
+void PidSlotDestroy(struct ProcessManager *manager)
+{
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        EnvMutexDestroy(&manager->slots[i].attrLock);
+    }
+}
+
+/* 引用归零后唯一清理者：释放 attr 并把槽位恢复为 FREE */
+static void PidSlotTryReclaim(struct ProcessManager *manager, int i)
+{
+    struct PidSlot *s = &manager->slots[i];
+    if (EnvAtomicRead(&s->refs) != 0) {
         return;
     }
+    if (EnvAtomicCmpAndSwap(PID_SLOT_REMOVING, PID_SLOT_FREE, &s->state) == PID_SLOT_REMOVING) {
+        FreeProceccesAttr(s->attr);
+        s->attr = NULL;
+        s->pid = 0;
+    }
+}
 
-    ProcessAttr *toRemove = *remove;
+int PidSlotAdd(struct ProcessManager *manager, ProcessAttr *attr)
+{
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        struct PidSlot *s = &manager->slots[i];
+        if (EnvAtomicCmpAndSwap(PID_SLOT_FREE, PID_SLOT_RESERVED, &s->state) != PID_SLOT_FREE) {
+            continue;
+        }
+        s->pid = attr->pid;
+        s->attr = attr;
+        EnvAtomicSet(&s->refs, 1);
+        EnvAtomicSet(&s->state, PID_SLOT_INUSE);
+        return i;
+    }
+    return -1;
+}
 
-    if (*head == toRemove) {
-        *head = toRemove->next;
-        toRemove->next = NULL;
-        FreeProceccesAttr(toRemove);
+void PidSlotRemove(struct ProcessManager *manager, pid_t pid)
+{
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        struct PidSlot *s = &manager->slots[i];
+        if (s->pid != pid) {
+            continue;
+        }
+        if (EnvAtomicCmpAndSwap(PID_SLOT_INUSE, PID_SLOT_REMOVING, &s->state) != PID_SLOT_INUSE) {
+            return;
+        }
+        if (AtomicFetchSub(&s->refs, 1) == 1) {
+            PidSlotTryReclaim(manager, i);
+        }
         return;
     }
+}
 
-    ProcessAttr *prev = *head;
-    while (prev->next != NULL && prev->next != toRemove) {
-        prev = prev->next;
+bool PidSlotEmpty(struct ProcessManager *manager)
+{
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        if (EnvAtomicRead(&manager->slots[i].state) == PID_SLOT_INUSE) {
+            return false;
+        }
     }
-    if (prev->next == toRemove) {
-        prev->next = toRemove->next;
-        toRemove->next = NULL;
-        FreeProceccesAttr(toRemove);
-        *remove = NULL;
+    return true;
+}
+
+struct PidSlot *PidSlotGetRef(pid_t pid)
+{
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        struct PidSlot *s = &g_processManager.slots[i];
+        if (EnvAtomicRead(&s->state) != PID_SLOT_INUSE || s->pid != pid) {
+            continue;
+        }
+        AtomicFetchAdd(&s->refs, 1);
+        if (EnvAtomicRead(&s->state) != PID_SLOT_INUSE) {
+            if (AtomicFetchSub(&s->refs, 1) == 1) {
+                PidSlotTryReclaim(&g_processManager, i);
+            }
+            continue;
+        }
+        return s;
+    }
+    return NULL;
+}
+
+size_t PidSlotCollectRefs(struct ProcessManager *manager, struct PidSlot *arr[], size_t cap)
+{
+    size_t count = 0;
+    for (int i = 0; i < MAX_PID_SLOTS && count < cap; i++) {
+        struct PidSlot *s = &manager->slots[i];
+        if (EnvAtomicRead(&s->state) != PID_SLOT_INUSE) {
+            continue;
+        }
+        AtomicFetchAdd(&s->refs, 1);
+        if (EnvAtomicRead(&s->state) != PID_SLOT_INUSE) {
+            if (AtomicFetchSub(&s->refs, 1) == 1) {
+                PidSlotTryReclaim(manager, i);
+            }
+            continue;
+        }
+        arr[count++] = s;
+    }
+    return count;
+}
+
+void PidSlotReleaseRefs(struct PidSlot *arr[], size_t n)
+{
+    for (size_t k = 0; k < n; k++) {
+        struct PidSlot *s = arr[k];
+        if (s == NULL) {
+            continue;
+        }
+        if (AtomicFetchSub(&s->refs, 1) == 1) {
+            PidSlotTryReclaim(&g_processManager, (int)(s - g_processManager.slots));
+        }
+    }
+}
+
+void PutProcessAttr(ProcessAttr *attr)
+{
+    if (attr == NULL) {
+        return;
+    }
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        struct PidSlot *s = &g_processManager.slots[i];
+        if (s->attr != attr) {
+            continue;
+        }
+        if (AtomicFetchSub(&s->refs, 1) == 1) {
+            PidSlotTryReclaim(&g_processManager, i);
+        }
+        return;
     }
 }
 
@@ -621,25 +753,11 @@ int DetectPidType(pid_t pid)
     return ret;
 }
 
+/* 取引用：返回 attr（持 1 引用）；用完须 PutProcessAttr 释放。未找到返回 NULL */
 ProcessAttr *GetProcessAttr(pid_t pid)
 {
-    ProcessAttr *current = g_processManager.processes;
-    EnvMutexLock(&g_processManager.lock);
-    while (current && current->pid != pid) {
-        current = current->next;
-    }
-    EnvMutexUnlock(&g_processManager.lock);
-    return current;
-}
-
-/* 调用前必须持有锁g_processManager.lock */
-ProcessAttr *GetProcessAttrLocked(pid_t pid)
-{
-    ProcessAttr *current = g_processManager.processes;
-    while (current && current->pid != pid) {
-        current = current->next;
-    }
-    return current;
+    struct PidSlot *s = PidSlotGetRef(pid);
+    return PidSlotAttr(s);
 }
 
 int ReadCmdlineByPid(pid_t pid, char *buf, int len)
@@ -805,7 +923,7 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
         return ret;
     }
     attr->scanTime = DEFAULT_SCAN_PERIOD;
-    LinkedListAdd(&g_processManager.processes, &attr);
+    PidSlotAdd(&g_processManager, attr);
     SMAP_LOGGER_INFO("Set pid %d scan cycle to %ums.", attr->pid, attr->scanTime);
     g_processManager.nr[type]++;
 
@@ -825,6 +943,7 @@ void DiscardProcessManageCandidate(ProcessManageCandidate *candidate)
         return;
     }
 
+    PutProcessAttr(candidate->active);
     free(candidate->prepared);
     *candidate = (ProcessManageCandidate){ 0 };
 }
@@ -856,11 +975,12 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
         return ret;
     }
 
-    ProcessAttr *active = GetProcessAttrLocked(param->pid);
+    ProcessAttr *active = GetProcessAttr(param->pid);
     ProcessAttr *prepared = NULL;
     if (active) {
         prepared = malloc(sizeof(ProcessAttr));
         if (!prepared) {
+            PutProcessAttr(active);
             return -ENOMEM;
         }
         *prepared = *active;
@@ -943,7 +1063,7 @@ void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
     }
 
     if (candidate->isNew) {
-        LinkedListAdd(&g_processManager.processes, &prepared);
+        PidSlotAdd(&g_processManager, prepared);
         g_processManager.nr[prepared->type]++;
         candidate->prepared = NULL;
         SMAP_LOGGER_INFO("Add pid %d to list done.", prepared->pid);
@@ -1201,7 +1321,6 @@ static uint64_t SumParamMigrateMemSize(const ProcessParam *param)
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
 {
     int ret;
-    ProcessAttr *current = g_processManager.processes;
     ProcessTargetConfig config;
     ret = BuildProcessTargetConfigFromParam(param, &config);
     if (ret) {
@@ -1214,34 +1333,38 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
         SMAP_LOGGER_ERROR("pid %d check failed: %d.", param->pid, pidType);
         return pidType;
     }
-    current = GetProcessAttrLocked(param->pid);
+    ProcessAttr *current = GetProcessAttr(param->pid);
     if (current) {
         ret = ConfigureMigrationTargets(current, &config);
         if (ret) {
             SMAP_LOGGER_ERROR("Configure pid %d target failed: %d.", current->pid, ret);
+            PutProcessAttr(current);
             return ret;
         }
-        if (current->pendingTargetConfigValid) {
-            if (nodeBitmap) {
-                current->pendingTargetNumaNodes = *nodeBitmap;
-            }
+        bool pending = current->pendingTargetConfigValid;
+        if (pending && nodeBitmap) {
+            current->pendingTargetNumaNodes = *nodeBitmap;
+        }
+        SMAP_LOGGER_INFO("Update pid %d migrate config, migrateMode: %d, remoteNumaCnt: %d.", current->pid,
+                         current->migrateMode, current->remoteNumaCnt);
+        for (int i = 0; i < param->count; i++) {
+            SMAP_LOGGER_INFO("Update pid:%d success! migrateMode: %d, destnid: %d, memSize: %llu.", current->pid,
+                             current->migrateMode, current->migrateParam[i].nid, current->migrateParam[i].memSize);
+        }
+        if (pending) {
             ret = SyncAllProcessConfig();
             if (ret) {
                 SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", current->pid, ret);
             }
             SMAP_LOGGER_INFO("Stage pid %d migration target update.", current->pid);
+            PutProcessAttr(current);
             return 0;
         }
-        SMAP_LOGGER_INFO("Update pid %d migrate config, migrateMode: %d, remoteNumaCnt: %d.", current->pid,
-                         current->migrateMode, current->remoteNumaCnt);
         ret = SyncAllProcessConfig();
         if (ret) {
-            SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", param->pid, ret);
+            SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", current->pid, ret);
         }
-        for (int i = 0; i < param->count; i++) {
-            SMAP_LOGGER_INFO("Update pid:%d success! migrateMode: %d, destnid: %d, memSize: %llu.", current->pid,
-                             current->migrateMode, current->migrateParam[i].nid, current->migrateParam[i].memSize);
-        }
+        PutProcessAttr(current);
     } else {
         ret = AddProcess(param, pidType, nodeBitmap);
         if (ret) {
@@ -1275,14 +1398,14 @@ int UpdateManagedProcessTrackingMode(ProcessAttr *attr, ScanType scanType, uint3
 void CheckAndRemoveInvalidProcess(void)
 {
     struct RemoteNumaInfo *numaInfo;
+    struct PidSlot *all[MAX_PID_SLOTS];
 
-    EnvMutexLock(&g_processManager.lock);
-    for (ProcessAttr *attr = g_processManager.processes; attr;) {
+    size_t n = PidSlotCollectRefs(&g_processManager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         pid_t pid = attr->pid;
-        ProcessAttr *next = attr->next;
         SMAP_LOGGER_INFO("check if pid %d is valid.", pid);
         if (!PidIsValid(pid)) {
-            PidType pidType = attr->type;
             // send ioctl to remove pid
             struct AccessRemovePidPayload payload = { .pid = pid };
             int ret = AccessIoctlRemovePid(1, &payload);
@@ -1290,46 +1413,42 @@ void CheckAndRemoveInvalidProcess(void)
                 SMAP_LOGGER_ERROR("access ioctl remove pid %d error: %d.", pid, ret);
             }
 
-            LinkedListRemove(&attr, &g_processManager.processes);
-            g_processManager.nr[pidType]--;
+            PidSlotRemove(&g_processManager, attr->pid);
+            g_processManager.nr[attr->type]--;
             ret = SyncAllProcessConfig();
             if (ret) {
                 SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", pid, ret);
             }
             SMAP_LOGGER_INFO("remove pid %d from managed process.", pid);
         }
-        attr = next;
     }
-    if (!g_processManager.processes) {
+    if (PidSlotEmpty(&g_processManager)) {
         numaInfo = &g_processManager.remoteNumaInfo;
         EnvMutexLock(&numaInfo->lock);
         ClearRemoteMemUsed();
         SMAP_LOGGER_DEBUG("Remote memory usage cleared.");
         EnvMutexUnlock(&numaInfo->lock);
     }
-    EnvMutexUnlock(&g_processManager.lock);
+    PidSlotReleaseRefs(all, n);
 }
 
 void RemoveManagedProcess(int nr, pid_t *pidArr)
 {
     int ret;
     for (int i = 0; i < nr; i++) {
-        ProcessAttr *attr = g_processManager.processes;
-        while (attr && attr->pid != pidArr[i]) {
-            attr = attr->next;
-        }
+        ProcessAttr *attr = GetProcessAttr(pidArr[i]);
         if (!attr) {
             SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", pidArr[i]);
             continue;
         }
-        PidType pidType = attr->type;
-        LinkedListRemove(&attr, &g_processManager.processes);
+        PidSlotRemove(&g_processManager, attr->pid);
         SMAP_LOGGER_INFO("Remove pid: %d, from managed process.", pidArr[i]);
-        g_processManager.nr[pidType]--;
+        g_processManager.nr[attr->type]--;
         ret = SyncAllProcessConfig();
         if (ret) {
             SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", pidArr[i], ret);
         }
+        PutProcessAttr(attr);
     }
 }
 
@@ -1339,22 +1458,21 @@ void RemoveAllManagedProcess(void)
     if (ret) {
         SMAP_LOGGER_ERROR("access ioctl remove all pid error: %d.", ret);
     }
-    EnvMutexLock(&g_processManager.lock);
-    ProcessAttr *attr = g_processManager.processes;
-    while (attr) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(&g_processManager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         SMAP_LOGGER_INFO("During destruction remove pid: %d, from managed process.", attr->pid);
-        LinkedListRemove(&attr, &g_processManager.processes);
-        attr = g_processManager.processes;
+        PidSlotRemove(&g_processManager, attr->pid);
     }
-    EnvMutexUnlock(&g_processManager.lock);
-    g_processManager.processes = NULL;
+    PidSlotReleaseRefs(all, n);
     g_processManager.nr[VM_TYPE] = g_processManager.nr[PROCESS_TYPE] = 0;
 }
 
 int DestroyProcessManager(void)
 {
     RemoveAllManagedProcess();
-    EnvMutexDestroy(&g_processManager.lock);
+    PidSlotDestroy(&g_processManager);
     EnvMutexDestroy(&g_processManager.threadLock);
     (void)memset_s(&g_processManager, sizeof(struct ProcessManager), 0, sizeof(struct ProcessManager));
     return 0;

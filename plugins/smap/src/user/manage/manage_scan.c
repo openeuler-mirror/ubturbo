@@ -349,11 +349,9 @@ int BuildAllPidData(void)
     int ret, failedCount = 0;
     char *buf;
     size_t bufLen;
-    EnvMutexLock(&GetProcessManager()->lock);
     ret = BuildAndFillBitmapBuf(&bufLen, &buf);
     if (ret) {
         SMAP_LOGGER_ERROR("BuildAllPidData: build and fill BitmapBuf error: %d.", ret);
-        EnvMutexUnlock(&GetProcessManager()->lock);
         return ret;
     }
     for (size_t offset = 0; offset < bufLen;) {
@@ -365,7 +363,7 @@ int BuildAllPidData(void)
             failedCount++;
             break;
         }
-        ProcessAttr *current = GetProcessAttrLocked(pmb.pid);
+        ProcessAttr *current = GetProcessAttr(pmb.pid);
         if (current && current->scanType == NORMAL_SCAN) {
             SMAP_LOGGER_INFO("Pid %d, numaNodes %#x, nrLocalNuma %u.", current->pid, current->numaAttr.numaNodes,
                              GetProcessManager()->nrLocalNuma);
@@ -374,6 +372,7 @@ int BuildAllPidData(void)
             if (ret) {
                 SMAP_LOGGER_ERROR("Fill pid %d actc data failed.", current->pid);
                 failedCount++;
+                PutProcessAttr(current);
                 continue;
             }
             if (!current->groupPolicy.enabled) {
@@ -385,9 +384,9 @@ int BuildAllPidData(void)
                 CalibratePairAccount(current);
             }
         }
+        PutProcessAttr(current);
     }
     CalcMigrateNrPagesPerPIDMuiltNuma();
     free(buf);
-    EnvMutexUnlock(&GetProcessManager()->lock);
     return failedCount;
 }

@@ -861,13 +861,10 @@ bool CheckBorrowUsed(int destNid)
 bool CheckReadyMigrateBack(int destNid)
 {
     // 如果已经没有管理中的虚机，则默认可以执行迁回
-    EnvMutexLock(&GetProcessManager()->lock);
-    if (!GetProcessManager()->processes) {
+    if (PidSlotEmpty(GetProcessManager())) {
         SMAP_LOGGER_INFO("CheckReadyMigrateBack no process, destNid %d.", destNid);
-        EnvMutexUnlock(&GetProcessManager()->lock);
         return true;
     }
-    EnvMutexUnlock(&GetProcessManager()->lock);
     struct RemoteNumaInfo *numaInfo = &GetProcessManager()->remoteNumaInfo;
     int column = destNid - GetProcessManager()->nrLocalNuma;
 
@@ -905,16 +902,21 @@ int IsPidArrayStateChangeReady(pid_t *pidArr, int len, int enable)
         return -EINVAL;
     }
     for (int i = 0; i < len; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(pidArr[i]);
-        if (!attr) {
+        struct PidSlot *slot = PidSlotGetRef(pidArr[i]);
+        if (!slot) {
             SMAP_LOGGER_INFO("pid %d is not in smap list.", pidArr[i]);
             continue;
         }
-        SMAP_LOGGER_DEBUG("pid %d actual state %d.", pidArr[i], attr->state);
-        if (enable == DISABLE_PROCESS_MIGRATE && (attr->state != PROC_IDLE && attr->state != PROC_MOVE)) {
+        ProcessAttr *attr = slot->attr;
+        EnvMutexLock(&slot->attrLock);
+        enum ProcessState st = attr->state;
+        EnvMutexUnlock(&slot->attrLock);
+        PutProcessAttr(attr);
+        SMAP_LOGGER_DEBUG("pid %d actual state %d.", pidArr[i], st);
+        if (enable == DISABLE_PROCESS_MIGRATE && (st != PROC_IDLE && st != PROC_MOVE)) {
             return 0;
         }
-        if (enable == ENABLE_PROCESS_MIGRATE && attr->state == PROC_BACK) {
+        if (enable == ENABLE_PROCESS_MIGRATE && st == PROC_BACK) {
             return 0;
         }
     }
@@ -933,15 +935,18 @@ int IsPidArrInState(pid_t *pidArr, int len, enum ProcessState state)
         return -EINVAL;
     }
     for (int i = 0; i < len; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(pidArr[i]);
+        ProcessAttr *attr = GetProcessAttr(pidArr[i]);
         if (!attr) {
             SMAP_LOGGER_INFO("pid %d is not in smap list.", pidArr[i]);
+            PutProcessAttr(attr);
             continue;
         }
         SMAP_LOGGER_DEBUG("pid %d actual state %d, expected state %d.", pidArr[i], attr->state, state);
         if (attr->state != state) {
+            PutProcessAttr(attr);
             return 0;
         }
+        PutProcessAttr(attr);
     }
     return 1;
 }
@@ -949,16 +954,22 @@ int IsPidArrInState(pid_t *pidArr, int len, enum ProcessState state)
 void SetPidArrState(pid_t *pidArr, int len, enum ProcessState state, int enable)
 {
     for (int i = 0; i < len; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(pidArr[i]);
-        if (!attr) {
+        struct PidSlot *slot = PidSlotGetRef(pidArr[i]);
+        if (!slot) {
             continue;
         }
+        ProcessAttr *attr = slot->attr;
+        EnvMutexLock(&slot->attrLock);
         /* enable == 1时，迁移状态的pid也视为合理状态，不需要设置为空闲态 */
         if (enable == ENABLE_PROCESS_MIGRATE && attr->state == PROC_MIGRATE) {
             SMAP_LOGGER_DEBUG("pid %d is in PROC_MIGRATE state.", attr->pid);
+            EnvMutexUnlock(&slot->attrLock);
+            PutProcessAttr(attr);
             continue;
         }
         attr->state = state;
+        EnvMutexUnlock(&slot->attrLock);
+        PutProcessAttr(attr);
     }
 }
 
@@ -969,24 +980,30 @@ void SetPidArrState(pid_t *pidArr, int len, enum ProcessState state, int enable)
  */
 bool IsAllL2NodePidInState(enum ProcessState state, int l2Node)
 {
-    EnvMutexLock(&GetProcessManager()->lock);
-    for (ProcessAttr *attr = GetProcessManager()->processes; attr; attr = attr->next) {
+    bool result = true;
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(GetProcessManager(), all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         if (NotEqualToAttrL2(attr, l2Node)) {
             continue;
         }
         if (attr->state != state) {
-            EnvMutexUnlock(&GetProcessManager()->lock);
-            return false;
+            result = false;
+            break;
         }
     }
-    EnvMutexUnlock(&GetProcessManager()->lock);
-    return true;
+    PidSlotReleaseRefs(all, n);
+    return result;
 }
 
 static void SetChangePidRemoteMsgPayload(int srcNid, int destNid, int *i, int maxProcessCnt,
                                          struct AccessAddPidPayload *payload)
 {
-    for (ProcessAttr *attr = GetProcessManager()->processes; attr && *i < maxProcessCnt; attr = attr->next) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(GetProcessManager(), all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n && *i < maxProcessCnt; k++) {
+        ProcessAttr *attr = all[k]->attr;
         if (NotEqualToAttrL2(attr, srcNid)) {
             continue;
         }
@@ -1000,6 +1017,7 @@ static void SetChangePidRemoteMsgPayload(int srcNid, int destNid, int *i, int ma
         payload[*i].pidType = attr->type;
         (*i)++;
     }
+    PidSlotReleaseRefs(all, n);
 }
 
 static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destNodeIndex, uint64_t memSize, int ratio)
@@ -1131,11 +1149,9 @@ int ChangePidRemoteByNuma(int srcNid, int destNid)
         return -ENOMEM;
     }
 
-    EnvMutexLock(&GetProcessManager()->lock);
     SetChangePidRemoteMsgPayload(srcNid, destNid, &i, maxProcessCnt, payload);
     if (i == 0) {
         SMAP_LOGGER_INFO("ChangePidRemoteByNuma len: %d, no need to change.", i);
-        EnvMutexUnlock(&GetProcessManager()->lock);
         free(payload);
         return 0;
     }
@@ -1144,10 +1160,12 @@ int ChangePidRemoteByNuma(int srcNid, int destNid)
     free(payload);
     if (ret) {
         SMAP_LOGGER_ERROR("ChangePidRemoteByNuma ioctl failed: %d.", ret);
-        EnvMutexUnlock(&GetProcessManager()->lock);
         return ret;
     }
-    for (attr = GetProcessManager()->processes; attr; attr = attr->next) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(GetProcessManager(), all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        attr = all[k]->attr;
         if (NotEqualToAttrL2(attr, srcNid)) {
             continue;
         }
@@ -1161,11 +1179,11 @@ int ChangePidRemoteByNuma(int srcNid, int destNid)
         MoveProcessTargetConfig(attr, srcNid, destNid);
         SetAttrL2(attr, destNid);
     }
+    PidSlotReleaseRefs(all, n);
     ret = SyncAllProcessConfig();
     if (ret) {
         SMAP_LOGGER_WARNING("Synchronize pid after change remote maybe failed: %d.", ret);
     }
-    EnvMutexUnlock(&GetProcessManager()->lock);
     return 0;
 }
 
@@ -1177,7 +1195,6 @@ int EnableProcessMigrate(pid_t *pidArr, int len, int enable)
 
     SMAP_LOGGER_DEBUG("enter EnableProcessMigrate.");
     while (true) {
-        EnvMutexLock(&GetProcessManager()->lock);
         int ret = IsPidArrayStateChangeReady(pidArr, len, enable);
         if (ret == 1) {
             if (enable == ENABLE_PROCESS_MIGRATE) {
@@ -1190,10 +1207,8 @@ int EnableProcessMigrate(pid_t *pidArr, int len, int enable)
             if (ret) {
                 SMAP_LOGGER_WARNING("Synchronize pid state maybe failed: %d.", ret);
             }
-            EnvMutexUnlock(&GetProcessManager()->lock);
             return 0;
         }
-        EnvMutexUnlock(&GetProcessManager()->lock);
         if (ret < 0) {
             SMAP_LOGGER_ERROR("check pid state err: %d.", ret);
             return ret;
@@ -1218,20 +1233,23 @@ int IsRemoteNumaMigrateBackAllowed(int nid)
     if (nid < GetProcessManager()->nrLocalNuma) {
         return -EINVAL;
     }
-    EnvMutexLock(&GetProcessManager()->lock);
-    for (ProcessAttr *attr = GetProcessManager()->processes; attr; attr = attr->next) {
+    int result = 1;
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(GetProcessManager(), all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         if (NotEqualToAttrL2(attr, nid)) {
             continue;
         }
         SMAP_LOGGER_DEBUG("pid %d state: %d.", attr->pid, attr->state);
         if (attr->state == PROC_MOVE) {
             SMAP_LOGGER_INFO("pid %d state %d == PROC_MOVE.", attr->pid, attr->state);
-            EnvMutexUnlock(&GetProcessManager()->lock);
-            return 0;
+            result = 0;
+            break;
         }
     }
-    EnvMutexUnlock(&GetProcessManager()->lock);
-    return 1;
+    PidSlotReleaseRefs(all, n);
+    return result;
 }
 
 /*
@@ -1245,20 +1263,23 @@ int IsRemoteNumaMoveAllowed(int nid)
     if (nid < GetProcessManager()->nrLocalNuma) {
         return -EINVAL;
     }
-    EnvMutexLock(&GetProcessManager()->lock);
-    for (ProcessAttr *attr = GetProcessManager()->processes; attr; attr = attr->next) {
+    int result = 1;
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(GetProcessManager(), all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         if (NotEqualToAttrL2(attr, nid)) {
             continue;
         }
         SMAP_LOGGER_DEBUG("pid %d state: %d.", attr->pid, attr->state);
         if (attr->state != PROC_MOVE) {
             SMAP_LOGGER_INFO("pid %d state %d != PROC_MOVE.", attr->pid, attr->state);
-            EnvMutexUnlock(&GetProcessManager()->lock);
-            return 0;
+            result = 0;
+            break;
         }
     }
-    EnvMutexUnlock(&GetProcessManager()->lock);
-    return 1;
+    PidSlotReleaseRefs(all, n);
+    return result;
 }
 
 static bool IsRemoteTargetMigOutDone(ProcessAttr *attr, int remoteNid, uint64_t targetPages)
@@ -1346,9 +1367,10 @@ static void SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRe
     int l2node;
     int nrLocalNuma = GetNrLocalNuma();
     for (int i = 0; i < len; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(msg->payloads[i].pid);
+        ProcessAttr *attr = GetProcessAttr(msg->payloads[i].pid);
         if (!attr) {
-            SMAP_LOGGER_ERROR("GetProcessAttrLocked pid %d null.", msg->payloads[i].pid);
+            SMAP_LOGGER_ERROR("GetProcessAttr pid %d null.", msg->payloads[i].pid);
+            PutProcessAttr(attr);
             continue;
         }
         payload[i].pid = attr->pid;
@@ -1371,6 +1393,7 @@ static void SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRe
         payload[i].duration = attr->duration;
         payload[i].type = attr->scanType;
         payload[i].pidType = attr->type;
+        PutProcessAttr(attr);
     }
 }
 
@@ -1388,20 +1411,19 @@ int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg)
         return -ENOMEM;
     }
 
-    EnvMutexLock(&GetProcessManager()->lock);
     SetPayloadValue(payload, msg, msg->pidCnt);
     SMAP_LOGGER_INFO("ChangePidRemoteByPid ioctl begin, len: %d.", msg->pidCnt);
     int ret = AccessIoctlAddPid(msg->pidCnt, payload);
     free(payload);
     if (ret) {
         SMAP_LOGGER_ERROR("ChangePidRemoteByNuma ioctl failed: %d.", ret);
-        EnvMutexUnlock(&GetProcessManager()->lock);
         return ret;
     }
     SMAP_LOGGER_INFO("ChangePidRemoteByNuma ioctl done.");
     for (int i = 0; i < msg->pidCnt; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(msg->payloads[i].pid);
+        ProcessAttr *attr = GetProcessAttr(msg->payloads[i].pid);
         if (!attr) {
+            PutProcessAttr(attr);
             continue;
         }
         int srcNode = msg->payloads[i].srcNid - GetProcessManager()->nrLocalNuma;
@@ -1430,24 +1452,23 @@ int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg)
         } else {
             attr->remoteNumaCnt = attr->targetConfig.count;
         }
+        PutProcessAttr(attr);
     }
     ret = SyncAllProcessConfig();
     if (ret) {
         SMAP_LOGGER_WARNING("Synchronize pid after change remote maybe failed: %d.", ret);
     }
-    EnvMutexUnlock(&GetProcessManager()->lock);
     return 0;
 }
 
 bool IsMemoryLow(pid_t pid)
 {
     bool isLow = false;
-    EnvMutexLock(&GetProcessManager()->lock);
-    ProcessAttr *process = GetProcessAttrLocked(pid);
+    ProcessAttr *process = GetProcessAttr(pid);
     if (process && process->isLowMem) {
         SMAP_LOGGER_INFO("Pid %d dest nid memory is low.", pid);
         isLow = true;
     }
-    EnvMutexUnlock(&GetProcessManager()->lock);
+    PutProcessAttr(process);
     return isLow;
 }

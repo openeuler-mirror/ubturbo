@@ -792,10 +792,14 @@ static void BuildPairRequestContext(const struct ProcessManager *manager,
 static int CollectAllPairRequests(const struct ProcessManager *manager,
                                   const uint64_t privatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
                                   const uint64_t sharedPages[REMOTE_NUMA_NUM], PairArbitrationEntry entries[],
-                                  size_t entryCap, size_t *entryCount, bool migrateOnly)
+                                  size_t entryCap, size_t *entryCount, bool migrateOnly,
+                                  struct PidSlot *all[], size_t *allCnt)
 {
     size_t count = 0;
-    for (const ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
+    size_t n = PidSlotCollectRefs((struct ProcessManager *)manager, all, MAX_PID_SLOTS);
+    *allCnt = n;
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         if (attr->scanType != NORMAL_SCAN || attr->groupPolicy.enabled ||
             (migrateOnly && attr->state != PROC_MIGRATE)) {
             continue;
@@ -897,14 +901,16 @@ static void PublishPairCapacityResult(struct ProcessManager *manager, PairArbitr
 static int BuildPairArbitrationSnapshotLocked(struct ProcessManager *manager, PairArbitrationEntry entries[],
                                               size_t entryCap, size_t *entryCount,
                                               uint64_t privateCapacity[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                              uint64_t totalCapacity[REMOTE_NUMA_NUM], bool migrateOnly)
+                                              uint64_t totalCapacity[REMOTE_NUMA_NUM], bool migrateOnly,
+                                              struct PidSlot *all[], size_t *allCnt)
 {
     uint64_t sharedCapacity[REMOTE_NUMA_NUM] = { 0 };
     int ret = BuildPairCapacitySnapshot(manager, privateCapacity, sharedCapacity, totalCapacity);
     if (ret) {
         return ret;
     }
-    ret = CollectAllPairRequests(manager, privateCapacity, sharedCapacity, entries, entryCap, entryCount, migrateOnly);
+    ret = CollectAllPairRequests(manager, privateCapacity, sharedCapacity, entries, entryCap, entryCount, migrateOnly,
+                                 all, allCnt);
     if (ret) {
         return ret;
     }
@@ -934,10 +940,11 @@ int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], si
     uint64_t privateCapacity[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
     uint64_t totalCapacity[REMOTE_NUMA_NUM] = { 0 };
 
-    EnvMutexLock(&manager->lock);
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t allCnt = 0;
     EnvMutexLock(&manager->remoteNumaInfo.lock);
     ret = BuildPairArbitrationSnapshotLocked(manager, entries, targetCap, &entryCount, privateCapacity, totalCapacity,
-                                             false);
+                                             false, all, &allCnt);
     if (!ret) {
         PublishPairCapacityResult(manager, entries, entryCount, privateCapacity, totalCapacity);
         for (size_t i = 0; i < entryCount; i++) {
@@ -946,7 +953,7 @@ int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], si
         *targetCnt = entryCount;
     }
     EnvMutexUnlock(&manager->remoteNumaInfo.lock);
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, allCnt);
     free(entries);
     return ret;
 }
@@ -979,10 +986,11 @@ int BuildAllPairPlanInputsForState(struct ProcessManager *manager, PairPlan plan
     uint64_t privateCapacity[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
     uint64_t totalCapacity[REMOTE_NUMA_NUM] = { 0 };
 
-    EnvMutexLock(&manager->lock);
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t allCnt = 0;
     EnvMutexLock(&manager->remoteNumaInfo.lock);
     ret = BuildPairArbitrationSnapshotLocked(manager, entries, planCap, &entryCount, privateCapacity, totalCapacity,
-                                             migrateOnly);
+                                             migrateOnly, all, &allCnt);
     if (!ret) {
         for (size_t i = 0; i < entryCount; i++) {
             if (i == 0 || entries[i].target.pid != entries[i - 1].target.pid) {
@@ -1021,7 +1029,7 @@ int BuildAllPairPlanInputsForState(struct ProcessManager *manager, PairPlan plan
         *pidBudgetCnt = budgetCount;
     }
     EnvMutexUnlock(&manager->remoteNumaInfo.lock);
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, allCnt);
     free(entries);
     return ret;
 }
