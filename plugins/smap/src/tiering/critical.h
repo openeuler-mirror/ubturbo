@@ -7,12 +7,11 @@
 #ifndef _CRITICAL_H
 #define _CRITICAL_H
 
-static inline bool smap_node_is_critical_err(int nid)
+#ifndef CONFIG_ACPI_APEI_RAS_CRITICAL
+static inline bool node_is_critical_err(int nid)
 {
 	return false;
 }
-#undef node_is_critical_err
 
-#define node_is_critical_err(nid) smap_node_is_critical_err(nid)
-
+#endif
 #endif /* _CRITICAL_H */

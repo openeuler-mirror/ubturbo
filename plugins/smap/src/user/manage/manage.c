@@ -389,9 +389,8 @@ static int ApplyManagedLocalObservation(ProcessAttr *attr, const ManagedLocalObs
 
 static uint32_t GetManagedLocalRefreshPeriodMs(void)
 {
-    ThreadCtx *ctx = g_processManager.threadCtx[0];
-    if (ctx && ctx->period != 0) {
-        return ctx->period;
+    if (g_processManager.migPeriod != 0) {
+        return g_processManager.migPeriod;
     }
     return DEFAULT_MIGRATE_PERIOD;
 }
@@ -573,9 +572,6 @@ int ProcessManagerInit(uint32_t pageType)
     g_processManager.fds.migrate = DEFAULT_FD;
     g_processManager.fds.access = DEFAULT_FD;
     g_processManager.fds.lock = DEFAULT_FD;
-    for (i = 0; i < MAX_THREADS; i++) {
-        g_processManager.threadCtx[i] = NULL;
-    }
     g_processManager.processes = NULL;
     g_processManager.ubBwMonitor.ubBwThreshold = GetUbBwThresholdConfig();
     g_processManager.ubBwMonitor.currentFluxRet = -ENODATA;
@@ -623,23 +619,20 @@ int IsQemuTask(pid_t pid)
         SMAP_LOGGER_ERROR("Failed to open file, errno is %d.", errno);
         return -EINVAL;
     }
-    if (fgets(comm, sizeof(comm), file)) {
-        SMAP_LOGGER_DEBUG("Skip the first line of comm file.");
-    }
-    if (fgets(comm, sizeof(comm), file)) {
-        SMAP_LOGGER_INFO("After fgets comm file");
-        pclose(file);
+    bool foundLine = false;
+    while (fgets(comm, sizeof(comm), file)) {
+        foundLine = true;
         if ((strncmp(comm, VM_NAME_STR, PID_NAME_LEN) == 0) ||
             (strncmp(comm, VM_KVM_NAME_STR, PID_KVM_NAME_LEN) == 0)) {
-            ret = VM_TYPE;
-        } else {
-            ret = PROCESS_TYPE;
+            pclose(file);
+            return VM_TYPE;
         }
-        return ret;
     }
     SMAP_LOGGER_ERROR("Error occur in fgets comm file");
-
     (void)pclose(file);
+    if (foundLine) {
+        return PROCESS_TYPE;
+    }
     return -1;
 }
 
@@ -2415,11 +2408,12 @@ static void CalcActcStats(ProcessAttr *attr)
         ActcData *actc = attr->scanAttr.actcData[nid];
         ActCount *count = &attr->scanAttr.actCount[nid];
 
-        memset(count->freqBuckets, 0, sizeof(count->freqBuckets));
-        memset(attr->scanAttr.selectedBuckets[nid], 0, sizeof(attr->scanAttr.selectedBuckets[nid]));
+        (void)memset_s(count->freqBuckets, sizeof(count->freqBuckets), 0, sizeof(count->freqBuckets));
+        (void)memset_s(attr->scanAttr.selectedBuckets[nid], sizeof(attr->scanAttr.selectedBuckets[nid]), 0,
+                       sizeof(attr->scanAttr.selectedBuckets[nid]));
 
         if (actcLen == 0 || !actc) {
-            memset(count, 0, sizeof(*count));
+            (void)memset_s(count, sizeof(*count), 0, sizeof(*count));
             continue;
         }
 

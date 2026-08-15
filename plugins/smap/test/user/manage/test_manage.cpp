@@ -5,6 +5,7 @@
  */
 
 #include <cstdlib>
+#include <cstring>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
@@ -40,20 +41,18 @@ extern "C" void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
 
 class ScopedMigrationPeriod {
 public:
-    explicit ScopedMigrationPeriod(uint32_t period) : previous_(g_processManager.threadCtx[0]), context_()
+    explicit ScopedMigrationPeriod(uint32_t period) : previous_(g_processManager.migPeriod)
     {
-        context_.period = period;
-        g_processManager.threadCtx[0] = &context_;
+        g_processManager.migPeriod = period;
     }
 
     ~ScopedMigrationPeriod()
     {
-        g_processManager.threadCtx[0] = previous_;
+        g_processManager.migPeriod = previous_;
     }
 
 private:
-    void *previous_;
-    ThreadCtx context_;
+    uint32_t previous_;
 };
 
 class ScopedPageSize {
@@ -742,7 +741,7 @@ TEST_F(ManageTest, TestProcessManagerInitTwo)
     int ret = 0;
     uint32_t pageType = PAGETYPE_HUGE;
     MOCKER(EnvMutexInit).stubs().will(returnValue(0));
-    g_processManager.threadCtx[0] = (void *)&period;
+    EnvAtomicSet(&g_processManager.scanMigrateStop, 1);
     g_processManager.processes = (ProcessAttr *)&period;
     ret = ProcessManagerInit(pageType);
     EXPECT_EQ(0, ret);
@@ -786,8 +785,10 @@ TEST_F(ManageTest, TestPidIsValid)
 
 extern "C" int snprintf_s(char *strDest, unsigned long destMax, unsigned long count, const char *format, ...);
 extern "C" FILE *fopen(const char *__restrict __filename, const char *__restrict __modes);
-extern "C" char *fgets(char *__restrict __s, int __n, FILE *__restrict __stream);
+extern "C" FILE *popen(const char *command, const char *type);
+extern "C" int pclose(FILE *stream);
 extern "C" int fclose(FILE *__stream);
+extern "C" char *fgets(char *__restrict __s, int __n, FILE *__restrict __stream);
 extern "C" int strncmp(const char *cs, const char *ct, size_t count);
 extern "C" int IsQemuTask(pid_t pid);
 TEST_F(ManageTest, TestIsQemuTaskPath)
@@ -803,9 +804,23 @@ TEST_F(ManageTest, TestIsQemuTaskPath)
     MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
         .stubs()
         .will(returnValue(0));
-    MOCKER(fopen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
+    MOCKER(popen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
     ret = IsQemuTask(1);
-    EXPECT_EQ(-1, ret);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+/* 模拟comm文件内容为一行"1"（非KVM名），随后到达EOF */
+static char *FakeFgetsProcessComm(char *s, int n, FILE *stream)
+{
+    static int callCnt = 0;
+    (void)n;
+    (void)stream;
+    if (callCnt++ == 0) {
+        s[0] = '1';
+        s[1] = '\0';
+        return s;
+    }
+    return nullptr;
 }
 
 TEST_F(ManageTest, TestIsQemuTaskFile)
@@ -816,9 +831,9 @@ TEST_F(ManageTest, TestIsQemuTaskFile)
         .stubs()
         .will(returnValue(0));
     static FILE fake_file;
-    MOCKER(fopen).stubs().will(returnValue(&fake_file));
+    MOCKER(popen).stubs().will(returnValue(&fake_file));
     MOCKER(fgets).stubs().will(returnValue(static_cast<char *>(nullptr)));
-    MOCKER(fclose).stubs().will(returnValue(0));
+    MOCKER(pclose).stubs().will(returnValue(0));
     ret = IsQemuTask(1);
     EXPECT_EQ(-1, ret);
 
@@ -826,10 +841,9 @@ TEST_F(ManageTest, TestIsQemuTaskFile)
     MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
         .stubs()
         .will(returnValue(0));
-    MOCKER(fopen).stubs().will(returnValue(&fake_file));
-    char buf[] = "1";
-    MOCKER(fgets).stubs().will(returnValue(&buf[0]));
-    MOCKER(fclose).stubs().will(returnValue(0));
+    MOCKER(popen).stubs().will(returnValue(&fake_file));
+    MOCKER(fgets).stubs().will(invoke(FakeFgetsProcessComm));
+    MOCKER(pclose).stubs().will(returnValue(0));
     ret = IsQemuTask(1);
     EXPECT_EQ(0, ret);
 }
@@ -4168,7 +4182,7 @@ struct AllPairTargetResult {
 
 static void InitPairTargetManager(ProcessManager *manager, int nrLocalNuma)
 {
-    *manager = {};
+    memset(manager, 0, sizeof(*manager));
     manager->nrLocalNuma = nrLocalNuma;
     manager->tracking.pageSize = PAGESIZE_4K;
     EnvMutexInit(&manager->lock);

@@ -221,9 +221,9 @@ TEST_F(InterfaceTest, TestIsLocalNidValid)
 
 extern "C" void EnvMutexLock(EnvMutex *mutex);
 extern "C" void EnvMutexUnlock(EnvMutex *mutex);
-extern "C" int ScanMigrateWork(ThreadCtx *ctx);
+extern "C" int ScanMigrateWork(struct ProcessManager *manager);
 extern "C" int InitAllThreads(struct ProcessManager *manager);
-extern "C" int InitThread(struct ProcessManager *manager, uint32_t period, WorkFunc workFunc);
+extern "C" int InitScanMigrateThread(struct ProcessManager *manager, uint32_t period);
 TEST_F(InterfaceTest, TestIsRatioValidTwo)
 {
     int ratio = 101;
@@ -245,8 +245,9 @@ TEST_F(InterfaceTest, TestInitAllThreads)
 
     EnvMutexInit(&pm.threadLock);
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
-    MOCKER(InitThread).stubs().will(returnValue(-EPERM));
-    MOCKER(DestroyAllThread).expects(once()).will(returnValue(0));
+    MOCKER(InitScanMigrateThread).stubs().will(returnValue(-EPERM));
+    // InitScanMigrateThread 失败时 scanMigrateThread 已清零，无需再销毁
+    MOCKER(DestroyScanMigrateThread).expects(never());
     ret = InitAllThreads(&pm);
     EXPECT_EQ(-EPERM, ret);
 }
@@ -261,7 +262,7 @@ TEST_F(InterfaceTest, TestInitAllThreadsHugeMode)
     EnvMutexInit(&pm.threadLock);
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
-    MOCKER(InitThread).stubs().will(returnValue(0));
+    MOCKER(InitScanMigrateThread).stubs().will(returnValue(0));
     ret = InitAllThreads(&pm);
     EXPECT_EQ(0, ret);
 }
@@ -274,7 +275,7 @@ TEST_F(InterfaceTest, TestInitAllThreadsProcessMode)
     EnvMutexInit(&pm.threadLock);
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
-    MOCKER(InitThread).stubs().will(returnValue(0));
+    MOCKER(InitScanMigrateThread).stubs().will(returnValue(0));
     ret = InitAllThreads(&pm);
     EXPECT_EQ(0, ret);
 }
@@ -1824,7 +1825,7 @@ TEST_F(InterfaceTest, TestSmapStop)
     int ret;
     EnvAtomicSet(&g_status, 1);
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(DestroyAllThread).stubs().will(ignoreReturnValue());
+    MOCKER(DestroyScanMigrateThread).stubs().will(ignoreReturnValue());
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(RemoveAllManagedProcess).stubs().will(ignoreReturnValue());
@@ -1839,7 +1840,7 @@ TEST_F(InterfaceTest, TestSmapStopOne)
     int ret;
     EnvAtomicSet(&g_status, 1);
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(DestroyAllThread).stubs().will(ignoreReturnValue());
+    MOCKER(DestroyScanMigrateThread).stubs().will(ignoreReturnValue());
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(RemoveAllManagedProcess).stubs().will(ignoreReturnValue());
@@ -4935,7 +4936,6 @@ extern "C" void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax);
 extern "C" bool CheckUbFeatureUbDma(void);
 extern "C" bool GetMigrateModeEnableConfig(void);
 extern "C" uint32_t GetMigrateModeConfig(void);
-extern "C" bool GetScanCpuEnableConfig(void);
 extern "C" uint32_t GetScanCpuMinConfig(void);
 extern "C" uint32_t GetScanCpuMaxConfig(void);
 
@@ -4944,7 +4944,9 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigMigrateModeEnable)
     MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(true));
     MOCKER(GetMigrateModeConfig).stubs().will(returnValue((uint32_t)1));
     MOCKER(IoctlUpdateUbDmaAvail).stubs().will(ignoreReturnValue());
-    MOCKER(GetScanCpuEnableConfig).stubs().will(returnValue(false));
+    MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)0));
+    MOCKER(GetScanCpuMaxConfig).stubs().will(returnValue((uint32_t)4));
+    MOCKER(IoctlSetScanCpuRange).stubs().will(ignoreReturnValue());
     MigrateAndCpuConfig();
     GlobalMockObject::verify();
 }
@@ -4954,7 +4956,9 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigMigrateModeDisableUbDmaAvail)
     MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(false));
     MOCKER(CheckUbFeatureUbDma).stubs().will(returnValue(true));
     MOCKER(IoctlUpdateUbDmaAvail).stubs().will(ignoreReturnValue());
-    MOCKER(GetScanCpuEnableConfig).stubs().will(returnValue(false));
+    MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)0));
+    MOCKER(GetScanCpuMaxConfig).stubs().will(returnValue((uint32_t)4));
+    MOCKER(IoctlSetScanCpuRange).stubs().will(ignoreReturnValue());
     MigrateAndCpuConfig();
     GlobalMockObject::verify();
 }
@@ -4964,7 +4968,9 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigMigrateModeDisableUbDmaNotAvail)
     MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(false));
     MOCKER(CheckUbFeatureUbDma).stubs().will(returnValue(false));
     MOCKER(IoctlUpdateUbDmaAvail).stubs().will(ignoreReturnValue());
-    MOCKER(GetScanCpuEnableConfig).stubs().will(returnValue(false));
+    MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)0));
+    MOCKER(GetScanCpuMaxConfig).stubs().will(returnValue((uint32_t)4));
+    MOCKER(IoctlSetScanCpuRange).stubs().will(ignoreReturnValue());
     MigrateAndCpuConfig();
     GlobalMockObject::verify();
 }
@@ -4974,7 +4980,6 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigScanCpuEnable)
     MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(false));
     MOCKER(CheckUbFeatureUbDma).stubs().will(returnValue(false));
     MOCKER(IoctlUpdateUbDmaAvail).stubs().will(ignoreReturnValue());
-    MOCKER(GetScanCpuEnableConfig).stubs().will(returnValue(true));
     MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)1));
     MOCKER(GetScanCpuMaxConfig).stubs().will(returnValue((uint32_t)3));
     MOCKER(IoctlSetScanCpuRange).stubs().will(ignoreReturnValue());
@@ -4987,7 +4992,6 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigBothEnabled)
     MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(true));
     MOCKER(GetMigrateModeConfig).stubs().will(returnValue((uint32_t)2));
     MOCKER(IoctlUpdateUbDmaAvail).stubs().will(ignoreReturnValue());
-    MOCKER(GetScanCpuEnableConfig).stubs().will(returnValue(true));
     MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)0));
     MOCKER(GetScanCpuMaxConfig).stubs().will(returnValue((uint32_t)4));
     MOCKER(IoctlSetScanCpuRange).stubs().will(ignoreReturnValue());

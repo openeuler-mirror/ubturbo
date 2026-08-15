@@ -20,7 +20,7 @@
 #include "securec.h"
 #include "strategy_config.h"
 
-#define STRATEGY_CONFIG_ENTRY 32
+#define STRATEGY_CONFIG_ENTRY 18
 #define STRATEGY_CONFIG_BUFFSIZE 500
 
 #define RETURN_OK 0
@@ -65,14 +65,44 @@
 
 #define DEFAULT_MIGRATE_MODE_ENABLE 0
 
-#define DEFAULT_SCAN_CPU_MIN 1
-#define DEFAULT_SCAN_CPU_MAX 3
-#define DEFAULT_SCAN_CPU_ENABLE 0
-
 #define MAX_UB_BW_THRESHOLD 65535
 #define DEFAULT_UB_BW_THRESHOLD 0
 
 #define RADIX_10 10UL
+
+#define SYS_CPU_POSSIBLE "/sys/devices/system/cpu/possible"
+
+/* 从 /sys/devices/system/cpu/possible 读取有效的 CPU 范围 */
+static void GetSystemCpuRange(uint32_t *cpuMin, uint32_t *cpuMax)
+{
+    *cpuMin = 0;
+    *cpuMax = 0;
+
+    FILE *fp = fopen(SYS_CPU_POSSIBLE, "r");
+    if (fp == NULL) {
+        SMAP_LOGGER_ERROR("Open %s failed, use default cpu range 0-0.", SYS_CPU_POSSIBLE);
+        return;
+    }
+
+    char buf[64] = { 0 };
+    if (fgets(buf, sizeof(buf), fp) == NULL) {
+        SMAP_LOGGER_ERROR("Read %s failed, use default cpu range 0-0.", SYS_CPU_POSSIBLE);
+        (void)fclose(fp);
+        return;
+    }
+    (void)fclose(fp);
+
+    /* 解析 "min-max" 格式，例如 "0-127" */
+    uint32_t min = 0, max = 0;
+    if (sscanf_s(buf, "%u-%u", &min, &max) != 2) {
+        SMAP_LOGGER_ERROR("Parse %s failed, content:%s, use default cpu range 0-0.", SYS_CPU_POSSIBLE, buf);
+        return;
+    }
+
+    *cpuMin = min;
+    *cpuMax = max;
+    SMAP_LOGGER_DEBUG("System cpu range: %u-%u.", *cpuMin, *cpuMax);
+}
 
 typedef struct {
     uint32_t scanPeriod;
@@ -96,7 +126,6 @@ typedef struct {
     bool scanCpuChanged;
     uint32_t scanCpuMin;
     uint32_t scanCpuMax;
-    bool scanCpuEnable;
     uint32_t ubBwThreshold;
 } StrategyConfig;
 
@@ -167,7 +196,6 @@ uint32_t GetMigrateModeConfig(void)
 {
     return g_strategyConfig.migrateMode;
 }
-
 bool GetMigrateModeChanged(void)
 {
     return g_strategyConfig.migrateModeChanged;
@@ -191,11 +219,6 @@ uint32_t GetScanCpuMinConfig(void)
 uint32_t GetScanCpuMaxConfig(void)
 {
     return g_strategyConfig.scanCpuMax;
-}
-
-bool GetScanCpuEnableConfig(void)
-{
-    return g_strategyConfig.scanCpuEnable;
 }
 
 bool GetScanCpuChanged(void)
@@ -505,20 +528,6 @@ static int32_t ConfigScanCpu(char *substr, char *value)
     return RETURN_OK;
 }
 
-static int32_t ConfigScanCpuEnable(char *substr, char *value)
-{
-    SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
-    if (strcmp(value, "true") == 0) {
-        g_tmpStrategyConfig.scanCpuEnable = true;
-    } else if (strcmp(value, "false") == 0) {
-        g_tmpStrategyConfig.scanCpuEnable = false;
-    } else {
-        SMAP_LOGGER_ERROR("Config scan cpu enable(%s) invalid, need true or false, key:%s.", value, substr);
-        return RETURN_ERROR;
-    }
-    return RETURN_OK;
-}
-
 static int32_t ConfigZeroFreqMigrateEnable(char *substr, char *value)
 {
     SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
@@ -679,12 +688,6 @@ static StrategyConfigReadElem g_strategyConfigRead[] = { {
                                                              ConfigScanCpu,
                                                              1UL,
                                                              0UL,
-                                                         },
-                                                         {
-                                                             "smap.scan.cpu.enable",
-                                                             ConfigScanCpuEnable,
-                                                             1UL,
-                                                             0UL,
                                                          } };
 
 static void ConfigReadTrim(char *str)
@@ -841,9 +844,10 @@ static void InitStrategyConfig(void)
     g_strategyConfig.fileConfSwitch = false;
     g_strategyConfig.scanPeriodChanged = false;
     g_strategyConfig.migratePeriodChanged = false;
-    g_strategyConfig.scanCpuMin = 0;
-    g_strategyConfig.scanCpuMax = 0;
-    g_strategyConfig.scanCpuEnable = false;
+    uint32_t sysCpuMin, sysCpuMax;
+    GetSystemCpuRange(&sysCpuMin, &sysCpuMax);
+    g_strategyConfig.scanCpuMin = sysCpuMin;
+    g_strategyConfig.scanCpuMax = sysCpuMax;
     g_strategyConfig.scanCpuChanged = false;
     g_strategyConfig.ubBwThreshold = DEFAULT_UB_BW_THRESHOLD;
 }
@@ -869,58 +873,10 @@ static int32_t EnsureDirectoryExists(const char *dirPath)
     return RETURN_OK;
 }
 
-static int32_t
-InitStrategyConfigFileBufferInner(char strategyDefaultConfig[STRATEGY_CONFIG_ENTRY][STRATEGY_CONFIG_BUFFSIZE],
-                                  size_t numConfigs)
-{
-    const char *scanCpuConfigEnableStr = "smap.scan.cpu.enable = false\n";
-    size_t scanCpuConfigEnableStrLen = strlen(scanCpuConfigEnableStr);
-    int ret = strncpy_s(strategyDefaultConfig[numConfigs], STRATEGY_CONFIG_BUFFSIZE, scanCpuConfigEnableStr,
-                        scanCpuConfigEnableStrLen);
-    if (ret != EOK) {
-        SMAP_LOGGER_ERROR("Strncpy smap scan cpu enable failed.");
-        return RETURN_ERROR;
-    }
-    const char *scanCpuConfigNote = "// cpu range: left is min cpu number, right is max cpu number\n";
-    size_t scanCpuConfigNoteLen = strlen(scanCpuConfigNote);
-    ret = strncpy_s(strategyDefaultConfig[numConfigs + 1], STRATEGY_CONFIG_BUFFSIZE, scanCpuConfigNote,
-                    scanCpuConfigNoteLen);
-    if (ret != EOK) {
-        SMAP_LOGGER_ERROR("Strncpy smap scan cpu range failed.");
-        return RETURN_ERROR;
-    }
-    const char *cpuScanRangeStr = "smap.scan.cpu = 0-0\n";
-    size_t cpuScanRangeStrLen = strlen(cpuScanRangeStr);
-    ret =
-        strncpy_s(strategyDefaultConfig[numConfigs + 2], STRATEGY_CONFIG_BUFFSIZE, cpuScanRangeStr, cpuScanRangeStrLen);
-    if (ret != EOK) {
-        SMAP_LOGGER_ERROR("Strncpy smap scan cpu range failed.");
-        return RETURN_ERROR;
-    }
-    const char *migrateModeEnable = "smap.migrate.mode.enable = false\n";
-    size_t migrateModeEnableStrLen = strlen(migrateModeEnable);
-    ret = strncpy_s(strategyDefaultConfig[numConfigs + 3], STRATEGY_CONFIG_BUFFSIZE, migrateModeEnable,
-                    migrateModeEnableStrLen);
-    if (ret != EOK) {
-        SMAP_LOGGER_ERROR("Strncpy smap migrate mode enable failed.");
-        return RETURN_ERROR;
-    }
-    const char *migrateMode = "smap.migrate.mode = %d\n";
-    ret = snprintf_s(strategyDefaultConfig[numConfigs + 4], STRATEGY_CONFIG_BUFFSIZE, STRATEGY_CONFIG_BUFFSIZE - 1,
-                     migrateMode, DEFAULT_MIGRATE_MODE);
-    if (ret < 0) {
-        SMAP_LOGGER_ERROR("Snprintf failed for smap migrate mode.");
-        return RETURN_ERROR;
-    }
-
-    return RETURN_OK;
-}
-
 static int32_t InitStrategyConfigFileBuffer(char strategyDefaultConfig[STRATEGY_CONFIG_ENTRY][STRATEGY_CONFIG_BUFFSIZE])
 {
     int32_t ret;
 
-    // 定义配置项的结构体数组
     struct ConfigEntry {
         const char *format;
         int value;
@@ -937,7 +893,6 @@ static int32_t InitStrategyConfigFileBuffer(char strategyDefaultConfig[STRATEGY_
                     { "smap.ub.bw.threshold = %d\n", DEFAULT_UB_BW_THRESHOLD } };
     size_t numConfigs = sizeof(configs) / sizeof(configs[0]);
 
-    // 使用循环处理snprintf_s部分
     for (size_t i = 0; i < numConfigs; i++) {
         ret = snprintf_s(strategyDefaultConfig[i], STRATEGY_CONFIG_BUFFSIZE, STRATEGY_CONFIG_BUFFSIZE - 1,
                          configs[i].format, configs[i].value);
@@ -946,31 +901,54 @@ static int32_t InitStrategyConfigFileBuffer(char strategyDefaultConfig[STRATEGY_
             return RETURN_ERROR;
         }
     }
+
+    size_t idx = numConfigs;
+    errno_t res;
+
     const char *zeroFreqMigrateEnableStr = "smap.zero.freq.migrate.enable = true\n";
-    size_t zeroFreqStrLen = strlen(zeroFreqMigrateEnableStr);
-    errno_t res = strncpy_s(strategyDefaultConfig[numConfigs], STRATEGY_CONFIG_BUFFSIZE, zeroFreqMigrateEnableStr,
-                            zeroFreqStrLen);
+    res = strncpy_s(strategyDefaultConfig[idx++], STRATEGY_CONFIG_BUFFSIZE, zeroFreqMigrateEnableStr,
+                    strlen(zeroFreqMigrateEnableStr));
     if (res != EOK) {
         SMAP_LOGGER_ERROR("Strncpy smap zero freq migrate enable failed.");
         return RETURN_ERROR;
     }
     const char *adaptiveRatioEnableStr = "smap.adaptive.ratio.enable = true\n";
-    size_t adaptiveRatioStrLen = strlen(adaptiveRatioEnableStr);
-    res = strncpy_s(strategyDefaultConfig[numConfigs + 1], STRATEGY_CONFIG_BUFFSIZE, adaptiveRatioEnableStr,
-                    adaptiveRatioStrLen);
+    res = strncpy_s(strategyDefaultConfig[idx++], STRATEGY_CONFIG_BUFFSIZE, adaptiveRatioEnableStr,
+                    strlen(adaptiveRatioEnableStr));
     if (res != EOK) {
         SMAP_LOGGER_ERROR("Strncpy smap adaptive ratio enable failed.");
         return RETURN_ERROR;
     }
     const char *switchConfigStr = "smap.period.file.config.switch = false\n";
-    size_t configStrLen = strlen(switchConfigStr);
-    res = strncpy_s(strategyDefaultConfig[numConfigs + 2], STRATEGY_CONFIG_BUFFSIZE, switchConfigStr, configStrLen);
+    res = strncpy_s(strategyDefaultConfig[idx++], STRATEGY_CONFIG_BUFFSIZE, switchConfigStr, strlen(switchConfigStr));
     if (res != EOK) {
         SMAP_LOGGER_ERROR("Strncpy smap period switch failed.");
         return RETURN_ERROR;
     }
+    const char *migrateModeEnableStr = "smap.migrate.mode.enable = false\n";
+    res = strncpy_s(strategyDefaultConfig[idx++], STRATEGY_CONFIG_BUFFSIZE, migrateModeEnableStr,
+                    strlen(migrateModeEnableStr));
+    if (res != EOK) {
+        SMAP_LOGGER_ERROR("Strncpy smap migrate mode enable failed.");
+        return RETURN_ERROR;
+    }
+    ret = snprintf_s(strategyDefaultConfig[idx++], STRATEGY_CONFIG_BUFFSIZE, STRATEGY_CONFIG_BUFFSIZE - 1,
+                     "smap.migrate.mode = %d\n", DEFAULT_MIGRATE_MODE);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("Snprintf smap migrate mode failed.");
+        return RETURN_ERROR;
+    }
 
-    return InitStrategyConfigFileBufferInner(strategyDefaultConfig, (numConfigs + 3));
+    uint32_t cpuMin, cpuMax;
+    GetSystemCpuRange(&cpuMin, &cpuMax);
+    ret = snprintf_s(strategyDefaultConfig[idx], STRATEGY_CONFIG_BUFFSIZE, STRATEGY_CONFIG_BUFFSIZE - 1,
+                     "smap.scan.cpu = %u-%u\n", cpuMin, cpuMax);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("Snprintf smap scan cpu range failed.");
+        return RETURN_ERROR;
+    }
+
+    return RETURN_OK;
 }
 
 int32_t GenerateStrategyConfigFile(const char *configFile)
@@ -1034,7 +1012,6 @@ static void UpdateMigrateModeAndScanCpu(void)
 {
     uint32_t oldMigrateMode = g_strategyConfig.migrateMode;
     g_strategyConfig.migrateModeEnable = g_tmpStrategyConfig.migrateModeEnable;
-    g_strategyConfig.scanCpuEnable = g_tmpStrategyConfig.scanCpuEnable;
 
     if (g_strategyConfig.migrateModeEnable) {
         if (oldMigrateMode != g_tmpStrategyConfig.migrateMode) {
@@ -1045,15 +1022,13 @@ static void UpdateMigrateModeAndScanCpu(void)
         }
     }
 
-    if (g_strategyConfig.scanCpuEnable) {
-        if (g_strategyConfig.scanCpuMin != g_tmpStrategyConfig.scanCpuMin ||
-            g_strategyConfig.scanCpuMax != g_tmpStrategyConfig.scanCpuMax) {
-            g_strategyConfig.scanCpuMin = g_tmpStrategyConfig.scanCpuMin;
-            g_strategyConfig.scanCpuMax = g_tmpStrategyConfig.scanCpuMax;
-            g_strategyConfig.scanCpuChanged = true;
-            g_tmpStrategyConfig.scanCpuChanged = true;
-            SMAP_LOGGER_INFO("Update scan cpu range %u-%u.", g_strategyConfig.scanCpuMin, g_strategyConfig.scanCpuMax);
-        }
+    if (g_strategyConfig.scanCpuMin != g_tmpStrategyConfig.scanCpuMin ||
+        g_strategyConfig.scanCpuMax != g_tmpStrategyConfig.scanCpuMax) {
+        g_strategyConfig.scanCpuMin = g_tmpStrategyConfig.scanCpuMin;
+        g_strategyConfig.scanCpuMax = g_tmpStrategyConfig.scanCpuMax;
+        g_strategyConfig.scanCpuChanged = true;
+        g_tmpStrategyConfig.scanCpuChanged = true;
+        SMAP_LOGGER_INFO("Update scan cpu range %u-%u.", g_strategyConfig.scanCpuMin, g_strategyConfig.scanCpuMax);
     }
 }
 

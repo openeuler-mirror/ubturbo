@@ -231,10 +231,11 @@ static int InitAllThreads(struct ProcessManager *manager)
     if (GetFileConfSwitchConfig()) {
         migPeriod = GetMigratePeriodConfig();
     }
-    ret = InitThread(manager, migPeriod, ScanMigrateWork);
+    ret = InitScanMigrateThread(manager, migPeriod);
     if (ret) {
         SMAP_LOGGER_ERROR("init scan migrate work thread error: %d.", ret);
-        DestroyAllThread(manager);
+        /* InitScanMigrateThread 失败时 scanMigrateThread 已被清零，
+         * 无需调用 DestroyScanMigrateThread，避免对未定义 pthread_t 执行操作 */
     }
     EnvMutexUnlock(&manager->threadLock);
     return ret;
@@ -1863,9 +1864,7 @@ static void MigrateAndCpuConfig(void)
         IoctlUpdateUbDmaAvail(mode);
     }
 
-    if (GetScanCpuEnableConfig()) {
-        IoctlSetScanCpuRange(GetScanCpuMinConfig(), GetScanCpuMaxConfig());
-    }
+    IoctlSetScanCpuRange(GetScanCpuMinConfig(), GetScanCpuMaxConfig());
 }
 
 int ubturbo_smap_start(uint32_t pageType, Logfunc extlog)
@@ -1954,9 +1953,9 @@ int ubturbo_smap_stop(void)
 
     struct ProcessManager *manager = GetProcessManager();
     EnvMutexLock(&manager->threadLock);
-    DestroyAllThread(manager);
+    DestroyScanMigrateThread(manager);
     EnvMutexUnlock(&manager->threadLock);
-    SMAP_LOGGER_INFO("All threads destroyed.");
+    SMAP_LOGGER_INFO("ScanMigrate thread destroyed.");
 
     RemoveAllManagedProcess();
     SMAP_LOGGER_INFO("All managed processes removed.");

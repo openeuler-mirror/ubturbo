@@ -15,7 +15,7 @@
 #include <errno.h>
 
 #include "smap_user_log.h"
-#include "thread.h"
+
 #include "manage.h"
 #include "device.h"
 #include "access_ioctl.h"
@@ -34,13 +34,8 @@ int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
         return -ENOMEM;
     }
     struct ProcessManager *manager = GetProcessManager();
-    ThreadCtx *ctx = manager->threadCtx[0];
     uint32_t migrationPeriod;
-    if (ctx) {
-        migrationPeriod = ctx->period;
-    } else {
-        migrationPeriod = IsHugeMode() ? LIGHT_STABLE_MIGRATE_CYCLE : PROCESS_LIGHT_STABLE_MIGRATE_CYCLE;
-    }
+    migrationPeriod = manager->migPeriod;
 
     for (int i = 0; i < len; i++) {
         accessMsg.payload[i].pid = payload[i].pid;

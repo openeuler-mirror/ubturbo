@@ -472,7 +472,7 @@ numactl -C 70-101 -m 1 sysbench --db-driver=mysql --mysql-host=[mysql_host] --my
 
 ```shell
 smap.scan.period = 200
-smap.migrate.period = 12000
+smap.migrate.period = 2000
 smap.remote.freq.percentile = 99
 smap.slow.threshold = 2
 smap.freq.wt = 0
@@ -480,12 +480,20 @@ smap.remote.hot.threshold = 65535
 smap.group.swap.ratio = 1
 smap.group.swap.min.remote.freq = 0
 smap.group.swap.min.freq.gain = 0
+smap.group.swap.local.watermark.ratio = 95
+smap.ub.bw.threshold = 0
 smap.zero.freq.migrate.enable = true
 smap.adaptive.ratio.enable = true
 smap.period.file.config.switch = false
 smap.migrate.mode.enable = false
 smap.migrate.mode = 1
+smap.scan.cpu = 0-127
 ```
+
+>[!NOTE] 说明
+>
+> - `smap.scan.cpu` 的默认值由SMAP初始化时从 `/sys/devices/system/cpu/possible` 读取系统有效CPU范围得到，不同服务器的取值不同（例如 `0-127`）。
+> - `smap.scan.cpu.enable` 配置项已移除，扫描CPU范围配置后直接生效，无需再通过开关开启。
 
 配置文件说明如[表1](#table1)所示。
 
@@ -507,6 +515,9 @@ smap.migrate.mode = 1
 |12|smap.period.file.config.switch|默认值：false<br>取值范围：<br>- false：系统采用算法配置周期。<br>- true：使用配置文件配置的周期。|配置周期开关。|
 |13|smap.migrate.mode.enable|默认值：false<br>取值范围：<br>- false<br>- true|迁移方式配置开关。设置为true时启用配置文件中指定的迁移方式；设置为false时系统默认采用LD/ST方式。|
 |14|smap.migrate.mode|默认值：1<br>取值范围：[0,2]|内存迁移方式。0：LD/ST方式，使用CPU load/store指令进行页面迁移；1：URMA方式，使用UB DMA offloading进行页面迁移，需硬件支持，若硬件不支持则自动回退为LD/ST方式。|
+|15|smap.group.swap.local.watermark.ratio|默认值：95<br>取值范围：[0,100]|大虚机场景，本地内存水位线比例，用于判断本地内存是否处于稳定状态。|
+|16|smap.ub.bw.threshold|默认值：0<br>单位：MB/s<br>取值范围：[0,65535]|UB带宽阈值，0表示不开启迁移限制。|
+|17|smap.scan.cpu|默认值：系统有效CPU范围（如0-127）<br>取值格式：min-max，且min不能大于max|扫描CPU范围，左值为最小CPU编号，右值为最大CPU编号。默认值由SMAP初始化时从/sys/devices/system/cpu/possible读取系统有效CPU范围得到。|
 
 > [!NOTE] 说明 
 >
