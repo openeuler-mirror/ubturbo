@@ -1672,32 +1672,51 @@ TEST_F(ManageTest, TestCalcActcStats)
     EXPECT_EQ((uint64_t)1, attr.scanAttr.actCount[4].whiteNum);
 }
 
-extern "C" int DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf);
+extern "C" void DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf);
 TEST_F(ManageTest, TestDistributeActcData)
 {
     ProcessAttr attr = {};
     struct ProcessMemBitmap pmb = {};
-    ActcData oldData[1] = {};
     ActcData buf[3] = {};
 
-    attr.pid = 1234;
+    // 模拟上一轮分配的连续缓冲（第一个非空即起始），分发时应被释放
     attr.scanAttr.actcData[0] = (ActcData *)malloc(sizeof(ActcData));
     ASSERT_NE(nullptr, attr.scanAttr.actcData[0]);
-    attr.scanAttr.actcData[0][0] = oldData[0];
+    attr.scanAttr.actcData[0][0].freq = 7;
     pmb.nrPages[0] = 2;
     pmb.nrPages[2] = 1;
 
-    int ret = DistributeActcData(&attr, &pmb, buf);
-    EXPECT_EQ(0, ret);
-    ASSERT_NE(nullptr, attr.scanAttr.actcData[0]);
-    ASSERT_NE(nullptr, attr.scanAttr.actcData[2]);
+    DistributeActcData(&attr, &pmb, buf);
+    // 新逻辑：actcData[nid] 指向传入 buf 的偏移，第一个非空即 buf 起始
+    EXPECT_EQ(buf, attr.scanAttr.actcData[0]);
+    EXPECT_EQ(buf + 2, attr.scanAttr.actcData[2]);
     EXPECT_EQ((uint64_t)2, attr.scanAttr.actcLen[0]);
     EXPECT_EQ((uint64_t)1, attr.scanAttr.actcLen[2]);
+    // 未赋值的 nid 应为 NULL
+    EXPECT_EQ(nullptr, attr.scanAttr.actcData[1]);
 
-    free(attr.scanAttr.actcData[0]);
-    free(attr.scanAttr.actcData[2]);
+    // buf 为栈内存，不可 free，仅置空指针避免悬垂
     attr.scanAttr.actcData[0] = nullptr;
     attr.scanAttr.actcData[2] = nullptr;
+}
+
+TEST_F(ManageTest, TestDistributeActcDataNullBuf)
+{
+    ProcessAttr attr = {};
+    struct ProcessMemBitmap pmb = {};  // 所有 nrPages=0
+
+    // 模拟上一轮有数据：actcData[nid] 按偏移指向同一连续缓冲
+    attr.scanAttr.actcData[0] = (ActcData *)malloc(sizeof(ActcData) * 2);
+    ASSERT_NE(nullptr, attr.scanAttr.actcData[0]);
+    attr.scanAttr.actcData[2] = attr.scanAttr.actcData[0] + 1;
+    attr.scanAttr.actcLen[0] = 2;
+    attr.scanAttr.actcLen[2] = 1;
+
+    // buf=NULL：应释放上一轮连续缓冲（仅 free 第一个非空即起始）并将所有 actcData 置空
+    DistributeActcData(&attr, &pmb, nullptr);
+    for (int nid = 0; nid < MAX_NODES; nid++) {
+        EXPECT_EQ(nullptr, attr.scanAttr.actcData[nid]);
+    }
 }
 
 TEST_F(ManageTest, TestCheckAndRemoveInvalidProcess)
@@ -1831,14 +1850,31 @@ extern "C" void ResetActcData(ActcData *actcData[], int len);
 TEST_F(ManageTest, TestResetActcData)
 {
     int len = 10;
-    ActcData **data = (ActcData **)malloc(sizeof(ActcData *) * len);
-    for (int i = 0; i < len; i++) {
-        data[i] = (ActcData *)malloc(sizeof(ActcData));
-    }
+    ActcData **data = (ActcData **)calloc(len, sizeof(ActcData *));
+    ASSERT_NE(nullptr, data);
+    // 模拟 DistributeActcData 的结果：actcData[nid] 按偏移指向同一连续缓冲
+    ActcData *buf = (ActcData *)malloc(sizeof(ActcData) * 3);
+    ASSERT_NE(nullptr, buf);
+    data[0] = buf;        // 第一个非空即缓冲区起始
+    data[2] = buf + 2;    // buf 内偏移
+
     ResetActcData(data, len);
-    EXPECT_EQ(data[0], nullptr);
+    // 释放后所有指针应为 nullptr（仅 free 起始一次，偏移指针不再悬垂）
     for (int i = 0; i < len; i++) {
-        free(data[i]);
+        EXPECT_EQ(nullptr, data[i]);
+    }
+    free(data);
+}
+
+TEST_F(ManageTest, TestResetActcDataAllNull)
+{
+    int len = 10;
+    ActcData **data = (ActcData **)calloc(len, sizeof(ActcData *));
+    ASSERT_NE(nullptr, data);
+    // 全部为 NULL，ResetActcData 不应 free 任何指针
+    ResetActcData(data, len);
+    for (int i = 0; i < len; i++) {
+        EXPECT_EQ(nullptr, data[i]);
     }
     free(data);
 }

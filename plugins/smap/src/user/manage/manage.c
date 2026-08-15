@@ -651,11 +651,15 @@ void LinkedListAdd(ProcessAttr **head, ProcessAttr **add)
 
 static void ResetActcData(ActcData *actcData[], int len)
 {
+    /* actcData[nid]按偏移指向同一连续缓冲区，第一个非空指针即缓冲区起始，仅释放一次 */
     for (int i = 0; i < len; i++) {
-        if (actcData[i]) {
+        if (actcData[i] != NULL) {
             free(actcData[i]);
-            actcData[i] = NULL;
+            break;
         }
+    }
+    for (int i = 0; i < len; i++) {
+        actcData[i] = NULL;
     }
 }
 
@@ -3468,45 +3472,21 @@ int BuildAllPairPlanInputs(struct ProcessManager *manager, PairPlan plans[], siz
  * @attr: ProcessAttr结构体指针
  * @pmb: ProcessMemBitmap结构体指针
  * @buf: 读取的数据缓冲区
- *
- * 返回: 成功返回0，失败返回负错误码
  */
-static int DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf)
+static void DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf)
 {
-    size_t actc_offset = 0;
+    /* 释放上一次的连续缓冲区（按actcData释放，第一个非空即缓冲区起始） */
+    ResetActcData(attr->scanAttr.actcData, MAX_NODES);
 
+    size_t actc_offset = 0;
     for (int nid = 0; nid < MAX_NODES; nid++) {
-        if (attr->scanAttr.actcData[nid]) {
-            free(attr->scanAttr.actcData[nid]);
-            attr->scanAttr.actcData[nid] = NULL;
-        }
         attr->scanAttr.actcLen[nid] = pmb->nrPages[nid];
         if (pmb->nrPages[nid] == 0) {
-            attr->scanAttr.actcData[nid] = NULL;
             continue;
         }
-        attr->scanAttr.actcData[nid] = malloc(pmb->nrPages[nid] * sizeof(ActcData));
-        if (!attr->scanAttr.actcData[nid]) {
-            SMAP_LOGGER_ERROR("malloc actcData[%d] failed for pid %d", nid, attr->pid);
-            for (int i = 0; i < nid; i++) {
-                free(attr->scanAttr.actcData[i]);
-                attr->scanAttr.actcData[i] = NULL;
-            }
-            return -ENOMEM;
-        }
-        size_t actcDataSize = pmb->nrPages[nid] * sizeof(ActcData);
-        int ret = memcpy_s(attr->scanAttr.actcData[nid], actcDataSize, buf + actc_offset, actcDataSize);
-        if (ret != EOK) {
-            SMAP_LOGGER_ERROR("copy actcData[%d] failed for pid %d, ret %d", nid, attr->pid, ret);
-            for (int i = 0; i <= nid; i++) {
-                free(attr->scanAttr.actcData[i]);
-                attr->scanAttr.actcData[i] = NULL;
-            }
-            return -ret;
-        }
+        attr->scanAttr.actcData[nid] = buf + actc_offset;
         actc_offset += pmb->nrPages[nid];
     }
-    return 0;
 }
 
 /**
@@ -3540,6 +3520,7 @@ static int ReadPidActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
     if (total_actc == 0) {
         SMAP_LOGGER_INFO("pid %d has no pages, skip read", attr->pid);
         close(fd);
+        DistributeActcData(attr, pmb, NULL);
         return 0;
     }
 
@@ -3560,12 +3541,7 @@ static int ReadPidActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
         return -EIO;
     }
 
-    ret = DistributeActcData(attr, pmb, buf);
-    free(buf);
-
-    if (ret) {
-        return ret;
-    }
+    DistributeActcData(attr, pmb, buf);
 
     SMAP_LOGGER_INFO("read pid %d success, total_actc %zu", attr->pid, total_actc);
     return 0;
