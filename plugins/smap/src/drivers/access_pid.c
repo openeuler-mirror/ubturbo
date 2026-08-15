@@ -490,6 +490,7 @@ int init_access_pid(struct access_add_pid_payload *payload,
 	if (!ap)
 		return -ENOMEM;
 	ap->pid = payload->pid;
+	ap->pid_type = payload->pid_type;
 	ap->numa_nodes = payload->numa_nodes;
 	ap->scan_time = payload->scan_time;
 	ap->ntimes = payload->ntimes;
@@ -502,7 +503,7 @@ int init_access_pid(struct access_add_pid_payload *payload,
 		ap->paddr_bm[i] = NULL;
 		ap->white_list_bm[i] = NULL;
 	}
-	if (is_access_hugepage()) {
+	if (ap->pid_type == SMAP_PID_VM) {
 		if (init_vm_mapping_info(ap->pid, &ap->info)) {
 			kfree(ap);
 			return -EINVAL;
@@ -533,8 +534,10 @@ void print_access_pid_list(void)
 	pr_debug("access pid list:\n");
 	down_read(&ap_data.lock);
 	list_for_each_entry(ap, &ap_data.list, node) {
-		pr_debug("pid %d, numa_nodes %x, scan_time %d, type %d\n",
-			 ap->pid, ap->numa_nodes, ap->scan_time, ap->type);
+		pr_debug(
+			"pid %d, pid_type %d, numa_nodes %x, scan_time %d, type %d\n",
+			ap->pid, ap->pid_type, ap->numa_nodes, ap->scan_time,
+			ap->type);
 	}
 	up_read(&ap_data.lock);
 	pr_debug("---------------------\n");
@@ -958,6 +961,7 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 				tmp2->scan_time = ap->scan_time;
 				tmp2->ntimes = ap->ntimes;
 				tmp2->type = ap->type;
+				tmp2->pid_type = ap->pid_type;
 				list_move_tail(&ap->node, &dup_head);
 				break;
 			}

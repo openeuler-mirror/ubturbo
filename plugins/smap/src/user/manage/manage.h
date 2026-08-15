@@ -564,9 +564,9 @@ int LoadMangerNrVmNum(void);
 
 bool PidIsValid(pid_t pid);
 
-int IsQemuTask(pid_t pid);
+int GetPidTypeFromComm(pid_t pid);
 
-PidType GetPidType(struct ProcessManager *manager);
+int DetectPidType(pid_t pid);
 
 uint32_t GetNormalPageSize(void);
 
@@ -725,6 +725,7 @@ ProcessAttr *GetProcessAttrLocked(pid_t pid);
 bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid);
 FILE *OpenNumaMaps(pid_t pid);
 int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge);
+bool IsPidUsingHugePages(pid_t pid);
 int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[MAX_NODES]);
 
 void UpdateRemoteNumaCriticalErr(void);

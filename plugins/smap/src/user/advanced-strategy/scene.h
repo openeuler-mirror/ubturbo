@@ -15,8 +15,8 @@
 #include "scene_info.h"
 #include "manage/manage.h"
 
-int InitSceneInfo(SceneInfo *info, PidType type);
-int GetProcessSceneAttr(Scene scene, SceneInfo *info, PidType type);
+int InitSceneInfo(SceneInfo *info, PageType pageType);
+int GetProcessSceneAttr(Scene scene, SceneInfo *info, PageType pageType);
 int SetProcessSceneAttr(ProcessAttr *process);
 void SetAdaptMem(bool flag);
 void ConfigRatios(struct ProcessManager *manager);

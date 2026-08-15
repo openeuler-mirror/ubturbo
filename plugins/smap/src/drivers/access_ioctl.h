@@ -40,6 +40,12 @@ typedef enum {
 	MAX_SCAN_TYPE,
 } scan_type;
 
+/* per-pid 身份，镜像用户态 PidType（PROCESS_TYPE=0 / VM_TYPE=1），数值须一致 */
+typedef enum {
+	SMAP_PID_PROCESS = 0,
+	SMAP_PID_VM,
+} smap_pid_type;
+
 struct access_add_pid_payload {
 	pid_t pid;
 	u32 numa_nodes;
@@ -47,6 +53,7 @@ struct access_add_pid_payload {
 	u32 duration;
 	scan_type type;
 	u32 ntimes;
+	smap_pid_type pid_type;
 };
 
 struct access_add_pid_msg {

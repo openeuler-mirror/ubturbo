@@ -41,6 +41,7 @@
 static struct ProcessManager g_processManager;
 
 static char g_mmapTypeName[][MMAP_TYPE_STRING_LEN] = { "mmap_private", "mmap_shared" };
+static char *g_nodePattern[LOCAL_NUMA_NUM] = { " N0=", " N1=", " N2=", " N3=" };
 
 uint32_t g_pageSizeNormal;
 uint32_t g_pageSizeHuge;
@@ -68,11 +69,6 @@ RunMode GetRunMode(void)
 void SetRunMode(RunMode runMode)
 {
     g_runMode = runMode;
-}
-
-PidType GetPidType(struct ProcessManager *manager)
-{
-    return manager->tracking.pageSize == g_pageSizeNormal ? PROCESS_TYPE : VM_TYPE;
 }
 
 uint32_t GetNormalPageSize(void)
@@ -578,7 +574,7 @@ int ProcessManagerInit(uint32_t pageType)
     RemoteNumaInfoInit();
     EnvMutexInit(&g_processManager.lock);
     EnvMutexInit(&g_processManager.threadLock);
-    InitSceneInfo(&g_processManager.sceneInfo, pageType == PAGETYPE_HUGE);
+    InitSceneInfo(&g_processManager.sceneInfo, (PageType)pageType);
     g_runMode = WATERLINE_MODE;
     return 0;
 }
@@ -603,7 +599,7 @@ bool PidIsValid(pid_t pid)
     return access(path, F_OK) == 0;
 }
 
-int IsQemuTask(pid_t pid)
+int GetPidTypeFromComm(pid_t pid)
 {
     char comm[BUFFER_SIZE];
     char cmdBuf[BUFFER_SIZE];
@@ -620,7 +616,7 @@ int IsQemuTask(pid_t pid)
         return -EINVAL;
     }
     bool foundLine = false;
-    while (fgets(comm, sizeof(comm), file)) {
+    while (fgets(comm, sizeof(comm), file) != NULL) {
         foundLine = true;
         if ((strncmp(comm, VM_NAME_STR, PID_NAME_LEN) == 0) ||
             (strncmp(comm, VM_KVM_NAME_STR, PID_KVM_NAME_LEN) == 0)) {
@@ -802,20 +798,22 @@ int IsHugePageRange(const char *line)
     return strstr(line, "hugepage") != NULL;
 }
 
-static int CheckPid(pid_t pid)
+/*
+ * 校验 pid 有效并返回其身份(VM_TYPE/PROCESS_TYPE)，失败返回 -ESRCH/-EINVAL。
+ * 身份由 GetPidTypeFromComm 自动判别，不再由 caller 声明——公共 API 仅传 pageType(页大小)。
+ */
+int DetectPidType(pid_t pid)
 {
-    PidType type = GetPidType(&g_processManager);
-    int ret;
     if (!PidIsValid(pid)) {
         SMAP_LOGGER_ERROR("Input pid %d is invalid.", pid);
         return -ESRCH;
     }
-    ret = IsQemuTask(pid);
-    if (ret != type) {
-        SMAP_LOGGER_ERROR("Pid %d type(%d) conflict with current pid type(%d).", pid, ret, type);
+    int ret = GetPidTypeFromComm(pid);
+    if (ret != VM_TYPE && ret != PROCESS_TYPE) {
+        SMAP_LOGGER_ERROR("Pid %d type detect failed: %d.", pid, ret);
         return -EINVAL;
     }
-    return 0;
+    return ret;
 }
 
 ProcessAttr *GetProcessAttr(pid_t pid)
@@ -919,13 +917,12 @@ int ParseMmapType(pid_t pid, MmapType *mmapType)
 
 int VMPreprocess(pid_t pid, ProcessAttr *attr)
 {
-    if (GetPidType(&g_processManager) != VM_TYPE) {
-        return 0;
-    }
-    int ret = ParseMmapType(pid, &attr->vmPidAttr.mmapType);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Parse mmap type of pid %d failed.", pid);
-        return 0;
+    if (attr->type == VM_TYPE) {
+        int ret = ParseMmapType(pid, &attr->vmPidAttr.mmapType);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Parse mmap type of pid %d failed.", pid);
+            return 0;
+        }
     }
     return 0;
 }
@@ -1549,7 +1546,7 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
 {
     int ret;
     (void)nodeBitmap;
-    if (g_processManager.nr[type] >= GetCurrentMaxNrPid()) {
+    if (g_processManager.nr[VM_TYPE] + g_processManager.nr[PROCESS_TYPE] >= GetCurrentMaxNrPid()) {
         SMAP_LOGGER_ERROR("nr of pid is out of limit.");
         return -EINVAL;
     }
@@ -1627,8 +1624,8 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
     if (ret) {
         return ret;
     }
-    ret = CheckPid(param->pid);
-    if (ret) {
+    ret = DetectPidType(param->pid);
+    if (ret < 0) {
         return ret;
     }
 
@@ -1641,7 +1638,7 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
         }
         *prepared = *active;
     } else {
-        if (g_processManager.nr[type] >= GetCurrentMaxNrPid()) {
+        if (g_processManager.nr[VM_TYPE] + g_processManager.nr[PROCESS_TYPE] >= GetCurrentMaxNrPid()) {
             SMAP_LOGGER_ERROR("nr of pid is out of limit.");
             return -EINVAL;
         }
@@ -1836,6 +1833,26 @@ int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool o
     return ret;
 }
 
+bool IsPidUsingHugePages(pid_t pid)
+{
+    char line[MAX_LINE_LENGTH];
+    FILE *fp = OpenNumaMaps(pid);
+    if (!fp) {
+        SMAP_LOGGER_ERROR("Open pid %d numa maps failed when probing page type.", pid);
+        return false;
+    }
+    while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
+        if (IsNumaMapLineHuge(line)) {
+            (void)pclose(fp);
+            return true;
+        }
+    }
+    if (pclose(fp)) {
+        SMAP_LOGGER_WARNING("Close numa maps failed when probing page type, pid=%d.", pid);
+    }
+    return false;
+}
+
 static int CollectGroupedTargetEntries(GroupMigrationPolicy *policy, int targetNid,
                                        int groupIdx[MAX_GROUP_TARGET_ENTRY], int targetIdx[MAX_GROUP_TARGET_ENTRY])
 {
@@ -1945,7 +1962,6 @@ static void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag)
     int i;
     int nrLocalNuma = GetNrLocalNuma();
     char *substr = NULL;
-    char pattern[NUMA_MAPS_MAX_PATTERN_LEN];
 
     /*
      * It's possible that there are multiple Nx= in one line,
@@ -1955,12 +1971,7 @@ static void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag)
         if (hugeFlag && !IsNumaMapLineHuge(line)) {
             continue;
         }
-        int ret = snprintf_s(pattern, sizeof(pattern), sizeof(pattern) - 1, " N%d=", i);
-        if (ret < 0) {
-            SMAP_LOGGER_ERROR("Set local numa pattern failed, nid %d.", i);
-            continue;
-        }
-        substr = strstr(line, pattern);
+        substr = strstr(line, g_nodePattern[i]);
         if (substr) {
             AddL1(nodeBitmap, i);
         }
@@ -2061,19 +2072,19 @@ static uint64_t SumParamMigrateMemSize(const ProcessParam *param)
 
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
 {
+    int ret;
     ProcessAttr *current = g_processManager.processes;
-    PidType type = GetPidType(&g_processManager);
     ProcessTargetConfig config;
-    int ret = BuildProcessTargetConfigFromParam(param, &config);
+    ret = BuildProcessTargetConfigFromParam(param, &config);
     if (ret) {
         SMAP_LOGGER_ERROR("pid %d target config invalid: %d.", param ? param->pid : -1, ret);
         return ret;
     }
 
-    ret = CheckPid(param->pid);
-    if (ret) {
-        SMAP_LOGGER_ERROR("pid %d check failed: %d.", param->pid, ret);
-        return ret;
+    int pidType = DetectPidType(param->pid);
+    if (pidType < 0) {
+        SMAP_LOGGER_ERROR("pid %d check failed: %d.", param->pid, pidType);
+        return pidType;
     }
     current = GetProcessAttrLocked(param->pid);
     if (current) {
@@ -2104,7 +2115,7 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
                              current->migrateMode, current->migrateParam[i].nid, current->migrateParam[i].memSize);
         }
     } else {
-        ret = AddProcess(param, type, nodeBitmap);
+        ret = AddProcess(param, pidType, nodeBitmap);
         if (ret) {
             SMAP_LOGGER_ERROR("Add pid %d to list failed: %d.", param->pid, ret);
             return ret;
@@ -2135,10 +2146,15 @@ int UpdateManagedProcessTrackingMode(ProcessAttr *attr, ScanType scanType, uint3
 
 int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy)
 {
-    int ret = CheckPid(pid);
-    if (ret) {
-        SMAP_LOGGER_ERROR("grouped pid %d check failed: %d.", pid, ret);
-        return ret;
+    int ret;
+    int pidType = DetectPidType(pid);
+    if (pidType < 0) {
+        SMAP_LOGGER_ERROR("grouped pid %d check failed: %d.", pid, pidType);
+        return pidType;
+    }
+    if (pidType != VM_TYPE) {
+        SMAP_LOGGER_ERROR("grouped migrate out only supports VM, pid %d type %d.", pid, pidType);
+        return -EINVAL;
     }
     if (!policy || !policy->enabled) {
         SMAP_LOGGER_ERROR("grouped policy of pid %d is invalid.", pid);
@@ -2156,7 +2172,7 @@ int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigration
         return 0;
     }
 
-    if (g_processManager.nr[VM_TYPE] >= GetCurrentMaxNrPid()) {
+    if (g_processManager.nr[VM_TYPE] + g_processManager.nr[PROCESS_TYPE] >= GetCurrentMaxNrPid()) {
         SMAP_LOGGER_ERROR("nr of grouped vm pid is out of limit.");
         return -EINVAL;
     }
@@ -2237,6 +2253,7 @@ int ApplyPendingGroupedPolicy(ProcessAttr *attr)
         .pid = attr->pid,
         .scanTime = SCAN_TIME_2M,
         .numaNodes = nodeBitmap,
+        .pidType = attr->type,
     };
     ret = AccessIoctlAddPid(1, &payload);
     if (ret) {
@@ -2295,7 +2312,6 @@ static void CalRemoteMemUsed(void)
 void CheckAndRemoveInvalidProcess(void)
 {
     struct RemoteNumaInfo *numaInfo;
-    PidType type = GetPidType(&g_processManager);
 
     EnvMutexLock(&g_processManager.lock);
     for (ProcessAttr *attr = g_processManager.processes; attr;) {
@@ -2303,6 +2319,7 @@ void CheckAndRemoveInvalidProcess(void)
         ProcessAttr *next = attr->next;
         SMAP_LOGGER_INFO("check if pid %d is valid.", pid);
         if (!PidIsValid(pid)) {
+            PidType pidType = attr->type;
             // send ioctl to remove pid
             struct AccessRemovePidPayload payload = { .pid = pid };
             int ret = AccessIoctlRemovePid(1, &payload);
@@ -2311,7 +2328,7 @@ void CheckAndRemoveInvalidProcess(void)
             }
 
             LinkedListRemove(&attr, &g_processManager.processes);
-            g_processManager.nr[type]--;
+            g_processManager.nr[pidType]--;
             ret = SyncAllProcessConfig();
             if (ret) {
                 SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", pid, ret);
@@ -2333,7 +2350,6 @@ void CheckAndRemoveInvalidProcess(void)
 void RemoveManagedProcess(int nr, pid_t *pidArr)
 {
     int ret;
-    PidType type = GetPidType(&g_processManager);
     for (int i = 0; i < nr; i++) {
         ProcessAttr *attr = g_processManager.processes;
         while (attr && attr->pid != pidArr[i]) {
@@ -2343,9 +2359,10 @@ void RemoveManagedProcess(int nr, pid_t *pidArr)
             SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", pidArr[i]);
             continue;
         }
+        PidType pidType = attr->type;
         LinkedListRemove(&attr, &g_processManager.processes);
         SMAP_LOGGER_INFO("Remove pid: %d, from managed process.", pidArr[i]);
-        g_processManager.nr[type]--;
+        g_processManager.nr[pidType]--;
         ret = SyncAllProcessConfig();
         if (ret) {
             SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", pidArr[i], ret);
@@ -3873,8 +3890,7 @@ static void CalRemoteNumaAllocPerPid(int i, int j, uint32_t tmpNrPagesToUse,
 {
     ProcessAttr *attr = g_processManager.processes;
 
-    PidType type = GetPidType(&g_processManager);
-    if (g_processManager.nr[type] == 0) {
+    if (g_processManager.nr[VM_TYPE] + g_processManager.nr[PROCESS_TYPE] == 0) {
         return;
     }
     double tmpRatioPerPid;
@@ -4091,8 +4107,7 @@ static void CalRemoteNumaSizeAllocPerNuma(void)
 static void CalcMigrateNrPagesPerPIDMuiltNuma(void)
 {
     struct RemoteNumaInfo *numaInfo = &g_processManager.remoteNumaInfo;
-    PidType type = GetPidType(&g_processManager);
-    if (g_processManager.nr[type] == 0) {
+    if (g_processManager.nr[VM_TYPE] + g_processManager.nr[PROCESS_TYPE] == 0) {
         return;
     }
     // 根据账本信息，计算每个PID各本地numa可支配的内存；
@@ -4450,6 +4465,7 @@ static void SetChangePidRemoteMsgPayload(int srcNid, int destNid, int *i, int ma
         payload[*i].scanTime = attr->scanTime;
         payload[*i].duration = attr->duration;
         payload[*i].type = attr->scanType;
+        payload[*i].pidType = attr->type;
         (*i)++;
     }
 }
@@ -4798,6 +4814,7 @@ static void SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRe
         payload[i].scanTime = attr->scanTime;
         payload[i].duration = attr->duration;
         payload[i].type = attr->scanType;
+        payload[i].pidType = attr->type;
     }
 }
 
