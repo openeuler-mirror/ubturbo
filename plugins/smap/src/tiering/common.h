@@ -59,8 +59,6 @@ struct mig_list {
 
 struct mig_pra {
 	int page_size;
-	int nr_thread;
-	bool is_mul_thread;
 };
 
 struct migrate_msg {

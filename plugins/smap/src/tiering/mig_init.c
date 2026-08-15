@@ -190,13 +190,6 @@ static bool is_migrate_msg_valid(struct migrate_msg *msg)
 		       msg->mul_mig.page_size);
 		return false;
 	}
-	if (msg->mul_mig.is_mul_thread &&
-	    (msg->mul_mig.nr_thread <= 1 ||
-	     msg->mul_mig.nr_thread > MAX_NR_MIGRATE_THREADS)) {
-		pr_err("invalid threads number: %d passed to check\n",
-		       msg->mul_mig.nr_thread);
-		return false;
-	}
 	return true;
 }
 

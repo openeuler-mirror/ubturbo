@@ -177,8 +177,7 @@ TEST_F(MigInitTest, isMigrateMsgValidFailed)
     smap_pgtype = HUGE_PAGE;
     g_pagesize_huge = TWO_MEGA_SIZE;
     struct mig_list migList[1];
-    struct mig_pra migPar = {.page_size = TWO_MEGA_SIZE, .nr_thread = MAX_NR_MIGRATE_THREADS + 1,
-                             .is_mul_thread = false};
+    struct mig_pra migPar = {.page_size = TWO_MEGA_SIZE};
     struct migrate_msg msg = {.cnt = -1, .mul_mig = migPar, .mig_list = migList};
     bool ret = is_migrate_msg_valid(&msg);
     EXPECT_EQ(false, ret);
@@ -190,10 +189,6 @@ TEST_F(MigInitTest, isMigrateMsgValidFailed)
     msg.mul_mig.page_size = PAGE_SIZE;
     ret = is_migrate_msg_valid(&msg);
     EXPECT_EQ(false, ret);
-
-    msg.mul_mig.is_mul_thread = true;
-    ret = is_migrate_msg_valid(&msg);
-    EXPECT_EQ(false, ret);
 }
 
 TEST_F(MigInitTest, isMigrateMsgValidSuccess)
@@ -201,15 +196,9 @@ TEST_F(MigInitTest, isMigrateMsgValidSuccess)
     smap_pgtype = NORMAL_PAGE;
     g_pagesize_huge = TWO_MEGA_SIZE;
     struct mig_list migList[1];
-    struct mig_pra migPar = {.page_size = PAGE_SIZE, .nr_thread = 1,
-                             .is_mul_thread = false};
+    struct mig_pra migPar = {.page_size = PAGE_SIZE};
     struct migrate_msg msg = {.cnt = 1, .mul_mig = migPar, .mig_list = migList};
     bool ret = is_migrate_msg_valid(&msg);
-    EXPECT_EQ(true, ret);
-
-    msg.mul_mig.is_mul_thread = true;
-    msg.mul_mig.nr_thread = 2;
-    ret = is_migrate_msg_valid(&msg);
     EXPECT_EQ(true, ret);
 
     smap_pgtype = HUGE_PAGE;
@@ -612,7 +601,6 @@ TEST_F(MigInitTest, __IoctlMigrateE2ETest)
     msg.cnt = cnt;
     msg.mig_list = migList;
     msg.mul_mig.page_size = TWO_MEGA_SIZE;
-    msg.mul_mig.is_mul_thread = false;
 
     // 10 huge page can migrate, all remaining pages processed via goto again
     IoctlMigrateE2ETestMock(&msg, HUGE_PAGE, 5120, 10);

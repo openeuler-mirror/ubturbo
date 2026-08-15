@@ -964,8 +964,6 @@ static int BuildGroupedSwapCompMsg(struct ProcessManager *manager, GroupSwapComp
         return -ENOMEM;
     }
     compMsg->cnt = 0;
-    compMsg->mulMig.nrThread = 1;
-    compMsg->mulMig.isMulThread = false;
     compMsg->mulMig.pageSize = manager->tracking.pageSize;
 
     EnvMutexLock(&manager->lock);
@@ -1119,8 +1117,6 @@ static int InitMigrateMsg(struct MigrateMsg *mMsg, struct ProcessManager *manage
         SMAP_LOGGER_ERROR("mMsg->migList malloc failed.");
         return -ENOMEM;
     }
-    mMsg->mulMig.nrThread = 1;
-    mMsg->mulMig.isMulThread = false;
     mMsg->mulMig.pageSize = manager->tracking.pageSize;
     return 0;
 }
@@ -1193,40 +1189,6 @@ static int PerformMigrationPreparation(struct ProcessManager *manager)
         return 0;
     }
     SmapAutoRemoveRemoteEmptyProcessesWithFreshData();
-    return 0;
-}
-
-static int SetMigrateThreadNum(struct MigrateMsg *mMsg, uint64_t migratePages, bool isForcedSingleThread)
-{
-    if (!mMsg) {
-        return -EINVAL;
-    }
-    if (mMsg->mulMig.pageSize == GetHugePageSize() && isForcedSingleThread) {
-        if (migratePages) {
-            mMsg->mulMig.isMulThread = false;
-            mMsg->mulMig.nrThread = SIG_THREAD_MIG_OUT;
-            SMAP_LOGGER_INFO("Forced signle thread detected, set 1 migration thread.");
-            return 0;
-        }
-        SMAP_LOGGER_INFO("As for 0 pages, no migration.");
-        return 0;
-    }
-    if (mMsg->mulMig.pageSize == GetHugePageSize() && migratePages > LESS_MIG_OUT_2M_PAGE_THRE) {
-        mMsg->mulMig.isMulThread = true;
-        if (migratePages <= MORE_MIG_OUT_2M_PAGE_THRE) {
-            mMsg->mulMig.nrThread = LESS_THREAD_MIG_OUT;
-        } else {
-            mMsg->mulMig.nrThread = MORE_THREAD_MIG_OUT;
-        }
-    } else {
-        mMsg->mulMig.isMulThread = false;
-        mMsg->mulMig.nrThread = SIG_THREAD_MIG_OUT;
-    }
-    if (migratePages) {
-        SMAP_LOGGER_INFO("As for %d pages, set %d migration thread(s).", migratePages, mMsg->mulMig.nrThread);
-    } else {
-        SMAP_LOGGER_INFO("As for 0 pages, no migration.");
-    }
     return 0;
 }
 
@@ -1402,7 +1364,6 @@ static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
 {
     int ret;
     ProcessAttr *current;
-    bool isForcedSingleThread = false;
     size_t candidateCnt = 0;
     size_t planCnt = 0;
     pid_t *candidatePids = calloc(MAX_4K_PROCESSES_CNT, sizeof(pid_t));
@@ -1486,11 +1447,9 @@ static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
         // 识别每个进程的待迁移冷热页
         ret = BuildMigrationMsg(current, mMsg, migratePages);
         SMAP_LOGGER_INFO("Add process: %d to migrate msg ret: %d.", current->pid, ret);
-        isForcedSingleThread = isForcedSingleThread || current->vmPidAttr.mmapType;
     }
     EnvMutexUnlock(&manager->lock);
 
-    SetMigrateThreadNum(mMsg, *migratePages, isForcedSingleThread);
     free(candidatePids);
     free(plans);
     return 0;

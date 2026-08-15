@@ -434,8 +434,6 @@ struct MigList {
 
 struct MigPra {
     int pageSize;
-    int nrThread;
-    bool isMulThread;
 };
 
 struct MigrateMsg {

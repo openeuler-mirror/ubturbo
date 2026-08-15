@@ -7,7 +7,6 @@
 #include <linux/migrate.h>
 #include <linux/mm_inline.h>
 #include <linux/rmap.h>
-#include <linux/kthread.h>
 #include <linux/ktime.h>
 #include <linux/gfp.h>
 #include <linux/cpumask.h>
@@ -45,23 +44,7 @@ struct num_node {
 	struct hlist_node hlist_node;
 };
 
-#define THREAD_PREFIX "smap_migrate_"
-
 extern u32 g_pagesize_huge;
-
-struct multi_migrate_struct {
-	ktime_t start_time;
-	ktime_t end_time;
-	unsigned int nr_folios;
-	unsigned int failed_num;
-	int to_node;
-	struct completion comp;
-	char thread_name[20];
-	bool init_flag;
-	struct folio **folios;
-	struct task_struct *ts;
-};
-static struct multi_migrate_struct mig[MAX_NR_MIGRATE_THREADS];
 
 static struct migrate_node {
 	int next_nid;
@@ -147,141 +130,12 @@ struct migration_target_control {
 	gfp_t gfp_mask;
 };
 
-static int thread_fn(void *data)
-{
-	int ret;
-	unsigned int nr_succeeded = 0;
-	struct multi_migrate_struct *ms = data;
-	ms->start_time = ktime_get();
-	ms->end_time = 0;
-	ktime_t mig_time;
-	ret = isolate_and_migrate_folios(ms->folios, ms->nr_folios,
-					 smap_alloc_new_node_page, NULL,
-					 ms->to_node, MIGRATE_ASYNC,
-					 &nr_succeeded);
-	if (ret) {
-		pr_err("failed to migrate pages, ret: %d\n", ret);
-	}
-	if (smap_pgtype == HUGE_PAGE) {
-		nr_succeeded >>= (__builtin_ctz(g_pagesize_huge) - PAGE_SHIFT);
-	}
-	ms->end_time = ktime_get();
-	mig_time = ktime_to_us(ktime_sub(ms->end_time, ms->start_time));
-	if (ms->to_node >= nr_local_numa)
-		pr_debug(
-			"time spend: %lldus, to_node: %d, nr_folios: %u, nr_succeeded: %u\n",
-			mig_time, ms->to_node, ms->nr_folios, nr_succeeded);
-	ms->failed_num = ms->nr_folios - nr_succeeded;
-	vfree(ms->folios);
-	complete(&ms->comp);
-	return ret;
-}
-
-static inline void clear_mig_folios(unsigned int clear_idx)
-{
-	unsigned int i;
-	for (i = 0; i < clear_idx; i++) {
-		vfree(mig[i].folios);
-		mig[i].folios = NULL;
-	}
-}
-
-static void cal_thread_time(ktime_t *start_time, ktime_t *end_time,
-			    ktime_t thread_stime, ktime_t thread_etime)
-{
-	if (thread_etime > *end_time)
-		*end_time = thread_etime;
-	if (thread_stime < *start_time)
-		*start_time = thread_stime;
-}
-
-static int init_mig(unsigned int nr_threads, unsigned int nr_folios,
-		    int to_node)
-{
-	unsigned int i;
-	unsigned int avg_cnt;
-	size_t alloc_size;
-
-	avg_cnt = DIV_ROUND_UP(nr_folios, nr_threads);
-	if (avg_cnt > SIZE_MAX / sizeof(struct folio *)) {
-		pr_err("migrate folio array size overflow, avg_cnt: %u\n",
-		       avg_cnt);
-		return -EINVAL;
-	}
-	alloc_size = (size_t)avg_cnt * sizeof(struct folio *);
-	for (i = 0; i < nr_threads; i++) {
-		mig[i].nr_folios = 0;
-		mig[i].failed_num = 0;
-		mig[i].folios = vzalloc(alloc_size);
-		if (!mig[i].folios) {
-			clear_mig_folios(i);
-			return -ENOMEM;
-		}
-		init_completion(&mig[i].comp);
-		mig[i].init_flag = true;
-		mig[i].to_node = to_node;
-		if (sprintf(mig[i].thread_name, "%s%u", THREAD_PREFIX, i) < 0)
-			pr_debug("sprintf failed: thread smap_migrate_%u ", i);
-	}
-	return 0;
-}
-
 static void put_folios(struct folio **folios, unsigned int nr_folios)
 {
 	unsigned int i;
 	for (i = 0; i < nr_folios; i++) {
 		folio_put(folios[i]);
 	}
-}
-
-int migrate_multi_threaded(unsigned int nr_threads, struct folio **folios,
-			   unsigned int nr_folios, int to_node)
-{
-	unsigned int i;
-	int ret;
-	ktime_t start_time = KTIME_MAX;
-	ktime_t end_time = 0;
-
-	if (nr_threads == 0 || nr_threads > MAX_NR_MIGRATE_THREADS) {
-		put_folios(folios, nr_folios);
-		return -EINVAL;
-	}
-
-	ret = init_mig(nr_threads, nr_folios, to_node);
-	if (ret) {
-		put_folios(folios, nr_folios);
-		return ret;
-	}
-
-	for (i = 0; i < nr_folios; i++) {
-		mig[i % nr_threads].folios[mig[i % nr_threads].nr_folios++] =
-			folios[i];
-	}
-
-	for (i = 0; i < nr_threads; i++) {
-		mig[i].ts = kthread_run(thread_fn, &mig[i], mig[i].thread_name);
-		if (IS_ERR(mig[i].ts)) {
-			complete(&mig[i].comp);
-			put_folios(mig[i].folios, mig[i].nr_folios);
-			pr_err("failed to create thread %u, ret: %ld\n", i,
-			       PTR_ERR(mig[i].ts));
-			vfree(mig[i].folios);
-			continue;
-		}
-	}
-
-	for (i = 0; i < nr_threads; i++) {
-		wait_for_completion(&mig[i].comp);
-		cal_thread_time(&start_time, &end_time, mig[i].start_time,
-				mig[i].end_time);
-	}
-
-	if (to_node >= nr_local_numa)
-		pr_debug("migration time spend: %lldus, nr_folios: %u\n",
-			 ktime_to_us(ktime_sub(end_time, start_time)),
-			 nr_folios);
-
-	return 0;
 }
 
 static int smap_isolate_and_migrate_folios(struct folio **folios,
@@ -740,35 +594,6 @@ void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 			       : MB_SUBTASK_DONE;
 }
 
-static unsigned int smu_migrate(struct folio **folios, unsigned int nr_folios,
-				int to_node, struct mig_pra *mul_mig)
-{
-	int ret;
-	unsigned int i;
-	unsigned int failed_num = 0;
-	unsigned int nr_threads;
-	if (mul_mig && mul_mig->is_mul_thread && mul_mig->nr_thread > 0) {
-		nr_threads = mul_mig->nr_thread;
-		ret = migrate_multi_threaded(nr_threads, folios, nr_folios,
-					     to_node);
-		if (ret) {
-			pr_err("failed to migrate with multi threads, ret:%d\n",
-			       ret);
-			return nr_folios;
-		}
-		for (i = 0; i < nr_threads; i++) {
-			if (mig[i].nr_folios == 0) {
-				continue;
-			}
-			failed_num += mig[i].failed_num;
-		}
-	} else {
-		failed_num = smap_migrate(folios, nr_folios, to_node,
-					  MIGRATE_TYPE_HOTNESS);
-	}
-	return failed_num;
-}
-
 int is_filter_4k(struct page *page, int page_size)
 {
 	if (page_size == PAGE_SIZE) {
@@ -886,7 +711,7 @@ static void collect_one_folio(int idx, struct mig_list *mig_list,
  * migrate_one_batch - collect and migrate one folio batch of an entry.
  *
  * Walks up to NR_BATCHED_MIGRATION folios starting at the offset implied by
- * nr_remain via collect_one_folio, then invokes smu_migrate(). Returns the
+ * nr_remain via collect_one_folio, then invokes smap_migrate(). Returns the
  * remaining folio count (0 when the entry is done), -ENOMEM if the folio array
  * cannot be allocated, or -EINVAL on a critical node error.
  */
@@ -931,8 +756,8 @@ static int migrate_one_batch(int idx, struct migrate_msg *msg,
 	pr_debug("migrate_one_batch: [%d] pid %d from %d to %d nr %u\n", idx,
 		 mig_list[idx].pid, mig_list[idx].from, mig_list[idx].to,
 		 batch.cnt);
-	batch_failed = smu_migrate(batch.folios, batch.nr_folios,
-				   mig_list[idx].to, &msg->mul_mig);
+	batch_failed = smap_migrate(batch.folios, batch.nr_folios, mig_list[idx].to,
+				    MIGRATE_TYPE_HOTNESS);
 	mig_list[idx].failed_mig_nr += batch_failed;
 	stats->failed_num += batch_failed;
 	mig_list[idx].success_to_user = true;
