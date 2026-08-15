@@ -637,10 +637,11 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfig)
                   .migrateParam = {{.nid = 5, .ratio = 15}}};
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetPidType).stubs().will(returnValue(PROCESS_TYPE));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
     MOCKER(InitProcessMigrationTargetState).expects(exactly(nrProcess));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(false));
     ret = RecoverProcessConfig((char *)&header);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(nrProcess, manager.nr[PROCESS_TYPE]);
@@ -672,9 +673,10 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigTwo)
                                         .migrateParam = {{.nid = 4, .ratio = 25}}}};
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetPidType).stubs().will(returnValue(PROCESS_TYPE));
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
     MOCKER(calloc).stubs().will(returnValue(static_cast<void *>(nullptr)));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(false));
     ret = RecoverProcessConfig((char *)&header);
     EXPECT_EQ(-ENOMEM, ret);
     ASSERT_EQ(nullptr, manager.processes);
@@ -697,7 +699,6 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigRestoresPairMultiRemoteTarget)
     };
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetPidType).stubs().will(returnValue(PROCESS_TYPE));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetPageSize).stubs().will(returnValue(static_cast<uint32_t>(PAGESIZE_4K)));
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)&payload));
@@ -780,7 +781,6 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
     LinkedListAdd(&manager.processes, &attr2);
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     ret = BuildAllProcessPayload(&payload, &len);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(2, len);
@@ -834,7 +834,6 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
     LinkedListAdd(&manager.processes, &attr2);
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     ret = BuildAllProcessPayload(&payload, &len);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(2, len);

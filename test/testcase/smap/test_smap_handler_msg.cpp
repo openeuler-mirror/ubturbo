@@ -44,20 +44,20 @@ TEST_F(TestSmapHandlerMsg, SmapMigrateOutCodecEncodeRequestFailed)
 {
     TurboByteBuffer inputBuffer;
     MigrateOutMsg msg = {0};
-    int pidType;
+    int pageType;
 
     SmapMigrateOutCodec codec;
     g_mock_new_should_fail = true;
-    int result = codec.EncodeRequest(inputBuffer, &msg, pidType);
+    int result = codec.EncodeRequest(inputBuffer, &msg, pageType);
     EXPECT_EQ(result, -EINVAL);
     g_mock_new_should_fail = false;
 
     MOCKER(memcpy_s).stubs().will(returnValue(1)).then(returnValue(0)).then(returnValue(NUM_2));
 
-    result = codec.EncodeRequest(inputBuffer, &msg, pidType);
+    result = codec.EncodeRequest(inputBuffer, &msg, pageType);
     EXPECT_EQ(result, 1);
 
-    result = codec.EncodeRequest(inputBuffer, &msg, pidType);
+    result = codec.EncodeRequest(inputBuffer, &msg, pageType);
     EXPECT_EQ(result, NUM_2);
 }
 
@@ -65,10 +65,10 @@ TEST_F(TestSmapHandlerMsg, SmapMigrateOutCodecDecodeRequestFailed)
 {
     TurboByteBuffer inputBuffer;
     MigrateOutMsg msg = {0};
-    int pidType;
+    int pageType;
 
     SmapMigrateOutCodec codec;
-    int result = codec.DecodeRequest(inputBuffer, msg, pidType);
+    int result = codec.DecodeRequest(inputBuffer, msg, pageType);
     EXPECT_EQ(result, -EINVAL);
 }
 
@@ -93,20 +93,20 @@ TEST_F(TestSmapHandlerMsg, SmapMigrateOutGroupedCodecEncodeRequestFailed)
 {
     TurboByteBuffer inputBuffer;
     GroupedMigrateOutMsg msg = {0};
-    int pidType;
+    int pageType;
 
     SmapMigrateOutGroupedCodec codec;
     g_mock_new_should_fail = true;
-    int result = codec.EncodeRequest(inputBuffer, &msg, pidType);
+    int result = codec.EncodeRequest(inputBuffer, &msg, pageType);
     EXPECT_EQ(result, -EINVAL);
     g_mock_new_should_fail = false;
 
     MOCKER(memcpy_s).stubs().will(returnValue(1)).then(returnValue(0)).then(returnValue(NUM_2));
 
-    result = codec.EncodeRequest(inputBuffer, &msg, pidType);
+    result = codec.EncodeRequest(inputBuffer, &msg, pageType);
     EXPECT_EQ(result, 1);
 
-    result = codec.EncodeRequest(inputBuffer, &msg, pidType);
+    result = codec.EncodeRequest(inputBuffer, &msg, pageType);
     EXPECT_EQ(result, NUM_2);
 }
 
@@ -114,10 +114,10 @@ TEST_F(TestSmapHandlerMsg, SmapMigrateOutGroupedCodecDecodeRequestFailed)
 {
     TurboByteBuffer inputBuffer;
     GroupedMigrateOutMsg msg = {0};
-    int pidType;
+    int pageType;
 
     SmapMigrateOutGroupedCodec codec;
-    int result = codec.DecodeRequest(inputBuffer, msg, pidType);
+    int result = codec.DecodeRequest(inputBuffer, msg, pageType);
     EXPECT_EQ(result, -EINVAL);
 }
 
@@ -186,20 +186,20 @@ TEST_F(TestSmapHandlerMsg, SmapRemoveCodecEncodeRequestFailed)
 {
     TurboByteBuffer inputBuffer;
     RemoveMsg msg = {0};
-    int pidType;
+    int pageType;
 
     SmapRemoveCodec codec;
     g_mock_new_should_fail = true;
-    int result = codec.EncodeRequest(inputBuffer, &msg, pidType);
+    int result = codec.EncodeRequest(inputBuffer, &msg, pageType);
     EXPECT_EQ(result, -EINVAL);
     g_mock_new_should_fail = false;
 
     MOCKER(memcpy_s).stubs().will(returnValue(1)).then(returnValue(0)).then(returnValue(NUM_2));
 
-    result = codec.EncodeRequest(inputBuffer, &msg, pidType);
+    result = codec.EncodeRequest(inputBuffer, &msg, pageType);
     EXPECT_EQ(result, 1);
 
-    result = codec.EncodeRequest(inputBuffer, &msg, pidType);
+    result = codec.EncodeRequest(inputBuffer, &msg, pageType);
     EXPECT_EQ(result, NUM_2);
 }
 
@@ -207,10 +207,10 @@ TEST_F(TestSmapHandlerMsg, SmapRemoveCodecDecodeRequestFailed)
 {
     TurboByteBuffer inputBuffer;
     RemoveMsg msg = {0};
-    int pidType;
+    int pageType;
 
     SmapRemoveCodec codec;
-    int result = codec.DecodeRequest(inputBuffer, msg, pidType);
+    int result = codec.DecodeRequest(inputBuffer, msg, pageType);
     EXPECT_EQ(result, -EINVAL);
 }
 
@@ -235,7 +235,7 @@ TEST_F(TestSmapHandlerMsg, SmapEnableNodeCodecEncodeRequestFailed)
 {
     TurboByteBuffer inputBuffer;
     EnableNodeMsg msg = {0};
-    int pidType;
+    int pageType;
 
     SmapEnableNodeCodec codec;
     g_mock_new_should_fail = true;

@@ -58,15 +58,15 @@ static SmapQueryRemoteNumaFreqFunc g_smapQueryRemoteNumaFreq = nullptr;
 
 RetCode SmapMigrateOutHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
 {
-    int pidType;
+    int pageType;
     MigrateOutMsg msg{};
     SmapMigrateOutCodec codec;
-    int ret = codec.DecodeRequest(inputBuffer, msg, pidType);
+    int ret = codec.DecodeRequest(inputBuffer, msg, pageType);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] ubturbo_smap_migrate_out DecodeRequest error " << ret;
         return TURBO_ERROR;
     }
-    int result = g_smapMigrateOut(&msg, pidType);
+    int result = g_smapMigrateOut(&msg, pageType);
     ret = codec.EncodeResponse(outputBuffer, result);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] ubturbo_smap_migrate_out EncodeResponse error " << ret;
@@ -77,16 +77,16 @@ RetCode SmapMigrateOutHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffe
 
 RetCode SmapMigrateOutGroupedHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
 {
-    int pidType;
+    int pageType;
     GroupedMigrateOutMsg msg{};
     SmapMigrateOutGroupedCodec codec;
-    int ret = codec.DecodeRequest(inputBuffer, msg, pidType);
+    int ret = codec.DecodeRequest(inputBuffer, msg, pageType);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
             << "[Smap] ubturbo_smap_migrate_out_grouped DecodeRequest error " << ret;
         return TURBO_ERROR;
     }
-    int result = g_smapMigrateOutGrouped(&msg, pidType);
+    int result = g_smapMigrateOutGrouped(&msg, pageType);
     ret = codec.EncodeResponse(outputBuffer, result);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
@@ -116,15 +116,15 @@ RetCode SmapMigrateBackHandler(const TurboByteBuffer &inputBuffer, TurboByteBuff
 
 RetCode SmapRemoveHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
 {
-    int pidType;
+    int pageType;
     RemoveMsg msg{};
     SmapRemoveCodec codec;
-    int ret = codec.DecodeRequest(inputBuffer, msg, pidType);
+    int ret = codec.DecodeRequest(inputBuffer, msg, pageType);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapRemoveHandler DecodeRequest error " << ret;
         return TURBO_ERROR;
     }
-    int result = g_smapRemove(&msg, pidType);
+    int result = g_smapRemove(&msg, pageType);
     ret = codec.EncodeResponse(outputBuffer, result);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapRemoveHandler EncodeResponse error " << ret;
@@ -388,16 +388,16 @@ RetCode SmapIsRunningHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer
 
 RetCode SmapMigrateOutSyncHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
 {
-    int pidType;
+    int pageType;
     uint64_t maxWaitTime;
     MigrateOutMsg msg{};
     SmapMigrateOutSyncCodec codec;
-    int ret = codec.DecodeRequest(inputBuffer, msg, pidType, maxWaitTime);
+    int ret = codec.DecodeRequest(inputBuffer, msg, pageType, maxWaitTime);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapMigrateOutSyncHandler DecodeRequest error " << ret;
         return TURBO_ERROR;
     }
-    int result = g_smapMigrateOutSync(&msg, pidType, maxWaitTime);
+    int result = g_smapMigrateOutSync(&msg, pageType, maxWaitTime);
     ret = codec.EncodeResponse(outputBuffer, result);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapMigrateOutSyncHandler EncodeResponse error " << ret;
@@ -499,12 +499,12 @@ RetCode SmapQueryRemoteNumaFreqHandler(const TurboByteBuffer &inputBuffer, Turbo
 }
 
 #ifdef DT_CONFIG
-int StubSmapMigrateOut(struct MigrateOutMsg *msg, int pidType)
+int StubSmapMigrateOut(struct MigrateOutMsg *msg, int pageType)
 {
     return 0; // 模拟成功
 }
 
-int StubSmapMigrateOutGrouped(struct GroupedMigrateOutMsg *msg, int pidType)
+int StubSmapMigrateOutGrouped(struct GroupedMigrateOutMsg *msg, int pageType)
 {
     return 0;
 }
@@ -514,7 +514,7 @@ int StubSmapMigrateBack(struct MigrateBackMsg *msg)
     return 0;
 }
 
-int StubSmapRemove(struct RemoveMsg *msg, int pidType)
+int StubSmapRemove(struct RemoveMsg *msg, int pageType)
 {
     return 0;
 }
@@ -559,7 +559,7 @@ bool StubSmapIsRunning()
     return true;
 }
 
-int StubSmapMigrateOutSync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime)
+int StubSmapMigrateOutSync(struct MigrateOutMsg *msg, int pageType, uint64_t maxWaitTime)
 {
     return 0;
 }

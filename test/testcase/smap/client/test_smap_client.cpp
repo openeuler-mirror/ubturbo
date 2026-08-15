@@ -312,23 +312,23 @@ TEST_F(TestSmapClient, SmapRemoveTest)
 {
     struct RemoveMsg msg;
     msg.count = 1;
-    int pidType = 1;
+    int pageType = 1;
 
     MOCKER_CPP(&UBTurboFunctionCaller,
                uint32_t(*)(const std::string &function, const TurboByteBuffer &params, TurboByteBuffer &result))
         .stubs()
         .will(invoke(Test_UBTurboFunctionCaller));
-    int ret = ubturbo_smap_remove(&msg, pidType);
+    int ret = ubturbo_smap_remove(&msg, pageType);
     EXPECT_NE(ret, 0);
 }
 
 TEST_F(TestSmapClient, SmapRemoveNULLMsg)
 {
     int ret;
-    int pidType = 1;
+    int pageType = 1;
     struct RemoveMsg *msg = nullptr;
 
-    ret = ubturbo_smap_remove(msg, pidType);
+    ret = ubturbo_smap_remove(msg, pageType);
     EXPECT_EQ(-22, ret);
 }
 
@@ -337,13 +337,13 @@ TEST_F(TestSmapClient, SmapRemoveEncodeRequestFailed)
     int ret;
     struct RemoveMsg msg;
     msg.count = 1;
-    int pidType = 1;
+    int pageType = 1;
 
     MOCKER_CPP(&SmapRemoveCodec::EncodeRequest, int (*)(SmapRemoveCodec *, TurboByteBuffer &, RemoveMsg *, int))
         .stubs()
         .will(returnValue(-1));
 
-    ret = ubturbo_smap_remove(&msg, pidType);
+    ret = ubturbo_smap_remove(&msg, pageType);
     EXPECT_EQ(1, ret);
 }
 
@@ -352,7 +352,7 @@ TEST_F(TestSmapClient, SmapRemoveUBTurboFunctionCallerFailed)
     int ret;
     struct RemoveMsg msg;
     msg.count = 1;
-    int pidType = 1;
+    int pageType = 1;
 
     MOCKER_CPP(&SmapRemoveCodec::EncodeRequest, int (*)(SmapRemoveCodec *, TurboByteBuffer &, RemoveMsg *, int))
         .stubs()
@@ -363,7 +363,7 @@ TEST_F(TestSmapClient, SmapRemoveUBTurboFunctionCallerFailed)
         .stubs()
         .will(returnValue(1));
 
-    ret = ubturbo_smap_remove(&msg, pidType);
+    ret = ubturbo_smap_remove(&msg, pageType);
     EXPECT_EQ(1, ret);
 }
 
@@ -372,7 +372,7 @@ TEST_F(TestSmapClient, SmapRemoveDecodeResponseFailed)
     int ret;
     struct RemoveMsg msg;
     msg.count = 1;
-    int pidType = 1;
+    int pageType = 1;
 
     MOCKER_CPP(&SmapRemoveCodec::EncodeRequest, int (*)(SmapRemoveCodec *, TurboByteBuffer &, RemoveMsg *, int))
         .stubs()
@@ -387,7 +387,7 @@ TEST_F(TestSmapClient, SmapRemoveDecodeResponseFailed)
         .stubs()
         .will(returnValue(1));
 
-    ret = ubturbo_smap_remove(&msg, pidType);
+    ret = ubturbo_smap_remove(&msg, pageType);
     EXPECT_EQ(1, ret);
 }
 
@@ -1105,14 +1105,14 @@ TEST_F(TestSmapClient, SmapMigrateOutSyncTest)
     msg.payload[0].pid = 1;
     msg.payload[0].inner[0].destNid = 4;
     msg.payload[0].inner[0].ratio = 25;
-    int pidType = 1;
+    int pageType = 1;
     uint64_t maxWaitTime = 1000;
 
     MOCKER_CPP(&UBTurboFunctionCaller,
                uint32_t(*)(const std::string &function, const TurboByteBuffer &params, TurboByteBuffer &result))
         .stubs()
         .will(invoke(Test_UBTurboFunctionCaller));
-    int ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
+    int ret = ubturbo_smap_migrate_out_sync(&msg, pageType, maxWaitTime);
     EXPECT_NE(ret, 0);
 }
 
@@ -1120,10 +1120,10 @@ TEST_F(TestSmapClient, SmapMigrateOutSyncNullMsg)
 {
     int ret;
     struct MigrateOutMsg *msg = nullptr;
-    int pidType = 1;
+    int pageType = 1;
     uint64_t maxWaitTime = 1000;
 
-    ret = ubturbo_smap_migrate_out_sync(msg, pidType, maxWaitTime);
+    ret = ubturbo_smap_migrate_out_sync(msg, pageType, maxWaitTime);
     EXPECT_EQ(-22, ret);
 }
 
@@ -1136,7 +1136,7 @@ TEST_F(TestSmapClient, SmapMigrateOutSyncEncodeRequestError)
     msg.payload[0].pid = 1;
     msg.payload[0].inner[0].destNid = 4;
     msg.payload[0].inner[0].ratio = 25;
-    int pidType = 1;
+    int pageType = 1;
     uint64_t maxWaitTime = 1000;
 
     MOCKER_CPP(&SmapMigrateOutSyncCodec::EncodeRequest,
@@ -1144,7 +1144,7 @@ TEST_F(TestSmapClient, SmapMigrateOutSyncEncodeRequestError)
         .stubs()
         .will(returnValue(-1));
 
-    ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
+    ret = ubturbo_smap_migrate_out_sync(&msg, pageType, maxWaitTime);
     EXPECT_EQ(1, ret);
 }
 
@@ -1157,7 +1157,7 @@ TEST_F(TestSmapClient, SmapMigrateOutSyncUBTurboFunctionCallerFailed)
     msg.payload[0].pid = 1;
     msg.payload[0].inner[0].destNid = 4;
     msg.payload[0].inner[0].ratio = 25;
-    int pidType = 1;
+    int pageType = 1;
     uint64_t maxWaitTime = 1000;
 
     MOCKER_CPP(&SmapMigrateOutSyncCodec::EncodeRequest,
@@ -1170,7 +1170,7 @@ TEST_F(TestSmapClient, SmapMigrateOutSyncUBTurboFunctionCallerFailed)
         .stubs()
         .will(returnValue(2));
 
-    ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
+    ret = ubturbo_smap_migrate_out_sync(&msg, pageType, maxWaitTime);
     EXPECT_EQ(2, ret);
 }
 

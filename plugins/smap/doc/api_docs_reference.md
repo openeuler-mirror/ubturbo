@@ -134,7 +134,7 @@ SMAP库 (libsmap.so)
 
 ```c
 #include "smap_interface.h"
-int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType);
+int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pageType);
 ```
 
 ## 描述 DESCRIPTION
@@ -156,7 +156,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType);
 | msg.payload.inner.ratio | IN | 迁出比例。 |
 | msg.payload.inner.memSize | IN | 迁出大小，单位KB。 |
 | msg.payload.inner.migrateMode | IN | 迁移模式，0：按比例， 1：按大小。 |
-| pidType | IN | 进程页面类型，0：4K，1：2M。 |
+| pageType | IN | 页面类型：0=4K页，1=2M页。 |
 
 ## 返回值 RETURN VALUE
 
@@ -170,12 +170,11 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType);
 | -ESRCH | 部分进程不存在但其余进程配置成功 |
 | -ENOMEM | 内存申请失败 |
 | -EINVAL | 参数错误 |
-| -EBADF | 内核驱动访问失败 |
 
 ## 约束 CONSTRAINTS
 
 * SMAP初始化后才能调用。
-* pidType需要和当前场景匹配。
+* pageType需要和当前场景匹配。
 * HCCS代际远端NUMA最大值为21。
 * UB代际远端NUMA最大值为21。
 * 远端NUMA被禁用时无法配置迁出（调用SmapMigrateBack接口时会默认禁用远端NUMA）。
@@ -236,7 +235,7 @@ SMAP库 (libsmap.so)
 
 ```c
 #include "smap_interface.h"
-int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidType);
+int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pageType);
 ```
 
 ## 描述 DESCRIPTION
@@ -261,7 +260,7 @@ int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pidTy
 | msg.payload.groups.targets | IN | 当前group的target remote NUMA数组。 |
 | msg.payload.groups.targets.nid | IN | target remote NUMA ID。 |
 | msg.payload.groups.targets.size | IN | 当前target remote NUMA的最大驻留容量quota，单位KB。 |
-| pidType | IN | 进程页面类型，仅支持1：2M虚机。 |
+| pageType | IN | 页面类型，需与当前场景匹配。 |
 
 grouped迁出ABI结构如下：
 
@@ -303,13 +302,12 @@ struct GroupedMigrateOutMsg {
 | -ESRCH | PID不存在，本接口会回滚已添加配置，不提供部分成功语义 |
 | -ENOMEM | 内存申请失败 |
 | -EINVAL | 参数错误 |
-| -EBADF | 内核驱动访问失败 |
 
 ## 约束 CONSTRAINTS
 
 * SMAP初始化后才能调用。
 * 仅支持2M huge page虚机，不支持4K进程或普通进程。
-* pidType需要和当前2M虚机场景匹配。
+* pageType需要和当前场景匹配。
 * UB代际远端NUMA最大值为21。
 * 远端NUMA被禁用时无法配置为grouped target（调用ubturbo_smap_migrate_back接口时会默认禁用远端NUMA）。
 * 同一次调用内不能传入重复PID。
@@ -414,7 +412,6 @@ int ubturbo_smap_remote_numa_info_set(struct SetRemoteNumaInfoMsg *msg);
 | --- | --- |
 | -EPERM | SMAP未初始化 |
 | -EINVAL | 参数错误 |
-| -EBADF | 配置同步到内核失败 |
 
 ## 约束 CONSTRAINTS
 
@@ -554,7 +551,7 @@ SMAP库 (libsmap.so)
 
 ```c
 #include "smap_interface.h"
-int ubturbo_smap_remove(struct RemoveMsg *msg, int pidType);
+int ubturbo_smap_remove(struct RemoveMsg *msg, int pageType);
 ```
 
 ## 描述 DESCRIPTION
@@ -571,7 +568,7 @@ int ubturbo_smap_remove(struct RemoveMsg *msg, int pidType);
 | msg.payload.pid | IN | 进程PID。 |
 | msg.payload.count | IN | 要移除进程的远端numa个数。 |
 | msg.payload.nid | IN | 要移除进程的远端numa数组 |
-| pidType | IN | 进程页面类型，0：4K，1：2M。 |
+| pageType | IN | 页面类型：0=4K页，1=2M页。 |
 
 ## 返回值 RETURN VALUE
 
@@ -589,7 +586,7 @@ int ubturbo_smap_remove(struct RemoveMsg *msg, int pidType);
 ## 约束 CONSTRAINTS
 
 * SMAP初始化后才能调用。
-* pidType需要和当前场景匹配。
+* pageType需要和当前场景匹配。
 * 当调用SmapMigrateBack接口迁回完所有地址后，需使用SmapRemove接口移除虚机管理，保证后续流程正常。
 
 ## 附注 NOTES
@@ -732,9 +729,6 @@ int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t
 | --- | --- |
 | -EPERM | SMAP未初始化 |
 | -EINVAL | 参数错误 |
-| -EAGAIN | 统计模式扫描时长未达到预期 |
-| -ENOMEM | 内核态内存申请失败 |
-| -EBADF | 内核ioctl访问失败 |
 
 ## 约束 CONSTRAINTS
 
@@ -803,7 +797,7 @@ int ubturbo_smap_run_mode_set(int runMode);
 | --- | --- |
 | -EPERM | SMAP未初始化 |
 | -EBADF | 同步配置文件失败 |
-| -EINVAL | 参数错误或非大页场景设置内存碎片模式 |
+| -EINVAL | 参数错误 |
 
 ## 约束 CONSTRAINTS
 
@@ -1026,7 +1020,6 @@ int ubturbo_smap_pid_remote_numa_migrate(pid_t *pidArr, int len, int srcNid, int
 | -EBADF | 迁移成功但修改进程远端NUMA失败 |
 | -ENOMEM | 内存申请失败 |
 | -EINVAL | 参数错误 |
-| -REMOTE_MIG_FAIL | 迁移失败 |
 
 ## 约束 CONSTRAINTS
 
@@ -1111,7 +1104,6 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
 | -EBADF | 内核调用失败 |
 | -ENOMEM | 内存申请失败 |
 | -EINVAL | 参数错误 |
-| -EBUSY | 进程状态非PROC_MOVE无法切换扫描类型 |
 
 ## 约束 CONSTRAINTS
 
@@ -1187,8 +1179,6 @@ int ubturbo_smap_process_tracking_remove(pid_t *pidArr, int len, int flags);
 | --- | --- |
 | -EPERM | SMAP未初始化 |
 | -EINVAL | 参数错误 |
-| -ENOMEM | 内存申请失败 |
-| -EBADF | 内核ioctl移除PID失败 |
 
 ## 约束 CONSTRAINTS
 
@@ -1231,7 +1221,7 @@ SMAP库 (libsmap.so)
 
 ```c
 #include "smap_interface.h"
-int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime);
+int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint64_t maxWaitTime);
 ```
 
 ## 描述 DESCRIPTION
@@ -1250,7 +1240,7 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64
 | msg.payload.ratio | IN | 迁出比例。 |
 | msg.payload.memSize | IN | 迁出大小，单位KB。 |
 | msg.payload.migrateMode | IN | 迁移模式，0：按比例， 1：按大小。 |
-| pidType | IN | 进程页面类型，0：4K，1：2M。 |
+| pageType | IN | 页面类型：0=4K页，1=2M页。 |
 | maxWaitTime | IN | 最大等待时间，单位ms。 |
 
 ## 返回值 RETURN VALUE
@@ -1264,8 +1254,7 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64
 | -EPERM | SMAP未初始化 |
 | -EBUSY | 超时 |
 | -EINVAL | 参数错误 |
-| -ESRCH | pid无效或部分pid无效 |
-| -ENOMEM | 内存申请失败 |
+| -ESRCH | pid无效 |
 
 ## 约束 CONSTRAINTS
 

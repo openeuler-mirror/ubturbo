@@ -61,28 +61,29 @@ TEST_F(InterfaceTest, TestIsRatioValidOne)
     EXPECT_EQ(true, ret);
 }
 
-extern "C" bool IsMigOutCountValid(pid_t *pidArr, int len, int pidType);
+extern "C" bool IsMigOutCountValid(pid_t *pidArr, int len);
 extern "C" ProcessAttr *GetProcessAttrLocked(pid_t pid);
 TEST_F(InterfaceTest, TestIsMigOutCountValid)
 {
-    int maxNum = MAX_4K_PROCESSES_CNT;
-    ProcessManager manager;
-    EnvMutexInit(&manager.lock);
     int len = 1;
     pid_t *pidArr = (pid_t *)malloc(sizeof(pid_t) * len);
     ProcessAttr *attr = nullptr;
-    MOCKER(LoadMangerNrProcessNum).stubs().will(returnValue(maxNum));
-    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+
+    // normal mode: managed count at limit, adding new pid exceeds limit
+    MOCKER(LoadMangerNrProcessNum).stubs().will(returnValue(MAX_4K_PROCESSES_CNT));
+    MOCKER(LoadMangerNrVmNum).stubs().will(returnValue(0));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(attr));
-    bool ret = IsMigOutCountValid(pidArr, len, 0);
+    bool ret = IsMigOutCountValid(pidArr, len);
     EXPECT_EQ(false, ret);
 
     GlobalMockObject::verify();
-    maxNum = MAX_2M_PROCESSES_CNT - 1;
+    // huge mode: managed count below limit, adding new pid fits
+    MOCKER(LoadMangerNrProcessNum).stubs().will(returnValue(MAX_2M_PROCESSES_CNT - 1));
     MOCKER(LoadMangerNrVmNum).stubs().will(returnValue(0));
-    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(attr));
-    ret = IsMigOutCountValid(pidArr, len, 1);
+    ret = IsMigOutCountValid(pidArr, len);
     EXPECT_EQ(true, ret);
     free(pidArr);
 }
@@ -169,27 +170,23 @@ TEST_F(InterfaceTest, TestCheckPidtypeFour)
 }
 
 extern "C" bool IsPidTypeValid(int pidType);
+extern "C" bool IsPidTypeCompatibleWithMode(int pidType);
+extern "C" bool IsPageTypeConsistent(int pageType);
 TEST_F(InterfaceTest, TestIsPidTypeValid)
 {
     bool ret;
-    int pidType = PAGETYPE_NORMAL;
-    struct ProcessManager manager;
-
-    manager.tracking.pageSize = PAGESIZE_4K;
-    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetNormalPageSize).stubs().will(returnValue((unsigned int)PAGESIZE_4K));
-    ret = IsPidTypeValid(pidType);
+    /* IsPidTypeValid 不再依赖 GetProcessManager，仅检查值域 */
+    ret = IsPidTypeValid(PROCESS_TYPE);
+    EXPECT_EQ(true, ret);
+    ret = IsPidTypeValid(VM_TYPE);
     EXPECT_EQ(true, ret);
 }
 
 TEST_F(InterfaceTest, TestIsPidTypeInValidOne)
 {
     bool ret;
-    int pidType = PAGETYPE_NORMAL;
-    struct ProcessManager manager;
+    int pidType = 999;
 
-    manager.tracking.pageSize = PAGETYPE_HUGE;
-    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     ret = IsPidTypeValid(pidType);
     EXPECT_EQ(false, ret);
 }
@@ -197,9 +194,8 @@ TEST_F(InterfaceTest, TestIsPidTypeInValidOne)
 TEST_F(InterfaceTest, TestIsPidTypeInValidTwo)
 {
     bool ret;
-    int pidType = PAGETYPE_NORMAL;
+    int pidType = -1;
 
-    MOCKER(GetProcessManager).stubs().will(returnValue((struct ProcessManager *)nullptr));
     ret = IsPidTypeValid(pidType);
     EXPECT_EQ(false, ret);
 }
@@ -520,29 +516,28 @@ TEST_F(InterfaceTest, TestIsDestNidVaild)
 
 extern uint32_t g_pageSizeNormal;
 extern uint32_t g_pageSizeHuge;
-extern "C" int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pidType, int *pidCount);
+extern "C" int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType);
 TEST_F(InterfaceTest, TestCheckMigrateOutMsgInvalidPidTypeAndMsgCount)
 {
     struct MigrateOutMsg msg;
     int pidType = PAGETYPE_NORMAL;
-    int pidCount = 0;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
     g_pageSizeHuge = PAGESIZE_2M;
     // null input case
-    int ret = CheckMigrateOutMsg(nullptr, pidType, &pidCount);
+    int ret = CheckMigrateOutMsg(nullptr, pidType);
     EXPECT_EQ(-EINVAL, ret);
 
     // invalid pidType case
-    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(-EINVAL, ret);
 
     // invalid count case
     g_processManager.tracking.pageSize = PAGESIZE_4K;
     msg.count = MAX_NR_MIGOUT + 1;
-    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(-EINVAL, ret);
     msg.count = 0;
-    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -552,20 +547,23 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgMigOutCount)
     msg.payload[0].pid = 1234;
     msg.payload[0].count = 1;
     int pidType = PAGETYPE_HUGE;
-    int pidCount = 0;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
+    g_pageSizeHuge = PAGESIZE_2M;
 
     // number of managed and non-managed PID beyond limit
     g_processManager.processes = nullptr;
     g_processManager.nr[VM_TYPE] = MAX_2M_PROCESSES_CNT;
-    int ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    int ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(-EINVAL, ret);
 
+    GlobalMockObject::verify();
     // PID has been managed, so not beyond limit
     ProcessAttr processes = {.pid = msg.payload[0].pid, .next = nullptr};
     g_processManager.processes = &processes;
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
     MOCKER(IsMigParaValid).stubs().will(returnValue(true));
-    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(0, ret);
 }
 
@@ -574,40 +572,46 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgAllows4KMultiRemote)
     struct MigrateOutMsg msg = {.count = 1};
     msg.payload[0].pid = 1234;
     msg.payload[0].count = 2;
-    int pidCount = 0;
 
     g_processManager.tracking.pageSize = PAGESIZE_4K;
     g_pageSizeNormal = PAGESIZE_4K;
     g_processManager.nr[PROCESS_TYPE] = 0;
     g_processManager.processes = nullptr;
     MOCKER(IsMigParaValid).stubs().will(returnValue(true));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)PROCESS_TYPE));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(false));
 
-    EXPECT_EQ(0, CheckMigrateOutMsg(&msg, PAGETYPE_NORMAL, &pidCount));
+    /* 进程多远端 NUMA 迁移已放开，不再返回 -EINVAL */
+    EXPECT_EQ(0, CheckMigrateOutMsg(&msg, PAGETYPE_NORMAL));
 }
 
 TEST_F(InterfaceTest, TestCheckMigrateOutMsgInvalidDestNid)
 {
     struct MigrateOutMsg msg = {.count = 1};
     int pidType = PAGETYPE_HUGE;
-    int pidCount = 0;
+    g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
     g_processManager.processes = nullptr;
-    g_processManager.nr[VM_TYPE] = 1;
+    g_processManager.nr[VM_TYPE] = 0;
     g_processManager.nrLocalNuma = 4;
 
     MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
 
     msg.payload[0].count = 1;
     msg.payload[0].pid = 1234;
     msg.payload[0].inner[0].destNid = 0;
-    int ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    int ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(-EINVAL, ret);
 
     // nid not match numaNodes bitmap
     ProcessAttr processes = {.pid = msg.payload[0].pid, .next = nullptr};
     processes.numaAttr.numaNodes = 0x20;
     g_processManager.processes = &processes;
-    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&processes));
+    MOCKER(IsMigParaValid).stubs().will(returnValue(false));
+    ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -618,7 +622,7 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgInvalidMigrateMode)
     msg.payload[0].count = 1;
     msg.payload[0].inner[0].destNid = 4;
     int pidType = PAGETYPE_HUGE;
-    int pidCount = 0;
+    g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
     g_processManager.nr[VM_TYPE] = 1;
     g_processManager.nrLocalNuma = 4;
@@ -628,13 +632,16 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgInvalidMigrateMode)
 
     MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
     MOCKER(IsNodeForbidden).stubs().will(returnValue(true));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
+    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&processes));
 
     msg.payload[0].inner[0].migrateMode = (MigrateMode)-1;
-    int ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    int ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(-EINVAL, ret);
 
     msg.payload[0].inner[0].migrateMode = (MigrateMode)(MIG_MEMSIZE_MODE + 1);
-    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -642,51 +649,62 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgCheckMigrateMode)
 {
     struct MigrateOutMsg msg = {.count = 1};
     int pidType = PAGETYPE_HUGE;
-    int pidCount = 0;
+    g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
-    g_processManager.nr[VM_TYPE] = 1;
+    g_processManager.nr[VM_TYPE] = 0;
     g_processManager.nrLocalNuma = 4;
     g_processManager.processes = nullptr;
 
-    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
-    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
 
     msg.payload[0].count = 1;
     msg.payload[0].inner[0].destNid = 4;
     msg.payload[0].inner[0].migrateMode = MIG_RATIO_MODE;
-    int ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    msg.payload[0].inner[0].ratio = 50;
+    int ret = CheckMigrateOutMsg(&msg, pidType);
+    /* New code: RATIO_MODE is allowed regardless of run mode */
     EXPECT_EQ(0, ret);
 
     msg.payload[0].inner[0].migrateMode = MIG_MEMSIZE_MODE;
     msg.payload[0].inner[0].memSize = 2049;
-    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    ret = CheckMigrateOutMsg(&msg, pidType);
+    /* memSize not aligned to 2M page size */
     EXPECT_EQ(-EINVAL, ret);
 
     msg.payload[0].inner[0].memSize = 2048;
-    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(0, ret);
 
     GlobalMockObject::verify();
-    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
-    MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
+    /* Test forbidden node: IsNodeForbidden is static inline, set g_forbiddenNodes directly */
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
+    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
 
-    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
-    EXPECT_EQ(0, ret);
+    ret = CheckMigrateOutMsg(&msg, pidType);
+    /* Node forbidden + non-zero memSize → rejected by CheckMigOutPayloadItems */
+    EXPECT_EQ(-EINVAL, ret);
 
     msg.payload[0].inner[0].migrateMode = MIG_RATIO_MODE;
     msg.payload[0].inner[0].ratio = 101;
-    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
+    ret = CheckMigrateOutMsg(&msg, pidType);
+    /* ratio > 100, IsRatioValid returns false */
     EXPECT_EQ(-EINVAL, ret);
 
     msg.payload[0].inner[0].ratio = 75;
-    ret = CheckMigrateOutMsg(&msg, pidType, &pidCount);
-    EXPECT_EQ(0, ret);
+    ret = CheckMigrateOutMsg(&msg, pidType);
+    /* ratio valid but node forbidden with non-zero target → rejected */
+    EXPECT_EQ(-EINVAL, ret);
+
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
 }
 
 TEST_F(InterfaceTest, TestCheckMigrateOutMsgAllowsZeroTargetOnDisabledRemote)
 {
     struct MigrateOutMsg msg = {.count = 1};
-    int pidCount = 0;
     g_pageSizeNormal = PAGESIZE_4K;
     g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
@@ -698,13 +716,17 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgAllowsZeroTargetOnDisabledRemote)
     msg.payload[0].inner[0].destNid = 4;
     msg.payload[0].inner[0].migrateMode = MIG_MEMSIZE_MODE;
 
-    MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
     EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
 
-    EXPECT_EQ(0, CheckMigrateOutMsg(&msg, PAGETYPE_HUGE, &pidCount));
+    /* memSize=0 on forbidden node: targetIsZero=true, allowed */
+    EXPECT_EQ(0, CheckMigrateOutMsg(&msg, PAGETYPE_HUGE));
 
     msg.payload[0].inner[0].memSize = KB_PER_2MB;
-    EXPECT_EQ(-EINVAL, CheckMigrateOutMsg(&msg, PAGETYPE_HUGE, &pidCount));
+    /* memSize!=0 on forbidden node: targetIsZero=false, rejected by CheckMigOutPayloadItems */
+    EXPECT_EQ(-EINVAL, CheckMigrateOutMsg(&msg, PAGETYPE_HUGE));
     EnvAtomicSet(&g_forbiddenNodes[4], 0);
 }
 
@@ -742,6 +764,10 @@ TEST_F(InterfaceTest, TestTrackMigrateOutCandidatesUsesPreparedState)
     EXPECT_EQ(0, TrackMigrateOutCandidates(candidates, 2));
 }
 
+extern "C" int BuildMigrateOutProcessParamWithCapacityPolicy(const struct MigrateOutPayload *payload,
+                                                              ProcessParam *param, bool ignoreRemoteCapacity);
+extern "C" int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate);
+extern "C" void DiscardMigrateOutCandidates(ProcessManageCandidate *candidates, int count);
 TEST_F(InterfaceTest, TestSmapMigrateOut)
 {
     int ret;
@@ -750,11 +776,17 @@ TEST_F(InterfaceTest, TestSmapMigrateOut)
     msg.payload[0].count = 1;
     msg.count = 1;
     EnvAtomicSet(&g_status, 1);
-    MOCKER(PrepareMigrateOutCandidates).stubs().will(returnValue(0));
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
+    MOCKER(IsPageTypeConsistent).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
     MOCKER(IsMigParaValid).stubs().will(returnValue(true));
-    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
-    ret = ubturbo_smap_migrate_out(&msg, 0);
-    EXPECT_EQ(0, ret);
+    MOCKER(BuildMigrateOutProcessParamWithCapacityPolicy).stubs().will(returnValue(-ENOMEM));
+    ret = ubturbo_smap_migrate_out(&msg, PAGETYPE_HUGE);
+    EXPECT_EQ(-ENOMEM, ret);
     EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
 }
 
@@ -790,11 +822,9 @@ TEST_F(InterfaceTest, TestSmapMigrateOutFour)
     msgc.payload[0].pid = 1234;
     msgc.payload[0].count = 1;
     EnvAtomicSet(&g_status, 1);
-    MOCKER(CheckMigrateOutMsg).stubs().will(returnValue(0));
-    MOCKER(PrepareMigrateOutCandidates).stubs().will(returnValue(0));
-    MOCKER(TrackMigrateOutCandidates).stubs().will(returnValue(-EBADF));
+    /* PAGETYPE_HUGE + 1 不合法，IsPageTypeConsistent 返回 false，CheckMigrateOutMsg 直接返回 -EINVAL */
     ret = ubturbo_smap_migrate_out(&msgc, PAGETYPE_HUGE + 1);
-    EXPECT_EQ(-EBADF, ret);
+    EXPECT_EQ(-EINVAL, ret);
     EnvAtomicSet(&g_status, 0);
     EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
 }
@@ -1061,12 +1091,15 @@ TEST_F(InterfaceTest, TestCheckGroupedMigrateOutMsgValidAndDuplicatePid)
 
     MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
-    int ret = CheckGroupedMigrateOutMsg(&msg, VM_TYPE);
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    int ret = CheckGroupedMigrateOutMsg(&msg, PAGETYPE_HUGE);
     EXPECT_EQ(0, ret);
 
     GlobalMockObject::verify();
     msg.payload[1].pid = msg.payload[0].pid;
-    ret = CheckGroupedMigrateOutMsg(&msg, VM_TYPE);
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    ret = CheckGroupedMigrateOutMsg(&msg, PAGETYPE_HUGE);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -1077,16 +1110,16 @@ TEST_F(InterfaceTest, TestCheckGroupedMigrateOutMsgRejectsInvalidInputs)
     g_pageSizeNormal = PAGESIZE_4K;
     g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
-    int ret = CheckGroupedMigrateOutMsg(nullptr, VM_TYPE);
+    int ret = CheckGroupedMigrateOutMsg(nullptr, PAGETYPE_HUGE);
     EXPECT_EQ(-EINVAL, ret);
 
     msg.count = 1;
     FillGroupedPayload(&msg.payload[0], 1234, 0, 4);
-    ret = CheckGroupedMigrateOutMsg(&msg, PROCESS_TYPE);
+    ret = CheckGroupedMigrateOutMsg(&msg, PAGETYPE_NORMAL);
     EXPECT_EQ(-EINVAL, ret);
 
     msg.count = 0;
-    ret = CheckGroupedMigrateOutMsg(&msg, VM_TYPE);
+    ret = CheckGroupedMigrateOutMsg(&msg, PAGETYPE_HUGE);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -1378,6 +1411,8 @@ TEST_F(InterfaceTest, TestCheckSmapRemoveMsgIgnoresNidFields)
     msg.payload[0].count = 0;
     msg.payload[0].nid[0] = -1;
     int pidType = VM_TYPE;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
 
     MOCKER(IsCountValid).stubs().will(returnValue(true));
     MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
@@ -1397,6 +1432,8 @@ TEST_F(InterfaceTest, TestCheckSmapRemoveMsgAcceptsPartialRemoteRemove)
     msg.payload[0].nid[0] = 4;
     msg.payload[0].nid[1] = 5;
     int pidType = VM_TYPE;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
 
     MOCKER(IsCountValid).stubs().will(returnValue(true));
     MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
@@ -1651,7 +1688,6 @@ TEST_F(InterfaceTest, TestRecoverRemoveInvalidProcess)
     LinkedListAdd(&manager.processes, &attr1);
     LinkedListAdd(&manager.processes, &attr2);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
     MOCKER(PidIsValid).stubs().with(eq(attr1->pid)).will(returnValue(false));
     MOCKER(PidIsValid).stubs().with(eq(attr2->pid)).will(returnValue(true));
@@ -2889,7 +2925,7 @@ TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaIsPidArrChangePidRemoteByPid)
 extern "C" bool GetAdaptMem(void);
 extern "C" bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid);
 extern "C" int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime);
-extern "C" int MigrateOutWithCapacityPolicy(struct MigrateOutMsg *msg, int pidType, bool ignoreRemoteCapacity);
+extern "C" int MigrateOutWithCapacityPolicy(struct MigrateOutMsg *msg, int pageType, bool ignoreRemoteCapacity);
 
 static int CheckSyncMigrateOutCapacityPolicy(struct MigrateOutMsg *msg, int pidType, bool ignoreRemoteCapacity)
 {
@@ -2935,9 +2971,16 @@ TEST_F(InterfaceTest, TestSmapMigrateOutSyncFailSmapMigrateOut)
 {
     int ret;
     struct MigrateOutMsg msg;
-    int pidType = VM_TYPE;
+    msg.count = 1;
+    msg.payload[0].pid = 1;
+    msg.payload[0].count = 1;
+    int pidType = PAGETYPE_HUGE;
     uint64_t maxWaitTime = 10000;
-    MOCKER(GetRunMode).stubs().will(returnValue(1));
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&g_processManager.lock);
+    MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
     MOCKER(MigrateOutWithCapacityPolicy).stubs().will(returnValue(-EPERM));
     ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
     EXPECT_EQ(-EPERM, ret);
@@ -2956,13 +2999,16 @@ TEST_F(InterfaceTest, TestSmapMigrateOutSyncSuccess)
     msg.payload[0].count = 1;
     msg.payload[0].pid = 1;
     msg.payload[0].inner[0].ratio = 25;
-    int pidType = VM_TYPE;
+    int pidType = PAGETYPE_HUGE;
     uint64_t maxWaitTime = 10000;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
 
     EnvMutexInit(&manager.lock);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetRunMode).stubs().will(returnValue(1));
-    MOCKER(MigrateOutWithCapacityPolicy).expects(once()).will(invoke(CheckSyncMigrateOutCapacityPolicy));
+    MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(MigrateOutWithCapacityPolicy).stubs().will(returnValue(0));
     MOCKER(MigOutIsDone).stubs().will(returnValue(true));
     ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
     EXPECT_EQ(0, ret);
@@ -2981,12 +3027,15 @@ TEST_F(InterfaceTest, TestSmapMigrateOutSyncFail)
     msg.payload[0].count = 1;
     msg.payload[0].pid = 1;
     msg.payload[0].inner[0].ratio = 25;
-    int pidType = VM_TYPE;
+    int pidType = PAGETYPE_HUGE;
     uint64_t maxWaitTime = 10000;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
 
     EnvMutexInit(&manager.lock);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetRunMode).stubs().will(returnValue(1));
+    MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
     MOCKER(MigrateOutWithCapacityPolicy).stubs().will(returnValue(0));
     MOCKER(MigOutIsDone).stubs().will(returnValue(false));
     ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
@@ -3312,6 +3361,7 @@ TEST_F(InterfaceTest, AddProcessTrackingNormalScanSuccess)
     uint32_t duration = 1;
     int scanType = 1;
     ProcessAttr process = {};
+    process.type = VM_TYPE;
     process.numaAttr.numaNodes = 0b00010001;
 
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
@@ -3320,6 +3370,8 @@ TEST_F(InterfaceTest, AddProcessTrackingNormalScanSuccess)
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&process));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
 
     ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
     EXPECT_EQ(0, ret);
@@ -3334,12 +3386,16 @@ TEST_F(InterfaceTest, AddProcessTrackingHAMScanNullPtrFailed)
     uint32_t duration = 1;
     int scanType = 0;
     ProcessAttr process = {};
+    process.type = VM_TYPE;
     process.numaAttr.numaNodes = 0b00010001;
 
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttribute *)nullptr));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
     MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-1));
 
     ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
@@ -3355,12 +3411,15 @@ TEST_F(InterfaceTest, AddProcessTrackingHAMScanFailed)
     uint32_t duration = 1;
     int scanType = 0;
     ProcessAttr process = {};
+    process.type = VM_TYPE;
     process.numaAttr.numaNodes = 0b00010001;
 
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&process));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
     MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-1));
 
     ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
@@ -3376,12 +3435,15 @@ TEST_F(InterfaceTest, AddProcessTrackingHAMScanSuccess)
     uint32_t duration = 1;
     int scanType = 0;
     ProcessAttr process = {};
+    process.type = VM_TYPE;
     process.numaAttr.numaNodes = 0b00010001;
 
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&process));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
     MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
 
     ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
@@ -3402,6 +3464,7 @@ TEST_F(InterfaceTest, AddProcessTrackingKeepsAllManagedRemoteNodes)
     uint32_t duration = 1;
     ProcessAttr process = {};
     process.pid = pid;
+    process.type = VM_TYPE;
     process.numaAttr.numaNodes = (1U << 0) | (1U << 4) | (1U << 6);
 
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
@@ -3409,6 +3472,8 @@ TEST_F(InterfaceTest, AddProcessTrackingKeepsAllManagedRemoteNodes)
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&process));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
     MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckTrackingPayloadKeepsAllRemoteNodes));
 
     EXPECT_EQ(0, AddProcessTracking(&pid, &scanTime, &duration, 1, NORMAL_SCAN));
@@ -3439,6 +3504,7 @@ TEST_F(InterfaceTest, TestSmapAddProcessTrackingFailed)
 TEST_F(InterfaceTest, TestSmapAddProcessTrackingCheckAddManage)
 {
     g_processManager.tracking.pageSize = PAGESIZE_2M;
+    g_pageSizeHuge = PAGESIZE_2M;
     pid_t pidArr[] = { 1 };
     uint32_t scanTime[] = { MIN_SCAN_TIME };
     uint32_t duration[] = { 1 };
@@ -3448,6 +3514,9 @@ TEST_F(InterfaceTest, TestSmapAddProcessTrackingCheckAddManage)
     MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
     MOCKER(ProcessAddManage).stubs().will(returnValue(-EINVAL));
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
     int ret = ubturbo_smap_process_tracking_add(pidArr, scanTime, duration, 1, 0);
     EXPECT_EQ(-EINVAL, ret);
     EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
@@ -3458,6 +3527,9 @@ TEST_F(InterfaceTest, TestSmapAddProcessTrackingCheckAddManage)
     MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
     MOCKER(ProcessAddManage).stubs().will(returnValue(0));
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
     ret = ubturbo_smap_process_tracking_add(pidArr, scanTime, duration, 1, 0);
     EXPECT_EQ(0, ret);
     EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.lock));
@@ -4236,38 +4308,39 @@ TEST_F(InterfaceTest, TestHasDuplicateInt)
     EXPECT_EQ(true, ret);
 }
 
-extern "C" int CheckMigOutSyncMsg(int pidType, uint64_t maxWaitTime);
+extern "C" int CheckMigOutSyncMsg(struct MigrateOutMsg *msg, int pageType, uint64_t maxWaitTime);
 TEST_F(InterfaceTest, TestCheckMigOutSyncMsgInvalidWaitTime)
 {
-    int ret = CheckMigOutSyncMsg(PAGETYPE_HUGE, 5);
+    struct MigrateOutMsg msg = {};
+    int ret = CheckMigOutSyncMsg(&msg, PAGETYPE_HUGE, 5);
     EXPECT_EQ(-EINVAL, ret);
 
-    ret = CheckMigOutSyncMsg(PAGETYPE_HUGE, 200000);
+    ret = CheckMigOutSyncMsg(&msg, PAGETYPE_HUGE, 200000);
     EXPECT_EQ(-EINVAL, ret);
 
     MOCKER(GetRunMode).stubs().will(returnValue(WATERLINE_MODE));
-    ret = CheckMigOutSyncMsg(PAGETYPE_HUGE, 0);
+    ret = CheckMigOutSyncMsg(&msg, PAGETYPE_HUGE, 0);
     EXPECT_EQ(-EINVAL, ret);
 }
 
 TEST_F(InterfaceTest, TestCheckMigOutSyncMsgNotMemPoolMode)
 {
+    struct MigrateOutMsg msg = {};
     MOCKER(GetRunMode).stubs().will(returnValue(WATERLINE_MODE));
-    int ret = CheckMigOutSyncMsg(PAGETYPE_HUGE, 15000);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
-TEST_F(InterfaceTest, TestCheckMigOutSyncMsgNotHugePidType)
-{
-    MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
-    int ret = CheckMigOutSyncMsg(PAGETYPE_NORMAL, 15000);
+    int ret = CheckMigOutSyncMsg(&msg, PAGETYPE_HUGE, 15000);
     EXPECT_EQ(-EINVAL, ret);
 }
 
 TEST_F(InterfaceTest, TestCheckMigOutSyncMsgValid)
 {
+    struct MigrateOutMsg msg = {};
+    msg.count = 1;
+    msg.payload[0].pid = 1234;
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
     MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
-    int ret = CheckMigOutSyncMsg(PAGETYPE_HUGE, 15000);
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    int ret = CheckMigOutSyncMsg(&msg, PAGETYPE_HUGE, 15000);
     EXPECT_EQ(0, ret);
 }
 
