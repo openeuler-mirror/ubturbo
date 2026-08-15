@@ -100,7 +100,8 @@ static int fake_calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
     return 0;
 }
 
-extern "C" int set_non_anon_bm(struct access_pid *ap, u64 acidx, u64 paddr, int nid);
+extern "C" int set_non_anon_bm(struct access_pid *ap, u64 acidx,
+                               struct page *page, int nid);
 extern "C" bool pfn_valid(unsigned long pfn);
 extern "C" struct page *pfn_to_online_page(unsigned long pfn);
 extern "C" int PageHuge(struct page *page);
@@ -117,7 +118,7 @@ TEST_F(AccessMMUTest, set_non_anon_bm)
     MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(PageHuge).stubs().will(returnValue(1));
     MOCKER(PageAnon).stubs().will(returnValue(true));
-    ret = set_non_anon_bm(&ap, 0, 0, 0);
+    ret = set_non_anon_bm(&ap, 0, &page, 0);
     EXPECT_EQ(0, ret);
 
     free(ap.white_list_bm[0]);

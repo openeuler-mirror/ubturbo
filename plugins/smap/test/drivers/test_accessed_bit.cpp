@@ -1228,7 +1228,8 @@ TEST_F(AccessedBitTest, FillPteVaIomemFallback)
 
 extern "C" int calc_paddr_acidx_acpi_known_nid(u64 paddr, int nid, u64 *pa_index, int page_size);
 extern "C" int calc_paddr_acidx_iomem_known_nid(u64 paddr, int nid, u64 *pa_index, int page_size);
-extern "C" void add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap);
+extern "C" void add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap,
+                                    struct page *page);
 extern "C" void process_scan_results(struct pte_walk *pte_walk);
 TEST_F(AccessedBitTest, ProcessScanResultsNullPteWalk)
 {
