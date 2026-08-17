@@ -1094,6 +1094,29 @@ static void ChangePidRemoteMemoryByNuma(ProcessAttr *attr, int srcNode, int dest
     }
 }
 
+/*
+ * Move the targetConfig entry from srcNid to destNid so that
+ * BuildManagedTrackingNodes does not re-add the stale srcNid.
+ */
+static void MoveProcessTargetConfig(ProcessAttr *attr, int srcNid, int destNid)
+{
+    const ProcessRemoteTarget *srcTarget = FindProcessRemoteTarget(&attr->targetConfig, srcNid);
+    if (srcTarget == NULL) {
+        return;
+    }
+    uint64_t memSizeKB = srcTarget->memSizeKB;
+    int ratio = srcTarget->ratio;
+    int ret = MoveProcessRemoteTarget(&attr->targetConfig, srcNid, destNid, memSizeKB, ratio);
+    /* MoveProcessRemoteTarget is a no-op when moved == 0; remove explicitly. */
+    if (ret == 0 && FindProcessRemoteTarget(&attr->targetConfig, srcNid) != NULL) {
+        (void)RemoveProcessRemoteTarget(&attr->targetConfig, srcNid);
+    }
+    if (ret != 0) {
+        SMAP_LOGGER_WARNING("Pid %d move Pair target %d to %d failed: %d.", attr->pid, srcNid, destNid, ret);
+    }
+    attr->remoteNumaCnt = attr->targetConfig.count;
+}
+
 int ChangePidRemoteByNuma(int srcNid, int destNid)
 {
     int i = 0;
@@ -1134,6 +1157,7 @@ int ChangePidRemoteByNuma(int srcNid, int destNid)
             attr->strategyAttr.remoteNrPagesAfterMigrate[j][srcNode] = 0;
         }
         ChangePidRemoteMemoryByNuma(attr, srcNode, destNode);
+        MoveProcessTargetConfig(attr, srcNid, destNid);
         SetAttrL2(attr, destNid);
     }
     ret = SyncAllProcessConfig();
