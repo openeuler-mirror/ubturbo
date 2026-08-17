@@ -47,8 +47,7 @@ void RmrsConfig::LoadRmrsScene()
         return;
     }
     // 防御性校验: pageType合法取值仅为0(容器)/1(虚机), 越界值直接cast到枚举属未定义行为, 按未知场景兜底待惰性判定
-    if (pageType != static_cast<uint32_t>(RmrsScene::CONTAINER) &&
-        pageType != static_cast<uint32_t>(RmrsScene::VM)) {
+    if (pageType != static_cast<uint32_t>(RmrsScene::CONTAINER) && pageType != static_cast<uint32_t>(RmrsScene::VM)) {
         UBTURBO_LOG_WARN(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "PageType file value invalid, pageType=" << pageType << ", scene is unknown, wait for lazy init.";
         rmrsScene = RmrsScene::UNKNOWN;
