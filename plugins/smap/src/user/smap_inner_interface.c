@@ -16,6 +16,7 @@
 #include "manage/manage.h"
 #include "advanced-strategy/scene.h"
 #include "smap_user_log.h"
+#include "smap_log_core.h"
 
 int SmapEnableAdaptMem(int flag)
 {
@@ -74,4 +75,16 @@ int SmapQueryVmMemRatio(struct VmRatioMsg *vrMsg)
     EnvMutexUnlock(&manager->lock);
 
     return ret;
+}
+
+int SmapSetLogLevel(int level)
+{
+    if (level < SMAP_LOG_CORE_TRACE || level >= SMAP_LOG_CORE_BUTT) {
+        SMAP_LOGGER_ERROR("Invalid log level %d, valid range: %d-%d.", level, SMAP_LOG_CORE_TRACE,
+                          SMAP_LOG_CORE_CRITICAL);
+        return -EINVAL;
+    }
+    SmapLogCoreSetMinLogLevel(level);
+    SMAP_LOGGER_INFO("Log level set to %s.", SmapLogCoreGetMinLogLevel() == level ? "success" : "failed");
+    return 0;
 }

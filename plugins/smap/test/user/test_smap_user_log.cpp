@@ -8,6 +8,7 @@
 #include "mockcpp/mokc.h"
 
 #include "smap_user_log.h"
+#include "smap_log_core.h"
 
 using namespace std;
 
@@ -33,6 +34,8 @@ protected:
         g_lastLogLevel = 0;
         g_lastLogMsg.clear();
         g_lastLogModule.clear();
+        /* Set to TRACE so subscriber-path tests pass regardless of prior state */
+        SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_TRACE);
         cout << "[SmapUserLogTest SetUp End]" << endl;
     }
     void TearDown() override
@@ -131,4 +134,46 @@ TEST_F(SmapUserLogTest, TestUpstreamSubscribeLoggerReplace)
     UpstreamSubscribeLogger(NULL);
     SMAP_Ulog(SMAP_LOG_INFO, "testFunc", 10, "test.c", "second message");
     EXPECT_EQ(0, g_logCallCount);
+}
+
+/* --- Level filtering tests --- */
+
+TEST_F(SmapUserLogTest, TestLevelFilterDebugBlockedAtInfo)
+{
+    UpstreamSubscribeLogger(MockLogCallback);
+    SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_INFO);
+    SMAP_Ulog(SMAP_LOG_DEBUG, "testFunc", 10, "test.c", "should be blocked");
+    EXPECT_EQ(0, g_logCallCount);
+}
+
+TEST_F(SmapUserLogTest, TestLevelFilterDebugPassAtDebug)
+{
+    UpstreamSubscribeLogger(MockLogCallback);
+    SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_DEBUG);
+    SMAP_Ulog(SMAP_LOG_DEBUG, "testFunc", 10, "test.c", "should pass");
+    EXPECT_EQ(1, g_logCallCount);
+}
+
+TEST_F(SmapUserLogTest, TestLevelFilterInfoPassAtInfo)
+{
+    UpstreamSubscribeLogger(MockLogCallback);
+    SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_INFO);
+    SMAP_Ulog(SMAP_LOG_INFO, "testFunc", 10, "test.c", "should pass");
+    EXPECT_EQ(1, g_logCallCount);
+}
+
+TEST_F(SmapUserLogTest, TestLevelFilterInfoBlockedAtWarn)
+{
+    UpstreamSubscribeLogger(MockLogCallback);
+    SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_WARN);
+    SMAP_Ulog(SMAP_LOG_INFO, "testFunc", 10, "test.c", "should be blocked");
+    EXPECT_EQ(0, g_logCallCount);
+}
+
+TEST_F(SmapUserLogTest, TestLevelFilterErrorPassAtWarn)
+{
+    UpstreamSubscribeLogger(MockLogCallback);
+    SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_WARN);
+    SMAP_Ulog(SMAP_LOG_ERROR, "testFunc", 10, "test.c", "should pass");
+    EXPECT_EQ(1, g_logCallCount);
 }

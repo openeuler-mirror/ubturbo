@@ -187,7 +187,7 @@ void RackLoggerFilter::PrintLogInfo(LogFilterInfo &info)
     }
     std::stringstream timeStream;
     timeStream << std::put_time(timeinfo, "%F %T");
-    if (info.rackLoggerEntry.GetFile() == nullptr) {
+    if (info.rackLoggerEntry.GetFile() == nullptr || info.rackLoggerEntry.GetFile()[0] == '\0') {
         std::cerr << "File not exit" << std::endl;
         return;
     }

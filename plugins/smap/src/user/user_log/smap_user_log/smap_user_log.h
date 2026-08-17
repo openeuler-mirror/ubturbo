@@ -48,15 +48,10 @@ void SMAP_Ulog(int logLevel, const char *funcName, int funcLine, const char *fil
 #define SMAP_LOGGER_ERROR(fmt, ...)
 #else
 
-#ifndef RELEASE
 #define SMAP_LOGGER_DEBUG(fmt, ...)                                                      \
     do {                                                                                 \
         SMAP_Ulog(SMAP_LOG_DEBUG, __FUNCTION__, __LINE__, FILENAME, fmt, ##__VA_ARGS__); \
     } while (0)
-#else
-
-#define SMAP_LOGGER_DEBUG(fmt, ...)
-#endif
 
 #define SMAP_LOGGER_INFO(fmt, ...)                                                      \
     do {                                                                                \
