@@ -57,15 +57,9 @@ struct mig_list {
 	u64 *addr;
 };
 
-struct mig_pra {
-	int page_size;
-	int nr_thread;
-	bool is_mul_thread;
-};
-
 struct migrate_msg {
 	int cnt;
-	struct mig_pra mul_mig;
+	int page_size;
 	struct mig_list *mig_list;
 };
 

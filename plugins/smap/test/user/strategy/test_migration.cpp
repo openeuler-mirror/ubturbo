@@ -584,62 +584,6 @@ TEST_F(MigrationTest, TestScanMigrateWorkNoProcessDisableTracking)
 }
 
 extern "C" uint32_t g_pageSizeHuge;
-extern "C" int SetMigrateThreadNum(struct MigrateMsg *mMsg, uint64_t migratePages, bool isForcedSingleThread);
-TEST_F(MigrationTest, TestSetMigrateThreadNum)
-{
-    int ret;
-    struct MigrateMsg mMsg = {0};
-    uint64_t migratePages = LESS_MIG_OUT_2M_PAGE_THRE + 1;
-    mMsg.mulMig.pageSize = g_pageSizeHuge = PAGESIZE_2M;
-    ret = SetMigrateThreadNum(&mMsg, migratePages, 0);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(true, mMsg.mulMig.isMulThread);
-    EXPECT_EQ(LESS_THREAD_MIG_OUT, mMsg.mulMig.nrThread);
-
-    migratePages = MORE_MIG_OUT_2M_PAGE_THRE + 1;
-    ret = SetMigrateThreadNum(&mMsg, migratePages, 0);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(MORE_THREAD_MIG_OUT, mMsg.mulMig.nrThread);
-}
-
-TEST_F(MigrationTest, TestSetMigrateThreadNumTwo)
-{
-    int ret;
-    struct MigrateMsg mMsg = {0};
-    uint64_t migratePages = LESS_MIG_OUT_2M_PAGE_THRE + 1;
-    ret = SetMigrateThreadNum(nullptr, migratePages, 0);
-    EXPECT_EQ(-EINVAL, ret);
-
-    mMsg.mulMig.pageSize = PAGESIZE_4K;
-    ret = SetMigrateThreadNum(&mMsg, migratePages, 0);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(false, mMsg.mulMig.isMulThread);
-    EXPECT_EQ(SIG_THREAD_MIG_OUT, mMsg.mulMig.nrThread);
-}
-
-TEST_F(MigrationTest, TestSetMigrateThreadNumThree)
-{
-    int ret;
-    struct MigrateMsg mMsg = {0};
-    uint64_t migratePages = LESS_MIG_OUT_2M_PAGE_THRE + 1;
-
-    ret = SetMigrateThreadNum(&mMsg, migratePages, 1);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(false, mMsg.mulMig.isMulThread);
-    EXPECT_EQ(1, mMsg.mulMig.nrThread);
-}
-
-TEST_F(MigrationTest, TestSetMigrateThreadNumPage2M)
-{
-    int ret;
-    struct MigrateMsg mMsg = {0};
-    mMsg.mulMig.pageSize = PAGESIZE_2M;
-    uint64_t migratePages = LESS_MIG_OUT_2M_PAGE_THRE + 1;
-
-    ret = SetMigrateThreadNum(&mMsg, migratePages, 1);
-    EXPECT_EQ(0, ret);
-}
-
 extern "C" long CalcDurationUs(struct timeval start, struct timeval end);
 TEST_F(MigrationTest, TestCalcDurationUs)
 {
@@ -1932,7 +1876,6 @@ TEST_F(MigrationTest, TestPreMigration)
     MOCKER(NumaMigReduceDeal).stubs();
     MOCKER(BuildAllPairPlans).stubs().will(returnValue(0));
     MOCKER(BuildMigrationMsg).stubs().will(returnValue(0));
-    MOCKER(SetMigrateThreadNum).stubs().will(ignoreReturnValue());
     ret = PreMigration(&manager, &mMsg, &migratePages);
     EXPECT_EQ(0, ret);
 }
@@ -1959,7 +1902,6 @@ TEST_F(MigrationTest, TestPreMigrationTwo)
     MOCKER(NumaMigReduceDeal).stubs();
     MOCKER(BuildAllPairPlans).stubs().will(returnValue(0));
     MOCKER(BuildMigrationMsg).stubs().will(returnValue(0));
-    MOCKER(SetMigrateThreadNum).stubs().will(ignoreReturnValue());
     ret = PreMigration(&manager, &mMsg, &migratePages);
     EXPECT_EQ(0, ret);
 }
