@@ -424,6 +424,22 @@ static void actc_data_update(int nid, u64 pa_index)
 		adev->access_bit_actc_data[pa_index]++;
 }
 
+/*
+ * Force the freq of a shared file page to the maximum so that the cold/hot
+ * swap path (SELECT_TOP_K) picks it for migrate-back first. Shared file pages
+ * migrated to remote memory should be promoted back promptly.
+ */
+static void actc_data_set_max(struct page *page, int nid, u64 pa_index)
+{
+	struct access_tracking_dev *adev = get_access_tracking_dev(nid);
+
+	if (unlikely(!adev || pa_index >= adev->page_count))
+		return;
+	if (!is_shared_file_page(page))
+		return;
+	adev->access_bit_actc_data[pa_index] = (actc_t)-1;
+}
+
 static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
 {
 	struct access_tracking_dev *adev;
@@ -1439,6 +1455,7 @@ static void process_scan_results(struct pte_walk *pte_walk)
 	int ret;
 	bool is_last_scan;
 	int nid = 0;
+	struct page *page;
 
 	if (!pte_walk || !pte_walk->ap)
 		return;
@@ -1467,9 +1484,13 @@ static void process_scan_results(struct pte_walk *pte_walk)
 		entry->nid = nid;
 		if (entry->hot)
 			actc_data_update(entry->nid, pa_idx);
-		if (is_last_scan)
+		if (is_last_scan) {
+			page = smap_paddr_to_page(entry->paddr);
+			if (page && entry->nid >= nr_local_numa)
+				actc_data_set_max(page, entry->nid, pa_idx);
 			add_to_bm_page_fast(entry->paddr, entry->nid, pa_idx,
-					    pte_walk->ap);
+					    pte_walk->ap, page);
+		}
 		cond_resched();
 	}
 }
