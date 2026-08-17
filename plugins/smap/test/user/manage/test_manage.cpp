@@ -39,6 +39,12 @@ extern "C" int PrepareProcessManageCandidate(ProcessParam *param, PidType type, 
 extern "C" void DiscardProcessManageCandidate(ProcessManageCandidate *candidate);
 extern "C" void PublishProcessManageCandidate(ProcessManageCandidate *candidate);
 
+extern "C" int ValidateProcessTargetConfig(const ProcessTargetConfig *config);
+extern "C" int BuildProcessTargetConfigFromParam(const ProcessParam *param, ProcessTargetConfig *config);
+extern "C" void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeBitmap,
+                                         const GroupMigrationPolicy *policy);
+extern "C" bool IsAllL2NodePidInState(enum ProcessState state, int l2Node);
+
 class ScopedMigrationPeriod {
 public:
     explicit ScopedMigrationPeriod(uint32_t period) : previous_(g_processManager.migPeriod)
@@ -809,13 +815,20 @@ TEST_F(ManageTest, TestGetPidTypeFromCommPath)
     EXPECT_EQ(-EINVAL, ret);
 }
 
-/* 模拟comm文件内容为一行"1"（非KVM名），随后到达EOF */
+/* 模拟comm文件内容：第一行(header被跳过)，第二行"1"(非KVM名)，随后EOF */
 static char *FakeFgetsProcessComm(char *s, int n, FILE *stream)
 {
     static int callCnt = 0;
     (void)n;
     (void)stream;
-    if (callCnt++ == 0) {
+    if (callCnt == 0) {
+        callCnt++;
+        s[0] = 'h';
+        s[1] = '\0';
+        return s;
+    }
+    if (callCnt == 1) {
+        callCnt++;
         s[0] = '1';
         s[1] = '\0';
         return s;
@@ -1590,13 +1603,15 @@ TEST_F(ManageTest, TestProcessAddGroupedManageRejectsInvalidInputs)
     EXPECT_EQ(-EINVAL, ret);
 
     GlobalMockObject::verify();
+    // DetectPidType returns PROCESS_TYPE (0), which is not VM_TYPE — should be rejected
     MOCKER(DetectPidType).stubs().will(returnValue(0));
     ret = ProcessAddGroupedManage(1234, 0x11, nullptr);
     EXPECT_EQ(-EINVAL, ret);
 
     GlobalMockObject::verify();
+    // DetectPidType returns VM_TYPE, but policy is invalid
     policy.enabled = false;
-    MOCKER(DetectPidType).stubs().will(returnValue(0));
+    MOCKER(DetectPidType).stubs().will(returnValue((int)VM_TYPE));
     ret = ProcessAddGroupedManage(1234, 0x11, &policy);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -1726,25 +1741,27 @@ TEST_F(ManageTest, TestDistributeActcData)
     struct ProcessMemBitmap pmb = {};
     ActcData buf[3] = {};
 
-    // 模拟上一轮分配的连续缓冲（第一个非空即起始），分发时应被释放
-    attr.scanAttr.actcData[0] = (ActcData *)malloc(sizeof(ActcData));
-    ASSERT_NE(nullptr, attr.scanAttr.actcData[0]);
-    attr.scanAttr.actcData[0][0].freq = 7;
+    // 填充源数据
+    buf[0].freq = 1;
+    buf[1].freq = 2;
+    buf[2].freq = 3;
+
+    // 模拟上一轮分配的连续缓冲（actcData[0] 指向起始）
+    ActcData *oldBuf = (ActcData *)malloc(sizeof(ActcData) * 2);
+    ASSERT_NE(nullptr, oldBuf);
+    attr.scanAttr.actcData[0] = oldBuf;
+    attr.scanAttr.actcData[1] = nullptr;
+    attr.scanAttr.actcData[2] = oldBuf + 1;
     pmb.nrPages[0] = 2;
     pmb.nrPages[2] = 1;
 
     DistributeActcData(&attr, &pmb, buf);
-    // 新逻辑：actcData[nid] 指向传入 buf 的偏移，第一个非空即 buf 起始
-    EXPECT_EQ(buf, attr.scanAttr.actcData[0]);
-    EXPECT_EQ(buf + 2, attr.scanAttr.actcData[2]);
+    // 偏移指针分配：actcData[nid] 指向 buf 内偏移位置
+    EXPECT_EQ(&buf[0], attr.scanAttr.actcData[0]);
+    EXPECT_EQ(nullptr, attr.scanAttr.actcData[1]);
+    EXPECT_EQ(&buf[2], attr.scanAttr.actcData[2]);
     EXPECT_EQ((uint64_t)2, attr.scanAttr.actcLen[0]);
     EXPECT_EQ((uint64_t)1, attr.scanAttr.actcLen[2]);
-    // 未赋值的 nid 应为 NULL
-    EXPECT_EQ(nullptr, attr.scanAttr.actcData[1]);
-
-    // buf 为栈内存，不可 free，仅置空指针避免悬垂
-    attr.scanAttr.actcData[0] = nullptr;
-    attr.scanAttr.actcData[2] = nullptr;
 }
 
 TEST_F(ManageTest, TestDistributeActcDataNullBuf)
@@ -1752,14 +1769,16 @@ TEST_F(ManageTest, TestDistributeActcDataNullBuf)
     ProcessAttr attr = {};
     struct ProcessMemBitmap pmb = {};  // 所有 nrPages=0
 
-    // 模拟上一轮有数据：actcData[nid] 按偏移指向同一连续缓冲
-    attr.scanAttr.actcData[0] = (ActcData *)malloc(sizeof(ActcData) * 2);
-    ASSERT_NE(nullptr, attr.scanAttr.actcData[0]);
-    attr.scanAttr.actcData[2] = attr.scanAttr.actcData[0] + 1;
+    // 模拟上一轮有连续缓冲（第一个非空即缓冲区起始）
+    ActcData *oldBuf = (ActcData *)malloc(sizeof(ActcData) * 3);
+    ASSERT_NE(nullptr, oldBuf);
+    attr.scanAttr.actcData[0] = oldBuf;
+    attr.scanAttr.actcData[1] = nullptr;
+    attr.scanAttr.actcData[2] = oldBuf + 2;
     attr.scanAttr.actcLen[0] = 2;
     attr.scanAttr.actcLen[2] = 1;
 
-    // buf=NULL：应释放上一轮连续缓冲（仅 free 第一个非空即起始）并将所有 actcData 置空
+    // 所有 nrPages=0：ResetActcData 应释放第一个非空指针，并将所有 actcData 置空
     DistributeActcData(&attr, &pmb, nullptr);
     for (int nid = 0; nid < MAX_NODES; nid++) {
         EXPECT_EQ(nullptr, attr.scanAttr.actcData[nid]);
@@ -1901,14 +1920,14 @@ TEST_F(ManageTest, TestResetActcData)
     int len = 10;
     ActcData **data = (ActcData **)calloc(len, sizeof(ActcData *));
     ASSERT_NE(nullptr, data);
-    // 模拟 DistributeActcData 的结果：actcData[nid] 按偏移指向同一连续缓冲
+    // 模拟连续缓冲区设计：actcData[0] 指向缓冲区起始，actcData[2] 指向偏移位置
     ActcData *buf = (ActcData *)malloc(sizeof(ActcData) * 3);
     ASSERT_NE(nullptr, buf);
-    data[0] = buf;        // 第一个非空即缓冲区起始
-    data[2] = buf + 2;    // buf 内偏移
+    data[0] = buf;
+    data[2] = buf + 2;
 
     ResetActcData(data, len);
-    // 释放后所有指针应为 nullptr（仅 free 起始一次，偏移指针不再悬垂）
+    // 释放第一个非空指针后，所有指针应为 nullptr
     for (int i = 0; i < len; i++) {
         EXPECT_EQ(nullptr, data[i]);
     }
@@ -5019,4 +5038,441 @@ TEST_F(ManageTest, TestProcessManagerInitCriticalErrNodesFailed)
     ret = ProcessManagerInit(pageType);
     EXPECT_EQ(-1, ret);
     GlobalMockObject::verify();
+}
+
+/* ========== ValidateProcessTargetConfig tests ========== */
+
+TEST_F(ManageTest, TestValidateProcessTargetConfigNull)
+{
+    EXPECT_EQ(-EINVAL, ValidateProcessTargetConfig(nullptr));
+}
+
+TEST_F(ManageTest, TestValidateProcessTargetConfigRatioModeValid)
+{
+    ProcessTargetConfig config = {};
+    config.migrateMode = MIG_RATIO_MODE;
+    config.count = 2;
+    config.targets[0].remoteNid = 4;
+    config.targets[0].ratio = 50;
+    config.targets[1].remoteNid = 5;
+    config.targets[1].ratio = 40;
+    EXPECT_EQ(0, ValidateProcessTargetConfig(&config));
+}
+
+TEST_F(ManageTest, TestValidateProcessTargetConfigRatioModeDuplicateNid)
+{
+    ProcessTargetConfig config = {};
+    config.migrateMode = MIG_RATIO_MODE;
+    config.count = 2;
+    config.targets[0].remoteNid = 4;
+    config.targets[0].ratio = 50;
+    config.targets[1].remoteNid = 4;
+    config.targets[1].ratio = 30;
+    EXPECT_EQ(-EINVAL, ValidateProcessTargetConfig(&config));
+}
+
+TEST_F(ManageTest, TestValidateProcessTargetConfigRatioModeExceedHundred)
+{
+    ProcessTargetConfig config = {};
+    config.migrateMode = MIG_RATIO_MODE;
+    config.count = 2;
+    config.targets[0].remoteNid = 4;
+    config.targets[0].ratio = 60;
+    config.targets[1].remoteNid = 5;
+    config.targets[1].ratio = 50;
+    EXPECT_EQ(-EINVAL, ValidateProcessTargetConfig(&config));
+}
+
+TEST_F(ManageTest, TestValidateProcessTargetConfigRatioModeSingleExceedHundred)
+{
+    ProcessTargetConfig config = {};
+    config.migrateMode = MIG_RATIO_MODE;
+    config.count = 1;
+    config.targets[0].remoteNid = 4;
+    config.targets[0].ratio = 101;
+    EXPECT_EQ(-EINVAL, ValidateProcessTargetConfig(&config));
+}
+
+TEST_F(ManageTest, TestValidateProcessTargetConfigMemSizeModeValid)
+{
+    ProcessTargetConfig config = {};
+    config.migrateMode = MIG_MEMSIZE_MODE;
+    config.count = 1;
+    config.targets[0].remoteNid = 4;
+    config.targets[0].memSizeKB = 4096;
+    EXPECT_EQ(0, ValidateProcessTargetConfig(&config));
+}
+
+TEST_F(ManageTest, TestValidateProcessTargetConfigMemSizeModeNotAligned)
+{
+    ProcessTargetConfig config = {};
+    config.migrateMode = MIG_MEMSIZE_MODE;
+    config.count = 1;
+    config.targets[0].remoteNid = 4;
+    /* pageSizeKB = 4 (normal mode), 3 is not page-aligned */
+    config.targets[0].memSizeKB = 3;
+    EXPECT_EQ(-EINVAL, ValidateProcessTargetConfig(&config));
+}
+
+/* ========== BuildProcessTargetConfigFromParam tests ========== */
+
+TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamNull)
+{
+    ProcessTargetConfig config = {};
+    EXPECT_EQ(-EINVAL, BuildProcessTargetConfigFromParam(nullptr, &config));
+    EXPECT_EQ(-EINVAL, BuildProcessTargetConfigFromParam((ProcessParam *)1, nullptr));
+}
+
+TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamCountInvalid)
+{
+    ProcessParam param = {};
+    ProcessTargetConfig config = {};
+    param.count = -1;
+    EXPECT_EQ(-EINVAL, BuildProcessTargetConfigFromParam(&param, &config));
+    param.count = REMOTE_NUMA_NUM + 1;
+    EXPECT_EQ(-EINVAL, BuildProcessTargetConfigFromParam(&param, &config));
+}
+
+TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamZeroCount)
+{
+    ProcessParam param = {};
+    ProcessTargetConfig config = {};
+    param.count = 0;
+    EXPECT_EQ(0, BuildProcessTargetConfigFromParam(&param, &config));
+    EXPECT_EQ(0U, config.count);
+    EXPECT_EQ(MIG_RATIO_MODE, config.migrateMode);
+}
+
+TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamDefaultL2Node)
+{
+    ProcessParam param = {};
+    ProcessTargetConfig config = {};
+    param.count = 1;
+    param.numaParam[0].nid = DEFAULT_L2_NODE;
+    EXPECT_EQ(0, BuildProcessTargetConfigFromParam(&param, &config));
+    EXPECT_EQ(0U, config.count);
+}
+
+TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamRatioMode)
+{
+    ProcessParam param = {};
+    ProcessTargetConfig config = {};
+    param.count = 2;
+    param.numaParam[0].nid = 4;
+    param.numaParam[0].ratio = 50;
+    param.numaParam[0].migrateMode = MIG_RATIO_MODE;
+    param.numaParam[1].nid = 5;
+    param.numaParam[1].ratio = 30;
+    param.numaParam[1].migrateMode = MIG_RATIO_MODE;
+    EXPECT_EQ(0, BuildProcessTargetConfigFromParam(&param, &config));
+    EXPECT_EQ(MIG_RATIO_MODE, config.migrateMode);
+    EXPECT_EQ(2U, config.count);
+    EXPECT_EQ(4, config.targets[0].remoteNid);
+    EXPECT_EQ(50, config.targets[0].ratio);
+    EXPECT_EQ(5, config.targets[1].remoteNid);
+    EXPECT_EQ(30, config.targets[1].ratio);
+}
+
+TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamMixedModes)
+{
+    ProcessParam param = {};
+    ProcessTargetConfig config = {};
+    param.count = 2;
+    param.numaParam[0].nid = 4;
+    param.numaParam[0].migrateMode = MIG_RATIO_MODE;
+    param.numaParam[1].nid = 5;
+    param.numaParam[1].migrateMode = MIG_MEMSIZE_MODE;
+    EXPECT_EQ(-EINVAL, BuildProcessTargetConfigFromParam(&param, &config));
+}
+
+TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamDuplicateNid)
+{
+    ProcessParam param = {};
+    ProcessTargetConfig config = {};
+    param.count = 2;
+    param.numaParam[0].nid = 4;
+    param.numaParam[0].migrateMode = MIG_RATIO_MODE;
+    param.numaParam[1].nid = 4;
+    param.numaParam[1].migrateMode = MIG_RATIO_MODE;
+    EXPECT_EQ(-EINVAL, BuildProcessTargetConfigFromParam(&param, &config));
+}
+
+TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamTargetConfigValid)
+{
+    ProcessParam param = {};
+    ProcessTargetConfig config = {};
+    param.targetConfigValid = true;
+    param.targetConfig.migrateMode = MIG_RATIO_MODE;
+    param.targetConfig.count = 1;
+    param.targetConfig.targets[0].remoteNid = 4;
+    param.targetConfig.targets[0].ratio = 50;
+    EXPECT_EQ(0, BuildProcessTargetConfigFromParam(&param, &config));
+    EXPECT_EQ(MIG_RATIO_MODE, config.migrateMode);
+    EXPECT_EQ(1U, config.count);
+    EXPECT_EQ(4, config.targets[0].remoteNid);
+}
+
+/* ========== SetGroupedProcessConfig tests ========== */
+
+TEST_F(ManageTest, TestSetGroupedProcessConfigBasic)
+{
+    ProcessAttr attr = {};
+    GroupMigrationPolicy policy = {};
+    policy.enabled = true;
+    policy.groupCount = 1;
+    policy.groups[0].targetCount = 1;
+    policy.groups[0].targets[0].nid = 4;
+    policy.groups[0].targets[0].quotaPages = 1024;
+
+    SetGroupedProcessConfig(&attr, 1234, BIT(0) | BIT(4), &policy);
+
+    EXPECT_EQ(1234, attr.pid);
+    EXPECT_EQ(NORMAL_SCAN, attr.scanType);
+    EXPECT_EQ(VM_TYPE, attr.type);
+    EXPECT_EQ(MIG_MEMSIZE_MODE, attr.migrateMode);
+    EXPECT_EQ(true, attr.enableSwap);
+    EXPECT_EQ(HUNDRED, attr.initLocalMemRatio);
+    EXPECT_EQ(BIT(0) | BIT(4), attr.numaAttr.numaNodes);
+    EXPECT_EQ(true, attr.groupPolicy.enabled);
+    EXPECT_EQ(1, attr.groupPolicy.groupCount);
+    EXPECT_EQ(false, attr.autoRemoveWhenRemoteEmpty);
+    EXPECT_EQ(false, attr.syncWaitRemoteEmpty);
+}
+
+TEST_F(ManageTest, TestSetGroupedProcessConfigOverwritesAttr)
+{
+    ProcessAttr attr = {};
+    attr.pid = 100;
+    attr.scanType = HAM_SCAN;
+    attr.type = PROCESS_TYPE;
+    GroupMigrationPolicy policy = {};
+    policy.groupCount = 2;
+
+    SetGroupedProcessConfig(&attr, 5678, BIT(0) | BIT(1) | BIT(4), &policy);
+
+    EXPECT_EQ(5678, attr.pid);
+    EXPECT_EQ(NORMAL_SCAN, attr.scanType);
+    EXPECT_EQ(VM_TYPE, attr.type);
+    EXPECT_EQ(2, attr.groupPolicy.groupCount);
+    EXPECT_EQ(GetL2Count(BIT(0) | BIT(1) | BIT(4)), attr.remoteNumaCnt);
+}
+
+/* ========== IsAllL2NodePidInState tests ========== */
+
+TEST_F(ManageTest, TestIsAllL2NodePidInStateEmptyList)
+{
+    g_processManager.processes = nullptr;
+    g_processManager.nrLocalNuma = 4;
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    EXPECT_TRUE(IsAllL2NodePidInState(PROC_MOVE, 4));
+}
+
+TEST_F(ManageTest, TestIsAllL2NodePidInStateNoL2Pid)
+{
+    /* All processes belong to a different L2 node, so none are checked */
+    ProcessAttr attr1 = {};
+    attr1.pid = 100;
+    attr1.state = PROC_MIGRATE;
+    attr1.numaAttr.numaNodes = BIT(5) | BIT(6);
+    attr1.next = nullptr;
+    g_processManager.processes = &attr1;
+    g_processManager.nrLocalNuma = 4;
+
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    /* No L2-4 process found → vacuously true */
+    EXPECT_TRUE(IsAllL2NodePidInState(PROC_MOVE, 4));
+}
+
+/* ========== manage_scan.c tests ========== */
+
+extern "C" int ReadPidActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb);
+extern "C" int FillPidData(ProcessAttr *attr, struct ProcessMemBitmap *pmb);
+extern "C" int BuildAndFillBitmapBuf(size_t *len, char **buf);
+extern "C" int ParseBitmapPid(struct ProcessMemBitmap *pmb, char *buf, size_t *offset);
+extern "C" int ParseBitmapNrPages(struct ProcessMemBitmap *pmb, char *buf, size_t *offset);
+extern "C" int ParseBitmap(size_t bufLen, char *buf, size_t *offset, struct ProcessMemBitmap *pmb);
+extern "C" int BuildAllPidData(void);
+
+TEST_F(ManageTest, TestReadPidActcDataOpenFail)
+{
+    ProcessAttr attr = {.pid = 123};
+    struct ProcessMemBitmap pmb = {};
+    MOCKER(open).stubs().will(returnValue(-1));
+    int ret = ReadPidActcData(&attr, &pmb);
+    EXPECT_EQ(-ENODEV, ret);
+}
+
+TEST_F(ManageTest, TestReadPidActcDataNoPages)
+{
+    ProcessAttr attr = {.pid = 123};
+    struct ProcessMemBitmap pmb = {};
+    int fd = 10;
+    MOCKER(open).stubs().will(returnValue(fd));
+    MOCKER(close).stubs().will(returnValue(0));
+    MOCKER(DistributeActcData).expects(once());
+    int ret = ReadPidActcData(&attr, &pmb);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(ManageTest, TestFillPidDataReadFail)
+{
+    ProcessAttr attr = {.pid = 123};
+    struct ProcessMemBitmap pmb = {};
+    MOCKER(ReadPidActcData).stubs().will(returnValue(-EIO));
+    int ret = FillPidData(&attr, &pmb);
+    EXPECT_EQ(-EIO, ret);
+}
+
+TEST_F(ManageTest, TestFillPidDataSuccess)
+{
+    ProcessAttr attr = {.pid = 123};
+    struct ProcessMemBitmap pmb = {};
+    MOCKER(ReadPidActcData).stubs().will(returnValue(0));
+    MOCKER(CalcActcStats).stubs().will(ignoreReturnValue());
+    int ret = FillPidData(&attr, &pmb);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(ManageTest, TestParseBitmapPid)
+{
+    struct ProcessMemBitmap pmb = {};
+    char buf[sizeof(pid_t)] = {};
+    pid_t testPid = 42;
+    memcpy(buf, &testPid, sizeof(pid_t));
+    size_t offset = 0;
+    int ret = ParseBitmapPid(&pmb, buf, &offset);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ((pid_t)42, pmb.pid);
+    EXPECT_EQ(sizeof(pid_t), offset);
+}
+
+TEST_F(ManageTest, TestParseBitmapNrPages)
+{
+    struct ProcessMemBitmap pmb = {};
+    size_t totalSize = sizeof(size_t) * MAX_NODES;
+    char *buf = (char *)calloc(1, totalSize);
+    ASSERT_NE(nullptr, buf);
+    size_t pages0 = 10;
+    size_t pages1 = 20;
+    memcpy(buf, &pages0, sizeof(size_t));
+    memcpy(buf + sizeof(size_t), &pages1, sizeof(size_t));
+    size_t offset = 0;
+    int ret = ParseBitmapNrPages(&pmb, buf, &offset);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ((size_t)10, pmb.nrPages[0]);
+    EXPECT_EQ((size_t)20, pmb.nrPages[1]);
+    EXPECT_EQ(totalSize, offset);
+    free(buf);
+}
+
+TEST_F(ManageTest, TestParseBitmapSuccess)
+{
+    struct ProcessMemBitmap pmb = {};
+    size_t totalSize = sizeof(pid_t) + sizeof(size_t) * MAX_NODES;
+    char *buf = (char *)calloc(1, totalSize);
+    ASSERT_NE(nullptr, buf);
+    pid_t testPid = 99;
+    memcpy(buf, &testPid, sizeof(pid_t));
+    size_t offset = 0;
+    int ret = ParseBitmap(totalSize, buf, &offset, &pmb);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ((pid_t)99, pmb.pid);
+    EXPECT_EQ(totalSize, offset);
+    free(buf);
+}
+
+TEST_F(ManageTest, TestBuildAndFillBitmapBufBuildFail)
+{
+    size_t len = 0;
+    char *buf = nullptr;
+    MOCKER(AccessIoctlWalkPagemap).stubs().will(returnValue(-EINVAL));
+    int ret = BuildAndFillBitmapBuf(&len, &buf);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(ManageTest, TestBuildAndFillBitmapBufReadFail)
+{
+    size_t len = 0;
+    char *buf = nullptr;
+    MOCKER(AccessIoctlWalkPagemap).stubs().will(returnValue(0));
+    MOCKER(malloc).stubs().will(returnValue((void *)nullptr));
+    int ret = BuildAndFillBitmapBuf(&len, &buf);
+    EXPECT_EQ(-ENOMEM, ret);
+}
+
+TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopeRefreshFail)
+{
+    ProcessAttr attr = {.pid = 100};
+    MOCKER(RefreshManagedLocalState).stubs().will(returnValue(-EINVAL));
+    int ret = RefreshManagedLocalTrackingScope(&attr);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopeBitmapUnchanged)
+{
+    ProcessAttr attr = {.pid = 100};
+    attr.numaAttr.numaNodes = 0x0F;
+    MOCKER(RefreshManagedLocalState).stubs().will(returnValue(0));
+    MOCKER(BuildManagedTrackingNodes).stubs().will(returnValue((uint32_t)0x0F));
+    int ret = RefreshManagedLocalTrackingScope(&attr);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ((uint32_t)0x0F, attr.numaAttr.numaNodes);
+}
+
+TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopeBitmapChanged)
+{
+    ProcessAttr attr = {.pid = 100};
+    attr.numaAttr.numaNodes = 0x0F;
+    attr.scanType = NORMAL_SCAN;
+    attr.scanTime = 100;
+    attr.duration = 200;
+    MOCKER(RefreshManagedLocalState).stubs().will(returnValue(0));
+    MOCKER(BuildManagedTrackingNodes).stubs().will(returnValue((uint32_t)0xFF));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
+    int ret = RefreshManagedLocalTrackingScope(&attr);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ((uint32_t)0xFF, attr.numaAttr.numaNodes);
+}
+
+TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopeIoctlFail)
+{
+    ProcessAttr attr = {.pid = 100};
+    attr.numaAttr.numaNodes = 0x0F;
+    attr.scanType = NORMAL_SCAN;
+    attr.scanTime = 100;
+    attr.duration = 200;
+    MOCKER(RefreshManagedLocalState).stubs().will(returnValue(0));
+    MOCKER(BuildManagedTrackingNodes).stubs().will(returnValue((uint32_t)0xFF));
+    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-EIO));
+    int ret = RefreshManagedLocalTrackingScope(&attr);
+    EXPECT_EQ(-EIO, ret);
+}
+
+TEST_F(ManageTest, TestBuildAllPidDataBuildBufFail)
+{
+    EnvMutexInit(&g_processManager.lock);
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(AccessIoctlWalkPagemap).stubs().will(returnValue(-ENOMEM));
+    int ret = BuildAllPidData();
+    EXPECT_EQ(-ENOMEM, ret);
+}
+
+TEST_F(ManageTest, TestBuildAllPidDataSuccessNoProcess)
+{
+    EnvMutexInit(&g_processManager.lock);
+    g_processManager.processes = nullptr;
+    g_processManager.nrLocalNuma = 4;
+
+    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
+    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(AccessIoctlWalkPagemap).stubs().will(returnValue(0));
+    MOCKER(AccessRead).stubs().will(returnValue(0));
+    MOCKER(CalcMigrateNrPagesPerPIDMuiltNuma).stubs().will(ignoreReturnValue());
+    MOCKER(malloc).stubs().will(returnValue((void *)nullptr));
+    int ret = BuildAllPidData();
+    // malloc fails in BuildBitmapBuf → returns -ENOMEM
+    EXPECT_EQ(-ENOMEM, ret);
 }

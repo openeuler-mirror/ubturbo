@@ -26,7 +26,11 @@
 #define MIN(a, b) ((a) <= (b) ? (a) : (b))
 #endif
 
+#ifndef USE_DT
+#define SMAP_MAX_LOCAL_NUMNODES 8
+#else
 #define SMAP_MAX_LOCAL_NUMNODES 4
+#endif
 #define SMAP_MAX_REMOTE_NUMNODES 18
 #define SMAP_MAX_NUMNODES (SMAP_MAX_LOCAL_NUMNODES + SMAP_MAX_REMOTE_NUMNODES)
 
