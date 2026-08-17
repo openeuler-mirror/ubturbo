@@ -432,13 +432,9 @@ struct MigList {
     uint64_t *addr;
 };
 
-struct MigPra {
-    int pageSize;
-};
-
 struct MigrateMsg {
     int cnt;
-    struct MigPra mulMig;
+    int pageSize;
     struct MigList *migList;
 };
 

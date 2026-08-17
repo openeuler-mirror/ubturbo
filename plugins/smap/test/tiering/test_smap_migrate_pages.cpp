@@ -586,7 +586,7 @@ TEST_F(SmapMigratePagesTest, DoMigratePerPidInterleavedBatched)
 
     nr_local_numa = 4;
     msg.cnt = 4;
-    msg.mul_mig.page_size = 0x1000;
+    msg.page_size = 0x1000;
     msg.mig_list = mig_list;
 
     /* pid 1: migrate-back (remote 4 -> local 0) then migrate-out (local 0 -> remote 4) */
@@ -653,7 +653,7 @@ TEST_F(SmapMigratePagesTest, DoMigratePerPidInterleavedBatchedMultiEntry)
 
 	nr_local_numa = 4;
 	msg.cnt = 4;
-	msg.mul_mig.page_size = 0x1000;
+	msg.page_size = 0x1000;
 	msg.mig_list = mig_list;
 
 	/* one pid: back, out, back, out (each nr=1) */
@@ -951,7 +951,7 @@ TEST_F(SmapMigratePagesTest, DoMigrateNrFoliosZeroGotoAgainFiltered)
         mig_list[0].addr[j] = 0x100000 + j * 0x1000;
     }
     msg->cnt = 1;
-    msg->mul_mig.page_size = 0x1000;
+    msg->page_size = 0x1000;
     msg->mig_list = mig_list;
 
     MOCKER(pfn_valid).stubs().will(returnValue(true));

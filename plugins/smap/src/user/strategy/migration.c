@@ -10,7 +10,9 @@
  * See the Mulan PSL v2 for more details.
  */
 
+#define _GNU_SOURCE
 #include <fcntl.h>
+#include <sched.h>
 #include <sys/ioctl.h>
 #include <sys/param.h>
 #include <sys/time.h>
@@ -964,7 +966,7 @@ static int BuildGroupedSwapCompMsg(struct ProcessManager *manager, GroupSwapComp
         return -ENOMEM;
     }
     compMsg->cnt = 0;
-    compMsg->mulMig.pageSize = manager->tracking.pageSize;
+    compMsg->pageSize = manager->tracking.pageSize;
 
     EnvMutexLock(&manager->lock);
     for (int i = 0; i < planCnt; i++) {
@@ -1071,34 +1073,214 @@ static int RunGroupedSwapCompensation(struct ProcessManager *manager, struct Mig
     return ret;
 }
 
+static int DecideThreadNum(struct MigrateMsg *mMsg, struct ProcessManager *manager)
+{
+    uint64_t total = 0;
+    bool forcedSingle = false;
+    int nThread = 0;
+
+    if (mMsg->pageSize != (int)GetHugePageSize()) {
+        return SIG_THREAD_MIG_OUT;
+    }
+
+    for (int i = 0; i < mMsg->cnt; i++) {
+        total += mMsg->migList[i].nr;
+    }
+    if (total == 0 || total <= LESS_MIG_OUT_HUGE_PAGE_THRE) {
+        SMAP_LOGGER_INFO("As for %llu 2M pages, set 1 migration thread.", (unsigned long long)total);
+        return SIG_THREAD_MIG_OUT;
+    }
+
+    EnvMutexLock(&manager->lock);
+    for (ProcessAttr *p = manager->processes; p; p = p->next) {
+        if (p->vmPidAttr.mmapType == MMAP_SHARED) {
+            forcedSingle = true;
+            break;
+        }
+    }
+    EnvMutexUnlock(&manager->lock);
+    if (forcedSingle) {
+        SMAP_LOGGER_INFO("Forced single thread detected (SHARED mmap), set 1 migration thread.");
+        return SIG_THREAD_MIG_OUT;
+    }
+    nThread = (total <= MORE_MIG_OUT_HUGE_PAGE_THRE) ? LESS_THREAD_MIG_OUT : MORE_THREAD_MIG_OUT;
+    SMAP_LOGGER_INFO("As for %llu 2M pages, set %d migration threads.", (unsigned long long)total, nThread);
+    return nThread;
+}
+
+struct SubMigrateCtx {
+    struct MigrateMsg msg;
+    int *origIdx;
+    int fd;
+    int ret;
+    uint32_t cpuMin;
+    uint32_t cpuMax;
+};
+
+static void *SubMigrateThreadFn(void *arg)
+{
+    struct SubMigrateCtx *ctx = arg;
+    cpu_set_t cpuset;
+
+    CPU_ZERO(&cpuset);
+    for (uint32_t c = ctx->cpuMin; c <= ctx->cpuMax; c++) {
+        CPU_SET((int)c, &cpuset);
+    }
+    if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
+        SMAP_LOGGER_WARNING("migrate thread setaffinity (%u-%u) failed.", ctx->cpuMin, ctx->cpuMax);
+    }
+    ctx->ret = (ctx->msg.cnt > 0) ? ioctl(ctx->fd, SMAP_MIG_MIGRATE, &ctx->msg) : 0;
+    return NULL;
+}
+
+static void FreeSubMigrateMsgs(struct SubMigrateCtx *subs, int nrThreads)
+{
+    for (int i = 0; i < nrThreads; i++) {
+        free(subs[i].msg.migList);
+        free(subs[i].origIdx);
+    }
+}
+
+static int BuildSubMigrateMsgs(struct MigrateMsg *mMsg, int nrThreads, struct SubMigrateCtx *subs)
+{
+    if (nrThreads <= 0) {
+        return -EINVAL;
+    }
+    for (int i = 0; i < nrThreads; i++) {
+        subs[i].msg.cnt = 0;
+        subs[i].msg.pageSize = mMsg->pageSize;
+        subs[i].msg.migList = calloc(mMsg->cnt, sizeof(struct MigList));
+        subs[i].origIdx = calloc(mMsg->cnt, sizeof(int));
+        if (!subs[i].msg.migList || !subs[i].origIdx) {
+            FreeSubMigrateMsgs(subs, nrThreads);
+            return -ENOMEM;
+        }
+    }
+    for (int j = 0; j < mMsg->cnt; j++) {
+        uint64_t nr = mMsg->migList[j].nr;
+        if (nr == 0) {
+            continue;
+        }
+        uint64_t chunk = nr / nrThreads;
+        int rem = (int)(nr % nrThreads);
+        uint64_t offset = 0;
+        for (int i = 0; i < nrThreads; i++) {
+            uint64_t subNr = chunk + (i < rem ? 1ULL : 0ULL);
+            if (subNr == 0) {
+                continue;
+            }
+            int k = subs[i].msg.cnt;
+            subs[i].msg.migList[k].pid = mMsg->migList[j].pid;
+            subs[i].msg.migList[k].from = mMsg->migList[j].from;
+            subs[i].msg.migList[k].to = mMsg->migList[j].to;
+            subs[i].msg.migList[k].nr = subNr;
+            subs[i].msg.migList[k].addr = mMsg->migList[j].addr + offset;
+            subs[i].msg.migList[k].successToUser = false;
+            subs[i].msg.migList[k].failedMigNr = 0;
+            subs[i].msg.migList[k].failedIsolatedNr = 0;
+            subs[i].origIdx[k] = j;
+            subs[i].msg.cnt++;
+            offset += subNr;
+        }
+    }
+    return 0;
+}
+
+static void AggregateSubMigResults(struct SubMigrateCtx *subs, int nrThreads, struct MigrateMsg *mMsg)
+{
+    for (int i = 0; i < nrThreads; i++) {
+        for (int k = 0; k < subs[i].msg.cnt; k++) {
+            int orig = subs[i].origIdx[k];
+            mMsg->migList[orig].failedMigNr += subs[i].msg.migList[k].failedMigNr;
+            mMsg->migList[orig].failedIsolatedNr += subs[i].msg.migList[k].failedIsolatedNr;
+            if (subs[i].msg.migList[k].successToUser) {
+                mMsg->migList[orig].successToUser = true;
+            }
+        }
+    }
+}
+
+static int RunMultiThreadedMigrate(struct MigrateMsg *mMsg, struct ProcessManager *manager, int nrThreads)
+{
+    int err = 0;
+    struct SubMigrateCtx *subs = NULL;
+    pthread_t *tids = NULL;
+    int buildRet = 0;
+
+    if (nrThreads <= SIG_THREAD_MIG_OUT || nrThreads > MORE_THREAD_MIG_OUT) {
+        return -EINVAL;
+    }
+
+    subs = calloc(nrThreads, sizeof(struct SubMigrateCtx));
+    tids = calloc(nrThreads, sizeof(pthread_t));
+    if (!subs || !tids) {
+        FreeSubMigrateMsgs(subs, nrThreads);
+        free(subs);
+        free(tids);
+        return -ENOMEM;
+    }
+    buildRet = BuildSubMigrateMsgs(mMsg, nrThreads, subs);
+    if (buildRet) {
+        FreeSubMigrateMsgs(subs, nrThreads);
+        free(subs);
+        free(tids);
+        return buildRet;
+    }
+    for (int i = 0; i < nrThreads; i++) {
+        subs[i].fd = manager->fds.migrate;
+        subs[i].ret = 0;
+        subs[i].cpuMin = GetScanCpuMinConfig();
+        subs[i].cpuMax = GetScanCpuMaxConfig();
+        int pr = pthread_create(&tids[i], NULL, SubMigrateThreadFn, &subs[i]);
+        if (pr != 0) {
+            SMAP_LOGGER_ERROR("pthread_create %d failed: %d.", i, pr);
+            subs[i].ret = -EFAULT;
+        }
+    }
+    for (int i = 0; i < nrThreads; i++) {
+        if (tids[i] != 0) {
+            pthread_join(tids[i], NULL);
+        }
+    }
+    for (int i = 0; i < nrThreads; i++) {
+        if (subs[i].ret > 0 && err >= 0) {
+            err += subs[i].ret;
+        } else {
+            err = subs[i].ret;
+        }
+    }
+    AggregateSubMigResults(subs, nrThreads, mMsg);
+    FreeSubMigrateMsgs(subs, nrThreads);
+    free(subs);
+    free(tids);
+    return err;
+}
+
 int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager)
 {
     int err = 0;
+    int nThread = 0;
     SMAP_LOGGER_DEBUG("mMsg->cnt %d.", mMsg->cnt);
-
     uint64_t **tmpAddr = malloc(sizeof(*tmpAddr) * mMsg->cnt);
     if (!tmpAddr) {
         SMAP_LOGGER_ERROR("malloc tmp addr failed.");
         return -ENOMEM;
     }
     for (int i = 0; i < mMsg->cnt; i++) {
-        SMAP_LOGGER_DEBUG("nr is %d, from is %d, to is %d, addr list :.", mMsg->migList[i].nr, mMsg->migList[i].from,
-                          mMsg->migList[i].to);
         tmpAddr[i] = mMsg->migList[i].addr;
-        for (int j = 0; j < mMsg->migList[i].nr; j++) {
-            SMAP_LOGGER_DEBUG("%#llx .", mMsg->migList[i].addr[j]);
-            if (j >= MAX_MIG_ADDR_PRINT_LEN) {
-                SMAP_LOGGER_DEBUG(" ... .");
-                break;
-            }
-        }
     }
-    if (mMsg->cnt > 0) {
+
+    nThread = DecideThreadNum(mMsg, manager);
+    if (nThread == SIG_THREAD_MIG_OUT) {
         err = ioctl(manager->fds.migrate, SMAP_MIG_MIGRATE, mMsg);
+    } else {
+        err = RunMultiThreadedMigrate(mMsg, manager, nThread);
     }
+
     for (int i = 0; i < mMsg->cnt; i++) {
         if (tmpAddr[i]) {
             free(tmpAddr[i]);
+            mMsg->migList[i].addr = NULL;
         }
     }
     free(tmpAddr);
@@ -1117,7 +1299,7 @@ static int InitMigrateMsg(struct MigrateMsg *mMsg, struct ProcessManager *manage
         SMAP_LOGGER_ERROR("mMsg->migList malloc failed.");
         return -ENOMEM;
     }
-    mMsg->mulMig.pageSize = manager->tracking.pageSize;
+    mMsg->pageSize = manager->tracking.pageSize;
     return 0;
 }
 

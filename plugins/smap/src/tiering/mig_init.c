@@ -185,9 +185,9 @@ static bool is_migrate_msg_valid(struct migrate_msg *msg)
 		       msg->cnt);
 		return false;
 	}
-	if (msg->mul_mig.page_size != page_size) {
+	if (msg->page_size != page_size) {
 		pr_err("invalid page size: %d passed to check\n",
-		       msg->mul_mig.page_size);
+		       msg->page_size);
 		return false;
 	}
 	return true;
@@ -208,8 +208,8 @@ static int __ioctl_migrate(void __user *argp)
 	if (ret) {
 		return ret;
 	}
+
 	ret = do_migrate(&msg, mig_list);
-	filter_4k_migrate_info();
 	if (copy_to_user(argp, &msg, sizeof(msg)))
 		pr_err("unable to copy migrate message to user space\n");
 	if (copy_to_user(msg.mig_list, mig_list,

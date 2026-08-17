@@ -613,8 +613,6 @@ int is_filter_4k(struct page *page, int page_size)
 	return -1;
 }
 
-size_t nr_abnormal[NR_ABNORMAL] = { 0 };
-
 static inline bool is_filter_anon(struct page *page)
 {
 	if (PageHuge(page)) {
@@ -651,6 +649,7 @@ struct mig_stats {
 	unsigned int non_anon_num;
 	unsigned int failed_num;
 	unsigned int pre_migrate_num;
+	size_t nr_abnormal[NR_ABNORMAL];
 };
 
 /*
@@ -689,9 +688,9 @@ static void collect_one_folio(int idx, struct mig_list *mig_list,
 		return;
 	}
 
-	err = is_filter_4k(p_page, msg->mul_mig.page_size);
+	err = is_filter_4k(p_page, msg->page_size);
 	if (err >= 0) {
-		nr_abnormal[err]++;
+		stats->nr_abnormal[err]++;
 		return;
 	}
 
@@ -756,8 +755,8 @@ static int migrate_one_batch(int idx, struct migrate_msg *msg,
 	pr_debug("migrate_one_batch: [%d] pid %d from %d to %d nr %u\n", idx,
 		 mig_list[idx].pid, mig_list[idx].from, mig_list[idx].to,
 		 batch.cnt);
-	batch_failed = smap_migrate(batch.folios, batch.nr_folios, mig_list[idx].to,
-				    MIGRATE_TYPE_HOTNESS);
+	batch_failed = smap_migrate(batch.folios, batch.nr_folios,
+				    mig_list[idx].to, MIGRATE_TYPE_HOTNESS);
 	mig_list[idx].failed_mig_nr += batch_failed;
 	stats->failed_num += batch_failed;
 	mig_list[idx].success_to_user = true;
@@ -896,7 +895,6 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 	struct mig_stats stats = { 0 };
 	u64 *nr_remain;
 
-	memset(nr_abnormal, 0, sizeof(nr_abnormal));
 	if (msg->cnt == 0)
 		return 0;
 
@@ -920,6 +918,7 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 
 	vfree(nr_remain);
 	pr_debug("non anon page number: %u\n", stats.non_anon_num);
+	filter_4k_migrate_info(stats.nr_abnormal);
 	return stats.failed_num;
 }
 
