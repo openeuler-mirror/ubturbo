@@ -362,6 +362,10 @@ int ProcessManagerInit(uint32_t pageType)
     g_pageSizeNormal = size;
     g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.tracking.pageSize = (pageType == PAGETYPE_NORMAL) ? g_pageSizeNormal : g_pageSizeHuge;
+    g_processManager.migPeriod = IsHugeMode() ? LIGHT_STABLE_MIGRATE_CYCLE : PROCESS_LIGHT_STABLE_MIGRATE_CYCLE;
+    if (GetFileConfSwitchConfig()) {
+        g_processManager.migPeriod = GetMigratePeriodConfig();
+    }
 
     for (i = 0; i < MAX_NODES; i++) {
         g_processManager.fds.nodes[i] = DEFAULT_FD;

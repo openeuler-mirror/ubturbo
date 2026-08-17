@@ -739,6 +739,7 @@ TEST_F(ManageTest, TestProcessManagerInit)
     GlobalMockObject::verify();
     ret = ProcessManagerInit(pageType);
     EXPECT_EQ(0, ret);
+    EXPECT_EQ(PROCESS_LIGHT_STABLE_MIGRATE_CYCLE, g_processManager.migPeriod);
 }
 
 TEST_F(ManageTest, TestProcessManagerInitTwo)
@@ -751,6 +752,7 @@ TEST_F(ManageTest, TestProcessManagerInitTwo)
     g_processManager.processes = (ProcessAttr *)&period;
     ret = ProcessManagerInit(pageType);
     EXPECT_EQ(0, ret);
+    EXPECT_EQ(LIGHT_STABLE_MIGRATE_CYCLE, g_processManager.migPeriod);
     EXPECT_EQ(nullptr, g_processManager.processes);
 }
 
