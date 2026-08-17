@@ -243,7 +243,6 @@ struct SetRemoteNumaInfoMsg {
 * HCCS代际远端NUMA最大值为17。
 * UB代际远端NUMA最大值为17。
 * 如果已配置某虚机的远端NUMA，后续配置不能改变虚机的远端NUMA，只能通过SmapMigratePidRemoteNuma接口改变远端NUMA。
-* 当配置的pid可迁出的量大于借用内存量时，SMAP不会使用完所有的借用量，每个本地NUMA对应的远端借用都有MIN[借用量的5%，200MB]的量不会使用，这是为了迁移内存时能申请到新的内存页面。例如：numa0 numa1分别借用了2G和6G共8G，numa0借的2G的预留按5%来算是100M，numa1借的6G的预留是200M，合计一共300M。
 * 此接口仅在水线场景中生效，且水线场景调用SmapMigrateOut接口前需通过此接口设置远端NUMA使用量才能迁出pid的内存。
 * 如果未调用SetSmapRemoteNumaInfo接口，默认初始化size值为0。
 
