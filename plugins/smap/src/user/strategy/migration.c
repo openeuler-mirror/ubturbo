@@ -1272,7 +1272,7 @@ int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager)
 
     nThread = DecideThreadNum(mMsg, manager);
     if (nThread == SIG_THREAD_MIG_OUT) {
-        err = ioctl(manager->fds.migrate, SMAP_MIG_MIGRATE, mMsg);
+        err = (mMsg->cnt > 0) ? ioctl(manager->fds.migrate, SMAP_MIG_MIGRATE, mMsg) : 0;
     } else {
         err = RunMultiThreadedMigrate(mMsg, manager, nThread);
     }

@@ -563,6 +563,15 @@ static int CheckManagedTrackingPayload(int len, struct AccessAddPidPayload *payl
     EXPECT_EQ(100U, payload[0].scanTime);
     EXPECT_EQ(NORMAL_SCAN, payload[0].type);
     EXPECT_EQ(BIT(0) | BIT(2) | BIT(4), payload[0].numaNodes);
+    EXPECT_EQ(VM_TYPE, payload[0].pidType);
+    return 0;
+}
+
+static int CheckPendingMigrationTargetPayload(int len, struct AccessAddPidPayload *payload)
+{
+    EXPECT_EQ(1, len);
+    EXPECT_EQ(123, payload[0].pid);
+    EXPECT_EQ(VM_TYPE, payload[0].pidType);
     return 0;
 }
 
@@ -573,6 +582,7 @@ TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopePublishesAfterTracking)
     attr.pid = 123;
     attr.scanType = NORMAL_SCAN;
     attr.scanTime = 100;
+    attr.type = VM_TYPE;
     attr.numaAttr.numaNodes = BIT(0) | BIT(4);
     attr.managedLocalState.managedLocalMask = BIT(0);
 
@@ -658,6 +668,7 @@ TEST_F(ManageTest, TestApplyPendingMigrationTargets)
 {
     ProcessAttr attr = {};
     attr.pid = 123;
+    attr.type = VM_TYPE;
     attr.state = PROC_MIGRATE;
     attr.numaAttr.numaNodes = 0x1;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
@@ -677,7 +688,7 @@ TEST_F(ManageTest, TestApplyPendingMigrationTargets)
     MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
     MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddEmptyCandidateResidentForTest));
     MOCKER(GetPidNumaPagesFromNumaMaps).expects(never());
-    MOCKER(AccessIoctlAddPid).expects(once()).will(returnValue(0));
+    MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckPendingMigrationTargetPayload));
     MOCKER(SyncAllProcessConfig).expects(once()).will(returnValue(0));
 
     int ret = ApplyPendingMigrationTargets(&attr);
