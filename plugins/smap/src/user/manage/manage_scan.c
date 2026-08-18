@@ -330,6 +330,7 @@ int RefreshManagedLocalTrackingScope(ProcessAttr *attr)
             .scanTime = attr->scanTime,
             .duration = attr->duration,
             .numaNodes = candidate.numaAttr.numaNodes,
+            .pidType = attr->type,
         };
         ret = AccessIoctlAddPid(1, &payload);
         if (ret) {
