@@ -16,6 +16,7 @@
 #include <climits>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <regex>
 #include <string>
 #include <unordered_map>
@@ -26,6 +27,7 @@
 #include "rmrs_config.h"
 #include "rmrs_json_helper.h"
 #include "rmrs_memory_info.h"
+#include "rmrs_smap_helper.h"
 #include "turbo_def.h"
 #include "turbo_logger.h"
 
@@ -95,8 +97,44 @@ RmrsResult ResourceExport::Init()
     return RMRS_OK;
 }
 
+bool ResourceExport::EnsureLibvirtReady()
+{
+    if (libvirt::LibvirtModule::IsAvailable()) {
+        UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[RmrsResourceExport] Libvirt is available.";
+        return true;
+    }
+    if (RmrsConfig::Instance().GetRmrsScene() == RmrsScene::CONTAINER) {
+        UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[RmrsResourceExport] Container scene, skip libvirt helper init.";
+        return false;
+    }
+    // 未知场景: 能到达此处的业务隐含虚机语义, 惰性初始化libvirt
+    std::lock_guard<smap::mutex> lock(smap::RmrsSmapHelper::gMutex);
+    if (libvirt::LibvirtModule::IsAvailable()) {
+        UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[RmrsResourceExport] Libvirt is available, skip lazy init.";
+        return true;
+    }
+    RmrsResult ret = LibvirtHelper::Init();
+    if (ret != RMRS_OK) {
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[RmrsResourceExport] Lazy init libvirt helper failed, ret=" << ret << ".";
+        return false;
+    }
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::VM);
+    UBTURBO_LOG_INFO(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+        << "[RmrsResourceExport] Lazy init libvirt helper success, scene set to vm.";
+    return true;
+}
+
 RmrsResult ResourceExport::CollectVmInfo()
 {
+    // 容器场景或libvirt初始化失败时, 无虚机信息可采集, 直接返回空列表
+    if (!EnsureLibvirtReady()) {
+        UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[RmrsResourceExport] Libvirt is unavailable, skip vm info collection.";
+        return RMRS_OK;
+    }
     LibvirtHelper libvirtHelper;
     if (libvirtHelper.Connect() != RMRS_OK) {
         return RMRS_ERROR;
