@@ -1092,14 +1092,15 @@ static int DecideThreadNum(struct MigrateMsg *mMsg, struct ProcessManager *manag
         return SIG_THREAD_MIG_OUT;
     }
 
-    EnvMutexLock(&manager->lock);
-    for (ProcessAttr *p = manager->processes; p; p = p->next) {
-        if (p->vmPidAttr.mmapType == MMAP_SHARED) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t i = 0; i < n; i++) {
+        if (all[i]->attr->vmPidAttr.mmapType == MMAP_SHARED) {
             forcedSingle = true;
             break;
         }
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
     if (forcedSingle) {
         SMAP_LOGGER_INFO("Forced single thread detected (SHARED mmap), set 1 migration thread.");
         return SIG_THREAD_MIG_OUT;

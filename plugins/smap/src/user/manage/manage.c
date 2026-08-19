@@ -436,7 +436,7 @@ int GetPidTypeFromComm(pid_t pid)
     return -1;
 }
 
-static int AtomicFetchAdd(EnvAtomic *a, int v)
+static int AtomicIncrease(EnvAtomic *a, int v)
 {
     int oldv;
     int newv;
@@ -447,7 +447,7 @@ static int AtomicFetchAdd(EnvAtomic *a, int v)
     return oldv;
 }
 
-static int AtomicFetchSub(EnvAtomic *a, int v)
+static int AtomicDecrease(EnvAtomic *a, int v)
 {
     int oldv;
     int newv;
@@ -541,7 +541,7 @@ void PidSlotRemove(struct ProcessManager *manager, pid_t pid)
         if (EnvAtomicCmpAndSwap(PID_SLOT_INUSE, PID_SLOT_REMOVING, &s->state) != PID_SLOT_INUSE) {
             return;
         }
-        if (AtomicFetchSub(&s->refs, 1) == 1) {
+        if (AtomicDecrease(&s->refs, 1) == 1) {
             PidSlotTryReclaim(manager, i);
         }
         return;
@@ -565,9 +565,9 @@ struct PidSlot *PidSlotGetRef(pid_t pid)
         if (EnvAtomicRead(&s->state) != PID_SLOT_INUSE || s->pid != pid) {
             continue;
         }
-        AtomicFetchAdd(&s->refs, 1);
+        AtomicIncrease(&s->refs, 1);
         if (EnvAtomicRead(&s->state) != PID_SLOT_INUSE) {
-            if (AtomicFetchSub(&s->refs, 1) == 1) {
+            if (AtomicDecrease(&s->refs, 1) == 1) {
                 PidSlotTryReclaim(&g_processManager, i);
             }
             continue;
@@ -585,9 +585,9 @@ size_t PidSlotCollectRefs(struct ProcessManager *manager, struct PidSlot *arr[],
         if (EnvAtomicRead(&s->state) != PID_SLOT_INUSE) {
             continue;
         }
-        AtomicFetchAdd(&s->refs, 1);
+        AtomicIncrease(&s->refs, 1);
         if (EnvAtomicRead(&s->state) != PID_SLOT_INUSE) {
-            if (AtomicFetchSub(&s->refs, 1) == 1) {
+            if (AtomicDecrease(&s->refs, 1) == 1) {
                 PidSlotTryReclaim(manager, i);
             }
             continue;
@@ -604,7 +604,7 @@ void PidSlotReleaseRefs(struct PidSlot *arr[], size_t n)
         if (s == NULL) {
             continue;
         }
-        if (AtomicFetchSub(&s->refs, 1) == 1) {
+        if (AtomicDecrease(&s->refs, 1) == 1) {
             PidSlotTryReclaim(&g_processManager, (int)(s - g_processManager.slots));
         }
     }
@@ -620,7 +620,7 @@ void PutProcessAttr(ProcessAttr *attr)
         if (s->attr != attr) {
             continue;
         }
-        if (AtomicFetchSub(&s->refs, 1) == 1) {
+        if (AtomicDecrease(&s->refs, 1) == 1) {
             PidSlotTryReclaim(&g_processManager, i);
         }
         return;
@@ -943,7 +943,6 @@ void DiscardProcessManageCandidate(ProcessManageCandidate *candidate)
         return;
     }
 
-    PutProcessAttr(candidate->active);
     free(candidate->prepared);
     *candidate = (ProcessManageCandidate){ 0 };
 }
@@ -1016,6 +1015,7 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
     uint64_t oldMemSize = active ? SumAttrMigrateMemSize(active) : 0;
     ret = ConfigureMigrationTargetsWithCapacityPolicy(prepared, &config, param->ignoreRemoteCapacity);
     if (ret) {
+        PutProcessAttr(candidate->active);
         DiscardProcessManageCandidate(candidate);
         return ret;
     }
@@ -1058,6 +1058,7 @@ void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
             SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", prepared->pid, ret);
         }
         SMAP_LOGGER_INFO("Stage pid %d migration target update.", prepared->pid);
+        PutProcessAttr(candidate->active);
         DiscardProcessManageCandidate(candidate);
         return;
     }
@@ -1076,6 +1077,7 @@ void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
     if (ret) {
         SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", prepared->pid, ret);
     }
+    PutProcessAttr(candidate->active);
     DiscardProcessManageCandidate(candidate);
 }
 

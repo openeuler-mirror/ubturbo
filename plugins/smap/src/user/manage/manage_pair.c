@@ -792,8 +792,8 @@ static void BuildPairRequestContext(const struct ProcessManager *manager,
 static int CollectAllPairRequests(const struct ProcessManager *manager,
                                   const uint64_t privatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
                                   const uint64_t sharedPages[REMOTE_NUMA_NUM], PairArbitrationEntry entries[],
-                                  size_t entryCap, size_t *entryCount, bool migrateOnly,
-                                  struct PidSlot *all[], size_t *allCnt)
+                                  size_t entryCap, size_t *entryCount, bool migrateOnly, struct PidSlot *all[],
+                                  size_t *allCnt)
 {
     size_t count = 0;
     size_t n = PidSlotCollectRefs((struct ProcessManager *)manager, all, MAX_PID_SLOTS);

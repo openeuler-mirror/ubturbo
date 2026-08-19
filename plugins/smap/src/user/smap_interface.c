@@ -900,6 +900,7 @@ static int BuildMigrateOutProcessParamWithCapacityPolicy(const struct MigrateOut
 static void DiscardMigrateOutCandidates(ProcessManageCandidate *candidates, int count)
 {
     for (int i = 0; i < count; i++) {
+        PutProcessAttr(candidates[i].active);
         DiscardProcessManageCandidate(&candidates[i]);
     }
 }
@@ -2262,7 +2263,8 @@ static int CheckAddProcessTrackingMsg(pid_t *pidArr, uint32_t *scanTime, uint32_
     for (int i = 0; i < len; i++) {
         ProcessAttr *current = GetProcessAttr(pidArr[i]);
         if (current && current->state != PROC_MOVE) {
-            SMAP_LOGGER_ERROR("The pid %d state is %d, only PROC_MOVE can change scan type.", pidArr[i], current->state);
+            SMAP_LOGGER_ERROR("The pid %d state is %d, only PROC_MOVE can change scan type.", pidArr[i],
+                              current->state);
             PutProcessAttr(current);
             return -EBUSY;
         }

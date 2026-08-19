@@ -51,7 +51,7 @@ int OpenAndFlockFd(int fd);
 }
 TEST_F(DeviceTest, TestIInitTrackingDevOne)
 {
-    struct ProcessManager pm = { 0 };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
     int ret;
 
     MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(-1));
@@ -61,7 +61,7 @@ TEST_F(DeviceTest, TestIInitTrackingDevOne)
 
 TEST_F(DeviceTest, TestIInitTrackingDevTwo)
 {
-    struct ProcessManager pm = { 0 };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
     int ret;
 
     MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
@@ -86,7 +86,7 @@ extern "C" int ConfigureTrackingDevices(struct ProcessManager *manager);
 TEST_F(DeviceTest, TestIInitTrackingDevThree)
 {
     int ret;
-    struct ProcessManager pm = { 0 };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
 
     MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
         .stubs()
@@ -103,7 +103,7 @@ TEST_F(DeviceTest, TestIInitTrackingDevThree)
 extern "C" int SendCmdToAllNodes(int fds[], unsigned long cmd, int arg);
 TEST_F(DeviceTest, TestEnableTracking)
 {
-    struct ProcessManager pm = { 0 };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
     int ret;
 
     MOCKER(SendCmdToAllNodes).stubs().will(returnValue(0));
@@ -113,7 +113,7 @@ TEST_F(DeviceTest, TestEnableTracking)
 
 TEST_F(DeviceTest, TestDisableTracking)
 {
-    struct ProcessManager pm = { 0 };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
     int ret;
 
     MOCKER(SendCmdToAllNodes).stubs().will(returnValue(0));
@@ -162,13 +162,8 @@ TEST_F(DeviceTest, TestConfigTrackingDev)
 extern "C" int DisableTracking(struct ProcessManager *manager);
 TEST_F(DeviceTest, TestDeinitTrackingDev)
 {
-    struct ProcessManager pm = {
-        .fds = {
-            .nodes = { 1, 2 },
-            .migrate = 3,
-            .access = 4,
-        }
-    };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
+    pm.fds.nodes[0] = 1; pm.fds.nodes[1] = 2; pm.fds.migrate = 3; pm.fds.access = 4;
     for (int i = 2; i < MAX_NODES; i++) {
         pm.fds.nodes[i] = DEFAULT_FD;
     }
