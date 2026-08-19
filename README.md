@@ -165,8 +165,19 @@ sh run_dt.sh
 # 编译安装：make install PREFIX=/usr/local
 ```
 
+> **已知兼容性问题**：
+> - **lcov 2.3 与 gcc 12.3.1 存在 mismatched exception tag 兼容问题**，导致覆盖率收集步骤报错（脚本退出码非0，但测试本身全部通过）。`run_ut.sh` 已使用 `set +e` 包裹覆盖率收集阶段，使 lcov 报错不影响脚本退出码和 CI 结果。如需获取覆盖率报告，请使用与 gcc 12.3.1 兼容的 lcov 版本。
+> - **UTC 时区导致 TestGenerateCompressedFilename 测试失败**：容器默认 UTC 时区，但日志文件名测试期望 +0800 时区。执行测试前需设置 `export TZ=Asia/Shanghai`，`run_ut.sh` 已自动设置。
+
 
 ## UBTurbo运行
+
+> **运行前提**：运行 `ub_turbo_exec` 前必须先**构建并安装 SMAP**（见下方 [SMAP插件安装与单元测试](#SMAP插件安装与单元测试) 章节），包括：
+> 1. 构建 `libsmap.so` 用户态库并安装到 `/usr/lib64/`；
+> 2. 构建 4 个内核模块（`smap_tracking_core.ko`、`smap_histogram_tracking.ko`、`smap_access_tracking.ko`、`smap_tiering.ko`）并安装到 `/lib/modules/smap/`；
+> 3. 按 [SMAP安装方式](#安装RPM包) 加载内核模块（`insmod` 顺序见下文）。
+>
+> 若 SMAP 未安装或内核模块未加载，UBTurbo 启动时会因 Smap 模块启动失败而退出（日志：`Start module failed, name:Smap`）。
 
 - 配置ubturbo.conf，控制日志级别
 
@@ -322,7 +333,7 @@ echo 0 > /proc/sys/vm/compaction_proactiveness
 echo never > /sys/kernel/mm/transparent_hugepage/defrag
 echo never > /sys/kernel/mm/transparent_hugepage/enabled
 ```
-- 提前安装obmm、URMA、libvirt、numactl，建议先安装HCOM（SMAP与HCOM均依赖obmm）
+- 提前安装URMA、libvirt、numactl
 - 创建ubturbo用户和用户组
 
 典型调用流程（通过`libsmap.so`提供的`smap_interface.h`接口）：
