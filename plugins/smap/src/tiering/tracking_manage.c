@@ -139,11 +139,16 @@ static int __init tracking_init(void)
 		pr_err("smap process symbols failed\n");
 		return ret;
 	}
+	/*
+	 * obmm is optional for SMAP init: iterate_obmm_dev() may fail
+	 * (e.g. -ENOENT when no obmm device is present), which is an
+	 * expected condition on systems without obmm. Do not abort
+	 * tracking_init; migrate_back retries periodically.
+	 */
 	ret = iterate_obmm_dev();
-	if (ret) {
-		pr_err("failed to iterate obmm_dev, ret: %d\n", ret);
-		goto out_smap_node_sysfs;
-	}
+	if (ret)
+		pr_warn("failed to iterate obmm_dev, ret: %d, obmm is optional, continue init\n",
+			ret);
 	migrate_back_wq = create_workqueue("smap_migrate_back_wq");
 	if (!migrate_back_wq) {
 		pr_err("failed to create migrate back workqueue\n");
