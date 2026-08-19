@@ -154,16 +154,6 @@ static bool IsPairPlanDirectionValid(const PairPlan *plan)
     return plan->demotePages == 0 && plan->promotePages == 0;
 }
 
-static ProcessAttr *FindPairPlanProcessLocked(struct ProcessManager *manager, pid_t pid)
-{
-    for (ProcessAttr *process = manager->processes; process; process = process->next) {
-        if (process->pid == pid) {
-            return process;
-        }
-    }
-    return NULL;
-}
-
 static void ConsumeBucketPages(uint64_t buckets[FREQ_BUCKETS_SIZE], uint64_t pages, bool highestFirst)
 {
     for (int step = 0; step < FREQ_BUCKETS_SIZE && pages > 0; step++) {
@@ -262,15 +252,15 @@ int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t 
         return -EINVAL;
     }
 
-    EnvMutexLock(&manager->lock);
     for (size_t i = 0; i < planCnt; i++) {
         int budgetIndex = FindPairPidBudget(pidBudgets, pidBudgetCnt, plans[i].pid);
-        ProcessAttr *process = FindPairPlanProcessLocked(manager, plans[i].pid);
-        if (budgetIndex < 0 || !process || process->groupPolicy.enabled || plans[i].localNid < 0 ||
-            plans[i].localNid >= context->nrLocalNuma || plans[i].remoteNid < context->nrLocalNuma ||
-            plans[i].remoteNid >= MAX_NODES || !IsPairPlanDirectionValid(&plans[i]) ||
-            pidBudgets[budgetIndex].plannedPages > pidBudgets[budgetIndex].maxMigratePages) {
-            EnvMutexUnlock(&manager->lock);
+        ProcessAttr *process = GetProcessAttr(plans[i].pid);
+        bool invalid = (budgetIndex < 0 || !process || process->groupPolicy.enabled || plans[i].localNid < 0 ||
+                        plans[i].localNid >= context->nrLocalNuma || plans[i].remoteNid < context->nrLocalNuma ||
+                        plans[i].remoteNid >= MAX_NODES || !IsPairPlanDirectionValid(&plans[i]) ||
+                        pidBudgets[budgetIndex].plannedPages > pidBudgets[budgetIndex].maxMigratePages);
+        PutProcessAttr(process);
+        if (invalid) {
             return -EINVAL;
         }
     }
@@ -279,7 +269,7 @@ int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t 
     uint64_t selectedFrom[MAX_NODES] = { 0 };
     for (size_t i = 0; i < planCnt; i++) {
         PairPlan *plan = &plans[i];
-        ProcessAttr *process = FindPairPlanProcessLocked(manager, plan->pid);
+        ProcessAttr *process = GetProcessAttr(plan->pid);
         int budgetIndex = FindPairPidBudget(pidBudgets, pidBudgetCnt, plan->pid);
         PairPidBudget *budget = &pidBudgets[budgetIndex];
         plan->swapPages = 0;
@@ -288,7 +278,7 @@ int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t 
             currentPid = plan->pid;
             int ret = memset_s(selectedFrom, sizeof(selectedFrom), 0, sizeof(selectedFrom));
             if (ret != EOK) {
-                EnvMutexUnlock(&manager->lock);
+                PutProcessAttr(process);
                 return ret;
             }
             for (size_t j = 0; j < planCnt; j++) {
@@ -300,6 +290,7 @@ int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t 
         }
         if (!process->enableSwap || IsNodeForbidden(plan->remoteNid) || !IsOnlyLocalForRemote(plans, planCnt, i) ||
             (plan->targetPages == 0 && plan->demotePages == 0 && plan->promotePages == 0)) {
+            PutProcessAttr(process);
             continue;
         }
 
@@ -327,8 +318,8 @@ int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t 
         selectedFrom[plan->remoteNid] += swapPages;
         context->plannedPages[plan->localNid] += swapPages;
         budget->plannedPages += swapPages * 2;
+        PutProcessAttr(process);
     }
-    EnvMutexUnlock(&manager->lock);
     return 0;
 }
 
@@ -487,12 +478,14 @@ int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[
 
     int ret = 0;
     size_t stageCnt = 0;
-    EnvMutexLock(&manager->lock);
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t procCnt = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
     if (manager->nrLocalNuma <= 0 || manager->nrLocalNuma > LOCAL_NUMA_NUM) {
         ret = -EINVAL;
         goto OUT;
     }
-    for (ProcessAttr *process = manager->processes; process; process = process->next) {
+    for (size_t k = 0; k < procCnt; k++) {
+        ProcessAttr *process = all[k]->attr;
         if (process->scanType != NORMAL_SCAN || process->groupPolicy.enabled || process->state != PROC_MIGRATE) {
             continue;
         }
@@ -533,7 +526,7 @@ int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[
     }
 
 OUT:
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, procCnt);
     free(stages);
     return ret;
 }
@@ -557,10 +550,8 @@ int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t p
 
     bool hugePage;
     int nrLocalNuma;
-    EnvMutexLock(&manager->lock);
     hugePage = manager->tracking.pageSize == PAGESIZE_2M;
     nrLocalNuma = manager->nrLocalNuma;
-    EnvMutexUnlock(&manager->lock);
 
     PairPlanContext context;
     int ret = CollectNodeFreeSnapshot(hugePage, nrLocalNuma, &context);
@@ -737,8 +728,9 @@ void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager)
     int fromNid;
     int toNid;
     for (int i = 0; i < mMsg->cnt; i++) {
-        current = GetProcessAttrLocked(mMsg->migList[i].pid);
+        current = GetProcessAttr(mMsg->migList[i].pid);
         if (!current || !mMsg->migList[i].successToUser) {
+            PutProcessAttr(current);
             continue;
         }
 
@@ -748,6 +740,7 @@ void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager)
 
         if (current->groupPolicy.enabled) {
             UpdateGroupedMigrationResult(current, fromNid, toNid, successMigCount);
+            PutProcessAttr(current);
             continue;
         }
 
@@ -782,12 +775,14 @@ void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager)
             RefreshPairAccountMask(current, toNid, remoteIndex);
         } else {
             SMAP_LOGGER_DEBUG("Skip non-Pair migration result for pid %d from %d to %d.", current->pid, fromNid, toNid);
+            PutProcessAttr(current);
             continue;
         }
         SMAP_LOGGER_INFO("pid %d from %d to %d nr %llu failed_mig_nr %llu "
                          "failed_isolated_nr %llu success_mig_nr %llu.",
                          mMsg->migList[i].pid, mMsg->migList[i].from, mMsg->migList[i].to, mMsg->migList[i].nr,
                          mMsg->migList[i].failedMigNr, mMsg->migList[i].failedIsolatedNr, successMigCount);
+        PutProcessAttr(current);
     }
 }
 
@@ -803,12 +798,15 @@ static void ResetGroupedSwapRuntimeLocked(ProcessAttr *process, bool freeze)
 
 static void FreezeGroupedSwapLocked(struct ProcessManager *manager, pid_t pid)
 {
-    ProcessAttr *process = GetProcessAttrLocked(pid);
+    (void)manager;
+    ProcessAttr *process = GetProcessAttr(pid);
     if (!process || !process->groupPolicy.enabled) {
+        PutProcessAttr(process);
         return;
     }
     ResetGroupedSwapRuntimeLocked(process, true);
     SMAP_LOGGER_ERROR("grouped pid %d swap frozen due to unbalanced swap migration.", pid);
+    PutProcessAttr(process);
 }
 
 static int FindGroupSwapPairStat(GroupSwapPairStat stats[], int statCnt, pid_t pid, int localNid, int remoteNid)
@@ -860,13 +858,15 @@ static int BuildGroupedSwapCompPlans(struct MigrateMsg *mMsg, struct ProcessMana
 
     for (int i = 0; i < mMsg->cnt; i++) {
         struct MigList *list = &mMsg->migList[i];
-        ProcessAttr *process = GetProcessAttrLocked(list->pid);
+        ProcessAttr *process = GetProcessAttr(list->pid);
         if (!process || !process->groupPolicy.enabled) {
+            PutProcessAttr(process);
             continue;
         }
         bool localToRemote = list->from < manager->nrLocalNuma && list->to >= manager->nrLocalNuma;
         bool remoteToLocal = list->from >= manager->nrLocalNuma && list->to < manager->nrLocalNuma;
         if (!localToRemote && !remoteToLocal) {
+            PutProcessAttr(process);
             continue;
         }
         int localNid = localToRemote ? list->from : list->to;
@@ -874,6 +874,7 @@ static int BuildGroupedSwapCompPlans(struct MigrateMsg *mMsg, struct ProcessMana
         int idx = AddGroupSwapPairStat(stats, &statCnt, MAX_GROUP_SWAP_COMP_PLANS, list->pid, localNid, remoteNid);
         if (idx < 0) {
             SMAP_LOGGER_ERROR("grouped pid %d swap compensation stat exceeds limit.", list->pid);
+            PutProcessAttr(process);
             return idx;
         }
         uint64_t success = GetMigListSuccessPages(list);
@@ -884,6 +885,7 @@ static int BuildGroupedSwapCompPlans(struct MigrateMsg *mMsg, struct ProcessMana
             stats[idx].remoteToLocalSuccess += success;
             stats[idx].hasRemoteToLocal = true;
         }
+        PutProcessAttr(process);
     }
 
     for (int i = 0; i < statCnt; i++) {
@@ -968,16 +970,17 @@ static int BuildGroupedSwapCompMsg(struct ProcessManager *manager, GroupSwapComp
     compMsg->cnt = 0;
     compMsg->pageSize = manager->tracking.pageSize;
 
-    EnvMutexLock(&manager->lock);
     for (int i = 0; i < planCnt; i++) {
-        ProcessAttr *process = GetProcessAttrLocked(plans[i].pid);
+        ProcessAttr *process = GetProcessAttr(plans[i].pid);
         if (!process || !process->groupPolicy.enabled) {
             plans[i].shouldFreeze = true;
+            PutProcessAttr(process);
             continue;
         }
         struct MigList *list = &compMsg->migList[compMsg->cnt];
         uint64_t nr = BuildCompMigListFromScan(process, &plans[i], list);
         if (nr == 0) {
+            PutProcessAttr(process);
             continue;
         }
         list->pid = plans[i].pid;
@@ -985,8 +988,8 @@ static int BuildGroupedSwapCompMsg(struct ProcessManager *manager, GroupSwapComp
         list->to = plans[i].to;
         compPlanIdx[compMsg->cnt] = i;
         compMsg->cnt++;
+        PutProcessAttr(process);
     }
-    EnvMutexUnlock(&manager->lock);
     return 0;
 }
 
@@ -1006,13 +1009,11 @@ static void FreeCompMigMsg(struct MigrateMsg *compMsg)
 
 static void FreezeFailedCompPlans(struct ProcessManager *manager, GroupSwapCompPlan plans[], int planCnt)
 {
-    EnvMutexLock(&manager->lock);
     for (int i = 0; i < planCnt; i++) {
         if (plans[i].shouldFreeze) {
             FreezeGroupedSwapLocked(manager, plans[i].pid);
         }
     }
-    EnvMutexUnlock(&manager->lock);
 }
 
 static int RunGroupedSwapCompensation(struct ProcessManager *manager, struct MigrateMsg *mMsg,
@@ -1091,14 +1092,15 @@ static int DecideThreadNum(struct MigrateMsg *mMsg, struct ProcessManager *manag
         return SIG_THREAD_MIG_OUT;
     }
 
-    EnvMutexLock(&manager->lock);
-    for (ProcessAttr *p = manager->processes; p; p = p->next) {
-        if (p->vmPidAttr.mmapType == MMAP_SHARED) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t i = 0; i < n; i++) {
+        if (all[i]->attr->vmPidAttr.mmapType == MMAP_SHARED) {
             forcedSingle = true;
             break;
         }
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
     if (forcedSingle) {
         SMAP_LOGGER_INFO("Forced single thread detected (SHARED mmap), set 1 migration thread.");
         return SIG_THREAD_MIG_OUT;
@@ -1304,55 +1306,54 @@ static int InitMigrateMsg(struct MigrateMsg *mMsg, struct ProcessManager *manage
 
 static int CleanStrategyAttribute(struct ProcessManager *manager)
 {
-    ProcessAttr *current;
-    EnvMutexLock(&manager->lock);
-    for (current = manager->processes; current; current = current->next) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *current = all[k]->attr;
         int ret;
         StrategyAttribute *strAttr = &current->strategyAttr;
         for (int i = 0; i < LOCAL_NUMA_NUM; i++) {
             ret = memset_s(strAttr->l3RemoteMemRatio[i], sizeof(strAttr->l3RemoteMemRatio[0]), 0,
                            sizeof(strAttr->l3RemoteMemRatio[0]));
             if (ret != EOK) {
-                EnvMutexUnlock(&manager->lock);
+                PidSlotReleaseRefs(all, n);
                 return ret;
             }
             ret = memset_s(strAttr->allocRemoteNrPages[i], sizeof(strAttr->allocRemoteNrPages[0]), 0,
                            sizeof(strAttr->allocRemoteNrPages[0]));
             if (ret != EOK) {
-                EnvMutexUnlock(&manager->lock);
+                PidSlotReleaseRefs(all, n);
                 return ret;
             }
         }
         ret = memset_s(strAttr->nrPagesPerLocalNuma, sizeof(strAttr->nrPagesPerLocalNuma), 0,
                        sizeof(strAttr->nrPagesPerLocalNuma));
         if (ret != EOK) {
-            EnvMutexUnlock(&manager->lock);
+            PidSlotReleaseRefs(all, n);
             return ret;
         }
         for (int i = 0; i < MAX_NODES; i++) {
             ret = memset_s(strAttr->nrMigratePages[i], sizeof(strAttr->nrMigratePages[0]), 0,
                            sizeof(strAttr->nrMigratePages[0]));
             if (ret != EOK) {
-                EnvMutexUnlock(&manager->lock);
+                PidSlotReleaseRefs(all, n);
                 return ret;
             }
         }
         ret = memset_s(strAttr->ubBwRestrict, sizeof(strAttr->ubBwRestrict), 0, sizeof(strAttr->ubBwRestrict));
         if (ret != EOK) {
-            EnvMutexUnlock(&manager->lock);
+            PidSlotReleaseRefs(all, n);
             return ret;
         }
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
     return 0;
 }
 
 static int PerformMigrationPreparation(struct ProcessManager *manager)
 {
     int ret = 0;
-    ProcessAttr *current = manager->processes;
-
-    if (!current) {
+    if (PidSlotEmpty(manager)) {
         return -EINVAL;
     }
     ret = CleanStrategyAttribute(manager);
@@ -1531,16 +1532,6 @@ static void NumaMigReduceDeal(ProcessAttr *current)
     }
 }
 
-static ProcessAttr *FindMigrationCandidateLocked(struct ProcessManager *manager, pid_t pid)
-{
-    for (ProcessAttr *current = manager->processes; current; current = current->next) {
-        if (current->pid == pid) {
-            return current;
-        }
-    }
-    return NULL;
-}
-
 static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg, uint64_t *migratePages)
 {
     int ret;
@@ -1555,19 +1546,28 @@ static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
         return -ENOMEM;
     }
 
-    EnvMutexLock(&manager->lock);
     ret = InitMigrateMsg(mMsg, manager);
     if (ret) {
-        EnvMutexUnlock(&manager->lock);
         SMAP_LOGGER_ERROR("InitMigrateMsg failed! ret:%d.", ret);
         goto OUT;
     }
-    for (current = manager->processes; current; current = current->next) {
+    struct PidSlot *procs[MAX_PID_SLOTS];
+    size_t procCnt = PidSlotCollectRefs(manager, procs, MAX_PID_SLOTS);
+    for (size_t k = 0; k < procCnt; k++) {
+        current = procs[k]->attr;
         if (current->scanType != NORMAL_SCAN) {
             continue;
         }
         if (current->state != PROC_IDLE) {
             SMAP_LOGGER_DEBUG("pid %d state is %d, skip migration.", current->pid, current->state);
+            continue;
+        }
+        bool actcNull = true;
+        for (int nn = 0; nn < MAX_NODES; nn++) {
+            actcNull &= !current->scanAttr.actcData[nn];
+        }
+        if (actcNull) {
+            SMAP_LOGGER_INFO("pid %d actcData not ready, skip migration this cycle.", current->pid);
             continue;
         }
         if (current->pendingTargetConfigValid) {
@@ -1595,12 +1595,20 @@ static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
             ret = -EOVERFLOW;
             break;
         }
+        EnvMutexLock(&procs[k]->attrLock);
+        if (current->state != PROC_IDLE) {
+            EnvMutexUnlock(&procs[k]->attrLock);
+            SMAP_LOGGER_INFO("pid %d state changed to %d during preparation, skip migration.", current->pid,
+                             current->state);
+            continue;
+        }
         ApplyUbBwStop(current, manager);
         current->state = PROC_MIGRATE;
+        EnvMutexUnlock(&procs[k]->attrLock);
         candidatePids[candidateCnt++] = current->pid;
         SMAP_LOGGER_DEBUG("change pid %d state from idle to migrate.", current->pid);
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(procs, procCnt);
 
     if (ret) {
         goto ROLLBACK;
@@ -1616,10 +1624,10 @@ static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
         goto ROLLBACK;
     }
 
-    EnvMutexLock(&manager->lock);
     for (size_t i = 0; i < candidateCnt; i++) {
-        current = FindMigrationCandidateLocked(manager, candidatePids[i]);
+        current = GetProcessAttr(candidatePids[i]);
         if (!current || current->state != PROC_MIGRATE) {
+            PutProcessAttr(current);
             continue;
         }
         if (current->groupPolicy.enabled) {
@@ -1628,22 +1636,21 @@ static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
         // 识别每个进程的待迁移冷热页
         ret = BuildMigrationMsg(current, mMsg, migratePages);
         SMAP_LOGGER_INFO("Add process: %d to migrate msg ret: %d.", current->pid, ret);
+        PutProcessAttr(current);
     }
-    EnvMutexUnlock(&manager->lock);
 
     free(candidatePids);
     free(plans);
     return 0;
 
 ROLLBACK:
-    EnvMutexLock(&manager->lock);
     for (size_t i = 0; i < candidateCnt; i++) {
-        current = FindMigrationCandidateLocked(manager, candidatePids[i]);
+        current = GetProcessAttr(candidatePids[i]);
         if (current && current->state == PROC_MIGRATE) {
             current->state = PROC_IDLE;
         }
+        PutProcessAttr(current);
     }
-    EnvMutexUnlock(&manager->lock);
     free(mMsg->migList);
     mMsg->migList = NULL;
 OUT:
@@ -1657,30 +1664,29 @@ static void PostMigration(struct ProcessManager *manager, struct MigrateMsg *mMs
     GroupSwapCompPlan plans[MAX_GROUP_SWAP_COMP_PLANS] = { 0 };
     int planCnt = 0;
 
-    EnvMutexLock(&manager->lock);
     int ret = BuildGroupedSwapCompPlans(mMsg, manager, plans, &planCnt);
-    EnvMutexUnlock(&manager->lock);
     if (!ret && planCnt > 0) {
         ret = RunGroupedSwapCompensation(manager, mMsg, plans, planCnt);
         if (ret) {
             SMAP_LOGGER_ERROR("Run grouped swap compensation failed: %d.", ret);
         }
     } else if (ret) {
-        EnvMutexLock(&manager->lock);
         for (int i = 0; i < mMsg->cnt; i++) {
-            ProcessAttr *process = GetProcessAttrLocked(mMsg->migList[i].pid);
+            ProcessAttr *process = GetProcessAttr(mMsg->migList[i].pid);
             if (process && process->groupPolicy.enabled) {
                 ResetGroupedSwapRuntimeLocked(process, true);
             }
+            PutProcessAttr(process);
         }
-        EnvMutexUnlock(&manager->lock);
     }
 
-    EnvMutexLock(&manager->lock);
     UpdateMigResult(mMsg, manager);
     free(mMsg->migList);
     mMsg->migList = NULL;
-    for (ProcessAttr *current = manager->processes; current; current = current->next) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t postCnt = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < postCnt; k++) {
+        ProcessAttr *current = all[k]->attr;
         if (current->state == PROC_MIGRATE) {
             /*
              * The old migration result is now settled; it is safe to publish
@@ -1701,7 +1707,7 @@ static void PostMigration(struct ProcessManager *manager, struct MigrateMsg *mMs
             current->state = PROC_IDLE;
         }
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, postCnt);
 }
 
 static int PerformMigration(struct ProcessManager *manager)
@@ -1753,15 +1759,15 @@ static int UpdateScanTime(ProcessAttr *process)
 
 static void UpdateScene(struct ProcessManager *manager)
 {
-    EnvMutexLock(&manager->lock);
-    ProcessAttr *current = manager->processes;
-    while (current) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *current = all[k]->attr;
         if (current->scanType == NORMAL_SCAN) {
             SetProcessSceneAttr(current);
         }
-        current = current->next;
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
 }
 
 static inline void HandleHighScan(ProcessAttr *current)
@@ -1779,9 +1785,10 @@ static int HandleScene(struct ProcessManager *manager)
     int ret = 0;
     Scene worstScene = LIGHT_STABLE_SCENE, scene;
     PageType pageType = IsHugeMode() ? PAGETYPE_HUGE : PAGETYPE_NORMAL;
-    EnvMutexLock(&manager->lock);
-    ProcessAttr *current = manager->processes;
-    while (current) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *current = all[k]->attr;
         // 更新进程的场景
         SceneInfo *info = &current->sceneInfo;
         GetProcessSceneAttr(info->currScene, info, pageType);
@@ -1800,9 +1807,8 @@ static int HandleScene(struct ProcessManager *manager)
         if (scene > worstScene) {
             worstScene = scene;
         }
-        current = current->next;
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
 
     if (manager->sceneInfo.currScene != worstScene) {
         SMAP_LOGGER_INFO("Manager changed scene from %d to %d.", manager->sceneInfo.currScene, worstScene);
@@ -1818,8 +1824,10 @@ static void UpdateAllProcessScanTime(struct ProcessManager *manager)
 {
     int ret;
 
-    EnvMutexLock(&manager->lock);
-    for (ProcessAttr *current = manager->processes; current; current = current->next) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *current = all[k]->attr;
         if (current->isFirstScan) {
             continue;
         }
@@ -1830,13 +1838,15 @@ static void UpdateAllProcessScanTime(struct ProcessManager *manager)
             }
         }
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
 }
 
 static void RestoreProcessScanTime(struct ProcessManager *manager)
 {
-    EnvMutexLock(&manager->lock);
-    for (ProcessAttr *current = manager->processes; current; current = current->next) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *current = all[k]->attr;
         if (current->isFirstScan) {
             if (current->walkPage.nrPage == 0) {
                 current->scanTime = DEFAULT_SCAN_PERIOD;
@@ -1848,7 +1858,7 @@ static void RestoreProcessScanTime(struct ProcessManager *manager)
             }
         }
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
 }
 
 static void UpdatePeriodFromConfig(struct ProcessManager *manager)
@@ -1893,7 +1903,7 @@ static void MigrationUpdateMigrateModeAndScanCpu(void)
 // 避免内核空转扫描和重复disable；新进程加入后下一周期恢复正常流程
 static bool SkipCycleIfNoProcess(struct ProcessManager *manager, int *ret)
 {
-    if (manager->processes) {
+    if (!PidSlotEmpty(manager)) {
         return false;
     }
     if (manager->tracking.trackingEnabled) {

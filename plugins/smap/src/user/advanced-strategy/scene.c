@@ -431,25 +431,28 @@ static void AdjustVmMemRatio(struct ProcessManager *manager, int *surpluses, int
         return;
     }
     BalanceSurpluses(surpluses, len);
-    ProcessAttr *current = manager->processes;
-    while (current && i < len) {
-        if (IsReadyForAdapt(current)) {
-            SceneInfo *info = &current->sceneInfo;
-            PageInfo *p = &info->pageInfo[info->pageInfoIndex];
-            p->nrL1Planed = p->nrL1Guarantee + surpluses[i];
-            SMAP_LOGGER_INFO("AdjustVmMemRatio nrL1Planed: %u, nrL1Guarantee: %u, surpluses: %d.", p->nrL1Planed,
-                             p->nrL1Guarantee, surpluses[i]);
-            SetLocalMemStatus(info);
-            if (info->status == FULL_SATISFIED) {
-                info->currScene = LIGHT_STABLE_SCENE;
-            } else if (info->status == SATISFIED) {
-                info->currScene = MAX(LIGHT_STABLE_SCENE, (int)info->currScene - 1);
-            }
-            UpdateMemRatio(current);
-            i++;
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n && i < len; k++) {
+        ProcessAttr *current = all[k]->attr;
+        if (!IsReadyForAdapt(current)) {
+            continue;
         }
-        current = current->next;
+        SceneInfo *info = &current->sceneInfo;
+        PageInfo *p = &info->pageInfo[info->pageInfoIndex];
+        p->nrL1Planed = p->nrL1Guarantee + surpluses[i];
+        SMAP_LOGGER_INFO("AdjustVmMemRatio nrL1Planed: %u, nrL1Guarantee: %u, surpluses: %d.", p->nrL1Planed,
+                         p->nrL1Guarantee, surpluses[i]);
+        SetLocalMemStatus(info);
+        if (info->status == FULL_SATISFIED) {
+            info->currScene = LIGHT_STABLE_SCENE;
+        } else if (info->status == SATISFIED) {
+            info->currScene = MAX(LIGHT_STABLE_SCENE, (int)info->currScene - 1);
+        }
+        UpdateMemRatio(current);
+        i++;
     }
+    PidSlotReleaseRefs(all, n);
 }
 
 void ConfigMultiVmRatio(struct ProcessManager *manager)
@@ -460,10 +463,11 @@ void ConfigMultiVmRatio(struct ProcessManager *manager)
         return;
     }
     int i = 0, surpluses[nrVms];
-    ProcessAttr *current = manager->processes;
-    while (current && i < nrVms) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n && i < nrVms; k++) {
+        ProcessAttr *current = all[k]->attr;
         if (!IsReadyForAdapt(current)) {
-            current = current->next;
             continue;
         }
         SceneInfo *info = &current->sceneInfo;
@@ -477,16 +481,18 @@ void ConfigMultiVmRatio(struct ProcessManager *manager)
             surpluses[i] = 0; // 后续流程中不会更改配比
         }
         i++;
-        current = current->next;
     }
+    PidSlotReleaseRefs(all, n);
     AdjustVmMemRatio(manager, surpluses, i);
 }
 
 static void GetMaxNuma(struct ProcessManager *manager, int *maxL1node, int *maxL2node)
 {
     int l1Node = 0, l2Node = 0;
-    ProcessAttr *current = manager->processes;
-    while (current) { // 获取本次/远端NUMA的范围
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) { // 获取本次/远端NUMA的范围
+        ProcessAttr *current = all[k]->attr;
         int tmpL1Node = GetAttrL1(current);
         int tmpL2Node = GetAttrL2(current);
         if (l1Node < tmpL1Node) {
@@ -496,8 +502,8 @@ static void GetMaxNuma(struct ProcessManager *manager, int *maxL1node, int *maxL
             l2Node = tmpL2Node;
         }
         current->adaptMem.enableAdaptMem = false;
-        current = current->next;
     }
+    PidSlotReleaseRefs(all, n);
     *maxL1node = l1Node;
     *maxL2node = l2Node;
 }
@@ -519,68 +525,58 @@ static bool ProcessMultiNumaVmNode(ProcessAttr *process)
 
 static void ConfigMultiVmRatioInGroups(struct ProcessManager *manager)
 {
-    int i, maxL1node = 0, maxL2node = 0;
-    EnvMutexLock(&manager->lock);
+    int maxL1node = 0, maxL2node = 0;
     GetMaxNuma(manager, &maxL1node, &maxL2node);
     int processed[(maxL1node + 1)][(maxL2node + 1)];
     ClearList((int *)processed, (maxL1node + 1) * (maxL2node + 1));
-    ProcessAttr *current = manager->processes;
-    while (current) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t a = 0; a < n; a++) {
+        ProcessAttr *current = all[a]->attr;
         if (current->scanType != NORMAL_SCAN) {
-            current = current->next;
             continue;
         }
-
         if (ProcessMultiNumaVmNode(current)) {
-            current = current->next;
             continue;
         }
-
         if (current->migrateMode == MIG_MEMSIZE_MODE) {
-            current = current->next;
             continue;
         }
 
         int l1 = GetAttrL1(current);
         int l2 = GetAttrL2(current);
         if (processed[l1][l2]) { // 如果这个近端-远端组处理过了则跳过
-            current = current->next;
             continue;
         }
         int nrObjects = 0;
         processed[l1][l2] = true;
-        ProcessAttr *tmp = manager->processes;
-        while (tmp) {
+        for (size_t b = 0; b < n; b++) {
+            ProcessAttr *tmp = all[b]->attr;
             if (tmp->scanType != NORMAL_SCAN) {
-                tmp = tmp->next;
                 continue;
             }
             if (EqualToAttrL1(tmp, l1) && EqualToAttrL2(tmp, l2)) {
                 tmp->adaptMem.enableAdaptMem = true; // 本地/远端NUMA一致的，标记为同一个group
                 nrObjects++;
             }
-            tmp = tmp->next;
         }
         if (nrObjects > 0) {
             ConfigMultiVmRatio(manager); // 进行自适应配比调度
         }
-        tmp = manager->processes;
-        while (tmp) {
-            tmp->adaptMem.enableAdaptMem = false; // 本地/远端NUMA一致的，标记为同一个group
-            tmp = tmp->next;
+        for (size_t b = 0; b < n; b++) {
+            all[b]->attr->adaptMem.enableAdaptMem = false;
         }
-        current = current->next;
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
 }
 
 static void SkipMultiProcessRatio(struct ProcessManager *manager)
 {
-    EnvMutexLock(&manager->lock);
-    ProcessAttr *current = manager->processes;
-    while (current) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *current = all[k]->attr;
         if (current->scanType != NORMAL_SCAN) {
-            current = current->next;
             continue;
         }
         int ret = memcpy_s(current->strategyAttr.l3RemoteMemRatio, sizeof(double) * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM,
@@ -588,9 +584,8 @@ static void SkipMultiProcessRatio(struct ProcessManager *manager)
         if (ret) {
             SMAP_LOGGER_ERROR("memcpy l3 remote mem ratio failed.");
         }
-        current = current->next;
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
 }
 
 void ConfigRatios(struct ProcessManager *manager)

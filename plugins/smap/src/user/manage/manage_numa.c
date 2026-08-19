@@ -253,25 +253,23 @@ void CalNrPagesLocalTotalPerPid(ProcessAttr *attr)
 
 void CalNrPagesLocalTotal(void)
 {
-    ProcessAttr *attr = GetProcessManager()->processes;
-    int ret;
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(GetProcessManager(), all, MAX_PID_SLOTS);
 
-    while (attr) {
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         if (IsMultiNumaVm(attr) && GetRunMode() == MEM_POOL_MODE) {
-            attr = attr->next;
             continue;
         }
         SMAP_LOGGER_DEBUG("CalNrPagesLocalTotal pid: %d.", attr->pid);
         CalNrPagesLocalTotalPerPid(attr);
-        attr = attr->next;
     }
+    PidSlotReleaseRefs(all, n);
 }
 
 void CalRemoteNumaAllocPerPid(int i, int j, uint32_t tmpNrPagesToUse,
                               uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM])
 {
-    ProcessAttr *attr = GetProcessManager()->processes;
-
     if (GetProcessManager()->nr[VM_TYPE] + GetProcessManager()->nr[PROCESS_TYPE] == 0) {
         return;
     }
@@ -281,8 +279,11 @@ void CalRemoteNumaAllocPerPid(int i, int j, uint32_t tmpNrPagesToUse,
     if (tmpMaxAllocNrPages[i][j] == 0) {
         return;
     }
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(GetProcessManager(), all, MAX_PID_SLOTS);
     // 根据比例计算每个PID的迁出比例，更新迁出的比例到l2RemoteMemRatio
-    while (attr) {
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         // 1）每个PID最大迁出量/总最大迁出量 = 最大迁出量比例
         tmpRatioPerPid =
             (double)attr->strategyAttr.nrPagesPerLocalNuma[i] *
@@ -295,9 +296,8 @@ void CalRemoteNumaAllocPerPid(int i, int j, uint32_t tmpNrPagesToUse,
         attr->strategyAttr.l2RemoteMemRatio[i][j] +=
             ((double)tmpNrPagesToUse * tmpRatioPerPid / attr->strategyAttr.nrPagesPerLocalNuma[i]) * HUNDRED;
         SMAP_LOGGER_DEBUG("CalRemoteNumaAllocPerPid 2: %.2lf.", attr->strategyAttr.l2RemoteMemRatio[i][j]);
-
-        attr = attr->next;
     }
+    PidSlotReleaseRefs(all, n);
 }
 
 static void CalAvailBorrowPage(uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
@@ -448,7 +448,6 @@ void AllocBorrowPagesForMemsize(ProcessAttr *attr, uint32_t availPrivatePages[LO
 
 void CalRemoteNumaSizeAllocPerNuma(void)
 {
-    ProcessAttr *attr;
     struct RemoteNumaInfo remoteNumaInfo = GetProcessManager()->remoteNumaInfo;
     uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
     int i, j;
@@ -457,15 +456,20 @@ void CalRemoteNumaSizeAllocPerNuma(void)
     uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
     CalAvailBorrowPage(availPrivatePages, availSharedPages);
 
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(GetProcessManager(), all, MAX_PID_SLOTS);
+
     // 先满足迁移模式为 MIG_MEMSIZE_MODE 的进程
-    for (attr = GetProcessManager()->processes; attr; attr = attr->next) {
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         if (attr->migrateMode == MIG_MEMSIZE_MODE) {
             AllocBorrowPagesForMemsize(attr, availPrivatePages, availSharedPages);
         }
     }
 
     // 计算所有进程**想要**从各本地NUMA迁移到各远端NUMA的总页面数量
-    for (attr = GetProcessManager()->processes; attr; attr = attr->next) {
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         if (attr->migrateMode == MIG_MEMSIZE_MODE) {
             continue;
         }
@@ -481,6 +485,8 @@ void CalRemoteNumaSizeAllocPerNuma(void)
             }
         }
     }
+
+    PidSlotReleaseRefs(all, n);
 
     // 用远端借用的内存计算每个pid，每个numa可迁出的比例
     AllocBorrowPage(tmpMaxAllocNrPages, availPrivatePages, availSharedPages);
@@ -501,13 +507,15 @@ void ClearRemoteMemUsed(void)
 
 void CalRemoteMemUsed(void)
 {
-    ProcessAttr *attr = GetProcessManager()->processes;
     struct RemoteNumaInfo *remoteNumaInfo = &GetProcessManager()->remoteNumaInfo;
     int i, j;
 
     int nrLocal = GetProcessManager()->nrLocalNuma;
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(GetProcessManager(), all, MAX_PID_SLOTS);
     // 计算每个本地远端对应按照ratio可迁出的最大量
-    while (attr) {
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         for (j = 0; j < REMOTE_NUMA_NUM; j++) {
             remoteNumaInfo->usedInfo[j].used += attr->walkPage.nrPages[j + nrLocal];
             SMAP_LOGGER_DEBUG("usedInfo[%d].used: %llu, nrPages[%d+%d]: %u.", j, remoteNumaInfo->usedInfo[j].used, j,
@@ -519,8 +527,8 @@ void CalRemoteMemUsed(void)
                                   attr->strategyAttr.allocRemoteNrPages[i][j]);
             }
         }
-        attr = attr->next;
     }
+    PidSlotReleaseRefs(all, n);
 }
 
 void CalcMigrateNrPagesPerPIDMuiltNuma(void)

@@ -20,6 +20,7 @@ using namespace std;
 
 #define BIT(i) (1U << (i))
 
+extern "C" void FreeProceccesAttr(ProcessAttr *attr);
 static cpu_set_t g_fake_cpu_mask;
 extern "C" struct ProcessManager g_processManager;
 extern "C" uint32_t g_pageSizeNormal;
@@ -100,19 +101,29 @@ static int fake_sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t *mask)
     return 0;
 }
 
+static ProcessAttr *PmHeadAttr(struct ProcessManager *pm)
+{
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        if (pm->slots[i].attr != nullptr) {
+            return pm->slots[i].attr;
+        }
+    }
+    return nullptr;
+}
+
 class ManageTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
         cout << "[Phase SetUp Begin]" << endl;
-        g_processManager.processes = nullptr;
+        memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
         cout << "[Phase SetUp End]" << endl;
     }
     void TearDown() override
     {
         cout << "[Phase TearDown Begin]" << endl;
         GlobalMockObject::verify();
-        g_processManager.processes = nullptr;
+        memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
         cout << "[Phase TearDown End]" << endl;
     }
 };
@@ -760,11 +771,11 @@ TEST_F(ManageTest, TestProcessManagerInitTwo)
     uint32_t pageType = PAGETYPE_HUGE;
     MOCKER(EnvMutexInit).stubs().will(returnValue(0));
     EnvAtomicSet(&g_processManager.scanMigrateStop, 1);
-    g_processManager.processes = (ProcessAttr *)&period;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, (ProcessAttr *)&period);
     ret = ProcessManagerInit(pageType);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(LIGHT_STABLE_MIGRATE_CYCLE, g_processManager.migPeriod);
-    EXPECT_EQ(nullptr, g_processManager.processes);
+    EXPECT_EQ(nullptr, PmHeadAttr(&g_processManager));
 }
 
 TEST_F(ManageTest, TestLoadMangerNrProcessNum)
@@ -874,78 +885,6 @@ TEST_F(ManageTest, TestGetPidTypeFromCommFile)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" void LinkedListRemove(ProcessAttr **remove, ProcessAttr **head);
-extern "C" void FreeProceccesAttr(ProcessAttr *attr);
-TEST_F(ManageTest, TestLinkedListRemoveInputNull)
-{
-    ProcessAttr *remove = nullptr;
-    ProcessAttr *head = nullptr;
-    LinkedListRemove(&remove, &head);
-    EXPECT_EQ(nullptr, remove);
-    EXPECT_EQ(nullptr, head);
-
-    head = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    LinkedListRemove(&remove, &head);
-    EXPECT_EQ(nullptr, remove);
-    free(head);
-
-    remove = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    head = nullptr;
-    LinkedListRemove(&remove, &head);
-    EXPECT_EQ(nullptr, head);
-    free(remove);
-
-    head = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    head->next = nullptr;
-    remove = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    MOCKER(FreeProceccesAttr).stubs().will(ignoreReturnValue());
-    LinkedListRemove(&remove, &head);
-    EXPECT_EQ(nullptr, head->next);
-    free(head);
-
-    head = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    head->next = nullptr;
-    remove = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    MOCKER(FreeProceccesAttr).stubs().will(ignoreReturnValue());
-    LinkedListRemove(&head, &head);
-    EXPECT_EQ(nullptr, head);
-}
-
-TEST_F(ManageTest, TestLinkedListRemove)
-{
-    MOCKER(FreeProceccesAttr).stubs().will(ignoreReturnValue());
-    ProcessAttr *head = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    ProcessAttr *middle = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    ProcessAttr *tail = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    head->next = middle;
-    middle->next = tail;
-    tail->next = nullptr;
-    LinkedListRemove(&middle, &head);
-    EXPECT_EQ(middle, nullptr);
-    free(head);
-
-    head = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    middle = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    tail = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    head->next = middle;
-    middle->next = tail;
-    tail->next = nullptr;
-    LinkedListRemove(&tail, &head);
-    EXPECT_EQ(tail, nullptr);
-    EXPECT_EQ(middle->next, nullptr);
-    free(head);
-
-    head = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    middle = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    tail = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    head->next = middle;
-    middle->next = tail;
-    tail->next = nullptr;
-    ProcessAttr *attr = head;
-    LinkedListRemove(&attr, &head);
-    EXPECT_EQ(head, middle);
-    free(head);
-}
 
 extern "C" int DetectPidType(pid_t pid);
 TEST_F(ManageTest, TestDetectPidType)
@@ -967,22 +906,12 @@ extern "C" ProcessAttr *GetProcessAttr(pid_t pid);
 TEST_F(ManageTest, TestGetProcessAttr)
 {
     ProcessAttr *ret, current;
-    g_processManager.processes = &current;
     current.pid = 123;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &current);
     ret = GetProcessAttr(123);
     EXPECT_EQ(123, ret->pid);
 }
 
-extern "C" ProcessAttr *GetProcessAttrLocked(pid_t pid);
-TEST_F(ManageTest, TestGetProcessAttrLocked)
-{
-    ProcessAttr pid1 = {.pid = 1};
-    ProcessAttr pid2 = {.pid = 2, .next = &pid1};
-    g_processManager.processes = &pid2;
-    ProcessAttr *ret = GetProcessAttrLocked(pid1.pid);
-    EXPECT_EQ(pid1.pid, ret->pid);
-    g_processManager.processes = nullptr;
-}
 
 extern "C" int ParseMmapType(pid_t pid, MmapType *mmapType);
 extern "C" int ReadCmdlineByPid(pid_t pid, char *buf, int len);
@@ -1238,7 +1167,7 @@ static ProcessParam InitCandidateTest(ProcessAttr *active, int nrLocalNuma = 4)
 {
     active->pid = 123;
     active->type = PROCESS_TYPE;
-    g_processManager.processes = active;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, active);
     g_processManager.nrLocalNuma = nrLocalNuma;
     return ProcessParam{
         .pid = active->pid,
@@ -1438,7 +1367,7 @@ TEST_F(ManageTest, TestProcessAddManageResetPidConfig)
     mockProcess.scanTime = 50;
     mockProcess.numaAttr.numaNodes = 31;
 
-    g_processManager.processes = &mockProcess;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &mockProcess);
     g_processManager.nrLocalNuma = 4;
     ProcessParam param = {
         .pid = pid,
@@ -1448,9 +1377,9 @@ TEST_F(ManageTest, TestProcessAddManageResetPidConfig)
     };
     param.numaParam[0].nid = 5;
     param.numaParam[0].ratio = 50;
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     MOCKER(DetectPidType).stubs().will(returnValue(0));
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&mockProcess));
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&mockProcess));
     MOCKER(SetLocalNumaByCpu).stubs().will(invoke(AddAffinityLocalForTest));
     MOCKER(GetProcessNumaMapsObservation).stubs().will(invoke(AddEmptyCandidateResidentForTest));
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
@@ -1460,10 +1389,10 @@ TEST_F(ManageTest, TestProcessAddManageResetPidConfig)
     mockProcess.numaAttr.numaNodes = 47;
     ret = ProcessAddManage(&param, &localNodeBitmap);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(mockProcess.scanTime, g_processManager.processes->scanTime);
-    EXPECT_EQ(mockProcess.duration, g_processManager.processes->duration);
-    EXPECT_EQ(50., g_processManager.processes->initLocalMemRatio);
-    g_processManager.processes = nullptr;
+    EXPECT_EQ(mockProcess.scanTime, PmHeadAttr(&g_processManager)->scanTime);
+    EXPECT_EQ(mockProcess.duration, PmHeadAttr(&g_processManager)->duration);
+    EXPECT_EQ(50., PmHeadAttr(&g_processManager)->initLocalMemRatio);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 TEST_F(ManageTest, TestProcessAddManageNewPid)
@@ -1478,7 +1407,7 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     };
     param.numaParam[0].nid = 4;
     param.numaParam[0].ratio = 50;
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     g_processManager.nr[VM_TYPE] = 0;
     g_processManager.nrLocalNuma = 4;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
@@ -1494,16 +1423,16 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     ret = ProcessAddManage(&param, nullptr);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
-    EXPECT_NE(nullptr, g_processManager.processes);
-    EXPECT_EQ(DEFAULT_SCAN_PERIOD, g_processManager.processes->scanTime); // 首次扫描使用DEFAULT_SCAN_PERIOD
-    EXPECT_EQ(param.duration, g_processManager.processes->duration);
-    EXPECT_EQ(50, g_processManager.processes->initLocalMemRatio);
+    EXPECT_NE(nullptr, PmHeadAttr(&g_processManager));
+    EXPECT_EQ(DEFAULT_SCAN_PERIOD, PmHeadAttr(&g_processManager)->scanTime); // 首次扫描使用DEFAULT_SCAN_PERIOD
+    EXPECT_EQ(param.duration, PmHeadAttr(&g_processManager)->duration);
+    EXPECT_EQ(50, PmHeadAttr(&g_processManager)->initLocalMemRatio);
 
     // when scanType is HAM_SCAN/STATISTIC_SCAN, state should be set to PROC_MOVE
     // when nodeBitmap is not null, local numanodes should be updated
-    free(g_processManager.processes);
+    free(PmHeadAttr(&g_processManager));
     uint32_t localNodeBitmap = 1;
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     g_processManager.nr[VM_TYPE] = 0;
     param.scanType = HAM_SCAN;
     MOCKER(DetectPidType).stubs().will(returnValue((int)VM_TYPE));
@@ -1511,12 +1440,12 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     ret = ProcessAddManage(&param, &localNodeBitmap);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
-    EXPECT_NE(nullptr, g_processManager.processes);
+    EXPECT_NE(nullptr, PmHeadAttr(&g_processManager));
     EXPECT_EQ(DEFAULT_SCAN_PERIOD,
-              g_processManager.processes->scanTime); // 首次扫描使用DEFAULT_SCAN_PERIOD
-    EXPECT_EQ(param.duration, g_processManager.processes->duration);
-    EXPECT_EQ(50, g_processManager.processes->initLocalMemRatio);
-    EXPECT_EQ(PROC_MOVE, g_processManager.processes->state);
+              PmHeadAttr(&g_processManager)->scanTime); // 首次扫描使用DEFAULT_SCAN_PERIOD
+    EXPECT_EQ(param.duration, PmHeadAttr(&g_processManager)->duration);
+    EXPECT_EQ(50, PmHeadAttr(&g_processManager)->initLocalMemRatio);
+    EXPECT_EQ(PROC_MOVE, PmHeadAttr(&g_processManager)->state);
 }
 
 TEST_F(ManageTest, TestProcessAddManageNewPidFailed)
@@ -1529,7 +1458,7 @@ TEST_F(ManageTest, TestProcessAddManageNewPidFailed)
     };
     param.numaParam[0].nid = 1;
     param.numaParam[0].ratio = 50;
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     g_processManager.nr[VM_TYPE] = 0;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
     g_pageSizeHuge = PAGESIZE_2M;
@@ -1559,7 +1488,7 @@ TEST_F(ManageTest, TestProcessAddGroupedManageNewPid)
     GroupMigrationPolicy policy = {};
     FillPolicyForManageTest(&policy);
 
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     g_processManager.nr[VM_TYPE] = 0;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
     g_pageSizeHuge = PAGESIZE_2M;
@@ -1569,16 +1498,16 @@ TEST_F(ManageTest, TestProcessAddGroupedManageNewPid)
 
     int ret = ProcessAddGroupedManage(1234, 0x11, &policy);
     EXPECT_EQ(0, ret);
-    ASSERT_NE(nullptr, g_processManager.processes);
+    ASSERT_NE(nullptr, PmHeadAttr(&g_processManager));
     EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
-    EXPECT_EQ(1234, g_processManager.processes->pid);
-    EXPECT_EQ((uint32_t)0x11, g_processManager.processes->numaAttr.numaNodes);
-    EXPECT_TRUE(g_processManager.processes->groupPolicy.enabled);
-    EXPECT_EQ((uint64_t)2, g_processManager.processes->groupPolicy.groups[0].locals[0].localReservePages);
-    EXPECT_EQ((uint64_t)3, g_processManager.processes->groupPolicy.groups[0].targets[0].usedPages);
+    EXPECT_EQ(1234, PmHeadAttr(&g_processManager)->pid);
+    EXPECT_EQ((uint32_t)0x11, PmHeadAttr(&g_processManager)->numaAttr.numaNodes);
+    EXPECT_TRUE(PmHeadAttr(&g_processManager)->groupPolicy.enabled);
+    EXPECT_EQ((uint64_t)2, PmHeadAttr(&g_processManager)->groupPolicy.groups[0].locals[0].localReservePages);
+    EXPECT_EQ((uint64_t)3, PmHeadAttr(&g_processManager)->groupPolicy.groups[0].targets[0].usedPages);
 
-    free(g_processManager.processes);
-    g_processManager.processes = nullptr;
+    free(PmHeadAttr(&g_processManager));
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     g_processManager.nr[VM_TYPE] = 0;
 }
 
@@ -1592,7 +1521,7 @@ TEST_F(ManageTest, TestProcessAddGroupedManageUpdateExistingPid)
     current.pid = 1234;
     current.next = nullptr;
     current.pendingGroupPolicy.valid = true;
-    g_processManager.processes = &current;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &current);
     MOCKER(DetectPidType).stubs().will(returnValue((int)VM_TYPE));
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
 
@@ -1603,7 +1532,7 @@ TEST_F(ManageTest, TestProcessAddGroupedManageUpdateExistingPid)
     EXPECT_TRUE(current.groupPolicy.enabled);
     EXPECT_FALSE(current.pendingGroupPolicy.valid);
     EXPECT_EQ((uint64_t)6, current.groupPolicy.groups[0].targets[0].usedPages);
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 TEST_F(ManageTest, TestProcessAddGroupedManageRejectsInvalidInputs)
@@ -1639,7 +1568,7 @@ TEST_F(ManageTest, TestProcessSetPendingGroupedManage)
     current.pid = 1234;
     current.state = PROC_MIGRATE;
     current.groupPolicy.enabled = true;
-    g_processManager.processes = &current;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &current);
 
     int ret = ProcessSetPendingGroupedManage(1234, 0x31, &policy);
     EXPECT_EQ(0, ret);
@@ -1656,7 +1585,7 @@ TEST_F(ManageTest, TestProcessSetPendingGroupedManage)
     current.state = PROC_IDLE;
     ret = ProcessSetPendingGroupedManage(1234, 0x31, &policy);
     EXPECT_EQ(-EINVAL, ret);
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 static int FillPendingGroupedNumaPages(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge)
@@ -1703,7 +1632,7 @@ TEST_F(ManageTest, TestProcessAddGroupedManageRejectsLimitAndPreprocessFailure)
 
     g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     g_processManager.nr[VM_TYPE] = MAX_2M_PROCESSES_CNT;
     MOCKER(DetectPidType).stubs().will(returnValue((int)VM_TYPE));
     int ret = ProcessAddGroupedManage(1234, 0x11, &policy);
@@ -1715,7 +1644,7 @@ TEST_F(ManageTest, TestProcessAddGroupedManageRejectsLimitAndPreprocessFailure)
     MOCKER(VMPreprocess).stubs().will(returnValue(-ENOMEM));
     ret = ProcessAddGroupedManage(1234, 0x11, &policy);
     EXPECT_EQ(-ENOMEM, ret);
-    EXPECT_EQ(nullptr, g_processManager.processes);
+    EXPECT_EQ(nullptr, PmHeadAttr(&g_processManager));
     EXPECT_EQ(0, g_processManager.nr[VM_TYPE]);
 }
 
@@ -1802,23 +1731,23 @@ TEST_F(ManageTest, TestCheckAndRemoveInvalidProcess)
 {
     ProcessAttr attr = {.pid = 1025};
     attr.type = VM_TYPE;
-    EnvMutexInit(&g_processManager.lock);
-    g_processManager.processes = &attr;
+    EnvMutexInit(&g_processManager.threadLock);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
     g_processManager.nr[VM_TYPE] = 2;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
     g_pageSizeHuge = PAGESIZE_2M;
     MOCKER(PidIsValid).stubs().will(returnValue(false));
     MOCKER(AccessIoctlRemovePid).expects(once()).will(returnValue(0));
-    MOCKER(LinkedListRemove).stubs().will(ignoreReturnValue());
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
+    MOCKER(FreeProceccesAttr).stubs().will(ignoreReturnValue());
     CheckAndRemoveInvalidProcess();
     EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
 }
 
 TEST_F(ManageTest, TestCheckAndRemoveInvalidProcessTwo)
 {
-    EnvMutexInit(&g_processManager.lock);
-    g_processManager.processes = nullptr;
+    EnvMutexInit(&g_processManager.threadLock);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     CheckAndRemoveInvalidProcess();
     EXPECT_EQ(0, g_processManager.remoteNumaInfo.usedInfo[0].used);
 }
@@ -1828,12 +1757,12 @@ TEST_F(ManageTest, TestCalRemoteMemUsed)
 {
     ProcessAttr attr;
     attr.next = nullptr;
-    g_processManager.processes = &attr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
     g_processManager.nrLocalNuma = 4;
-    g_processManager.processes->walkPage.nrPages[4] = 1;
+    PmHeadAttr(&g_processManager)->walkPage.nrPages[4] = 1;
     CalRemoteMemUsed();
     EXPECT_EQ(1, g_processManager.remoteNumaInfo.usedInfo[0].used);
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 extern "C" void RemoveManagedProcess(int nr, pid_t *pidArr);
@@ -1846,7 +1775,8 @@ TEST_F(ManageTest, TestRemoveManagedProcessInvalidPid)
     mockProcess.type = PROCESS_TYPE;
     mockProcess.next = nullptr;
 
-    g_processManager.processes = &mockProcess;
+    mockProcess.pid = pid;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &mockProcess);
     g_processManager.nr[PROCESS_TYPE] = 1;
     pid_t pidArr[1] = {1};
 
@@ -1860,7 +1790,7 @@ TEST_F(ManageTest, TestRemoveManagedProcessValidPid)
     ProcessAttr mockProcess;
     mockProcess.pid = pid;
     mockProcess.next = nullptr;
-    g_processManager.processes = &mockProcess;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &mockProcess);
     pid_t pidArr[1] = {pid};
     int ret;
 
@@ -1870,17 +1800,17 @@ TEST_F(ManageTest, TestRemoveManagedProcessValidPid)
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
     RemoveManagedProcess(1, pidArr);
     EXPECT_EQ(0, g_processManager.nr[VM_TYPE]);
-    EXPECT_EQ(g_processManager.processes, nullptr);
+    EXPECT_EQ(PmHeadAttr(&g_processManager), nullptr);
 
     GlobalMockObject::verify();
-    g_processManager.processes = &mockProcess;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &mockProcess);
     mockProcess.type = PROCESS_TYPE;
     g_processManager.nr[PROCESS_TYPE] = 1;
     MOCKER(FreeProceccesAttr).stubs().will(ignoreReturnValue());
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
     RemoveManagedProcess(1, pidArr);
     EXPECT_EQ(0, g_processManager.nr[PROCESS_TYPE]);
-    EXPECT_EQ(g_processManager.processes, nullptr);
+    EXPECT_EQ(PmHeadAttr(&g_processManager), nullptr);
 }
 
 extern "C" void RemoveAllManagedProcess(void);
@@ -1890,7 +1820,7 @@ TEST_F(ManageTest, TestRemoveAllManagedProcess)
 
     pid_t pid = 123;
 
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
 
     ProcessAttr *mockProcess = (ProcessAttr *)malloc(sizeof(ProcessAttr));
     mockProcess->pid = pid;
@@ -1898,15 +1828,15 @@ TEST_F(ManageTest, TestRemoveAllManagedProcess)
 
     MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(0));
     MOCKER(FreeProceccesAttr).stubs().will(ignoreReturnValue());
-    g_processManager.processes = mockProcess;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, mockProcess);
     RemoveAllManagedProcess();
-    EXPECT_EQ(g_processManager.processes, nullptr);
+    EXPECT_EQ(PmHeadAttr(&g_processManager), nullptr);
     EXPECT_EQ(g_processManager.nr[VM_TYPE], 0);
     EXPECT_EQ(g_processManager.nr[PROCESS_TYPE], 0);
 
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     RemoveAllManagedProcess();
-    EXPECT_EQ(g_processManager.processes, nullptr);
+    EXPECT_EQ(PmHeadAttr(&g_processManager), nullptr);
     EXPECT_EQ(g_processManager.nr[VM_TYPE], 0);
     EXPECT_EQ(g_processManager.nr[PROCESS_TYPE], 0);
 }
@@ -2148,7 +2078,7 @@ TEST_F(ManageTest, TestCalNrPagesLocalTotalPerPid)
 {
     ProcessAttr attr = {};
     g_processManager.nrLocalNuma = 4;
-    g_processManager.processes = &attr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 2;
     attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 4;
     attr.strategyAttr.remoteNrPagesAfterMigrate[2][0] = 6;
@@ -2170,7 +2100,7 @@ TEST_F(ManageTest, TestCalNrPagesLocalTotalPerPidTwo)
 {
     ProcessAttr attr = {};
     g_processManager.nrLocalNuma = 4;
-    g_processManager.processes = &attr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][1] = 2;
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][2] = 4;
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][3] = 6;
@@ -2193,12 +2123,12 @@ extern "C" void CalNrPagesLocalTotal(void);
 TEST_F(ManageTest, TestCalNrPagesLocalTotal)
 {
     ProcessAttr attr = {};
-    g_processManager.processes = &attr;
-    g_processManager.processes->next = nullptr;
-    g_processManager.processes->strategyAttr.remoteNrPagesAfterMigrate[0][0] = 2;
-    g_processManager.processes->walkPage.nrPages[0] = 2;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
+    PmHeadAttr(&g_processManager)->next = nullptr;
+    PmHeadAttr(&g_processManager)->strategyAttr.remoteNrPagesAfterMigrate[0][0] = 2;
+    PmHeadAttr(&g_processManager)->walkPage.nrPages[0] = 2;
     CalNrPagesLocalTotal();
-    EXPECT_EQ(2, g_processManager.processes->strategyAttr.nrPagesPerLocalNuma[0]);
+    EXPECT_EQ(2, PmHeadAttr(&g_processManager)->strategyAttr.nrPagesPerLocalNuma[0]);
 }
 
 extern "C" void CalRemoteNumaAllocPerPid(int i, int j, uint32_t tmpNrPagesToUse,
@@ -2208,8 +2138,8 @@ TEST_F(ManageTest, TestCalRemoteNumaAllocPerPid)
     uint32_t tmp[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = {0};
 
     ProcessAttr attr = {};
-    g_processManager.processes = &attr;
-    g_processManager.processes->next = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
+    PmHeadAttr(&g_processManager)->next = nullptr;
 
     g_processManager.tracking.pageSize = PAGESIZE_4K;
     g_processManager.nr[0] = 100;
@@ -2227,15 +2157,15 @@ extern "C" void CalRemoteNumaSizeAllocPerNuma(void);
 TEST_F(ManageTest, TestCalRemoteNumaSizeAllocPerNuma)
 {
     ProcessAttr attr = {};
-    g_processManager.processes = &attr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
     g_processManager.remoteNumaInfo.privateSize[0][0] = 300;
-    g_processManager.processes->next = nullptr;
+    PmHeadAttr(&g_processManager)->next = nullptr;
     g_processManager.nrLocalNuma = 4;
     attr.strategyAttr.nrPagesPerLocalNuma[0] = 10;
     attr.strategyAttr.initRemoteMemRatio[0][0] = 50;
 
     CalRemoteNumaSizeAllocPerNuma();
-    EXPECT_EQ(50, g_processManager.processes->strategyAttr.l2RemoteMemRatio[0][0]);
+    EXPECT_EQ(50, PmHeadAttr(&g_processManager)->strategyAttr.l2RemoteMemRatio[0][0]);
 }
 
 extern "C" void CalcMigrateNrPagesPerPIDMuiltNuma(void);
@@ -2243,16 +2173,16 @@ TEST_F(ManageTest, TestCalcMigrateNrPagesPerPIDMuiltNuma)
 {
     g_runMode = WATERLINE_MODE;
     ProcessAttr attr = {};
-    g_processManager.processes = &attr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
     g_processManager.tracking.pageSize = PAGESIZE_2M;
     g_processManager.remoteNumaInfo.usedInfo[0].size = 300;
-    g_processManager.processes->next = nullptr;
+    PmHeadAttr(&g_processManager)->next = nullptr;
     g_processManager.nrLocalNuma = 4;
     attr.strategyAttr.nrPagesPerLocalNuma[0] = 10;
     attr.strategyAttr.initRemoteMemRatio[0][0] = 50;
 
     CalcMigrateNrPagesPerPIDMuiltNuma();
-    EXPECT_EQ(0, g_processManager.processes->strategyAttr.l2RemoteMemRatio[0][0]);
+    EXPECT_EQ(0, PmHeadAttr(&g_processManager)->strategyAttr.l2RemoteMemRatio[0][0]);
 }
 
 TEST_F(ManageTest, TestSetRemoteNumaInfo)
@@ -2400,12 +2330,12 @@ TEST_F(ManageTest, TestCheckReadyMigrateBack)
 {
     bool ret;
     ProcessAttr attr = {};
-    g_processManager.processes = &attr;
-    g_processManager.processes->next = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
+    PmHeadAttr(&g_processManager)->next = nullptr;
     g_processManager.nrLocalNuma = 4;
-    g_processManager.processes->numaAttr.numaNodes = 1;
+    PmHeadAttr(&g_processManager)->numaAttr.numaNodes = 1;
     g_processManager.remoteNumaInfo.sharedSize[1] = 1;
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     MOCKER(CheckBorrowUsed).stubs().will(returnValue(true));
     MOCKER(CheckPrivateBorrowUsed).stubs().will(returnValue(true));
     ret = CheckReadyMigrateBack(5);
@@ -2421,7 +2351,7 @@ TEST_F(ManageTest, TestCheckReadyMigrateBack)
 TEST_F(ManageTest, TestCheckReadyMigrateBackTwo)
 {
     bool ret;
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     MOCKER(CheckBorrowUsed).stubs().will(returnValue(true));
     ret = CheckReadyMigrateBack(5);
     EXPECT_EQ(true, ret);
@@ -2436,26 +2366,27 @@ TEST_F(ManageTest, TestIsPidArrInStateInvalid)
 
     int ret = IsPidArrayStateChangeReady(nullptr, 2, 1);
     EXPECT_EQ(-EINVAL, ret);
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttr *)nullptr)).then(returnValue(&pid));
+    MOCKER(GetProcessAttr).stubs().will(returnValue((ProcessAttr *)nullptr)).then(returnValue(&pid));
     ret = IsPidArrayStateChangeReady(pidArr, 2, 1);
     EXPECT_EQ(1, ret);
 }
 
 TEST_F(ManageTest, TestIsPidArrInStateNormal)
 {
-    ProcessAttr pid1 = {.state = PROC_MIGRATE};
-    ProcessAttr pid2 = {.state = PROC_MOVE};
+    ProcessAttr pid1 = {.pid = 1, .state = PROC_MIGRATE};
+    ProcessAttr pid2 = {.pid = 2, .state = PROC_MOVE};
     pid_t pidArr[] = {1, 2};
 
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&pid1)).then(returnValue(&pid2));
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotAdd(&g_processManager, &pid1);
+    PidSlotAdd(&g_processManager, &pid2);
     int ret = IsPidArrayStateChangeReady(pidArr, 2, 0);
     EXPECT_EQ(0, ret);
 
-    GlobalMockObject::verify();
     pid2.state = PROC_IDLE;
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&pid1)).then(returnValue(&pid2));
     ret = IsPidArrayStateChangeReady(pidArr, 2, 1);
     EXPECT_EQ(1, ret);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 TEST_F(ManageTest, TestIsPidArrInState)
@@ -2464,13 +2395,13 @@ TEST_F(ManageTest, TestIsPidArrInState)
     ProcessAttr pid2 = {.state = PROC_MOVE};
     pid_t pidArr[] = {1, 2};
 
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&pid1)).then(returnValue(&pid2));
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&pid1)).then(returnValue(&pid2));
     int ret = IsPidArrInState(pidArr, 2, PROC_MOVE);
     EXPECT_EQ(1, ret);
 
     GlobalMockObject::verify();
     pid2.state = PROC_IDLE;
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&pid1)).then(returnValue(&pid2));
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&pid1)).then(returnValue(&pid2));
     ret = IsPidArrInState(pidArr, 2, PROC_MOVE);
     EXPECT_EQ(0, ret);
 }
@@ -2478,14 +2409,17 @@ TEST_F(ManageTest, TestIsPidArrInState)
 extern "C" void SetPidArrState(pid_t *pidArr, int len, enum ProcessState state, int enable);
 TEST_F(ManageTest, TestSetPidArrState)
 {
-    ProcessAttr pid1 = {.state = PROC_IDLE};
-    ProcessAttr pid2 = {.state = PROC_IDLE};
+    ProcessAttr pid1 = {.pid = 1, .state = PROC_IDLE};
+    ProcessAttr pid2 = {.pid = 2, .state = PROC_IDLE};
     pid_t pidArr[] = {1, 2};
 
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&pid1)).then(returnValue(&pid2));
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotAdd(&g_processManager, &pid1);
+    PidSlotAdd(&g_processManager, &pid2);
     SetPidArrState(pidArr, 2, PROC_MOVE, 0);
     EXPECT_EQ(PROC_MOVE, pid1.state);
     EXPECT_EQ(PROC_MOVE, pid2.state);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 TEST_F(ManageTest, TestChangePidRemoteByNuma)
@@ -2498,10 +2432,11 @@ TEST_F(ManageTest, TestChangePidRemoteByNuma)
     pid1.numaAttr.numaNodes = 0b01010000;
     pid2.numaAttr.numaNodes = 0b00110000;
     pid1.next = &pid2;
-    g_processManager.processes = &pid1;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &pid1);
+    PidSlotAdd(&g_processManager, &pid2);
     g_processManager.nrLocalNuma = 4;
 
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     MOCKER(GetCurrentMaxNrPid).stubs().will(returnValue(2));
     MOCKER(AccessIoctlAddPid).stubs().will(returnValue(EINVAL));
     int ret = ChangePidRemoteByNuma(srcNid, destNid);
@@ -2515,7 +2450,7 @@ TEST_F(ManageTest, TestChangePidRemoteByNuma)
 
 TEST_F(ManageTest, TestChangePidRemoteByNumaTwo)
 {
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     int srcNid = 4;
     int destNid = 6;
     int ret = ChangePidRemoteByNuma(srcNid, destNid);
@@ -2531,9 +2466,10 @@ TEST_F(ManageTest, TestChangePidRemoteByNumaSyncAllProcessConfigFail)
     pid1.numaAttr.numaNodes = 0b01010000;
     pid2.numaAttr.numaNodes = 0b00110000;
     pid1.next = &pid2;
-    g_processManager.processes = &pid1;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &pid1);
+    PidSlotAdd(&g_processManager, &pid2);
 
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     MOCKER(GetCurrentMaxNrPid).stubs().will(returnValue(2));
     MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
     MOCKER(SyncAllProcessConfig).expects(once()).will(returnValue(-EBADF));
@@ -2555,12 +2491,12 @@ TEST_F(ManageTest, TestChangePidRemoteByPid)
     pid1.pid = 100;
 
     pid1.numaAttr.numaNodes = 0b00010001;
-    g_processManager.processes = &pid1;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &pid1);
     msg.payloads[0].pid = pid1.pid;
     msg.payloads[0].srcNid = 4;
     msg.payloads[0].destNid = 6;
 
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
     int ret = ChangePidRemoteByPid(&msg);
     EXPECT_EQ(0, ret);
@@ -2577,7 +2513,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateDisableInvalid)
 {
     pid_t pidArr[] = {1};
 
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(-EINVAL));
     int ret = EnableProcessMigrate(pidArr, 1, DISABLE_PROCESS_MIGRATE);
     EXPECT_EQ(-EINVAL, ret);
@@ -2587,7 +2523,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateDisableRetryFail)
 {
     pid_t pidArr[] = {1};
 
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(0));
     int ret = EnableProcessMigrate(pidArr, 1, DISABLE_PROCESS_MIGRATE);
     EXPECT_EQ(-ETIMEDOUT, ret);
@@ -2597,7 +2533,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateDisableRetrySuccess)
 {
     pid_t pidArr[] = {1};
 
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(0)).then(returnValue(1));
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
     MOCKER(SetPidArrState).expects(once());
@@ -2609,7 +2545,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateDisableNormal)
 {
     pid_t pidArr[] = {1};
 
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(1));
     MOCKER(SetPidArrState).expects(once());
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
@@ -2621,7 +2557,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateEnableNormal)
 {
     pid_t pidArr[] = {1};
 
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(1));
     MOCKER(SetPidArrState).expects(once());
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
@@ -2632,7 +2568,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateEnableNormal)
 TEST_F(ManageTest, TestIsRemoteNumaMigrateBackAllowedInvalid)
 {
     g_processManager.nrLocalNuma = 4;
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     int ret = IsRemoteNumaMigrateBackAllowed(0);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -2644,8 +2580,8 @@ TEST_F(ManageTest, TestIsRemoteNumaMigrateBackAllowedFail)
     pid1.state = PROC_MOVE;
     pid1.numaAttr.numaNodes = 0b00010001;
     g_processManager.nrLocalNuma = 4;
-    g_processManager.processes = &pid1;
-    EnvMutexInit(&g_processManager.lock);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &pid1);
+    EnvMutexInit(&g_processManager.threadLock);
     int ret = IsRemoteNumaMigrateBackAllowed(destNid);
     EXPECT_EQ(0, ret);
 }
@@ -2663,13 +2599,14 @@ TEST_F(ManageTest, TestIsRemoteNumaMigrateBackAllowedSuccess)
     pid2.next = &pid1;
     g_processManager.nrLocalNuma = 4;
 
-    g_processManager.processes = &pid1;
-    EnvMutexInit(&g_processManager.lock);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &pid1);
+    EnvMutexInit(&g_processManager.threadLock);
     int ret = IsRemoteNumaMigrateBackAllowed(destNid);
     EXPECT_EQ(1, ret);
 
     GlobalMockObject::verify();
-    g_processManager.processes = &pid2;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &pid2);
+    PidSlotAdd(&g_processManager, &pid1);
     ret = IsRemoteNumaMigrateBackAllowed(destNid);
     EXPECT_EQ(0, ret);
 }
@@ -2677,7 +2614,7 @@ TEST_F(ManageTest, TestIsRemoteNumaMigrateBackAllowedSuccess)
 TEST_F(ManageTest, TestIsRemoteNumaMoveAllowedInvalid)
 {
     g_processManager.nrLocalNuma = 4;
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     int ret = IsRemoteNumaMoveAllowed(0);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -2690,8 +2627,8 @@ TEST_F(ManageTest, TestIsRemoteNumaMoveAllowedFail)
     pid1.numaAttr.numaNodes = 0b00010001;
     g_processManager.nrLocalNuma = 4;
 
-    g_processManager.processes = &pid1;
-    EnvMutexInit(&g_processManager.lock);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &pid1);
+    EnvMutexInit(&g_processManager.threadLock);
     int ret = IsRemoteNumaMoveAllowed(destNid);
     EXPECT_EQ(0, ret);
 }
@@ -2709,8 +2646,9 @@ TEST_F(ManageTest, TestIsRemoteNumaMoveAllowedSuccess)
     pid2.next = nullptr;
     g_processManager.nrLocalNuma = 4;
 
-    g_processManager.processes = &pid1;
-    EnvMutexInit(&g_processManager.lock);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &pid1);
+    PidSlotAdd(&g_processManager, &pid2);
+    EnvMutexInit(&g_processManager.threadLock);
     int ret = IsRemoteNumaMoveAllowed(destNid);
     EXPECT_EQ(1, ret);
 }
@@ -2728,8 +2666,9 @@ TEST_F(ManageTest, TestIsRemoteNumaMoveAllowedSuccessTwo)
     pid2.next = nullptr;
     g_processManager.nrLocalNuma = 5;
 
-    g_processManager.processes = &pid1;
-    EnvMutexInit(&g_processManager.lock);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &pid1);
+    PidSlotAdd(&g_processManager, &pid2);
+    EnvMutexInit(&g_processManager.threadLock);
     int ret = IsRemoteNumaMoveAllowed(destNid);
     EXPECT_EQ(-22, ret);
 }
@@ -2747,8 +2686,9 @@ TEST_F(ManageTest, TestIsRemoteNumaMoveAllowedSuccessThree)
     pid2.next = nullptr;
     g_processManager.nrLocalNuma = 2;
 
-    g_processManager.processes = &pid1;
-    EnvMutexInit(&g_processManager.lock);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &pid1);
+    PidSlotAdd(&g_processManager, &pid2);
+    EnvMutexInit(&g_processManager.threadLock);
     int ret = IsRemoteNumaMoveAllowed(destNid);
     EXPECT_EQ(1, ret);
 }
@@ -2766,8 +2706,9 @@ TEST_F(ManageTest, TestIsRemoteNumaMoveAllowedSuccessFour)
     pid2.next = nullptr;
     g_processManager.nrLocalNuma = 4;
 
-    g_processManager.processes = &pid1;
-    EnvMutexInit(&g_processManager.lock);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &pid1);
+    PidSlotAdd(&g_processManager, &pid2);
+    EnvMutexInit(&g_processManager.threadLock);
     int ret = IsRemoteNumaMoveAllowed(destNid);
     EXPECT_EQ(0, ret);
 }
@@ -2791,13 +2732,14 @@ TEST_F(ManageTest, TestMigOutIsDoneSuccess)
     attr.migrateParam[0].memSize = 10240;
     g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.nrLocalNuma = 4;
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     ret = MigOutIsDone(&attr, &isMultiNumaPid);
     EXPECT_EQ(false, ret);
 
     attr.numaAttr.numaNodes = 0b00010001;
     attr.remoteNumaCnt = 1;
-    g_processManager.processes = &attr;
+    attr.pid = PID;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
     ret = MigOutIsDone(&attr, &isMultiNumaPid);
     EXPECT_EQ(true, ret);
 }
@@ -2809,7 +2751,6 @@ TEST_F(ManageTest, TestMigOutIsDoneSingleRemoteUsesRemotePages)
 
     g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.nrLocalNuma = 4;
-    attr.pid = PID;
     attr.migrateMode = MIG_MEMSIZE_MODE;
     attr.numaAttr.numaNodes = 0b00010001;
     attr.remoteNumaCnt = 1;
@@ -3070,7 +3011,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeIncreaseRearmsHighFre
     active.migrateParam[0].memSize = 1 * GIB / KIB;  // old target: 1GB
     active.isFirstScan = false;
     active.scanTime = 1000;  // low-freq scan
-    g_processManager.processes = &active;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &active);
     g_processManager.nrLocalNuma = 4;
     g_pageSizeNormal = PAGESIZE_4K;
     g_pageSizeHuge = PAGESIZE_2M;
@@ -3088,7 +3029,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeIncreaseRearmsHighFre
     ProcessManageCandidate candidate = {};
 
     MOCKER(DetectPidType).stubs().will(returnValue(0));
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&active));
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&active));
     MOCKER(ConfigureMigrationTargetsWithCapacityPolicy).stubs().will(invoke(SetIncreasedMemSizeForTest));
 
     int ret = PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate);
@@ -3098,7 +3039,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeIncreaseRearmsHighFre
     EXPECT_EQ(DEFAULT_SCAN_PERIOD, candidate.prepared->scanTime);  // scanTime reset to default
 
     DiscardProcessManageCandidate(&candidate);
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 /*
@@ -3115,7 +3056,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeDecreaseKeepsNormalSc
     active.migrateParam[0].memSize = 3 * GIB / KIB;  // old target: 3GB
     active.isFirstScan = false;
     active.scanTime = 1000;
-    g_processManager.processes = &active;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &active);
     g_processManager.nrLocalNuma = 4;
     g_pageSizeNormal = PAGESIZE_4K;
     g_pageSizeHuge = PAGESIZE_2M;
@@ -3133,7 +3074,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeDecreaseKeepsNormalSc
     ProcessManageCandidate candidate = {};
 
     MOCKER(DetectPidType).stubs().will(returnValue(0));
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&active));
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&active));
     MOCKER(ConfigureMigrationTargetsWithCapacityPolicy).stubs().will(invoke(SetDecreasedMemSizeForTest));
 
     int ret = PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate);
@@ -3143,7 +3084,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeDecreaseKeepsNormalSc
     EXPECT_NE(DEFAULT_SCAN_PERIOD, candidate.prepared->scanTime);  // scanTime unchanged
 
     DiscardProcessManageCandidate(&candidate);
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 /*
@@ -3160,7 +3101,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeUnchangedKeepsNormalS
     active.migrateParam[0].memSize = 2 * GIB / KIB;  // old target: 2GB
     active.isFirstScan = false;
     active.scanTime = 1000;
-    g_processManager.processes = &active;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &active);
     g_processManager.nrLocalNuma = 4;
     g_pageSizeNormal = PAGESIZE_4K;
     g_pageSizeHuge = PAGESIZE_2M;
@@ -3178,7 +3119,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeUnchangedKeepsNormalS
     ProcessManageCandidate candidate = {};
 
     MOCKER(DetectPidType).stubs().will(returnValue(0));
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&active));
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&active));
     MOCKER(ConfigureMigrationTargetsWithCapacityPolicy).stubs().will(invoke(SetUnchangedMemSizeForTest));
 
     int ret = PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate);
@@ -3188,7 +3129,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeUnchangedKeepsNormalS
     EXPECT_NE(DEFAULT_SCAN_PERIOD, candidate.prepared->scanTime);  // scanTime unchanged
 
     DiscardProcessManageCandidate(&candidate);
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 /*
@@ -3205,7 +3146,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeIncreaseHugeModeNoRes
     active.migrateParam[0].memSize = 1 * GIB / KIB;  // old target: 1GB
     active.isFirstScan = false;
     active.scanTime = 1000;  // low-freq scan
-    g_processManager.processes = &active;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &active);
     g_processManager.nrLocalNuma = 4;
     g_pageSizeNormal = PAGESIZE_4K;
     g_pageSizeHuge = PAGESIZE_2M;
@@ -3223,7 +3164,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeIncreaseHugeModeNoRes
     ProcessManageCandidate candidate = {};
 
     MOCKER(DetectPidType).stubs().will(returnValue(0));
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&active));
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&active));
     MOCKER(ConfigureMigrationTargetsWithCapacityPolicy).stubs().will(invoke(SetIncreasedMemSizeForTest));
 
     int ret = PrepareProcessManageCandidate(&param, VM_TYPE, &candidate);
@@ -3233,7 +3174,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeIncreaseHugeModeNoRes
     EXPECT_NE(DEFAULT_SCAN_PERIOD, candidate.prepared->scanTime);  // scanTime unchanged
 
     DiscardProcessManageCandidate(&candidate);
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 /*
@@ -4252,14 +4193,14 @@ static void InitPairTargetManager(ProcessManager *manager, int nrLocalNuma)
     memset(manager, 0, sizeof(*manager));
     manager->nrLocalNuma = nrLocalNuma;
     manager->tracking.pageSize = PAGESIZE_4K;
-    EnvMutexInit(&manager->lock);
+    EnvMutexInit(&manager->threadLock);
     EnvMutexInit(&manager->remoteNumaInfo.lock);
 }
 
 static void DestroyPairTargetManager(ProcessManager *manager)
 {
     EnvMutexDestroy(&manager->remoteNumaInfo.lock);
-    EnvMutexDestroy(&manager->lock);
+    EnvMutexDestroy(&manager->threadLock);
 }
 
 static void InitRatioPairProcess(ProcessAttr *attr, pid_t pid, int nrLocalNuma, uint32_t local0Pages,
@@ -4302,7 +4243,8 @@ TEST_F(ManageTest, TestBuildAllPairTargetsSyncBypassesRemoteCapacity)
     InitRatioPairProcess(&normalPid, 200, 1, 800, 0, 50);
     syncPid.ignoreRemoteCapacity = true;
     syncPid.next = &normalPid;
-    manager.processes = &syncPid;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &syncPid);
+    PidSlotAdd(&manager, &normalPid);
 
     AllPairTargetResult result = RunBuildAllPairTargets(&manager);
     ASSERT_EQ(0, result.ret);
@@ -4311,7 +4253,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsSyncBypassesRemoteCapacity)
     EXPECT_EQ(0U, result.Requested(200, 0, 1));
     EXPECT_EQ(0U, result.Target(200, 0, 1));
 
-    manager.processes = nullptr;
+    memset(&manager.slots, 0, sizeof(manager.slots));
     DestroyPairTargetManager(&manager);
 }
 
@@ -4329,7 +4271,9 @@ TEST_F(ManageTest, TestBuildAllPairTargetsPrivateFairAndStable)
     InitRatioPairProcess(&highPid, 300, 1, 800, 0, 50);
     highPid.next = &lowPid;
     lowPid.next = &middlePid;
-    manager.processes = &highPid;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &highPid);
+    PidSlotAdd(&manager, &lowPid);
+    PidSlotAdd(&manager, &middlePid);
 
     AllPairTargetResult first = RunBuildAllPairTargets(&manager);
     EXPECT_EQ(0, first.ret);
@@ -4345,7 +4289,9 @@ TEST_F(ManageTest, TestBuildAllPairTargetsPrivateFairAndStable)
     middlePid.next = &highPid;
     highPid.next = &lowPid;
     lowPid.next = nullptr;
-    manager.processes = &middlePid;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &middlePid);
+    PidSlotAdd(&manager, &highPid);
+    PidSlotAdd(&manager, &lowPid);
     AllPairTargetResult second = RunBuildAllPairTargets(&manager);
     EXPECT_EQ(first.Target(100, 0, 1), second.Target(100, 0, 1));
     EXPECT_EQ(first.Target(200, 0, 1), second.Target(200, 0, 1));
@@ -4355,7 +4301,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsPrivateFairAndStable)
     EXPECT_EQ(256U, manager.remoteNumaInfo.usedInfo[0].size);
     EXPECT_TRUE(manager.remoteNumaInfo.usedInfo[0].ifUsedFreshed);
 
-    manager.processes = nullptr;
+    memset(&manager.slots, 0, sizeof(manager.slots));
     DestroyPairTargetManager(&manager);
 }
 
@@ -4370,7 +4316,8 @@ TEST_F(ManageTest, TestBuildAllPairTargetsSharedAcrossLocalsAndPids)
     InitRatioPairProcess(&firstPid, 100, 2, 400, 400, 50);
     InitRatioPairProcess(&secondPid, 200, 2, 400, 400, 50);
     secondPid.next = &firstPid;
-    manager.processes = &secondPid;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &secondPid);
+    PidSlotAdd(&manager, &firstPid);
 
     AllPairTargetResult result = RunBuildAllPairTargets(&manager);
     EXPECT_EQ(0, result.ret);
@@ -4384,7 +4331,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsSharedAcrossLocalsAndPids)
     EXPECT_EQ(0U, manager.remoteNumaInfo.usedInfo[0].used);
     EXPECT_EQ(0U, manager.remoteNumaInfo.privateUsedInfo[0][0].used);
 
-    manager.processes = nullptr;
+    memset(&manager.slots, 0, sizeof(manager.slots));
     DestroyPairTargetManager(&manager);
 }
 
@@ -4402,7 +4349,8 @@ TEST_F(ManageTest, TestBuildAllPairTargetsNoModePriority)
     memsizePid.targetConfig.targets[0].ratio = 0;
     memsizePid.targetConfig.targets[0].memSizeKB = 1600;
     memsizePid.next = &ratioPid;
-    manager.processes = &memsizePid;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &memsizePid);
+    PidSlotAdd(&manager, &ratioPid);
 
     AllPairTargetResult result = RunBuildAllPairTargets(&manager);
     EXPECT_EQ(0, result.ret);
@@ -4411,7 +4359,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsNoModePriority)
     EXPECT_EQ(256U, result.Target(100, 0, 1));
     EXPECT_EQ(256U, result.Target(200, 0, 1));
 
-    manager.processes = nullptr;
+    memset(&manager.slots, 0, sizeof(manager.slots));
     DestroyPairTargetManager(&manager);
 }
 
@@ -4427,7 +4375,8 @@ TEST_F(ManageTest, TestBuildAllPairTargetsPrivateThenShared)
     InitRatioPairProcess(&firstPid, 100, 1, 800, 0, 50);
     InitRatioPairProcess(&secondPid, 200, 1, 800, 0, 50);
     secondPid.next = &firstPid;
-    manager.processes = &secondPid;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &secondPid);
+    PidSlotAdd(&manager, &firstPid);
 
     AllPairTargetResult result = RunBuildAllPairTargets(&manager);
     EXPECT_EQ(0, result.ret);
@@ -4437,7 +4386,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsPrivateThenShared)
     EXPECT_EQ(0U, manager.remoteNumaInfo.usedInfo[0].used);
     EXPECT_EQ(512U, manager.remoteNumaInfo.usedInfo[0].size);
 
-    manager.processes = nullptr;
+    memset(&manager.slots, 0, sizeof(manager.slots));
     DestroyPairTargetManager(&manager);
 }
 
@@ -4455,7 +4404,8 @@ TEST_F(ManageTest, TestBuildAllPairTargetsKeepsResidentBaseline)
     residentPid.managedLocalState.accountLocalMask[0] = BIT(0);
     InitRatioPairProcess(&newPid, 200, 1, 800, 0, 50);
     newPid.next = &residentPid;
-    manager.processes = &newPid;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &newPid);
+    PidSlotAdd(&manager, &residentPid);
 
     AllPairTargetResult result = RunBuildAllPairTargets(&manager);
     EXPECT_EQ(0, result.ret);
@@ -4466,7 +4416,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsKeepsResidentBaseline)
     EXPECT_EQ(300U, manager.remoteNumaInfo.privateUsedInfo[0][0].used);
     EXPECT_EQ(256U, manager.remoteNumaInfo.usedInfo[0].size);
 
-    manager.processes = nullptr;
+    memset(&manager.slots, 0, sizeof(manager.slots));
     DestroyPairTargetManager(&manager);
 }
 
@@ -4480,7 +4430,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsCapacityRecovery)
     attr.walkPage.nrPages[1] = 20;
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 20;
     attr.managedLocalState.accountLocalMask[0] = BIT(0);
-    manager.processes = &attr;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
 
     AllPairTargetResult noCapacity = RunBuildAllPairTargets(&manager);
     EXPECT_EQ(0, noCapacity.ret);
@@ -4497,7 +4447,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsCapacityRecovery)
     EXPECT_EQ(20U, manager.remoteNumaInfo.usedInfo[0].used);
     EXPECT_EQ(256U, manager.remoteNumaInfo.usedInfo[0].size);
 
-    manager.processes = nullptr;
+    memset(&manager.slots, 0, sizeof(manager.slots));
     DestroyPairTargetManager(&manager);
 }
 
@@ -4513,7 +4463,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsReroutesRequestFromIneligibleAccount)
     attr.managedLocalState.accountLocalMask[0] = BIT(1);
     attr.walkPage.nrPages[2] = 200;
     attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 200;
-    manager.processes = &attr;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
 
     AllPairTargetResult result = RunBuildAllPairTargets(&manager);
 
@@ -4525,7 +4475,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsReroutesRequestFromIneligibleAccount)
     EXPECT_EQ(200U, manager.remoteNumaInfo.usedInfo[0].used);
     EXPECT_EQ(200U, manager.remoteNumaInfo.privateUsedInfo[1][0].used);
 
-    manager.processes = nullptr;
+    memset(&manager.slots, 0, sizeof(manager.slots));
     DestroyPairTargetManager(&manager);
 }
 
@@ -4536,7 +4486,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsCapacityShrinkAndRestore)
 
     ProcessAttr attr;
     InitRatioPairProcess(&attr, 100, 1, 800, 0, 50);
-    manager.processes = &attr;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
 
     manager.remoteNumaInfo.privateSize[0][0] = 2;
     AllPairTargetResult full = RunBuildAllPairTargets(&manager);
@@ -4553,7 +4503,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsCapacityShrinkAndRestore)
     EXPECT_EQ(400U, restored.Requested(100, 0, 1));
     EXPECT_EQ(400U, restored.Target(100, 0, 1));
 
-    manager.processes = nullptr;
+    memset(&manager.slots, 0, sizeof(manager.slots));
     DestroyPairTargetManager(&manager);
 }
 
@@ -4569,7 +4519,7 @@ TEST_F(ManageTest, TestBuildAllPairPlanInputsKeepsTargetAndActualSnapshot)
     attr.walkPage.nrPages[1] = 300;
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 300;
     attr.managedLocalState.accountLocalMask[0] = BIT(0);
-    manager.processes = &attr;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
 
     PairPlan plans[LOCAL_NUMA_NUM * REMOTE_NUMA_NUM] = {};
     PairPidBudget pidBudgets[1] = {};
@@ -4588,7 +4538,7 @@ TEST_F(ManageTest, TestBuildAllPairPlanInputsKeepsTargetAndActualSnapshot)
     EXPECT_EQ(100, pidBudgets[0].pid);
     EXPECT_EQ(1100U, pidBudgets[0].maxMigratePages);
 
-    manager.processes = nullptr;
+    memset(&manager.slots, 0, sizeof(manager.slots));
     DestroyPairTargetManager(&manager);
 }
 
@@ -4602,7 +4552,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsFailureDoesNotPublishUsage)
 
     ProcessAttr attr;
     InitRatioPairProcess(&attr, 100, 1, 800, 0, 50);
-    manager.processes = &attr;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
 
     PairTarget target = {};
     size_t targetCnt = 1;
@@ -4612,7 +4562,7 @@ TEST_F(ManageTest, TestBuildAllPairTargetsFailureDoesNotPublishUsage)
     EXPECT_EQ(7U, manager.remoteNumaInfo.usedInfo[0].used);
     EXPECT_EQ(5U, manager.remoteNumaInfo.privateUsedInfo[0][0].used);
 
-    manager.processes = nullptr;
+    memset(&manager.slots, 0, sizeof(manager.slots));
     DestroyPairTargetManager(&manager);
 }
 
@@ -4674,32 +4624,12 @@ TEST_F(ManageTest, TestIsHugeModeFalse)
     EXPECT_EQ(false, ret);
 }
 
-extern "C" void LinkedListAdd(ProcessAttr **head, ProcessAttr **add);
-TEST_F(ManageTest, TestLinkedListAdd)
-{
-    ProcessAttr *head = nullptr;
-    ProcessAttr *node1 = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    node1->pid = 1;
-    node1->next = nullptr;
-    LinkedListAdd(&head, &node1);
-    EXPECT_EQ(head, node1);
-
-    ProcessAttr *node2 = (ProcessAttr *)malloc(sizeof(ProcessAttr));
-    node2->pid = 2;
-    node2->next = nullptr;
-    LinkedListAdd(&head, &node2);
-    EXPECT_EQ(head, node2);
-    EXPECT_EQ(node2->next, node1);
-
-    free(node1);
-    free(node2);
-}
 
 extern "C" bool IsMemoryLow(pid_t pid);
 TEST_F(ManageTest, TestIsMemoryLowFalse)
 {
-    EnvMutexInit(&g_processManager.lock);
-    g_processManager.processes = nullptr;
+    EnvMutexInit(&g_processManager.threadLock);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     bool ret = IsMemoryLow(9999);
     EXPECT_EQ(false, ret);
 }
@@ -4710,12 +4640,12 @@ TEST_F(ManageTest, TestIsMemoryLowTrue)
     attr.pid = 1234;
     attr.isLowMem = true;
     attr.next = nullptr;
-    EnvMutexInit(&g_processManager.lock);
-    g_processManager.processes = &attr;
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
+    EnvMutexInit(&g_processManager.threadLock);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     bool ret = IsMemoryLow(1234);
     EXPECT_EQ(true, ret);
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 extern "C" int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap);
@@ -4728,10 +4658,10 @@ TEST_F(ManageTest, TestAddProcessNormal)
     param.count = 1;
     param.numaParam[0].nid = 4;
     param.numaParam[0].ratio = 50;
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     g_processManager.nr[VM_TYPE] = 0;
     g_processManager.nrLocalNuma = 4;
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     MOCKER(DetectPidType).stubs().will(returnValue(0));
     MOCKER(VMPreprocess).stubs().will(returnValue(0));
     MOCKER(GetPidNrPages).stubs().will(returnValue(0x100));
@@ -4742,15 +4672,15 @@ TEST_F(ManageTest, TestAddProcessNormal)
     MOCKER(GetProcessNumaMapsObservation).stubs().will(invoke(AddEmptyCandidateResidentForTest));
     int ret = AddProcess(&param, VM_TYPE, nullptr);
     EXPECT_EQ(0, ret);
-    EXPECT_NE(nullptr, g_processManager.processes);
-    free(g_processManager.processes);
-    g_processManager.processes = nullptr;
+    EXPECT_NE(nullptr, PmHeadAttr(&g_processManager));
+    free(PmHeadAttr(&g_processManager));
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 TEST_F(ManageTest, TestSetLocalNumaByCpu)
 {
     g_processManager.nrLocalNuma = 4;
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     CPU_ZERO(&g_fake_cpu_mask);
     CPU_SET(1, &g_fake_cpu_mask);
     uint32_t nodeBitmap = 0;
@@ -4821,27 +4751,28 @@ TEST_F(ManageTest, TestGetProcessAttrFound)
     ProcessAttr p1 = {.pid = 1, .next = nullptr};
     ProcessAttr p2 = {.pid = 2, .next = nullptr};
     p1.next = &p2;
-    g_processManager.processes = &p1;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &p1);
+    PidSlotAdd(&g_processManager, &p2);
     ProcessAttr *ret = GetProcessAttr(1);
     EXPECT_EQ(1, ret->pid);
 
     ret = GetProcessAttr(2);
     EXPECT_EQ(2, ret->pid);
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 TEST_F(ManageTest, TestGetProcessAttrNotFound)
 {
     ProcessAttr p1 = {.pid = 1, .next = nullptr};
-    g_processManager.processes = &p1;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &p1);
     ProcessAttr *ret = GetProcessAttr(3);
     EXPECT_EQ(nullptr, ret);
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 TEST_F(ManageTest, TestGetProcessAttrNullList)
 {
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     ProcessAttr *ret = GetProcessAttr(1);
     EXPECT_EQ(nullptr, ret);
 }
@@ -4888,7 +4819,6 @@ TEST_F(ManageTest, TestSetLocalNumaByCpuAffinityFailed)
     EXPECT_EQ(-EINVAL, ret);
 }
 
-extern "C" void LinkedListAdd(ProcessAttr **head, ProcessAttr **add);
 extern "C" void FreeProceccesAttr(ProcessAttr *attr);
 TEST_F(ManageTest, TestFreeProceccesAttrNull)
 {
@@ -4954,8 +4884,8 @@ TEST_F(ManageTest, TestDestroyProcessManagerWithProcesses)
     ProcessAttr attr = {};
     attr.pid = 1;
     attr.next = nullptr;
-    g_processManager.processes = &attr;
-    EnvMutexInit(&g_processManager.lock);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
+    EnvMutexInit(&g_processManager.threadLock);
     EnvMutexInit(&g_processManager.threadLock);
     MOCKER(AccessIoctlRemoveAllPid).stubs().will(returnValue(0));
     MOCKER(FreeProceccesAttr).stubs().will(ignoreReturnValue());
@@ -5274,7 +5204,7 @@ TEST_F(ManageTest, TestSetGroupedProcessConfigOverwritesAttr)
 
 TEST_F(ManageTest, TestIsAllL2NodePidInStateEmptyList)
 {
-    g_processManager.processes = nullptr;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     g_processManager.nrLocalNuma = 4;
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
@@ -5289,7 +5219,7 @@ TEST_F(ManageTest, TestIsAllL2NodePidInStateNoL2Pid)
     attr1.state = PROC_MIGRATE;
     attr1.numaAttr.numaNodes = BIT(5) | BIT(6);
     attr1.next = nullptr;
-    g_processManager.processes = &attr1;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr1);
     g_processManager.nrLocalNuma = 4;
 
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
@@ -5465,7 +5395,7 @@ TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopeIoctlFail)
 
 TEST_F(ManageTest, TestBuildAllPidDataBuildBufFail)
 {
-    EnvMutexInit(&g_processManager.lock);
+    EnvMutexInit(&g_processManager.threadLock);
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(AccessIoctlWalkPagemap).stubs().will(returnValue(-ENOMEM));
@@ -5475,8 +5405,8 @@ TEST_F(ManageTest, TestBuildAllPidDataBuildBufFail)
 
 TEST_F(ManageTest, TestBuildAllPidDataSuccessNoProcess)
 {
-    EnvMutexInit(&g_processManager.lock);
-    g_processManager.processes = nullptr;
+    EnvMutexInit(&g_processManager.threadLock);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     g_processManager.nrLocalNuma = 4;
 
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());

@@ -5,6 +5,7 @@
  */
 
 #include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include "gtest/gtest.h"
@@ -16,6 +17,30 @@
 #include "manage/smap_config.h"
 
 using namespace std;
+
+static ProcessAttr *PmHeadAttr(struct ProcessManager *pm)
+{
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        if (pm->slots[i].attr != nullptr) {
+            return pm->slots[i].attr;
+        }
+    }
+    return nullptr;
+}
+
+static ProcessAttr *PmNthAttr(struct ProcessManager *pm, int n)
+{
+    int count = 0;
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        if (pm->slots[i].attr != nullptr) {
+            if (count == n) {
+                return pm->slots[i].attr;
+            }
+            count++;
+        }
+    }
+    return nullptr;
+}
 
 class SmapConfigTest : public ::testing::Test {
 protected:
@@ -289,7 +314,7 @@ TEST_F(SmapConfigTest, TestWriteNumaConfig)
     int ret;
     int nrLocal = 4;
     struct PayloadHeader header;
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     manager.remoteNumaInfo.privateSize[0][0] = 128;
     struct NumaPayload *payload = (struct NumaPayload *)calloc((nrLocal + 1) * REMOTE_NUMA_NUM, sizeof(*payload));
 
@@ -495,7 +520,7 @@ TEST_F(SmapConfigTest, TestRecoverNumaConfig)
     int remote1 = 5;
     int remote2 = 7;
     char numaBase;
-    struct ProcessManager manager = {0};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     struct NumaPayload *payload = (struct NumaPayload *)calloc((nrLocal + 1) * REMOTE_NUMA_NUM, sizeof(*payload));
     payload[local1 * REMOTE_NUMA_NUM + remote1 - nrLocal].size = 1024; // local1-remote1 has 1024MB
     payload[local2 * REMOTE_NUMA_NUM + remote2 - nrLocal].size = 512; // local2-remote2 has 512MB
@@ -615,7 +640,7 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfig)
     int nrProcess = 2;
     ProcessAttr *attr;
     struct PayloadHeader header = {.len = nrProcess * CONFIG_PROC_LEN};
-    struct ProcessManager manager = {.processes = nullptr};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     struct ProcessPayload payload[2] = {};
     payload[0] = {.pid = 1025,
                   .scanType = NORMAL_SCAN,
@@ -645,15 +670,15 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfig)
     ret = RecoverProcessConfig((char *)&header);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(nrProcess, manager.nr[PROCESS_TYPE]);
-    EXPECT_EQ(payload[0].pid, manager.processes->next->pid);
-    EXPECT_EQ(payload[1].pid, manager.processes->pid);
+    EXPECT_EQ(payload[0].pid, PmHeadAttr(&manager)->pid);
+    EXPECT_EQ(payload[1].pid, PmNthAttr(&manager, 1)->pid);
 
-    attr = manager.processes;
+    attr = PmHeadAttr(&manager);
     while (attr) {
-        LinkedListRemove(&attr, &manager.processes);
-        attr = manager.processes;
+        PidSlotRemove(&manager, (attr)->pid);
+        attr = PmHeadAttr(&manager);
     }
-    ASSERT_EQ(nullptr, manager.processes);
+    ASSERT_EQ(nullptr, PmHeadAttr(&manager));
 }
 
 TEST_F(SmapConfigTest, TestRecoverProcessConfigTwo)
@@ -661,7 +686,7 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigTwo)
     int ret;
     int nrProcess = 1;
     struct PayloadHeader header = {.len = nrProcess * CONFIG_PROC_LEN};
-    struct ProcessManager manager = {.processes = nullptr};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     struct ProcessPayload payload[] = {{.pid = 1025,
                                         .scanType = NORMAL_SCAN,
                                         .type = PROCESS_TYPE,
@@ -679,13 +704,13 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigTwo)
     MOCKER(IsPidUsingHugePages).stubs().will(returnValue(false));
     ret = RecoverProcessConfig((char *)&header);
     EXPECT_EQ(-ENOMEM, ret);
-    ASSERT_EQ(nullptr, manager.processes);
+    ASSERT_EQ(nullptr, PmHeadAttr(&manager));
 }
 
 TEST_F(SmapConfigTest, TestRecoverProcessConfigRestoresPairMultiRemoteTarget)
 {
     struct PayloadHeader header = {.len = CONFIG_PROC_LEN};
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     struct ProcessPayload payload = {
         .pid = 1234,
         .scanType = NORMAL_SCAN,
@@ -704,18 +729,18 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigRestoresPairMultiRemoteTarget)
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)&payload));
 
     EXPECT_EQ(0, RecoverProcessConfig((char *)&header));
-    ASSERT_NE(nullptr, manager.processes);
-    EXPECT_EQ(2U, manager.processes->targetConfig.count);
-    EXPECT_EQ(MIG_MEMSIZE_MODE, manager.processes->targetConfig.migrateMode);
-    EXPECT_EQ(4, manager.processes->targetConfig.targets[0].remoteNid);
-    EXPECT_EQ(2048U, manager.processes->targetConfig.targets[0].memSizeKB);
-    EXPECT_EQ(6, manager.processes->targetConfig.targets[1].remoteNid);
-    EXPECT_EQ(4096U, manager.processes->targetConfig.targets[1].memSizeKB);
-    EXPECT_EQ(4, manager.processes->migrateParam[0].nid);
-    EXPECT_EQ(6, manager.processes->migrateParam[1].nid);
+    ASSERT_NE(nullptr, PmHeadAttr(&manager));
+    EXPECT_EQ(2U, PmHeadAttr(&manager)->targetConfig.count);
+    EXPECT_EQ(MIG_MEMSIZE_MODE, PmHeadAttr(&manager)->targetConfig.migrateMode);
+    EXPECT_EQ(4, PmHeadAttr(&manager)->targetConfig.targets[0].remoteNid);
+    EXPECT_EQ(2048U, PmHeadAttr(&manager)->targetConfig.targets[0].memSizeKB);
+    EXPECT_EQ(6, PmHeadAttr(&manager)->targetConfig.targets[1].remoteNid);
+    EXPECT_EQ(4096U, PmHeadAttr(&manager)->targetConfig.targets[1].memSizeKB);
+    EXPECT_EQ(4, PmHeadAttr(&manager)->migrateParam[0].nid);
+    EXPECT_EQ(6, PmHeadAttr(&manager)->migrateParam[1].nid);
 
-    ProcessAttr *attr = manager.processes;
-    LinkedListRemove(&attr, &manager.processes);
+    ProcessAttr *attr = PmHeadAttr(&manager);
+    PidSlotRemove(&manager, (attr)->pid);
 }
 
 extern "C" int WriteProcessConfig(char *processBase, struct ProcessPayload *p, int nrPayload);
@@ -748,7 +773,7 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
     int ret;
     int nrProcess = 2;
     int len;
-    struct ProcessManager manager = { .processes = nullptr, .nr = { 0, 2 } };
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager)); manager.nr[0] = 0; manager.nr[1] = 2;
     ProcessAttr *attr;
     ProcessAttr *attr1 = nullptr;
     ProcessAttr *attr2 = nullptr;
@@ -777,23 +802,23 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
     attr2->scanType = NORMAL_SCAN;
     attr2->numaAttr.numaNodes = 0x44;
 
-    LinkedListAdd(&manager.processes, &attr1);
-    LinkedListAdd(&manager.processes, &attr2);
+    PidSlotAdd(&manager, attr1);
+    PidSlotAdd(&manager, attr2);
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     ret = BuildAllProcessPayload(&payload, &len);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(2, len);
     EXPECT_NE(nullptr, payload);
-    EXPECT_EQ(attr2->pid, payload[0].pid);
-    EXPECT_EQ(attr1->pid, payload[1].pid);
+    EXPECT_EQ(attr1->pid, payload[0].pid);
+    EXPECT_EQ(attr2->pid, payload[1].pid);
 
-    attr = manager.processes;
+    attr = PmHeadAttr(&manager);
     while (attr) {
-        LinkedListRemove(&attr, &manager.processes);
-        attr = manager.processes;
+        PidSlotRemove(&manager, (attr)->pid);
+        attr = PmHeadAttr(&manager);
     }
-    ASSERT_EQ(nullptr, manager.processes);
+    ASSERT_EQ(nullptr, PmHeadAttr(&manager));
     free(payload);
 }
 
@@ -801,7 +826,7 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
 {
     int ret;
     int len;
-    struct ProcessManager manager = { .processes = nullptr, .nr = { 0, 2 } };
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager)); manager.nr[0] = 0; manager.nr[1] = 2;
     ProcessAttr *attr;
     ProcessAttr *attr1 = nullptr;
     ProcessAttr *attr2 = nullptr;
@@ -830,29 +855,29 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
     attr2->scanType = HAM_SCAN;
     attr2->numaAttr.numaNodes = 0x44;
 
-    LinkedListAdd(&manager.processes, &attr1);
-    LinkedListAdd(&manager.processes, &attr2);
+    PidSlotAdd(&manager, attr1);
+    PidSlotAdd(&manager, attr2);
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     ret = BuildAllProcessPayload(&payload, &len);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(2, len);
     EXPECT_NE(nullptr, payload);
-    EXPECT_EQ(attr2->pid, payload[0].pid);
-    EXPECT_EQ(attr1->pid, payload[1].pid);
+    EXPECT_EQ(attr1->pid, payload[0].pid);
+    EXPECT_EQ(attr2->pid, payload[1].pid);
 
-    attr = manager.processes;
+    attr = PmHeadAttr(&manager);
     while (attr) {
-        LinkedListRemove(&attr, &manager.processes);
-        attr = manager.processes;
+        PidSlotRemove(&manager, (attr)->pid);
+        attr = PmHeadAttr(&manager);
     }
-    ASSERT_EQ(nullptr, manager.processes);
+    ASSERT_EQ(nullptr, PmHeadAttr(&manager));
     free(payload);
 }
 
 TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffectiveTarget)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     ProcessAttr attr = {};
     struct ProcessPayload *payload = nullptr;
     int len = 0;
@@ -870,7 +895,7 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffe
     attr.pendingTargetConfig.count = 1;
     attr.pendingTargetConfig.targets[0] = {8, 0, 8192};
     attr.pendingTargetNumaNodes = 0x153;
-    manager.processes = &attr;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));

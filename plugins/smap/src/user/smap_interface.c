@@ -77,10 +77,11 @@ static bool IsMigOutCountValid(pid_t *pidArr, int len)
     int newNum = 0;
     int oldNum = LoadMangerNrProcessNum() + LoadMangerNrVmNum();
     for (int i = 0; i < len; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(pidArr[i]);
+        ProcessAttr *attr = GetProcessAttr(pidArr[i]);
         if (!attr) {
             newNum++;
         }
+        PutProcessAttr(attr);
     }
     SMAP_LOGGER_INFO("SMAP's managed PID count: %d, pidArr contain new PID count: %d.", oldNum, newNum);
     return (oldNum + newNum) <= GetCurrentMaxNrPid();
@@ -220,7 +221,10 @@ static bool IsPidArrValid(pid_t *pidArr, int len, bool ignoreUnmanaged)
             SMAP_LOGGER_ERROR("invalid pid %d.", pid);
             return false;
         }
-        if (!ignoreUnmanaged && !GetProcessAttr(pid)) {
+        ProcessAttr *a = GetProcessAttr(pid);
+        bool managed = (a != NULL);
+        PutProcessAttr(a);
+        if (!ignoreUnmanaged && !managed) {
             SMAP_LOGGER_ERROR("unmanaged pid %d.", pid);
             return false;
         }
@@ -258,15 +262,13 @@ static int InitAllThreads(struct ProcessManager *manager)
 
 static bool IsDestNidVaild(int nid, pid_t pid)
 {
-    ProcessAttr *attr;
-    attr = GetProcessAttrLocked(pid);
+    ProcessAttr *attr = GetProcessAttr(pid);
     if (!attr) {
         return true;
     }
-    if (NotInAttrL2(attr, nid)) {
-        return false;
-    }
-    return true;
+    bool valid = !NotInAttrL2(attr, nid);
+    PutProcessAttr(attr);
+    return valid;
 }
 
 static bool IsDestNidUnique(struct MigrateOutPayload *payload)
@@ -421,11 +423,13 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
     }
 
     for (i = 0; i < msg->count; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(msg->payload[i].pid);
+        ProcessAttr *attr = GetProcessAttr(msg->payload[i].pid);
         if (attr && attr->groupPolicy.enabled) {
             SMAP_LOGGER_ERROR("pid %d already uses grouped migrate out.", msg->payload[i].pid);
+            PutProcessAttr(attr);
             return -EINVAL;
         }
+        PutProcessAttr(attr);
         if (msg->payload[i].count < 0 || msg->payload[i].count > REMOTE_NUMA_NUM) {
             SMAP_LOGGER_ERROR("pid: %d, migrate out payload count:%d is invalid.", msg->payload[i].pid,
                               msg->payload[i].count);
@@ -513,15 +517,18 @@ static int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int pay
         SMAP_LOGGER_ERROR("[%d] grouped group count %d invalid.", payloadIdx, payload->groupCount);
         return -EINVAL;
     }
-    ProcessAttr *attr = GetProcessAttrLocked(payload->pid);
+    ProcessAttr *attr = GetProcessAttr(payload->pid);
     if (attr && !attr->groupPolicy.enabled) {
         SMAP_LOGGER_ERROR("pid %d already uses normal migrate out.", payload->pid);
+        PutProcessAttr(attr);
         return -EINVAL;
     }
     if (attr && attr->state != PROC_IDLE && attr->state != PROC_MIGRATE) {
         SMAP_LOGGER_ERROR("pid %d state %d is busy for grouped policy update.", payload->pid, attr->state);
+        PutProcessAttr(attr);
         return -EAGAIN;
     }
+    PutProcessAttr(attr);
     for (int i = 0; i < payload->groupCount; i++) {
         struct MigrationGroup *group = &payload->groups[i];
         int localNids[MAX_GROUP_LOCAL_NUMA] = { 0 };
@@ -732,7 +739,9 @@ static int AddGroupedProcessesToGlobalManagerFiltered(struct GroupedMigrateOutMs
             keepTracking[i] = true;
             continue;
         }
-        existedBefore[i] = GetProcessAttrLocked(msg->payload[i].pid) != NULL;
+        ProcessAttr *prev = GetProcessAttr(msg->payload[i].pid);
+        existedBefore[i] = (prev != NULL);
+        PutProcessAttr(prev);
         int ret = ProcessAddGroupedManage(msg->payload[i].pid, nodeBitmap[i], &policies[i]);
         if (ret) {
             SMAP_LOGGER_ERROR("add grouped process %d failed: %d.", msg->payload[i].pid, ret);
@@ -782,13 +791,15 @@ static void RollbackGroupedManagerAdds(const pid_t *addedPids, int addedCnt)
     struct ProcessManager *manager = GetProcessManager();
 
     for (int i = 0; i < addedCnt; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(addedPids[i]);
+        ProcessAttr *attr = GetProcessAttr(addedPids[i]);
         if (!attr || !attr->groupPolicy.enabled) {
+            PutProcessAttr(attr);
             continue;
         }
-        LinkedListRemove(&attr, &manager->processes);
+        PidSlotRemove(manager, attr->pid);
         manager->nr[VM_TYPE]--;
         SMAP_LOGGER_INFO("rollback grouped pid %d from manager.", addedPids[i]);
+        PutProcessAttr(attr);
     }
     if (addedCnt == 0) {
         return;
@@ -801,8 +812,10 @@ static void RollbackGroupedManagerAdds(const pid_t *addedPids, int addedCnt)
 
 static bool IsGroupedPendingUpdate(pid_t pid)
 {
-    ProcessAttr *attr = GetProcessAttrLocked(pid);
-    return attr && attr->groupPolicy.enabled && attr->state == PROC_MIGRATE;
+    ProcessAttr *attr = GetProcessAttr(pid);
+    bool pending = attr && attr->groupPolicy.enabled && attr->state == PROC_MIGRATE;
+    PutProcessAttr(attr);
+    return pending;
 }
 
 static bool HasGroupedPendingUpdate(const bool *pendingUpdate, int count)
@@ -851,11 +864,15 @@ static bool IsGroupedAttrByRemoteNid(ProcessAttr *attr, int remoteNid)
 static bool IsAnyGroupedPidOnRemoteNid(int remoteNid)
 {
     struct ProcessManager *manager = GetProcessManager();
-    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
-        if (IsGroupedAttrByRemoteNid(attr, remoteNid)) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        if (IsGroupedAttrByRemoteNid(all[k]->attr, remoteNid)) {
+            PidSlotReleaseRefs(all, n);
             return true;
         }
     }
+    PidSlotReleaseRefs(all, n);
     return false;
 }
 
@@ -883,6 +900,7 @@ static int BuildMigrateOutProcessParamWithCapacityPolicy(const struct MigrateOut
 static void DiscardMigrateOutCandidates(ProcessManageCandidate *candidates, int count)
 {
     for (int i = 0; i < count; i++) {
+        PutProcessAttr(candidates[i].active);
         DiscardProcessManageCandidate(&candidates[i]);
     }
 }
@@ -970,11 +988,9 @@ static int MigrateOutWithCapacityPolicy(struct MigrateOutMsg *msg, int pageType,
         return -EPERM;
     }
 
-    EnvMutexLock(&manager->lock);
     int ret = CheckMigrateOutMsg(msg, pageType);
     if (ret) {
         SMAP_LOGGER_ERROR("Migrate out msg check failed, ret: %d.", ret);
-        EnvMutexUnlock(&manager->lock);
         return -EINVAL;
     }
 
@@ -988,13 +1004,11 @@ static int MigrateOutWithCapacityPolicy(struct MigrateOutMsg *msg, int pageType,
     if (ret) {
         SMAP_LOGGER_ERROR("Add process tracking failed: %d.", ret);
         DiscardMigrateOutCandidates(candidates, msg->count);
-        EnvMutexUnlock(&manager->lock);
         return ret;
     }
 
     PublishMigrateOutCandidates(candidates, msg->count);
 
-    EnvMutexUnlock(&manager->lock);
     return prepareError;
 }
 
@@ -1013,11 +1027,9 @@ int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pageT
         return -EPERM;
     }
 
-    EnvMutexLock(&manager->lock);
     int ret = CheckGroupedMigrateOutMsg(msg, pageType);
     if (ret) {
         SMAP_LOGGER_ERROR("Grouped migrate out msg check failed, ret: %d.", ret);
-        EnvMutexUnlock(&manager->lock);
         return ret;
     }
 
@@ -1030,7 +1042,6 @@ int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pageT
     ret = BuildGroupedPolicies(msg, policies);
     if (ret) {
         SMAP_LOGGER_ERROR("Build grouped policies failed: %d.", ret);
-        EnvMutexUnlock(&manager->lock);
         return ret;
     }
 
@@ -1049,7 +1060,6 @@ int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pageT
                              ProcessAddGroupedTrackingManage(msg, nodeBitmap);
     if (ret) {
         SMAP_LOGGER_ERROR("Add grouped process tracking failed: %d.", ret);
-        EnvMutexUnlock(&manager->lock);
         return ret;
     }
 
@@ -1059,12 +1069,10 @@ int ubturbo_smap_migrate_out_grouped(struct GroupedMigrateOutMsg *msg, int pageT
               AddGroupedProcessesToGlobalManager(msg, nodeBitmap, policies, keepTracking);
     if (ret) {
         RollbackGroupedTrackingManage(msg, keepTracking);
-        EnvMutexUnlock(&manager->lock);
         return ret;
     }
 
     ret = SetPendingGroupedPolicies(msg, nodeBitmap, policies, pendingUpdate);
-    EnvMutexUnlock(&manager->lock);
     return ret;
 }
 
@@ -1223,9 +1231,7 @@ int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg)
     }
 
     struct ProcessManager *manager = GetProcessManager();
-    EnvMutexLock(&manager->lock);
     ret = SetMigrateBackForbiddenLocked(msg);
-    EnvMutexUnlock(&manager->lock);
     if (ret) {
         SMAP_LOGGER_ERROR("Smap check grouped pid for mig back err: %d.", ret);
         return ret;
@@ -1347,19 +1353,23 @@ static int IoctlRemoveProcess(struct RemoveMsg *msg)
             continue;
         }
 
-        ProcessAttr *attr = GetProcessAttrLocked(pid);
+        ProcessAttr *attr = GetProcessAttr(pid);
         if (!attr) {
             int ret = AccessRemovePid(pid);
             if (ret) {
+                PutProcessAttr(attr);
                 return ret;
             }
+            PutProcessAttr(attr);
             continue;
         }
         uint32_t numaNodes = ClearRemovePayloadRemoteNodes(attr, payload);
         int ret = GetL2Count(numaNodes) == 0 ? AccessRemovePid(pid) : AccessUpdateProcessRemoteNodes(attr, numaNodes);
         if (ret) {
+            PutProcessAttr(attr);
             return ret;
         }
+        PutProcessAttr(attr);
     }
     return 0;
 }
@@ -1372,23 +1382,21 @@ static int CheckSmapRemoveGroupedPidLocked(struct RemoveMsg *msg)
         if (IsRemoveWholeProcess(payload)) {
             continue;
         }
-        ProcessAttr *attr = GetProcessAttrLocked(payload->pid);
+        ProcessAttr *attr = GetProcessAttr(payload->pid);
         if (attr && attr->groupPolicy.enabled) {
             SMAP_LOGGER_ERROR("partial remove does not support grouped pid %d.", payload->pid);
+            PutProcessAttr(attr);
             return -EINVAL;
         }
+        PutProcessAttr(attr);
     }
     return 0;
 }
 
-/* Remove one pid from the user-space manager process list. */
 static void ClearManagedWholeProcess(pid_t pid, bool *removed)
 {
     struct ProcessManager *manager = GetProcessManager();
-    ProcessAttr *attr = manager->processes;
-    while (attr && attr->pid != pid) {
-        attr = attr->next;
-    }
+    ProcessAttr *attr = GetProcessAttr(pid);
     if (!attr) {
         SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", pid);
         *removed = false;
@@ -1396,12 +1404,13 @@ static void ClearManagedWholeProcess(pid_t pid, bool *removed)
     }
 
     PidType type = attr->type;
-    LinkedListRemove(&attr, &manager->processes);
+    PidSlotRemove(manager, attr->pid);
     if (type >= PROCESS_TYPE && type < TYPE_MAX && manager->nr[type] > 0) {
         manager->nr[type]--;
     }
     *removed = true;
     SMAP_LOGGER_INFO("Remove pid: %d, from managed process.", pid);
+    PutProcessAttr(attr);
 }
 
 /* Clear strategy/accounting fields that belong to the removed remote node. */
@@ -1456,17 +1465,14 @@ static void RemoveManagedProcessRemoteNode(ProcessAttr *attr, int remoteNid)
     attr->remoteNumaCnt = attr->targetConfig.count;
 }
 
-/* Apply a partial remote-node remove to the user-space manager state. */
 static void ClearManagedPartialRemoteNodes(struct RemovePayload *payload, bool *removed, bool *changed)
 {
     struct ProcessManager *manager = GetProcessManager();
-    ProcessAttr *attr = manager->processes;
-    while (attr && attr->pid != payload->pid) {
-        attr = attr->next;
-    }
+    ProcessAttr *attr = GetProcessAttr(payload->pid);
     if (!attr) {
         SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", payload->pid);
         *changed = false;
+        PutProcessAttr(attr);
         return;
     }
     for (int i = 0; i < payload->count; i++) {
@@ -1476,6 +1482,7 @@ static void ClearManagedPartialRemoteNodes(struct RemovePayload *payload, bool *
     if (attr->remoteNumaCnt == 0) {
         ClearManagedWholeProcess(payload->pid, removed);
     }
+    PutProcessAttr(attr);
 }
 
 /* Keep manager state and persisted process config consistent after remove. */
@@ -1518,23 +1525,19 @@ int ubturbo_smap_remove(struct RemoveMsg *msg, int pageType)
     }
 
     struct ProcessManager *manager = GetProcessManager();
-    EnvMutexLock(&manager->lock);
     ret = CheckSmapRemoveGroupedPidLocked(msg);
     if (ret) {
         SMAP_LOGGER_ERROR("Check grouped pid for smap remove failed: %d.", ret);
-        EnvMutexUnlock(&manager->lock);
         return ret;
     }
     // send ioctl to remove pid
     ret = IoctlRemoveProcess(msg);
     if (ret) {
         SMAP_LOGGER_ERROR("Ioctl remove pid failed: %d.", ret);
-        EnvMutexUnlock(&manager->lock);
         return ret;
     }
 
     ClearManagedProcess(msg->count, msg->payload);
-    EnvMutexUnlock(&manager->lock);
     SMAP_LOGGER_INFO("smap remove result: %d.", ret);
     return ret;
 }
@@ -1580,7 +1583,7 @@ static bool IsMigrateBackAutoRemoveCandidate(ProcessAttr *attr, const struct Mig
 static bool IsAutoRemoveCandidate(ProcessAttr *attr)
 {
     if (!attr || !attr->autoRemoveWhenRemoteEmpty || attr->syncWaitRemoteEmpty || attr->groupPolicy.enabled ||
-        attr->scanType != NORMAL_SCAN) {
+        attr->scanType != NORMAL_SCAN || attr->state == PROC_MOVE) {
         return false;
     }
     if (attr->walkPage.nrPage == 0) {
@@ -1594,15 +1597,17 @@ static void MarkAutoRemoveByMigrateBack(struct MigrateBackMsg *msg)
 {
     struct ProcessManager *manager = GetProcessManager();
 
-    EnvMutexLock(&manager->lock);
-    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         if (!attr->groupPolicy.enabled && attr->scanType == NORMAL_SCAN &&
             IsMigrateBackAutoRemoveCandidate(attr, msg)) {
             attr->autoRemoveWhenRemoteEmpty = true;
             SMAP_LOGGER_INFO("Pid %d will be auto removed after migrate back clears remote pages.", attr->pid);
         }
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
 }
 
 static bool IsPidAlreadyCollected(pid_t *pids, int count, pid_t pid)
@@ -1620,8 +1625,10 @@ static int CollectRemoteEmptyAutoRemovePids(pid_t *pids, int maxCount)
     struct ProcessManager *manager = GetProcessManager();
     int count = 0;
 
-    EnvMutexLock(&manager->lock);
-    for (ProcessAttr *attr = manager->processes; attr && count < maxCount; attr = attr->next) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n && count < maxCount; k++) {
+        ProcessAttr *attr = all[k]->attr;
         if (!IsAutoRemoveCandidate(attr) || HasRemotePages(attr)) {
             continue;
         }
@@ -1630,7 +1637,7 @@ static int CollectRemoteEmptyAutoRemovePids(pid_t *pids, int maxCount)
         }
         pids[count++] = attr->pid;
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
     return count;
 }
 
@@ -1643,15 +1650,16 @@ static void RemoveAutoRemovePids(pid_t *pids, int count)
         int remain = count - offset;
         int batch = remain < MAX_NR_REMOVE ? remain : MAX_NR_REMOVE;
 
-        EnvMutexLock(&manager->lock);
         for (int i = 0; i < batch; i++) {
-            ProcessAttr *attr = GetProcessAttrLocked(pids[offset + i]);
+            ProcessAttr *attr = GetProcessAttr(pids[offset + i]);
             if (!IsAutoRemoveCandidate(attr) || HasRemotePages(attr)) {
+                PutProcessAttr(attr);
                 continue;
             }
             removeMsg.payload[removeMsg.count].pid = pids[offset + i];
             removeMsg.payload[removeMsg.count].count = 0;
             removeMsg.count++;
+            PutProcessAttr(attr);
         }
 
         if (removeMsg.count > 0) {
@@ -1662,7 +1670,6 @@ static void RemoveAutoRemovePids(pid_t *pids, int count)
                 ClearManagedProcess(removeMsg.count, removeMsg.payload);
             }
         }
-        EnvMutexUnlock(&manager->lock);
         offset += batch;
     }
 }
@@ -1700,19 +1707,14 @@ int ubturbo_smap_node_enable(struct EnableNodeMsg *msg)
         return -EINVAL;
     }
     if (msg->enable == ENABLE_NUMA_MIG) {
-        EnvMutexLock(&pm->lock);
         if (IsNodeForbiddenReason(msg->nid, NODE_FORBIDDEN_MIGBACK_BUSY)) {
-            EnvMutexUnlock(&pm->lock);
             SMAP_LOGGER_ERROR("node %d is migrate back busy, enable node failed.", msg->nid);
             return -EAGAIN;
         }
         ClearNodeForbiddenReason(msg->nid, NODE_FORBIDDEN_USER | NODE_FORBIDDEN_MIGBACK_DONE);
-        EnvMutexUnlock(&pm->lock);
         SMAP_LOGGER_INFO("smap enable node %d.", msg->nid);
     } else if (msg->enable == DISABLE_NUMA_MIG) {
-        EnvMutexLock(&pm->lock);
         SetNodeForbiddenReason(msg->nid, NODE_FORBIDDEN_USER);
-        EnvMutexUnlock(&pm->lock);
         SMAP_LOGGER_INFO("smap disable node %d.", msg->nid);
     } else {
         SMAP_LOGGER_INFO("enable args:%d is invalid.", msg->enable);
@@ -1744,8 +1746,10 @@ static int SyncProcessToKernel(void)
     }
     struct ProcessManager *manager = GetProcessManager();
 
-    EnvMutexLock(&manager->lock);
-    for (ProcessAttr *attr = manager->processes; attr && i < maxProcessCnt; attr = attr->next) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n && i < maxProcessCnt; k++) {
+        ProcessAttr *attr = all[k]->attr;
         payload[i].pid = attr->pid;
         payload[i].numaNodes = attr->numaAttr.numaNodes;
         payload[i].scanTime = attr->scanTime;
@@ -1756,43 +1760,51 @@ static int SyncProcessToKernel(void)
     }
     if (i == 0) {
         SMAP_LOGGER_INFO("SyncAllProcessConfig len: %d, no need to change.", i);
-        EnvMutexUnlock(&manager->lock);
+        PidSlotReleaseRefs(all, n);
         free(payload);
         return 0;
     }
+    PidSlotReleaseRefs(all, n);
     SMAP_LOGGER_INFO("SyncAllProcessConfig ioctl begin, len: %d.", i);
     ret = AccessIoctlAddPid(i, payload);
     if (ret) {
         SMAP_LOGGER_ERROR("SyncAllProcessConfig ioctl failed: %d.", ret);
     }
-    EnvMutexUnlock(&manager->lock);
     free(payload);
     return ret;
 }
 
 static void RecoverRemoveInvalidProcess(void)
 {
-    int ret;
     struct ProcessManager *manager = GetProcessManager();
+    pid_t invalidPids[MAX_PID_SLOTS];
+    PidType invalidTypes[MAX_PID_SLOTS];
+    size_t invalidCnt = 0;
 
-    EnvMutexLock(&manager->lock);
-    for (ProcessAttr *attr = manager->processes; attr;) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n && invalidCnt < MAX_PID_SLOTS; k++) {
+        ProcessAttr *attr = all[k]->attr;
         pid_t pid = attr->pid;
-        ProcessAttr *next = attr->next;
         SMAP_LOGGER_INFO("Recover check if pid %d is valid.", pid);
         if (!PidIsValid(pid)) {
-            PidType pidType = attr->type;
-            LinkedListRemove(&attr, &manager->processes);
-            manager->nr[pidType]--;
-            ret = SyncAllProcessConfig();
-            if (ret) {
-                SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", pid, ret);
-            }
-            SMAP_LOGGER_INFO("Recover remove pid %d from managed process.", pid);
+            invalidPids[invalidCnt] = pid;
+            invalidTypes[invalidCnt] = attr->type;
+            invalidCnt++;
         }
-        attr = next;
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
+
+    for (size_t k = 0; k < invalidCnt; k++) {
+        pid_t pid = invalidPids[k];
+        PidSlotRemove(manager, pid);
+        manager->nr[invalidTypes[k]]--;
+        int ret = SyncAllProcessConfig();
+        if (ret) {
+            SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", pid, ret);
+        }
+        SMAP_LOGGER_INFO("Recover remove pid %d from managed process.", pid);
+    }
 }
 
 static void RecoverAllMMapType(void)
@@ -1800,16 +1812,15 @@ static void RecoverAllMMapType(void)
     int ret;
     struct ProcessManager *manager = GetProcessManager();
 
-    EnvMutexLock(&manager->lock);
-    for (ProcessAttr *attr = manager->processes; attr;) {
-        ProcessAttr *next = attr->next;
-        ret = VMPreprocess(attr->pid, attr);
+    struct PidSlot *mmapAll[MAX_PID_SLOTS];
+    size_t mmapCnt = PidSlotCollectRefs(manager, mmapAll, MAX_PID_SLOTS);
+    for (size_t k = 0; k < mmapCnt; k++) {
+        ret = VMPreprocess(mmapAll[k]->attr->pid, mmapAll[k]->attr);
         if (ret) {
-            SMAP_LOGGER_WARNING("Recover process mmaptype failed on pid %d: %d.", attr->pid, ret);
+            SMAP_LOGGER_WARNING("Recover process mmaptype failed on pid %d: %d.", mmapAll[k]->attr->pid, ret);
         }
-        attr = next;
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(mmapAll, mmapCnt);
 }
 
 static int Recover(void)
@@ -2088,10 +2099,12 @@ static int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint32_t lengthIn, 
     }
     if (dataSource == STATISTIC_DATA_SOURCE && attr->scanType != STATISTIC_SCAN) {
         SMAP_LOGGER_ERROR("pid %d is not in statistic mode\n", pid);
+        PutProcessAttr(attr);
         return -EINVAL;
     }
     if (dataSource == NORMAL_DATA_SOURCE && attr->scanType != NORMAL_SCAN) {
         SMAP_LOGGER_ERROR("pid %d is not in normal mode\n", pid);
+        PutProcessAttr(attr);
         return -EINVAL;
     }
     if (time(&currentTime) == (time_t)-1) {
@@ -2100,8 +2113,10 @@ static int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint32_t lengthIn, 
     SMAP_LOGGER_INFO("Current time: %s\n", ctime(&currentTime));
     if (dataSource == STATISTIC_DATA_SOURCE && (currentTime - attr->scanStart < attr->duration)) {
         SMAP_LOGGER_ERROR("pid %d scan duaration did not meet the expected threshold\n", pid);
+        PutProcessAttr(attr);
         return -EAGAIN;
     }
+    PutProcessAttr(attr);
     return 0;
 }
 
@@ -2138,11 +2153,10 @@ static int QueryVMFreqFromUser(int pid, uint16_t *data, uint32_t lengthIn, uint3
     uint64_t i = 0;
     uint64_t actcLen = 0;
     struct ProcessManager *manager = GetProcessManager();
-    EnvMutexLock(&manager->lock);
-    ProcessAttr *attr = GetProcessAttrLocked(pid);
+    ProcessAttr *attr = GetProcessAttr(pid);
     if (!attr) {
         SMAP_LOGGER_ERROR("pid %d doesn't exist, ubturbo_smap_freq_query failed.", pid);
-        EnvMutexUnlock(&manager->lock);
+        PutProcessAttr(attr);
         return -EINVAL;
     }
     for (int nid = 0; nid < MAX_NODES; nid++) {
@@ -2151,7 +2165,7 @@ static int QueryVMFreqFromUser(int pid, uint16_t *data, uint32_t lengthIn, uint3
     if (actcLen == 0) {
         *lengthOut = 0;
         SMAP_LOGGER_ERROR("pid %d, actcLen %llu, ubturbo_smap_freq_query failed.", pid, actcLen);
-        EnvMutexUnlock(&manager->lock);
+        PutProcessAttr(attr);
         return -EINVAL;
     }
     *lengthOut = (actcLen > lengthIn) ? lengthIn : actcLen;
@@ -2164,7 +2178,7 @@ static int QueryVMFreqFromUser(int pid, uint16_t *data, uint32_t lengthIn, uint3
     }
     SMAP_LOGGER_INFO("ubturbo_smap_freq_query success, pid %d lengthIn %llu lengthOut %llu.", pid, lengthIn,
                      *lengthOut);
-    EnvMutexUnlock(&manager->lock);
+    PutProcessAttr(attr);
     return 0;
 }
 
@@ -2234,8 +2248,6 @@ int ubturbo_smap_run_mode_set(int runMode)
 
 static int CheckAddProcessTrackingMsg(pid_t *pidArr, uint32_t *scanTime, uint32_t *duration, int len, int scanType)
 {
-    struct ProcessManager *pm = GetProcessManager();
-    ProcessAttr *current = pm->processes;
     if (pidArr == NULL || scanTime == NULL || duration == NULL) {
         SMAP_LOGGER_ERROR("Smap check add process tracking pid list or scan time list is NULL.");
         return -EINVAL;
@@ -2248,17 +2260,15 @@ static int CheckAddProcessTrackingMsg(pid_t *pidArr, uint32_t *scanTime, uint32_
         SMAP_LOGGER_ERROR("Smap add process tracking len %d is invalid.", len);
         return -EINVAL;
     }
-    while (current) {
-        for (int i = 0; i < len; i++) {
-            if (current->pid == pidArr[i]) {
-                if (current->state != PROC_MOVE) {
-                    SMAP_LOGGER_ERROR("The pid %d state is %d, only PROC_MOVE can change scan type.", pidArr[i],
-                                      current->state);
-                    return -EBUSY;
-                }
-            }
+    for (int i = 0; i < len; i++) {
+        ProcessAttr *current = GetProcessAttr(pidArr[i]);
+        if (current && current->state != PROC_MOVE) {
+            SMAP_LOGGER_ERROR("The pid %d state is %d, only PROC_MOVE can change scan type.", pidArr[i],
+                              current->state);
+            PutProcessAttr(current);
+            return -EBUSY;
         }
-        current = current->next;
+        PutProcessAttr(current);
     }
     for (int i = 0; i < len; i++) {
         if (!PidIsValid(pidArr[i])) {
@@ -2302,7 +2312,7 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
         payload[i].scanTime = scanTime[i];
         payload[i].duration = duration[i];
         payload[i].type = scanType;
-        ProcessAttr *attr = GetProcessAttrLocked(pidArr[i]);
+        ProcessAttr *attr = GetProcessAttr(pidArr[i]);
         if (attr) {
             int nrLocalNuma = GetNrLocalNuma();
             bool hasRemoteTracking = false;
@@ -2313,6 +2323,7 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
                         SMAP_LOGGER_ERROR("pid %d remote node %d is invalid, scan type is %d.", attr->pid, remoteNid,
                                           scanType);
                         free(payload);
+                        PutProcessAttr(attr);
                         return -EINVAL;
                     }
                 }
@@ -2320,6 +2331,7 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
             if (scanType == NORMAL_SCAN && !hasRemoteTracking) {
                 SMAP_LOGGER_ERROR("pid %d has no remote tracking node, scan type can not be %d.", pidArr[i], scanType);
                 free(payload);
+                PutProcessAttr(attr);
                 return -EINVAL;
             }
             /* Keep every historically tracked remote node when changing scan type. */
@@ -2327,6 +2339,7 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
         } else if (scanType == NORMAL_SCAN) {
             SMAP_LOGGER_ERROR("pid %d is not managed, scan type can not be %d.", pidArr[i], scanType);
             free(payload);
+            PutProcessAttr(attr);
             return -EINVAL;
         } else {
             ClearL2(&payload[i].numaNodes);
@@ -2335,6 +2348,7 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
         if (!IsPidTypeValid(pidTypeDetected)) {
             SMAP_LOGGER_ERROR("pid %d type detect failed: %d.", pidArr[i], pidTypeDetected);
             free(payload);
+            PutProcessAttr(attr);
             return -EINVAL;
         }
         if (scanType != STATISTIC_SCAN && !IsPidTypeCompatibleWithMode(pidTypeDetected)) {
@@ -2342,9 +2356,11 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
                               "(4K VM and 2M process unsupported).",
                               pidArr[i], pidTypeDetected);
             free(payload);
+            PutProcessAttr(attr);
             return -EINVAL;
         }
         payload[i].pidType = (PidType)pidTypeDetected;
+        PutProcessAttr(attr);
     }
     ret = AccessIoctlAddPid(len, payload);
     if (ret) {
@@ -2367,36 +2383,35 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
         SMAP_LOGGER_ERROR("Smap Add Process Tracking non-statistic scan requires huge mode, scanType %d.", scanType);
         return -EINVAL;
     }
-    EnvMutexLock(&manager->lock);
     ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, len, scanType);
     if (ret) {
         SMAP_LOGGER_ERROR("Smap check add process tracking msg failed.");
-        EnvMutexUnlock(&manager->lock);
         return ret;
     }
 
     ret = AddProcessTracking(pidArr, scanTime, duration, len, scanType);
     if (ret) {
         SMAP_LOGGER_ERROR("Smap module add process tracking failed.");
-        EnvMutexUnlock(&manager->lock);
         return ret;
     }
     SMAP_LOGGER_INFO("Add process tracking done.");
     bool hasManagedProcess = false;
     // Add an unmanaged pid, or update only scan mode for a managed pid.
     for (int i = 0; i < len; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(pidArr[i]);
+        ProcessAttr *attr = GetProcessAttr(pidArr[i]);
         if (attr) {
             ret = UpdateManagedProcessTrackingMode(attr, scanType, scanTime[i], duration[i]);
             if (ret) {
                 SMAP_LOGGER_ERROR("Update managed process %d scan type failed: %d.", pidArr[i], ret);
-                EnvMutexUnlock(&manager->lock);
+                PutProcessAttr(attr);
                 return ret;
             }
             hasManagedProcess = true;
             SMAP_LOGGER_INFO("Update managed process %d scan type to %d done.", pidArr[i], scanType);
+            PutProcessAttr(attr);
             continue;
         }
+        PutProcessAttr(attr);
 
         ProcessParam param = { 0 };
         param.count = 1;
@@ -2410,7 +2425,6 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
         ret = ProcessAddManage(&param, NULL);
         if (ret) {
             SMAP_LOGGER_ERROR("Add process tracking %d failed: %d.", pidArr[i], ret);
-            EnvMutexUnlock(&manager->lock);
             return ret;
         }
         SMAP_LOGGER_INFO("Add process %d tracking done.", pidArr[i]);
@@ -2423,14 +2437,12 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
         }
     }
     SMAP_LOGGER_INFO("Add process tracking manage result: %d.", ret);
-    EnvMutexUnlock(&manager->lock);
     return ret;
 }
 
 static int CheckRemoveProcessTrackingMsg(pid_t *pidArr, int len)
 {
     int ret = 0;
-    struct ProcessManager *manager = GetProcessManager();
 
     if (pidArr == NULL) {
         SMAP_LOGGER_ERROR("Smap check remove process tracking pid list  is NULL.");
@@ -2441,18 +2453,18 @@ static int CheckRemoveProcessTrackingMsg(pid_t *pidArr, int len)
         return -EINVAL;
     }
     for (int i = 0; i < len; i++) {
-        ProcessAttr *attr = manager->processes;
-        while (attr && attr->pid != pidArr[i]) {
-            attr = attr->next;
-        }
+        ProcessAttr *attr = GetProcessAttr(pidArr[i]);
         if (!attr) {
+            PutProcessAttr(attr);
             continue;
         }
         if (attr->scanType == NORMAL_SCAN || attr->state == PROC_MIGRATE || attr->state == PROC_BACK) {
             ret = -EINVAL;
             SMAP_LOGGER_ERROR("Pid %d scan type is %d, state is %d.", attr->pid, attr->scanType, attr->state);
+            PutProcessAttr(attr);
             break;
         }
+        PutProcessAttr(attr);
     }
     return ret;
 }
@@ -2467,18 +2479,15 @@ int ubturbo_smap_process_tracking_remove(pid_t *pidArr, int len, int flag)
     }
     struct ProcessManager *manager = GetProcessManager();
     int maxProcessCnt = GetCurrentMaxNrPid();
-    EnvMutexLock(&manager->lock);
     ret = CheckRemoveProcessTrackingMsg(pidArr, len);
     if (ret) {
         SMAP_LOGGER_ERROR("Smap check remove process tracking msg failed, ret is %d.", ret);
-        EnvMutexUnlock(&manager->lock);
         return ret;
     }
     SMAP_LOGGER_INFO("Check ubturbo_smap_process_tracking_remove msg done.");
     struct AccessRemovePidPayload *payload = malloc(maxProcessCnt * sizeof(struct AccessRemovePidPayload));
     if (!payload) {
         SMAP_LOGGER_ERROR("AccessRemovePidPayload malloc failed.");
-        EnvMutexUnlock(&manager->lock);
         return -ENOMEM;
     }
     for (int i = 0; i < len; i++) {
@@ -2488,13 +2497,11 @@ int ubturbo_smap_process_tracking_remove(pid_t *pidArr, int len, int flag)
     free(payload);
     if (ret) {
         SMAP_LOGGER_WARNING("Process tracking access ioctl remove pid error: %d.", ret);
-        EnvMutexUnlock(&manager->lock);
         return ret;
     }
     SMAP_LOGGER_INFO("Remove process from kernel done.");
 
     RemoveManagedProcess(len, pidArr);
-    EnvMutexUnlock(&manager->lock);
     SMAP_LOGGER_INFO("Remove process tracking manage result: %d.", ret);
     return ret;
 }
@@ -2700,23 +2707,20 @@ static void SetSyncWaitRemoteEmpty(struct MigrateOutMsg *msg, bool enable)
         return;
     }
 
-    EnvMutexLock(&manager->lock);
     for (int i = 0; i < msg->count; i++) {
         if (!IsMigrateOutPayloadRemoteTargetZero(&msg->payload[i])) {
             continue;
         }
 
-        ProcessAttr *attr = manager->processes;
-        while (attr && attr->pid != msg->payload[i].pid) {
-            attr = attr->next;
-        }
+        ProcessAttr *attr = GetProcessAttr(msg->payload[i].pid);
         if (!attr || attr->groupPolicy.enabled || attr->scanType != NORMAL_SCAN) {
+            PutProcessAttr(attr);
             continue;
         }
         attr->syncWaitRemoteEmpty = enable;
         SMAP_LOGGER_INFO("Pid %d sync wait remote empty protection %s.", attr->pid, enable ? "enabled" : "disabled");
+        PutProcessAttr(attr);
     }
-    EnvMutexUnlock(&manager->lock);
 }
 
 static int CheckMigOutSyncResult(struct MigrateOutMsg *msg, int *invalidPidNum, bool *allPidSuccess,
@@ -2729,19 +2733,15 @@ static int CheckMigOutSyncResult(struct MigrateOutMsg *msg, int *invalidPidNum, 
 
     for (int i = 0; i < msg->count; i++) {
         bool isMultiNumaPid = false;
-        EnvMutexLock(&manager->lock);
-        attr = manager->processes;
-        while (attr && attr->pid != msg->payload[i].pid) {
-            attr = attr->next;
-        }
+        attr = GetProcessAttr(msg->payload[i].pid);
         if (!attr) {
             num++;
-            EnvMutexUnlock(&manager->lock);
+            PutProcessAttr(attr);
             SMAP_LOGGER_ERROR("Pid %d is invalid.", msg->payload[i].pid);
             continue;
         }
         bool isSuccess = MigOutIsDone(attr, &isMultiNumaPid);
-        EnvMutexUnlock(&manager->lock);
+        PutProcessAttr(attr);
         result &= isSuccess;
         if (!isSuccess && IsMemoryLow(msg->payload[i].pid) && maxWaitTime == 0) {
             SMAP_LOGGER_ERROR("Dest numa memory is not enough.");
@@ -2825,12 +2825,15 @@ static bool IsScanTypeValid(pid_t *pidArr, int len)
         attr = GetProcessAttr(pid);
         if (!attr) {
             SMAP_LOGGER_ERROR("get process attr failed, pid:%d.", pid);
+            PutProcessAttr(attr);
             return false;
         }
         if (attr->scanType != NORMAL_SCAN) {
             SMAP_LOGGER_ERROR("pid %d invalid scan type %d.", pid, attr->scanType);
+            PutProcessAttr(attr);
             return false;
         }
+        PutProcessAttr(attr);
     }
     return true;
 }
@@ -2844,21 +2847,22 @@ static int IsPidArrRemoteNumaMatch(struct MigrateEscapeMsg *msg)
 {
     struct ProcessManager *manager = GetProcessManager();
     int ret = 0;
-    EnvMutexLock(&manager->lock);
     for (int i = 0; i < msg->count; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(msg->payload[i].pid);
+        ProcessAttr *attr = GetProcessAttr(msg->payload[i].pid);
         if (!attr) {
-            SMAP_LOGGER_ERROR("GetProcessAttrLocked pid %d null.", msg->payload[i].pid);
+            SMAP_LOGGER_ERROR("GetProcessAttr pid %d null.", msg->payload[i].pid);
             ret = -EINVAL;
+            PutProcessAttr(attr);
             break;
         }
         if (NotInAttrL2(attr, msg->payload[i].srcNid)) {
             SMAP_LOGGER_ERROR("pid %d remote nid is not %d", msg->payload[i].pid, msg->payload[i].srcNid);
             ret = -ENXIO;
+            PutProcessAttr(attr);
             break;
         }
+        PutProcessAttr(attr);
     }
-    EnvMutexUnlock(&manager->lock);
     return ret;
 }
 
@@ -2871,7 +2875,8 @@ static int GetAttrNidInitRatio(pid_t pid, int nid)
     }
     int l1node = GetAttrL1(attr);
     int curRatio = attr->strategyAttr.initRemoteMemRatio[l1node][nid - nrLocalNuma];
-    return attr->strategyAttr.initRemoteMemRatio[l1node][nid - nrLocalNuma];
+    PutProcessAttr(attr);
+    return curRatio;
 }
 
 static bool IsRemoteNidRatioValid(pid_t pid, int nid, int ratio)
@@ -2907,6 +2912,7 @@ static int GetAttrNidInitMemSize(pid_t pid, int nid, uint64_t *memSize)
         }
     }
     *memSize = curMemSize;
+    PutProcessAttr(attr);
     return 0;
 }
 
@@ -2950,14 +2956,11 @@ static int SmapMigratePidRemoteNumaCheckInner(struct MigrateEscapeMsg *msg)
     }
 
     struct ProcessManager *manager = GetProcessManager();
-    EnvMutexLock(&manager->lock);
     ret = IsPidArrInState(pidArr, msg->count, PROC_MOVE);
     if (ret != 1) {
         SMAP_LOGGER_ERROR("not all pid in correct state, start proc move failed ret: %d.", ret);
-        EnvMutexUnlock(&manager->lock);
         return -EINVAL;
     }
-    EnvMutexUnlock(&manager->lock);
     return 0;
 }
 
@@ -3179,8 +3182,10 @@ int ubturbo_smap_process_config_query(int nid, struct OldProcessPayload *result,
     }
     SMAP_LOGGER_INFO("Check ubturbo_smap_process_config_query msg done.");
 
-    EnvMutexLock(&manager->lock);
-    for (ProcessAttr *attr = manager->processes; attr; attr = attr->next) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         if (!InAttrL2(attr, nid)) {
             SMAP_LOGGER_INFO("Skip pid %d because L2 node != %d.", attr->pid, nid);
             continue;
@@ -3198,7 +3203,7 @@ int ubturbo_smap_process_config_query(int nid, struct OldProcessPayload *result,
     }
     *outLen = i;
     SMAP_LOGGER_INFO("ubturbo_smap_process_config_query done, outLen %d.", *outLen);
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
     return ret;
 }
 
@@ -3232,16 +3237,17 @@ int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_freq_query memset_s failed, ret: %d.", ret);
         return -ENOMEM;
     }
-    EnvMutexLock(&manager->lock);
-    ProcessAttr *current;
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
     for (i = 0; i < length; i++) {
-        for (current = manager->processes; current; current = current->next) {
+        for (size_t k = 0; k < n; k++) {
+            ProcessAttr *current = all[k]->attr;
             if (InAttrL2(current, numa[i])) {
                 freq[i] += current->scanAttr.actCount[numa[i]].freqSum;
             }
         }
     }
-    EnvMutexUnlock(&manager->lock);
+    PidSlotReleaseRefs(all, n);
     SMAP_LOGGER_INFO("ubturbo_smap_remote_numa_freq_query success.");
     return 0;
 }

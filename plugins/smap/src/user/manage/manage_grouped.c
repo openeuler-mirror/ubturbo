@@ -200,7 +200,7 @@ int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigration
         return -EINVAL;
     }
 
-    ProcessAttr *current = GetProcessAttrLocked(pid);
+    ProcessAttr *current = GetProcessAttr(pid);
     if (current) {
         SetGroupedProcessConfig(current, pid, nodeBitmap, policy);
         SMAP_LOGGER_INFO("Update grouped pid %d success, group count %d.", pid, policy->groupCount);
@@ -208,6 +208,7 @@ int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigration
         if (ret) {
             SMAP_LOGGER_WARNING("Synchronize grouped pid %d config maybe failed: %d.", pid, ret);
         }
+        PutProcessAttr(current);
         return 0;
     }
 
@@ -230,7 +231,7 @@ int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigration
         return ret;
     }
     SetGroupedProcessConfig(attr, pid, nodeBitmap, policy);
-    LinkedListAdd(&GetProcessManager()->processes, &attr);
+    PidSlotAdd(GetProcessManager(), attr);
     GetProcessManager()->nr[VM_TYPE]++;
     SMAP_LOGGER_INFO("Add grouped pid %d success, group count %d.", pid, policy->groupCount);
     ret = SyncAllProcessConfig();
@@ -247,9 +248,10 @@ int ProcessSetPendingGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMi
         return -EINVAL;
     }
 
-    ProcessAttr *current = GetProcessAttrLocked(pid);
+    ProcessAttr *current = GetProcessAttr(pid);
     if (!current || !current->groupPolicy.enabled || current->state != PROC_MIGRATE) {
         SMAP_LOGGER_ERROR("pid %d cannot save pending grouped policy.", pid);
+        PutProcessAttr(current);
         return -EINVAL;
     }
 
@@ -258,6 +260,7 @@ int ProcessSetPendingGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMi
     current->pendingGroupPolicy.nodeBitmap = nodeBitmap;
     current->pendingGroupPolicy.policy = *policy;
     SMAP_LOGGER_INFO("Save pending grouped policy for pid %d, group count %d.", pid, policy->groupCount);
+    PutProcessAttr(current);
     return 0;
 }
 

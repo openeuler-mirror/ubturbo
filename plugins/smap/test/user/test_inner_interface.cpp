@@ -82,7 +82,7 @@ TEST_F(InnerInterfaceTest, TestSmapQueryVmMemRatio)
     current.type = VM_TYPE;
     current.pid = 1;
     current.strategyAttr.l3RemoteMemRatio[0][0] = TEST_DEFAULT_LOCAL_MEM_RATIO;
-    manager->processes = &current;
+    memset(&manager->slots, 0, sizeof(manager->slots)); PidSlotAdd(manager, &current);
     ret = SmapQueryVmMemRatio(&msg);
     EXPECT_EQ(1, msg.vr[0].pid);
     EXPECT_EQ(HUNDRED - TEST_DEFAULT_LOCAL_MEM_RATIO, msg.vr[0].ratio);

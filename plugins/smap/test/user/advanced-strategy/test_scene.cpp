@@ -418,7 +418,7 @@ TEST_F(SceneTest, TestAdjustVmMemRatio)
     struct ProcessManager manager;
     ProcessAttr current;
     current.next = NULL;
-    manager.processes = &current;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
     manager.nr[1] = 1;
     arr[0] = 1;
     arr[1] = 2;
@@ -479,7 +479,7 @@ TEST_F(SceneTest, TestConfigMultiVmRatio)
 
     manager.nr[VM_TYPE] = 1;
     ProcessAttr current;
-    manager.processes = &current;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
     current.next = NULL;
     MOCKER(IsReadyForAdapt).stubs().will(returnValue(true));
     current.sceneInfo.pageInfoIndex = 0;
@@ -496,8 +496,8 @@ TEST_F(SceneTest, TestGetMaxNuma)
 {
     ProcessAttr attr = {};
     attr.numaAttr.numaNodes = 0b10011001;
-    struct ProcessManager manager = {};
-    manager.processes = &attr;
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
     int maxL1node = 0;
     int maxL2node = 0;
 
@@ -514,7 +514,7 @@ TEST_F(SceneTest, TestConfigMultiVmRatioInGroups)
     ProcessAttr current;
     current.next = nullptr;
     current.numaAttr.numaNodes = 31;
-    manager->processes = &current;
+    memset(&manager->slots, 0, sizeof(manager->slots)); PidSlotAdd(manager, &current);
     MOCKER(ConfigMultiVmRatio).stubs();
     ConfigMultiVmRatioInGroups(manager);
     EXPECT_EQ(false, current.adaptMem.enableAdaptMem);
@@ -527,7 +527,7 @@ TEST_F(SceneTest, TestConfigMultiVmRatioInGroupsTwo)
     current.next = nullptr;
     current.scanType = NORMAL_SCAN;
     current.numaAttr.numaNodes = 0b00010001;
-    manager->processes = &current;
+    memset(&manager->slots, 0, sizeof(manager->slots)); PidSlotAdd(manager, &current);
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(ConfigMultiVmRatio).stubs();
     EXPECT_EQ(false, current.adaptMem.enableAdaptMem);
@@ -536,9 +536,9 @@ TEST_F(SceneTest, TestConfigMultiVmRatioInGroupsTwo)
 extern "C" void SkipMultiProcessRatio(struct ProcessManager *manager);
 TEST_F(SceneTest, TestSkipMultiProcessRatio)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    manager.processes = &current;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
     current.next = NULL;
     current.scanType = NORMAL_SCAN;
     current.strategyAttr.l2RemoteMemRatio[0][0] = 30;
@@ -552,9 +552,9 @@ extern "C" void ConfigRatios(struct ProcessManager *manager);
 extern "C" void ConfigMultiVmRatioInGroups(struct ProcessManager *manager);
 TEST_F(SceneTest, TestConfigRatiosProcessType)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    manager.processes = &current;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
     manager.tracking.pageSize = PAGESIZE_4K;
     manager.nr[VM_TYPE] = 0; /* 无 VM → 走 SkipMultiProcessRatio */
     current.next = NULL;
@@ -568,9 +568,9 @@ TEST_F(SceneTest, TestConfigRatiosProcessType)
 
 TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemTrue)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    manager.processes = &current;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
     manager.tracking.pageSize = PAGESIZE_4K;
     manager.nr[VM_TYPE] = 1; /* 存在 VM + 开自适应 → 走 ConfigMultiVmRatioInGroups */
     current.next = NULL;
@@ -582,9 +582,9 @@ TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemTrue)
 
 TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemFalse)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    manager.processes = &current;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
     manager.tracking.pageSize = PAGESIZE_4K;
     manager.nr[VM_TYPE] = 1; /* 存在 VM 但关自适应 → 回落 SkipMultiProcessRatio */
     current.next = NULL;

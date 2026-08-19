@@ -35,7 +35,7 @@ extern "C" void *ThreadMain(void *args);
 
 TEST_F(ThreadTest, TestThreadMainStoped)
 {
-    struct ProcessManager pm = { 0 };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
     EnvAtomicSet(&pm.scanMigrateStop, 1);
     pm.migPeriod = 50;
 
@@ -45,7 +45,7 @@ TEST_F(ThreadTest, TestThreadMainStoped)
 
 TEST_F(ThreadTest, TestInitScanMigrateThread)
 {
-    struct ProcessManager pm = { 0 };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
     uint32_t period = 100;
     int ret;
 
@@ -58,7 +58,7 @@ TEST_F(ThreadTest, TestInitScanMigrateThread)
 
 TEST_F(ThreadTest, TestInitScanMigrateThreadCreateFailed)
 {
-    struct ProcessManager pm = { 0 };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
     uint32_t period = 50;
     int ret;
 
@@ -70,7 +70,7 @@ TEST_F(ThreadTest, TestInitScanMigrateThreadCreateFailed)
 TEST_F(ThreadTest, TestDestroyScanMigrateThread)
 {
     int ret;
-    struct ProcessManager pm = { 0 };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
 
     // pthread_t 非零时才执行 join，模拟线程已成功创建
     pm.scanMigrateThread = (pthread_t)1;
