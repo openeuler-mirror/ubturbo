@@ -100,43 +100,47 @@ static int fake_calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
     return 0;
 }
 
-extern "C" int set_non_anon_bm(struct access_pid *ap, u64 acidx, u64 paddr, int nid);
-extern "C" bool pfn_valid(unsigned long pfn);
-extern "C" struct page *pfn_to_online_page(unsigned long pfn);
+extern "C" int set_non_anon_bm(struct access_pid *ap, u64 acidx, struct page *page,
+			       int nid);
 extern "C" int PageHuge(struct page *page);
 extern "C" bool PageAnon(struct page *page);
 TEST_F(AccessMMUTest, set_non_anon_bm)
 {
     int ret = 0;
     struct page page;
-    struct access_pid ap = {0};
+    struct access_pid ap = {};
     ap.bm_len[0] = 1;
     ap.white_list_bm[0] = (unsigned long *)malloc(sizeof(unsigned long));
 
-    MOCKER(pfn_valid).stubs().will(returnValue(true));
-    MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(PageHuge).stubs().will(returnValue(1));
     MOCKER(PageAnon).stubs().will(returnValue(true));
-    ret = set_non_anon_bm(&ap, 0, 0, 0);
+    ret = set_non_anon_bm(&ap, 0, &page, 0);
     EXPECT_EQ(0, ret);
 
     free(ap.white_list_bm[0]);
 }
 
-extern "C" int add_to_bm_page(u64 paddr, struct access_pid *ap);
+extern "C" int add_to_bm_page(u64 paddr, struct page *page, struct access_pid *ap);
 TEST_F(AccessMMUTest, AddToBMPage)
 {
-    MOCKER(mock_calc_paddr_acidx).stubs().will(invoke(fake_calc_paddr_acidx));
+    u64 index = 1;
+
+    MOCKER(is_access_hugepage).stubs().will(returnValue(false));
+    MOCKER(calc_paddr_acidx_acpi_known_nid)
+        .stubs()
+        .with(eq((u64)0x00005000), any(), outBoundP(&index, sizeof(index)), any())
+        .will(returnValue(0));
 
     int ret = 0;
     struct access_pid ap = {
         .numa_nodes = 0x11,
     };
+    struct page page = {};
     ap.bm_len[0] = 2;
     ap.paddr_bm[0] = (unsigned long *)malloc(sizeof(unsigned long) * 2);
 
     MOCKER(set_non_anon_bm).stubs().will(returnValue(0));
-    ret = add_to_bm_page((u64)0x00005000, &ap);
+    ret = add_to_bm_page((u64)0x00005000, &page, &ap);
     EXPECT_EQ(0, ret);
 
     free(ap.paddr_bm[0]);
@@ -148,12 +152,12 @@ TEST_F(AccessMMUTest, AddToBMPageTwo)
     struct access_pid ap = {
         .numa_nodes = 0x11,
     };
+    struct page page = {};
 
-    MOCKER(mock_calc_paddr_acidx).stubs().will(returnValue(1));
-    ret = add_to_bm_page((u64)0x00005000, &ap);
+    MOCKER(is_access_hugepage).stubs().will(returnValue(false));
+    MOCKER(calc_paddr_acidx_acpi_known_nid).stubs().will(returnValue(1));
+    ret = add_to_bm_page((u64)0x00005000, &page, &ap);
     EXPECT_EQ(1, ret);
-
-    free(ap.paddr_bm[L1]);
 }
 
 extern "C" void set_pa_prior(struct access_pid *ap, u64 vaddr, u64 pa_idx, int nid);

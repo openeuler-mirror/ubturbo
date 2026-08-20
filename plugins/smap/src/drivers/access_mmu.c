@@ -70,10 +70,10 @@ static int calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
 	return calc_paddr_acidx_iomem(paddr, nid, index, page_size);
 }
 
-static int set_non_anon_bm(struct access_pid *ap, u64 acidx, u64 paddr, int nid)
+static int set_non_anon_bm(struct access_pid *ap, u64 acidx, struct page *page,
+			   int nid)
 {
-	struct page *page = smap_paddr_to_page(paddr);
-	if (!page)
+	if (unlikely(!page))
 		return -EINVAL;
 	if (is_file_or_shared_page(page)) {
 		__set_bit(acidx, ap->white_list_bm[nid]);
@@ -81,13 +81,22 @@ static int set_non_anon_bm(struct access_pid *ap, u64 acidx, u64 paddr, int nid)
 	return 0;
 }
 
-int add_to_bm_page(u64 paddr, struct access_pid *ap)
+int add_to_bm_page(u64 paddr, struct page *page, struct access_pid *ap)
 {
 	int nid, nid_pos, ret;
 	u64 acidx;
 	unsigned long numa_nodes = ap->numa_nodes;
+	int page_size = is_access_hugepage() ? g_pagesize_huge : PAGE_SIZE;
 
-	ret = calc_paddr_acidx(paddr, &nid, &acidx);
+	nid = page_to_nid(page);
+	if (unlikely(nid == NUMA_NO_NODE))
+		return -EINVAL;
+	if (nid < nr_local_numa)
+		ret = calc_paddr_acidx_acpi_known_nid(paddr, nid, &acidx,
+						      page_size);
+	else
+		ret = calc_paddr_acidx_iomem_known_nid(paddr, nid, &acidx,
+						       page_size);
 	if (ret)
 		return ret;
 	nid_pos = convert_nid_to_pos(nid);
@@ -99,7 +108,7 @@ int add_to_bm_page(u64 paddr, struct access_pid *ap)
 		return -ERANGE;
 	}
 
-	ret = set_non_anon_bm(ap, acidx, paddr, nid);
+	ret = set_non_anon_bm(ap, acidx, page, nid);
 	if (ret) {
 		return ret;
 	}
@@ -115,6 +124,7 @@ int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap)
 {
 	int ret, nid_pos;
 	unsigned long numa_nodes;
+	struct page *page;
 
 	nid_pos = convert_nid_to_pos(nid);
 	numa_nodes = ap->numa_nodes;
@@ -124,7 +134,11 @@ int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap)
 	if (BIT_WORD(acidx) >= ap->bm_len[nid])
 		return -ERANGE;
 
-	ret = set_non_anon_bm(ap, acidx, paddr, nid);
+	page = pfn_to_online_page(PHYS_PFN(paddr));
+	if (!page)
+		return -EINVAL;
+
+	ret = set_non_anon_bm(ap, acidx, page, nid);
 	if (ret)
 		return ret;
 	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly */
@@ -274,12 +288,11 @@ static int add_to_bm(unsigned long vaddr, pagemap_entry_t *pme,
 	if (!pfn || !(pme->pme & PM_PRESENT))
 		goto inc_pm_pos;
 	paddr = PFN_PHYS(pfn);
+	page = pfn_to_online_page(pfn);
+	if (!page)
+		goto inc_pm_pos;
 
 	if (pm->mig_type == REMOTE_MIGRATE) {
-		page = pfn_to_online_page(pfn);
-		if (!page) {
-			goto inc_pm_pos;
-		}
 		pm->mig_info.page_cnt++;
 		if (!is_paddr_belong_remote_node(paddr,
 						 pm->mig_info.remote_nid)) {
@@ -298,7 +311,7 @@ static int add_to_bm(unsigned long vaddr, pagemap_entry_t *pme,
 		if (is_access_hugepage())
 			add_to_bm_huge(vaddr, paddr, pm->ap);
 		else
-			add_to_bm_page(paddr, pm->ap);
+			add_to_bm_page(paddr, page, pm->ap);
 	}
 
 inc_pm_pos:

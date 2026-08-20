@@ -322,6 +322,7 @@ TEST_F(AccessedBitTest, hva_to_hpa_hugetlb_three)
     struct kvm kvm = { .mm = NULL };
     pte_t pte = { .pte = 0 };
 
+    g_pagesize_huge = PAGE_SIZE_2M;
     MOCKER(huge_page_size).stubs().will(returnValue(PAGE_SIZE_2M));
     MOCKER(huge_pte_offset).stubs().will(returnValue((pte_t *)nullptr));
     ret = hva_to_hpa_hugetlb(&kvm, 0);
@@ -449,6 +450,7 @@ TEST_F(AccessedBitTest, hva_to_hpa_ham)
     info.freq[L2] = &freq2;
     info.len[L1] = info.len[L2] = 1;
     ptep.pte = 1;
+    g_pagesize_huge = PAGE_SIZE_2M;
     MOCKER(huge_page_size).stubs().will(returnValue(0x200000UL));
     MOCKER(huge_pte_offset).stubs().will(returnValue((pte_t *)&ptep));
     list_add(&info.node, &ham_pid_list);
@@ -825,6 +827,8 @@ TEST_F(AccessedBitTest, HvaCmpLocalBeforeRemote)
 
 TEST_F(AccessedBitTest, HvaCmpRemoteAfterLocal)
 {
+    nr_local_numa = SMAP_MAX_LOCAL_NUMNODES;
+
     struct hva_info x = { .va = 0x1000, .nid = nr_local_numa };
     struct hva_info y = { .va = 0x2000, .nid = 0 };
     int ret = hva_cmp(&x, &y);
@@ -1122,6 +1126,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmNoScan)
     struct access_pid ap;
     ap.pid = 1;
     ap.type = NO_SCAN;
+    g_pagesize_huge = PAGE_SIZE_2M;
     int ret = scan_accessed_bit_forward_hugepage(&ap, PAGE_SIZE_2M);
     EXPECT_EQ(0, ret);
 }
@@ -1131,6 +1136,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmFindPidFail)
     struct access_pid ap;
     ap.pid = 1;
     ap.type = NORMAL_SCAN;
+    g_pagesize_huge = PAGE_SIZE_2M;
     MOCKER(find_get_pid).stubs().will(returnValue((struct pid*)nullptr));
     int ret = scan_accessed_bit_forward_hugepage(&ap, PAGE_SIZE_2M);
     EXPECT_EQ(-EINVAL, ret);
@@ -1142,6 +1148,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmGetTaskFail)
     struct pid pid_s;
     ap.pid = 1;
     ap.type = NORMAL_SCAN;
+    g_pagesize_huge = PAGE_SIZE_2M;
     MOCKER(find_get_pid).stubs().will(returnValue(&pid_s));
     MOCKER(get_pid_task).stubs().will(returnValue((struct task_struct*)nullptr));
     int ret = scan_accessed_bit_forward_hugepage(&ap, PAGE_SIZE_2M);
@@ -1853,7 +1860,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmHugePageRenamed)
 
 extern "C" int kvm_pgtable_walk(struct kvm_pgtable *pgt, u64 addr, u64 size,
                                 struct kvm_pgtable_walker *walker);
-extern "C" int add_to_bm_page(u64 paddr, struct access_pid *ap);
+extern "C" int add_to_bm_page(u64 paddr, struct page *page, struct access_pid *ap);
 
 struct smap_bulk_memslot_ctx {
     struct kvm *kvm;
@@ -1889,7 +1896,9 @@ TEST_F(AccessedBitTest, BulkPteCbValidYoungCallsActcAddFast)
     struct kvm kvm_obj = {};
     struct kvm_memory_slot memslot = {};
     struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+    struct page page;
 
+    MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(actc_data_add_fast).expects(exactly(1));
     int ret = smap_bulk_pte_cb(0x1000, 0x2000, true, true, &ctx);
     EXPECT_EQ(0, ret);
@@ -1905,7 +1914,9 @@ TEST_F(AccessedBitTest, BulkPteCbValidLastScanCallsAddToBmPage)
     struct kvm kvm_obj = {};
     struct kvm_memory_slot memslot = {};
     struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+    struct page page;
 
+    MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(actc_data_add_fast).stubs();
     MOCKER(add_to_bm_page).expects(exactly(1)).will(returnValue(0));
     int ret = smap_bulk_pte_cb(0x1000, 0x2000, true, true, &ctx);
@@ -1940,9 +1951,11 @@ TEST_F(AccessedBitTest, BulkPteCbColdLastScanCallsHvaToHpa)
     struct kvm kvm_obj = {};
     struct kvm_memory_slot memslot = {};
     struct smap_bulk_memslot_ctx ctx = { &kvm_obj, &memslot, &ap };
+    struct page page;
 
     /* young=false but last_scanning=true → does NOT skip.
-       pte_valid=true → add_to_bm_page(hpa, ap) */
+       pte_valid=true → add_to_bm_page(hpa, page, ap) */
+    MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(add_to_bm_page).expects(exactly(1)).will(returnValue(0));
     int ret = smap_bulk_pte_cb(0x1000, 0x2000, false, true, &ctx);
     EXPECT_EQ(0, ret);

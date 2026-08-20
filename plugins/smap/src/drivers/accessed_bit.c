@@ -404,9 +404,6 @@ static inline int get_numa_id_by_paddr(phys_addr_t paddr)
 	unsigned long pfn = PHYS_PFN(paddr);
 	struct page *page;
 
-	if (!pfn_valid(pfn))
-		return NUMA_NO_NODE;
-
 	page = pfn_to_online_page(pfn);
 	if (!page)
 		return NUMA_NO_NODE;
@@ -424,13 +421,14 @@ static void actc_data_update(int nid, u64 pa_index)
 		adev->access_bit_actc_data[pa_index]++;
 }
 
-static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
+static void actc_data_add_fast(phys_addr_t paddr, struct page *page,
+			       u32 page_size)
 {
 	struct access_tracking_dev *adev;
 	int ret, nid;
 	u64 pa_index;
 
-	nid = get_numa_id_by_paddr(paddr);
+	nid = page_to_nid(page);
 	if (unlikely(nid == NUMA_NO_NODE))
 		return;
 
@@ -461,6 +459,7 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 	pte_t *ptep;
 	pte_t pte;
 	phys_addr_t paddr;
+	struct page *page;
 
 	if (!kvm)
 		return -EINVAL;
@@ -483,8 +482,12 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 	}
 
 	paddr = PFN_PHYS(pte_pfn(pte));
+	page = pfn_to_online_page(PHYS_PFN(paddr));
+	if (!page)
+		return 0;
+
 	if (is_young)
-		actc_data_add_fast(paddr, g_pagesize_huge);
+		actc_data_add_fast(paddr, page, g_pagesize_huge);
 
 	if (access_pid_cur_last_scanning(ap))
 		add_to_bm_huge(host_va, paddr, ap);
@@ -577,6 +580,7 @@ static int hva_to_hpa_4k(struct kvm *kvm, u64 host_va, struct access_pid *ap,
 	pte_t *ptep;
 	pte_t pte;
 	phys_addr_t paddr;
+	struct page *page;
 
 	if (!kvm)
 		return -EINVAL;
@@ -600,11 +604,14 @@ static int hva_to_hpa_4k(struct kvm *kvm, u64 host_va, struct access_pid *ap,
 	paddr = __pte_to_phys(pte);
 	pte_unmap(ptep);
 
+	page = pfn_to_online_page(PHYS_PFN(paddr));
+	if (!page)
+		return 0;
 	if (is_young)
-		actc_data_add_fast(paddr, PAGE_SIZE);
+		actc_data_add_fast(paddr, page, PAGE_SIZE);
 
 	if (access_pid_cur_last_scanning(ap))
-		add_to_bm_page(paddr, ap);
+		add_to_bm_page(paddr, page, ap);
 
 	return 0;
 }
@@ -842,6 +849,7 @@ static int smap_bulk_pte_cb(u64 gpa, u64 hpa, bool young, bool pte_valid,
 	struct smap_bulk_memslot_ctx *ctx = arg;
 	struct access_pid *ap = ctx->ap;
 	unsigned long hva;
+	struct page *page;
 	int ret = 0;
 
 	/* Skip cold PTEs unless this is the last scan (need page counting) */
@@ -849,10 +857,14 @@ static int smap_bulk_pte_cb(u64 gpa, u64 hpa, bool young, bool pte_valid,
 		return 0;
 
 	if (pte_valid) {
+		page = pfn_to_online_page(PHYS_PFN(hpa));
+		if (unlikely(!page))
+			return 0;
+
 		if (young)
-			actc_data_add_fast(hpa, PAGE_SIZE);
+			actc_data_add_fast(hpa, page, PAGE_SIZE);
 		if (access_pid_cur_last_scanning(ap))
-			add_to_bm_page(hpa, ap);
+			add_to_bm_page(hpa, page, ap);
 	} else {
 		hva = gfn_to_hva_memslot(ctx->memslot, gpa >> PAGE_SHIFT);
 		ret = hva_to_hpa(ctx->kvm, hva, ap, young);
