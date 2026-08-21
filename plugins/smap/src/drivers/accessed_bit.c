@@ -1464,6 +1464,14 @@ static void process_scan_results(struct pte_walk *pte_walk)
 
 	for (i = 0; i < pte_walk->scan_result_cnt; i++) {
 		struct scan_result_entry *entry = &pte_walk->scan_results[i];
+
+		if (entry->hot) {
+			unsigned long pfn = PHYS_PFN(entry->paddr);
+
+			if (pfn_valid(pfn))
+				folio_set_young(pfn_folio(pfn));
+		}
+
 		if (nid < nr_local_numa) {
 			ret = calc_paddr_acidx_acpi_known_nid(
 				entry->paddr, nid, &pa_idx, PAGE_SIZE);
