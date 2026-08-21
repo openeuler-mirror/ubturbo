@@ -492,10 +492,15 @@ int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][
                 }
                 continue;
             }
-            uint32_t swapPages =
-                (strategy->ubBwRestrict[remoteNid] == UB_BW_SWAP_STOP) ? 0 : MIN(localToRemote, remoteToLocal);
+            uint32_t swapPages = MIN(localToRemote, remoteToLocal);
             uint32_t demotePages = localToRemote - swapPages;
             uint32_t promotePages = remoteToLocal - swapPages;
+            if (strategy->ubBwRestrict[remoteNid] == UB_BW_SWAP_STOP) {
+                SMAP_LOGGER_INFO("Pid %d pair %d-%d UB bandwidth restricts swap, swapPages %u -> 0, "
+                                 "demotePages %u, promotePages %u.",
+                                 process->pid, localNid, remoteNid, swapPages, demotePages, promotePages);
+                swapPages = 0;
+            }
 
             int ret = BuildPairMlist(process, mlist, numaOffset, localNid, remoteNid, demotePages + swapPages,
                                      SELECT_BOTTOM_K);

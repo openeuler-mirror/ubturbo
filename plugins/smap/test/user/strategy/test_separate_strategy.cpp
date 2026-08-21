@@ -291,6 +291,34 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuildsPairSwapAfterNetMigr
     free(process.scanAttr.actcData[2]);
 }
 
+TEST_F(SeparateStrategyTest, TestPairMigrationStrategyUbBwSwapStopStripsSwap)
+{
+    ProcessAttr process = {};
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    const uint16_t local0[] = {0, 1, 6};
+    const uint16_t remote2[] = {9, 8, 2};
+    BuildPairActcData(0, local0, 3, &process.scanAttr);
+    BuildPairActcData(2, remote2, 3, &process.scanAttr);
+    initializeMigList(mlist);
+    process.strategyAttr.nrMigratePages[0][2] = 3; /* local -> remote */
+    process.strategyAttr.nrMigratePages[2][0] = 2; /* remote -> local */
+    process.strategyAttr.ubBwRestrict[2] = UB_BW_SWAP_STOP;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
+
+    ASSERT_EQ(0, PairMigrationStrategy(&process, mlist));
+
+    /* swapPages = MIN(3, 2) = 2 -> 0; demotePages = 3 - 2 = 1, promotePages = 2 - 2 = 0.
+     * UB_BW_SWAP_STOP only strips swap, net demote/promote stays. */
+    ASSERT_EQ(1U, mlist[0][2].nr);
+    EXPECT_EQ(0U, mlist[0][2].addr[0]);
+    ASSERT_EQ(0U, mlist[2][0].nr);
+    EXPECT_EQ(nullptr, mlist[2][0].addr);
+
+    FreeMlist(mlist);
+    free(process.scanAttr.actcData[0]);
+    free(process.scanAttr.actcData[2]);
+}
+
 TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteSkipsBothDirections)
 {
     ProcessAttr process = {};
