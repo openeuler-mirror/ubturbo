@@ -159,6 +159,11 @@ static inline struct folio *pfn_folio(unsigned long pfn)
     return stubFolio;
 }
 
+static inline bool try_get_page(struct page *page)
+{
+    return true;
+}
+
 #else /* KERNEL_VERSION(5, 10, 0) */
 #endif /* LINUX_VERSION_CODE */
 

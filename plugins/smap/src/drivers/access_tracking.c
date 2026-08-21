@@ -517,6 +517,7 @@ static void work_func(struct work_struct *work)
 	} else {
 		ret = scan_accessed_bit_forward_smallpage(ap, page_size);
 	}
+	ap->first_scan = false;
 	up_read(&ap_data.lock);
 	adev_buffer_up_read();
 	end_time = ktime_get();

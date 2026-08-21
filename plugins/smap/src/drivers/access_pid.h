@@ -76,6 +76,7 @@ struct access_pid {
 	unsigned long last_scan_delay_ms;
 	struct proc_dir_entry *proc_root;
 	struct proc_dir_entry *proc_freq;
+	bool first_scan;
 };
 
 typedef struct {

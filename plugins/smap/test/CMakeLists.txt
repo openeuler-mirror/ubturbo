@@ -179,6 +179,7 @@ target_compile_definitions(smap_dt PUBLIC
     CONFIG_CPUSETS=y
     CONFIG_64BIT=y
     CONFIG_MEMORY_HOTPLUG=true
+    CONFIG_NUMA_BALANCING=y
     CONFIG_CMA
 )
 

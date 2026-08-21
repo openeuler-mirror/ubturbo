@@ -34,6 +34,7 @@
 #include "access_pid.h"
 #include "access_mmu.h"
 #include "access_tracking.h"
+#include "smap_page_flags.h"
 #include "accessed_bit.h"
 
 #define DECIMAL 10
@@ -450,6 +451,17 @@ static void actc_data_add_fast(phys_addr_t paddr, struct page *page,
 	adev->access_bit_actc_data[pa_index]++;
 }
 
+static void last_scan_update_page_flags(struct page *page, bool young)
+{
+	if (try_get_page(page)) {
+		if (young)
+			smap_page_cold_periods_reset(page);
+		else
+			smap_page_cold_periods_inc(page);
+		put_page(page);
+	}
+}
+
 static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 			      struct access_pid *ap, bool is_young)
 {
@@ -485,12 +497,20 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 	page = pfn_to_online_page(PHYS_PFN(paddr));
 	if (!page)
 		return 0;
+	if (ap->first_scan) {
+		if (try_get_page(page)) {
+			smap_page_cold_periods_reset(page);
+			put_page(page);
+		}
+	}
 
 	if (is_young)
 		actc_data_add_fast(paddr, page, g_pagesize_huge);
 
-	if (access_pid_cur_last_scanning(ap))
+	if (access_pid_cur_last_scanning(ap)) {
 		add_to_bm_huge(host_va, paddr, ap);
+		last_scan_update_page_flags(page, is_young);
+	}
 
 	return 0;
 }
@@ -610,8 +630,10 @@ static int hva_to_hpa_4k(struct kvm *kvm, u64 host_va, struct access_pid *ap,
 	if (is_young)
 		actc_data_add_fast(paddr, page, PAGE_SIZE);
 
-	if (access_pid_cur_last_scanning(ap))
+	if (access_pid_cur_last_scanning(ap)) {
 		add_to_bm_page(paddr, page, ap);
+		last_scan_update_page_flags(page, is_young);
+	}
 
 	return 0;
 }
@@ -863,8 +885,10 @@ static int smap_bulk_pte_cb(u64 gpa, u64 hpa, bool young, bool pte_valid,
 
 		if (young)
 			actc_data_add_fast(hpa, page, PAGE_SIZE);
-		if (access_pid_cur_last_scanning(ap))
+		if (access_pid_cur_last_scanning(ap)) {
 			add_to_bm_page(hpa, page, ap);
+			last_scan_update_page_flags(page, young);
+		}
 	} else {
 		hva = gfn_to_hva_memslot(ctx->memslot, gpa >> PAGE_SHIFT);
 		ret = hva_to_hpa(ctx->kvm, hva, ap, young);
@@ -1624,6 +1648,8 @@ static void process_scan_results(struct pte_walk *pte_walk)
 	int ret;
 	bool is_last_scan;
 	int nid = 0;
+	struct access_tracking_dev *adev;
+	struct page *page;
 
 	if (!pte_walk || !pte_walk->ap)
 		return;
@@ -1632,6 +1658,9 @@ static void process_scan_results(struct pte_walk *pte_walk)
 
 	for (i = 0; i < pte_walk->scan_result_cnt; i++) {
 		struct scan_result_entry *entry = &pte_walk->scan_results[i];
+
+		cond_resched();
+
 		if (nid < nr_local_numa) {
 			ret = calc_paddr_acidx_acpi_known_nid(
 				entry->paddr, nid, &pa_idx, PAGE_SIZE);
@@ -1652,10 +1681,20 @@ static void process_scan_results(struct pte_walk *pte_walk)
 		entry->nid = nid;
 		if (entry->hot)
 			actc_data_update(entry->nid, pa_idx);
-		if (is_last_scan)
-			add_to_bm_page_fast(entry->paddr, entry->nid, pa_idx,
-					    pte_walk->ap);
-		cond_resched();
+		if (!is_last_scan)
+			continue;
+
+		add_to_bm_page_fast(entry->paddr, entry->nid, pa_idx,
+				    pte_walk->ap);
+
+		adev = get_access_tracking_dev(entry->nid);
+		if (!adev || pa_idx >= adev->page_count || adev->is_hist)
+			continue;
+		page = pfn_to_online_page(PHYS_PFN(entry->paddr));
+		if (!page)
+			continue;
+		last_scan_update_page_flags(
+			page, adev->access_bit_actc_data[pa_idx] > 0);
 	}
 }
 

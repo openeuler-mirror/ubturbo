@@ -495,6 +495,7 @@ int init_access_pid(struct access_add_pid_payload *payload,
 	ap->scan_time = payload->scan_time;
 	ap->ntimes = payload->ntimes;
 	ap->type = payload->type;
+	ap->first_scan = true;
 	init_completion(&ap->work_done);
 	for (int i = 0; i < SMAP_MAX_NUMNODES; i++) {
 		ap->scan_count[i] = 0;
