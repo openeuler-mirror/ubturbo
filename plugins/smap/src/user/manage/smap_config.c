@@ -439,12 +439,14 @@ static void ApplyRecoveredTargetConfig(ProcessAttr *attr, const ProcessTargetCon
         int remoteIndex = config->targets[i].remoteNid - GetNrLocalNuma();
         attr->migrateParam[i].nid = config->targets[i].remoteNid;
         attr->migrateParam[i].memSize = config->targets[i].memSizeKB;
+        bool firstL1 = true;
         for (int localNid = 0; localNid < GetNrLocalNuma(); localNid++) {
             if (!InAttrL1(attr, localNid)) {
                 continue;
             }
             attr->strategyAttr.initRemoteMemRatio[localNid][remoteIndex] = config->targets[i].ratio;
-            attr->strategyAttr.memSize[localNid][remoteIndex] = config->targets[i].memSizeKB;
+            attr->strategyAttr.memSize[localNid][remoteIndex] = firstL1 ? config->targets[i].memSizeKB : 0;
+            firstL1 = false;
         }
         AddAttrL2(attr, config->targets[i].remoteNid);
         totalRatio += config->targets[i].ratio;
