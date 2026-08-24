@@ -508,11 +508,13 @@ static void PidSlotTryReclaim(struct ProcessManager *manager, int i)
     if (EnvAtomicRead(&s->refs) != 0) {
         return;
     }
-    if (EnvAtomicCmpAndSwap(PID_SLOT_REMOVING, PID_SLOT_FREE, &s->state) == PID_SLOT_REMOVING) {
-        FreeProceccesAttr(s->attr);
-        s->attr = NULL;
-        s->pid = 0;
+    if (EnvAtomicCmpAndSwap(PID_SLOT_REMOVING, PID_SLOT_RESERVED, &s->state) != PID_SLOT_REMOVING) {
+        return;
     }
+    FreeProceccesAttr(s->attr);
+    s->attr = NULL;
+    s->pid = 0;
+    EnvAtomicSet(&s->state, PID_SLOT_FREE);
 }
 
 int PidSlotAdd(struct ProcessManager *manager, ProcessAttr *attr)
