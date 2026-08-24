@@ -230,15 +230,6 @@ static bool IsPidArrValid(pid_t *pidArr, int len, bool ignoreUnmanaged)
         }
         SMAP_LOGGER_INFO("pid Arr msg num:[%d] pid:%d.", i, pidArr[i]);
     }
-    /* 检查pidArr是否有重复项 */
-    for (i = 0; i < len - 1; i++) {
-        for (int j = i + 1; j < len; j++) {
-            if (pidArr[i] == pidArr[j]) {
-                SMAP_LOGGER_ERROR("pidArr with duplicate elements: %d.", pidArr[i]);
-                return false;
-            }
-        }
-    }
     return true;
 }
 
@@ -2866,6 +2857,20 @@ static int IsPidArrRemoteNumaMatch(struct MigrateEscapeMsg *msg)
     return ret;
 }
 
+static bool IsPidArrRemoteDestConflict(struct MigrateEscapeMsg *msg)
+{
+    for (int i = 0; i < msg->count - 1; i++) {
+        for (int j = i + 1; j < msg->count; j++) {
+            if (msg->payload[i].pid == msg->payload[j].pid && msg->payload[i].srcNid == msg->payload[j].srcNid) {
+                SMAP_LOGGER_ERROR("pid %d srcNid %d duplicate migrate request.", msg->payload[i].pid,
+                                  msg->payload[i].srcNid);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static int GetAttrNidInitRatio(pid_t pid, int nid)
 {
     int nrLocalNuma = GetNrLocalNuma();
@@ -2953,6 +2958,11 @@ static int SmapMigratePidRemoteNumaCheckInner(struct MigrateEscapeMsg *msg)
     if (ret) {
         SMAP_LOGGER_ERROR("not all pid remote numa valid, start proc move failed ret: %d.", ret);
         return ret;
+    }
+
+    if (IsPidArrRemoteDestConflict(msg)) {
+        SMAP_LOGGER_ERROR("pid remote dest conflict, migrate pid remote numa failed.");
+        return -EINVAL;
     }
 
     struct ProcessManager *manager = GetProcessManager();

@@ -2470,12 +2470,13 @@ TEST_F(InterfaceTest, TestIsPidArrValidTwo)
 
 TEST_F(InterfaceTest, TestIsPidArrValidThree)
 {
+    /* 重复pid不再作为拒绝条件，仅校验pid合法性与受管状态 */
     pid_t pidArr[] = { 1, 1 };
     ProcessAttr pid1;
     MOCKER(GetProcessAttr).stubs().will(returnValue(&pid1));
     MOCKER(PidIsValid).stubs().will(returnValue(true));
     bool ret = IsPidArrValid(pidArr, 2, true);
-    EXPECT_EQ(false, ret);
+    EXPECT_EQ(true, ret);
 }
 
 extern "C" int CheckMigrateNumaMsg(struct MigrateNumaMsg *msg);
@@ -2924,6 +2925,70 @@ TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaIsPidArrChangePidRemoteByPid)
     MOCKER(ChangePidRemoteByPid).stubs().will(returnValue(0));
     int ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
     EXPECT_EQ(-22, ret);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+}
+
+/* 同一(pid, srcNid)指向不同destNid应报错 */
+TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaDestConflict)
+{
+    struct MigrateEscapeMsg msg = {
+        .count = 2,
+    };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    msg.payload[0].destNid = 5;
+    msg.payload[1].pid = 1;
+    msg.payload[1].srcNid = 4;
+    msg.payload[1].destNid = 6;
+
+    ProcessAttr attr = {};
+    attr.pid = 1;
+    attr.scanType = NORMAL_SCAN;
+    attr.next = nullptr;
+    attr.numaAttr.numaNodes = 0b01110000; // 4 5 6
+    attr.state = PROC_MOVE;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsPidArrValid).stubs().will(returnValue(true));
+    MOCKER(IsPidArrRemoteNumaMatch).stubs().will(returnValue(0));
+
+    int ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+}
+
+/* 完全相同的(pid, srcNid)重复请求也应报错，避免重复迁移导致记账错乱 */
+TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaSameDestConflict)
+{
+    struct MigrateEscapeMsg msg = {
+        .count = 2,
+    };
+    msg.payload[0].pid = 1;
+    msg.payload[0].srcNid = 4;
+    msg.payload[0].destNid = 5;
+    msg.payload[1].pid = 1;
+    msg.payload[1].srcNid = 4;
+    msg.payload[1].destNid = 5;
+
+    ProcessAttr attr = {};
+    attr.pid = 1;
+    attr.scanType = NORMAL_SCAN;
+    attr.next = nullptr;
+    attr.numaAttr.numaNodes = 0b00110000; // 4 5
+    attr.state = PROC_MOVE;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
+
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
+    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsPidArrValid).stubs().will(returnValue(true));
+    MOCKER(IsPidArrRemoteNumaMatch).stubs().will(returnValue(0));
+
+    int ret = ubturbo_smap_pid_remote_numa_migrate(&msg);
+    EXPECT_EQ(-EINVAL, ret);
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
@@ -4260,11 +4325,12 @@ TEST_F(InterfaceTest, TestIsPidArrValidIgnoreUnmanaged)
 
 TEST_F(InterfaceTest, TestIsPidArrValidDuplicatePid)
 {
+    /* 重复pid不再作为拒绝条件，ignoreUnmanaged=true时跳过受管检查应返回true */
     pid_t pidArr[2] = { 123, 123 };
     MOCKER(PidIsValid).stubs().will(returnValue(true));
     MOCKER(GetProcessAttr).stubs().will(returnValue((ProcessAttr *)nullptr));
     bool ret = IsPidArrValid(pidArr, 2, true);
-    EXPECT_EQ(false, ret);
+    EXPECT_EQ(true, ret);
 }
 
 TEST_F(InterfaceTest, TestIoctlHandlerOpenFailed)
