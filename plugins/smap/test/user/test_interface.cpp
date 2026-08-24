@@ -4079,13 +4079,12 @@ TEST_F(InterfaceTest, TestGetAttrNidInitRatio)
 TEST_F(InterfaceTest, TestGetAttrNidInitMemSize)
 {
     ProcessAttr attr = { .pid = 1 };
-    attr.strategyAttr.memSize[0][0] = 1024;
-    attr.numaAttr.numaNodes = 0b00010001;
-    g_processManager.nrLocalNuma = 4;
+    attr.remoteNumaCnt = 1;
+    attr.migrateParam[0].nid = 4;
+    attr.migrateParam[0].memSize = 1024;
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
     uint64_t memSize = 0;
 
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
 
     EXPECT_EQ(0, GetAttrNidInitMemSize(1, 4, &memSize));
@@ -4098,12 +4097,11 @@ TEST_F(InterfaceTest, TestGetAttrNidInitMemSize)
 TEST_F(InterfaceTest, TestIsRemoteNidMemSizeValid)
 {
     ProcessAttr attr = { .pid = 1 };
-    attr.strategyAttr.memSize[0][0] = 2048;
-    attr.numaAttr.numaNodes = 0b00010001;
-    g_processManager.nrLocalNuma = 4;
+    attr.remoteNumaCnt = 1;
+    attr.migrateParam[0].nid = 4;
+    attr.migrateParam[0].memSize = 2048;
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
 
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
 
     EXPECT_TRUE(IsRemoteNidMemSizeValid(1, 4, 2048));

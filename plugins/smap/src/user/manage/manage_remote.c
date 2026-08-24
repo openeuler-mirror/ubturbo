@@ -1035,10 +1035,20 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
             }
         }
         for (int i = 0; i < GetProcessManager()->nrLocalNuma; i++) {
+            if (!InAttrL1(attr, i)) {
+                continue;
+            }
+            if (attr->strategyAttr.memSize[i][srcNodeIndex] == 0) {
+                continue;
+            }
             attr->strategyAttr.initRemoteMemRatio[i][destNodeIndex] += ratio;
             attr->strategyAttr.initRemoteMemRatio[i][srcNodeIndex] -= ratio;
-            attr->strategyAttr.memSize[i][destNodeIndex] = attr->strategyAttr.memSize[i][srcNodeIndex];
-            attr->strategyAttr.memSize[i][srcNodeIndex] = 0;
+            attr->strategyAttr.memSize[i][destNodeIndex] += memSize;
+            if (attr->strategyAttr.memSize[i][srcNodeIndex] >= memSize) {
+                attr->strategyAttr.memSize[i][srcNodeIndex] -= memSize;
+            } else {
+                attr->strategyAttr.memSize[i][srcNodeIndex] = 0;
+            }
 
             SMAP_LOGGER_INFO("[change_remote] pid=%d local=%d old_remote=%d new_remote=%d old_sz=%llu new_sz=%llu",
                              attr->pid, i, srcNodeIndex, destNodeIndex, attr->strategyAttr.memSize[i][srcNodeIndex],
@@ -1064,8 +1074,15 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
         }
 
         for (int i = 0; i < GetProcessManager()->nrLocalNuma; i++) {
+            if (!InAttrL1(attr, i)) {
+                continue;
+            }
             attr->strategyAttr.memSize[i][destNodeIndex] += memSize;
-            attr->strategyAttr.memSize[i][srcNodeIndex] -= memSize;
+            if (attr->strategyAttr.memSize[i][srcNodeIndex] >= memSize) {
+                attr->strategyAttr.memSize[i][srcNodeIndex] -= memSize;
+            } else {
+                attr->strategyAttr.memSize[i][srcNodeIndex] = 0;
+            }
         }
     }
 
@@ -1100,16 +1117,16 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
 
 static void ChangePidRemoteMemoryByNuma(ProcessAttr *attr, int srcNode, int destNode)
 {
-    if (GetRunMode() == WATERLINE_MODE) {
-        for (int i = 0; i < GetProcessManager()->nrLocalNuma; i++) {
-            attr->strategyAttr.initRemoteMemRatio[i][destNode] = attr->strategyAttr.initRemoteMemRatio[i][srcNode];
-            attr->strategyAttr.initRemoteMemRatio[i][srcNode] = 0;
-        }
-    } else if (GetRunMode() == MEM_POOL_MODE) {
-        for (int i = 0; i < GetProcessManager()->nrLocalNuma; i++) {
-            attr->strategyAttr.memSize[i][destNode] = attr->strategyAttr.memSize[i][srcNode];
-            attr->strategyAttr.memSize[i][srcNode] = 0;
-        }
+    int nrLocalNuma = GetProcessManager()->nrLocalNuma;
+    for (int i = 0; i < nrLocalNuma; i++) {
+        attr->strategyAttr.initRemoteMemRatio[i][destNode] = attr->strategyAttr.initRemoteMemRatio[i][srcNode];
+        attr->strategyAttr.initRemoteMemRatio[i][srcNode] = 0;
+        attr->strategyAttr.memSize[i][destNode] = attr->strategyAttr.memSize[i][srcNode];
+        attr->strategyAttr.memSize[i][srcNode] = 0;
+    }
+    for (int i = 0; i < attr->remoteNumaCnt; i++) {
+        if (attr->migrateParam[i].nid == srcNode + nrLocalNuma)
+            attr->migrateParam[i].nid = destNode + nrLocalNuma;
     }
 }
 
@@ -1451,6 +1468,15 @@ int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg)
                                 msg->payloads[i].destNid, ret);
         } else {
             attr->remoteNumaCnt = attr->targetConfig.count;
+            /* Sync migrateParam from targetConfig so the strategy layer reads
+             * the correct memSize after MoveProcessRemoteTarget split/move.
+             * Without this, migrateParam[0].memSize stays at the stale original
+             * value and the strategy layer overwrites strategyAttr.memSize with
+             * the wrong number, causing accumulation in ChangePidRemoteMemory. */
+            for (int j = 0; j < attr->targetConfig.count; j++) {
+                attr->migrateParam[j].nid = attr->targetConfig.targets[j].remoteNid;
+                attr->migrateParam[j].memSize = attr->targetConfig.targets[j].memSizeKB;
+            }
         }
         PutProcessAttr(attr);
     }

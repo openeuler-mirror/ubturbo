@@ -2902,8 +2902,6 @@ static bool IsRemoteNidRatioValid(pid_t pid, int nid, int ratio)
 
 static int GetAttrNidInitMemSize(pid_t pid, int nid, uint64_t *memSize)
 {
-    int nrLocalNuma = GetNrLocalNuma();
-    uint64_t curMemSize = 0;
     ProcessAttr *attr = GetProcessAttr(pid);
     if (!memSize) {
         return -EINVAL;
@@ -2911,12 +2909,17 @@ static int GetAttrNidInitMemSize(pid_t pid, int nid, uint64_t *memSize)
     if (!attr) {
         return -EINVAL;
     }
-    for (int i = 0; i < nrLocalNuma; i++) {
-        if (InAttrL1(attr, i)) {
-            curMemSize += attr->strategyAttr.memSize[i][nid - nrLocalNuma];
+    /* Read from migrateParam (synced from targetConfig, stable across scan
+     * cycles) instead of strategyAttr.memSize which the strategy layer
+     * overwrites with the remaining target (can be 0 after migration done). */
+    for (int i = 0; i < attr->remoteNumaCnt; i++) {
+        if (attr->migrateParam[i].nid == nid) {
+            *memSize = attr->migrateParam[i].memSize;
+            PutProcessAttr(attr);
+            return 0;
         }
     }
-    *memSize = curMemSize;
+    *memSize = 0;
     PutProcessAttr(attr);
     return 0;
 }
