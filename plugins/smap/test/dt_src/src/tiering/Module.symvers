@@ -1,5 +1,0 @@
-0x7c168728	smap_pgtype	/home/yyx/master/ubturbo/plugins/smap/src/tiering/smap_tiering	EXPORT_SYMBOL_GPL	
-0x588f1397	is_smap_pg_huge	/home/yyx/master/ubturbo/plugins/smap/src/tiering/smap_tiering	EXPORT_SYMBOL	
-0x9a2e36c0	check_and_create_dir	/home/yyx/master/ubturbo/plugins/smap/src/tiering/smap_tiering	EXPORT_SYMBOL	
-0xe2d6afae	check_filesize	/home/yyx/master/ubturbo/plugins/smap/src/tiering/smap_tiering	EXPORT_SYMBOL	
-0x0c536ab5	rename_file	/home/yyx/master/ubturbo/plugins/smap/src/tiering/smap_tiering	EXPORT_SYMBOL	

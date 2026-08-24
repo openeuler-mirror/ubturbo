@@ -1,1 +1,0 @@
-savedcmd_/home/yyx/master/ubturbo/plugins/smap/src/drivers/smap_tracking_core.mod := printf '%s\n'   core.o bus.o | awk '!x[$$0]++ { print("/home/yyx/master/ubturbo/plugins/smap/src/drivers/"$$0) }' > /home/yyx/master/ubturbo/plugins/smap/src/drivers/smap_tracking_core.mod

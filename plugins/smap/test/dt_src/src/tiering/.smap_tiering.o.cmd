@@ -1,1 +1,0 @@
-savedcmd_/home/yyx/master/ubturbo/plugins/smap/src/tiering/smap_tiering.o := ld -EL  -maarch64linux -z norelro -z noexecstack --no-warn-rwx-segments   -r -o /home/yyx/master/ubturbo/plugins/smap/src/tiering/smap_tiering.o @/home/yyx/master/ubturbo/plugins/smap/src/tiering/smap_tiering.mod 
