@@ -32,69 +32,50 @@ protected:
 extern "C" void EnvMutexLock(EnvMutex *mutex);
 extern "C" void EnvMutexUnlock(EnvMutex *mutex);
 extern "C" void *ThreadMain(void *args);
-extern "C" int IdleWork(struct ThreadContext *priv);
-int TmpWorkFunc(ThreadCtx *priv)
-{
-    return 0;
-}
 
 TEST_F(ThreadTest, TestThreadMainStoped)
 {
-    ThreadCtx *ctx = (ThreadCtx *)malloc(sizeof(*ctx));
-    ctx->workFunc = IdleWork;
-    EnvAtomicSet(&ctx->stop, 1);
-    ctx->period = 50;
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
+    EnvAtomicSet(&pm.scanMigrateStop, 1);
+    pm.migPeriod = 50;
 
-    void *ret = ThreadMain(ctx);
+    void *ret = ThreadMain(&pm);
     EXPECT_EQ(nullptr, ret);
 }
 
-TEST_F(ThreadTest, TestInitThread)
+TEST_F(ThreadTest, TestInitScanMigrateThread)
 {
-    struct ProcessManager pm = {
-        .nrThread = 0
-    };
-    uint32_t period;
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
+    uint32_t period = 100;
     int ret;
 
     MOCKER(pthread_create).stubs().will(returnValue(0));
-    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
-    ret = InitThread(&pm, period, TmpWorkFunc);
+    ret = InitScanMigrateThread(&pm, period);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(1, pm.nrThread);
-    free(pm.threadCtx[0]);
+    EXPECT_EQ(period, pm.migPeriod);
+    EXPECT_EQ(0, EnvAtomicRead(&pm.scanMigrateStop));
 }
 
-TEST_F(ThreadTest, TestInitThreadCreateFailed)
+TEST_F(ThreadTest, TestInitScanMigrateThreadCreateFailed)
 {
-    struct ProcessManager pm = {
-        .nrThread = 0
-    };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
     uint32_t period = 50;
     int ret;
 
     MOCKER(pthread_create).stubs().will(returnValue(EAGAIN));
-    ret = InitThread(&pm, period, TmpWorkFunc);
+    ret = InitScanMigrateThread(&pm, period);
     EXPECT_EQ(-EAGAIN, ret);
-    EXPECT_EQ(0, pm.nrThread);
-    EXPECT_EQ(nullptr, pm.threadCtx[0]);
 }
 
-TEST_F(ThreadTest, TestDestroyAllThread)
+TEST_F(ThreadTest, TestDestroyScanMigrateThread)
 {
     int ret;
-    struct ProcessManager pm = { .nrThread = 2 };
-    pm.threadCtx[0] = malloc(sizeof(ThreadCtx));
-    pm.threadCtx[1] = malloc(sizeof(ThreadCtx));
-    ASSERT_NE(nullptr, pm.threadCtx[0]);
-    ASSERT_NE(nullptr, pm.threadCtx[1]);
-    MOCKER(pthread_join).expects(exactly(2)).will(ignoreReturnValue());
-    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
-    ret = DestroyAllThread(&pm);
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
+
+    // pthread_t 非零时才执行 join，模拟线程已成功创建
+    pm.scanMigrateThread = (pthread_t)1;
+    MOCKER(pthread_join).expects(once()).will(ignoreReturnValue());
+    ret = DestroyScanMigrateThread(&pm);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(nullptr, pm.threadCtx[0]);
-    EXPECT_EQ(nullptr, pm.threadCtx[1]);
-    EXPECT_EQ(0, pm.nrThread);
+    EXPECT_EQ(1, EnvAtomicRead(&pm.scanMigrateStop));
 }

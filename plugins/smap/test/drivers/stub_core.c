@@ -30,12 +30,6 @@ void stub_tracking_target_node_update(struct device *ldev,
     ldev->numa_node = 7;
 }
 
-int stub_tracking_mode_set(struct device *ldev, u8 mode)
-{
-    ldev->numa_node = 4;
-    return 1;
-}
-
 int stub_tracking_set_page_size(struct device *ldev, u8 page_size)
 {
     ldev->numa_node = 6;

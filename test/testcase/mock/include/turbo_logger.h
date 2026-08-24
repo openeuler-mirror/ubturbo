@@ -119,7 +119,7 @@ public:
     void FormatSyslog(std::ostream &os);
 
     TurboLogLevel GetLogLevel();
-    const char *GetSyslogAsString();
+    std::string GetSyslogAsString();
     const char *GetModuleName();
     const char *GetFile();
     uint32_t GetLine();

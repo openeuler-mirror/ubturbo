@@ -18,7 +18,7 @@ int SmapMigratePidRemoteNuma(pid_t *pidArr, int len, int srcNid, int destNid)
     return 0;
 }
 
-int SmapMigrateOut(struct MigrateOutMsg *msg, int pidType)
+int SmapMigrateOut(struct MigrateOutMsg *msg, int pageType)
 {
     return 0;
 }
@@ -43,12 +43,12 @@ int SmapMigrateBack(struct MigrateBackMsg *msg)
     return 0;
 }
 
-int SmapRemove(struct RemoveMsg *msg, int pidType)
+int SmapRemove(struct RemoveMsg *msg, int pageType)
 {
     return 0;
 }
 
-int SmapMigrateOutSync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime)
+int SmapMigrateOutSync(struct MigrateOutMsg *msg, int pageType, uint64_t maxWaitTime)
 {
     return 0;
 }

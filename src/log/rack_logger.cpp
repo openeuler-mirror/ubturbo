@@ -56,7 +56,7 @@ static void FormatTimestamp(std::ostream &os, uint64_t timestamp)
         buffer[0] = '\0';
     }
     uint64_t milliseconds = (timestamp % 1000000) / 1000; // timestamp % 1000000提取时间戳微秒部分
-    os << '[' << buffer << std::setw(3) << std::setfill('0') << milliseconds << " +0800]"; // 毫秒格式化3位
+    os << '[' << buffer << std::setw(3) << std::setfill('0') << milliseconds << ']'; // 毫秒格式化3位
 }
 
 static const char *LogLevelToString(TurboLogLevel level)
@@ -202,18 +202,18 @@ const char *TurboLoggerEntry::GetModuleName()
 
 const char *TurboLoggerEntry::GetFile()
 {
-    return file;
+    return file ? file : "";
 }
 
 uint32_t TurboLoggerEntry::GetLine()
 {
     return line;
 }
-const char *TurboLoggerEntry::GetSyslogAsString()
+std::string TurboLoggerEntry::GetSyslogAsString()
 {
     std::ostringstream oss;
     FormatSyslog(oss);
-    return oss.str().c_str();
+    return oss.str();
 }
 TurboLogLevel TurboLoggerEntry::GetLogLevel()
 {

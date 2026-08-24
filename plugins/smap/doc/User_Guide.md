@@ -7,10 +7,11 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 在之后的时间内, SMAP周期性统计内存冷热信息, 保证虚机内应用在使用远端内存时, 性能可控。
 当NUMA内的内存使用率下降到一定水线时, SMAP支持按照借用的内存迁回虚机数据。
 
-> 说明: 自本版本起, 页面大小与进程身份解耦。
-> * `pageType` 为全局开关, 由 `ubturbo_smap_start` 启动时传入, 决定本次跟踪使用 2M 大页还是 4K 页。
-> * `pidType` 为逐 pid 身份标识(虚机 VM / 普通进程 PROCESS), 与页面大小相互独立——既存在 2M 大页虚机, 也存在 4K 页虚机; 普通进程同理。
-> * 因此 4K 页虚机可进入 grouped / multi-numa 迁移路径(此前仅 2M 虚机可用); 普通进程仍走 SeparateStrategy。HAM 场景本期仍维持 2M。
+> 多 NUMA 迁出说明：
+> * `pageType` 由 `ubturbo_smap_start` 启动时传入，决定本次跟踪的页面类型：4K 普通进程使用 0，2M 虚机使用 1；调用迁出接口时必须与启动页型一致。
+> * 普通 `ubturbo_smap_migrate_out` 支持一个 PID 同时配置多个远端 NUMA。调用方只配置 remote 聚合目标，不指定本地 NUMA；SMAP 会根据 CPU affinity、页面驻留和既有迁移账本自动管理多个 local NUMA。
+> * 每次普通 migrate-out 配置均全量替换该 PID 的远端目标；未包含的 remote 会清零，`payload.count == 0` 表示清空全部普通迁出目标。`srcNid` 仅为 ABI 兼容保留，普通迁出中不生效。
+> * 远端容量由 private/shared 容量在所有 PID 间统一仲裁。容量不足时配置仍会保存，SMAP 在后续周期按可用容量收敛；容量恢复后无需重新下发目标。多个 local 共用 remote 时，若无法可靠判断页面来源，SMAP 会跳过冷热交换，但仍会执行必要的迁出和迁回。
 
 ## SMAP安装&部署
 

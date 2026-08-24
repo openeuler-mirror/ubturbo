@@ -24,9 +24,6 @@ message(STATUS "3rdparty src dir ${PROJECT_3RDPARTY_SRC_DIR}")
 message(STATUS "3rdparty bin dir ${PROJECT_3RDPARTY_BIN_DIR}")
 message(STATUS "target install dir ${TARGET_INSTALL_DIR}")
 
-include_directories(
-    ${PROJECT_3RDPARTY_SRC_DIR}/secure/libboundscheck/include
-)
 #################################
 # include common cmake modules
 #################################

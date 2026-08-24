@@ -170,6 +170,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pageType);
 | -ESRCH | 部分进程不存在但其余进程配置成功 |
 | -ENOMEM | 内存申请失败 |
 | -EINVAL | 参数错误 |
+| -EBADF | 内核驱动访问失败 |
 
 ## 约束 CONSTRAINTS
 
@@ -303,6 +304,7 @@ struct GroupedMigrateOutMsg {
 | -ESRCH | PID不存在，本接口会回滚已添加配置，不提供部分成功语义 |
 | -ENOMEM | 内存申请失败 |
 | -EINVAL | 参数错误 |
+| -EBADF | 内核驱动访问失败 |
 
 ## 约束 CONSTRAINTS
 
@@ -414,6 +416,7 @@ int ubturbo_smap_remote_numa_info_set(struct SetRemoteNumaInfoMsg *msg);
 | --- | --- |
 | -EPERM | SMAP未初始化 |
 | -EINVAL | 参数错误 |
+| -EBADF | 配置同步到内核失败 |
 
 ## 约束 CONSTRAINTS
 
@@ -731,6 +734,9 @@ int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t
 | --- | --- |
 | -EPERM | SMAP未初始化 |
 | -EINVAL | 参数错误 |
+| -EAGAIN | 统计模式扫描时长未达到预期 |
+| -ENOMEM | 内核态内存申请失败 |
+| -EBADF | 内核ioctl访问失败 |
 
 ## 约束 CONSTRAINTS
 
@@ -799,7 +805,7 @@ int ubturbo_smap_run_mode_set(int runMode);
 | --- | --- |
 | -EPERM | SMAP未初始化 |
 | -EBADF | 同步配置文件失败 |
-| -EINVAL | 参数错误 |
+| -EINVAL | 参数错误或非大页场景设置内存碎片模式 |
 
 ## 约束 CONSTRAINTS
 
@@ -1022,6 +1028,7 @@ int ubturbo_smap_pid_remote_numa_migrate(pid_t *pidArr, int len, int srcNid, int
 | -EBADF | 迁移成功但修改进程远端NUMA失败 |
 | -ENOMEM | 内存申请失败 |
 | -EINVAL | 参数错误 |
+| -REMOTE_MIG_FAIL | 迁移失败 |
 
 ## 约束 CONSTRAINTS
 
@@ -1089,7 +1096,7 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
 | name | IN/OUT | description |
 | --- | --- | --- |
 | pidArr | IN | 进程PID数组。 |
-| scanTime | IN | 扫描间隔，单位ms，必须为50的倍数，最大2000。 |
+| scanTime | IN | 扫描间隔，单位ms，最大2000。 |
 | duration | IN | 扫描持续时长，scanType为2时有效。 |
 | len | IN | 数组长度。 |
 | scanType | IN | 0：将进程设置为只扫描状态，1：将进程恢复为冷热扫描加迁移状态，2：表示进程设置为统计特定时长冷热信息状态。 |
@@ -1106,6 +1113,7 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
 | -EBADF | 内核调用失败 |
 | -ENOMEM | 内存申请失败 |
 | -EINVAL | 参数错误 |
+| -EBUSY | 进程状态非PROC_MOVE无法切换扫描类型 |
 
 ## 约束 CONSTRAINTS
 
@@ -1181,6 +1189,8 @@ int ubturbo_smap_process_tracking_remove(pid_t *pidArr, int len, int flags);
 | --- | --- |
 | -EPERM | SMAP未初始化 |
 | -EINVAL | 参数错误 |
+| -ENOMEM | 内存申请失败 |
+| -EBADF | 内核ioctl移除PID失败 |
 
 ## 约束 CONSTRAINTS
 
@@ -1256,7 +1266,8 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint6
 | -EPERM | SMAP未初始化 |
 | -EBUSY | 超时 |
 | -EINVAL | 参数错误 |
-| -ESRCH | pid无效 |
+| -ESRCH | pid无效或部分pid无效 |
+| -ENOMEM | 内存申请失败 |
 
 ## 约束 CONSTRAINTS
 
@@ -1409,6 +1420,7 @@ void ubturbo_smap_urgent_migrate_out(uint64_t size);
 
 * SMAP初始化后才能调用。
 * 在OOM场景下由上层组件调用。
+* 紧急迁出按 numa\_maps 段级过滤收集候选页，无法识别共享页归属，段内共享页可能被一并迁到远端；OOM 场景首要目标是压低本地水线、避免 kill，允许共享页短暂误迁。水线下降后，调用方应把相关 pid 重新加入 SMAP 管理，SMAP 管理态扫描会按 pidType/pageType 纠正共享页归属。
 
 ## 附注 NOTES
 

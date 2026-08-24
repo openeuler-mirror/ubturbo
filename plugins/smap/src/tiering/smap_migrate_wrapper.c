@@ -14,22 +14,12 @@ DEFINE_STATIC_KEY_FALSE(cpusets_enabled_key);
 
 unsigned long (*fp_kallsyms_lookup_name)(const char *) = NULL;
 int (*fp_migrate_pages)(struct list_head *from, new_folio_t get_new_folio,
-			free_folio_t put_new_folio, unsigned long private,
+			free_folio_t put_new_folio, unsigned long priv,
 			enum migrate_mode mode, int reason,
 			unsigned int *ret_succeeded) = NULL;
 void (*fp_putback_movable_pages)(struct list_head *l) = NULL;
 bool (*fp_isolate_folio_to_list)(struct folio *folio,
 				 struct list_head *list) = NULL;
-
-static inline unsigned long *get_pageblock_bitmap(const struct page *p,
-						  unsigned long pfn)
-{
-#ifdef CONFIG_SPARSEMEM
-	return section_to_usemap(__pfn_to_section(pfn));
-#else
-	return page_zone(p)->pageblock_flags;
-#endif
-}
 
 void lookup_kallsyms_lookup_name(void)
 {
@@ -52,7 +42,7 @@ int smap_process_symbols(void)
 	// clang-format off
 	fp_migrate_pages =
 		(int (*)(struct list_head *from, new_folio_t get_new_folio,
-			 free_folio_t put_new_folio, unsigned long private,
+			 free_folio_t put_new_folio, unsigned long priv,
 			 enum migrate_mode mode, int reason,
 			 unsigned int *ret_succeeded))
 			fp_kallsyms_lookup_name("migrate_pages");
@@ -70,33 +60,4 @@ int smap_process_symbols(void)
 	return 0;
 }
 
-static inline unsigned long pfn_to_bitidx(const struct page *p,
-					  unsigned long pfn)
-{
-#ifdef CONFIG_SPARSEMEM
-	pfn &= (PAGES_PER_SECTION - 1);
-#else
-	pfn = pfn -
-	      round_down(page_zone(p)->zone_start_pfn, pageblock_nr_pages);
-#endif
-	return (pfn >> pageblock_order) * NR_PAGEBLOCK_BITS;
-}
-
-static __always_inline unsigned long
-__get_pfnblock_flags_mask(const struct page *page, unsigned long pfn,
-			  unsigned long mask)
-{
-	unsigned long bitidx, word_bitidx;
-	unsigned long *bitmap = get_pageblock_bitmap(page, pfn);
-	bitidx = pfn_to_bitidx(page, pfn);
-	word_bitidx = bitidx / BITS_PER_LONG;
-	bitidx &= (BITS_PER_LONG - 1);
-
-	return (bitmap[word_bitidx] >> bitidx) & mask;
-}
-
-unsigned long get_pfnblock_flags_mask(const struct page *page,
-				      unsigned long pfn, unsigned long mask)
-{
-	return __get_pfnblock_flags_mask(page, pfn, mask);
-}
+/* get_pfnblock_flags_mask and its helpers now imported from drivers */

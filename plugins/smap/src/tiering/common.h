@@ -30,8 +30,13 @@
 #define MAX_4K_MIGMSG_CNT (MAX_4K_PROCESSES_CNT * MAX_PER_PID_MIG_LIST_COUNT)
 #define NR_BATCHED_MIGRATION 512
 
+#ifndef USE_DT
+#define SMAP_MAX_LOCAL_NUMNODES 8
+#else
 #define SMAP_MAX_LOCAL_NUMNODES 4
-#define SMAP_MAX_NUMNODES 22
+#endif
+#define SMAP_MAX_REMOTE_NUMNODES 18
+#define SMAP_MAX_NUMNODES (SMAP_MAX_LOCAL_NUMNODES + SMAP_MAX_REMOTE_NUMNODES)
 
 extern u32 g_pagesize_huge;
 
@@ -52,15 +57,9 @@ struct mig_list {
 	u64 *addr;
 };
 
-struct mig_pra {
-	int page_size;
-	int nr_thread;
-	bool is_mul_thread;
-};
-
 struct migrate_msg {
 	int cnt;
-	struct mig_pra mul_mig;
+	int page_size;
 	struct mig_list *mig_list;
 };
 

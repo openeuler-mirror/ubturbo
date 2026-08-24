@@ -59,7 +59,7 @@ typedef enum {
 
 struct access_pid {
 	pid_t pid;
-	u32 pid_type;
+	smap_pid_type pid_type;
 	u32 numa_nodes;
 	scan_type type;
 	u32 scan_time;
@@ -124,7 +124,6 @@ void access_remove_pid(int len, struct access_remove_pid_payload *payload);
 void access_remove_all_pid(void);
 void change_ap_type(pid_t pid);
 void clean_last_ap_data(struct access_pid *ap);
-int access_walk_pagemap(struct access_pid *ap);
 struct access_pid *find_access_pid(pid_t pid);
 int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr);
 int init_ap_bm_white_list(int node_len, u64 *node_page_count,
@@ -141,11 +140,6 @@ static inline bool access_pid_is_scanning(pid_t pid)
 static inline bool access_pid_cur_last_scanning(struct access_pid *ap)
 {
 	return ap->type == NORMAL_SCAN && (ap->cur_times + 1 >= ap->ntimes);
-}
-
-static inline bool access_pid_cur_prior_decay(struct access_pid *ap)
-{
-	return ap->type == NORMAL_SCAN && (ap->acc_times >= SMAP_ACC_CNT_MAX);
 }
 
 static inline void clear_vm_mapping(u8 *priors, u32 len)

@@ -68,6 +68,7 @@ rm -rf ${RPM_BUILD_ROOT}
 %pre
 
 %post
+rm -f /opt/ubturbo/conf/smap/period.config
 cd %{smap_dir}
 depmod -a
 echo "external 6.6.0-* %{smap_dir}" > /etc/depmod.d/smap.conf

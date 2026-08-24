@@ -16,6 +16,8 @@
 using namespace std;
 
 namespace rmrs::libvirt {
+static int g_dummyLibvirtHandle = 0;
+
 // 测试类
 class TestRmrsLibvirtModule : public ::testing::Test {
 protected:
@@ -24,11 +26,15 @@ protected:
     void SetUp() override
     {
         cout << "[TestRmrsLibvirtModule SetUp Begin]" << endl;
+        // 预置非空handle, 使dlsym懒加载用例可通过handle校验
+        LibvirtModule::libvirtHandle = reinterpret_cast<void *>(&g_dummyLibvirtHandle);
         cout << "[TestRmrsLibvirtModule SetUp End]" << endl;
     }
     void TearDown() override
     {
         cout << "[TestRmrsLibvirtModule TearDown Begin]" << endl;
+        LibvirtModule::available = false;
+        LibvirtModule::libvirtHandle = nullptr;
         LibvirtModule::virConnectOpenFunc = nullptr;
         LibvirtModule::virConnectCloseFunc = nullptr;
         LibvirtModule::virConnectListAllDomainsFunc = nullptr;
@@ -485,6 +491,15 @@ TEST_F(TestRmrsLibvirtModule, InitShouldReturnOkWhenAllMethodsReturnOk)
     MOCKER_CPP(dlopen, void *(*)(const char *, int)).stubs().will(returnValue(reinterpret_cast<void *>(&dummyHandle)));
     uint32_t result = libvirtModule.Init();
     EXPECT_EQ(result, RMRS_OK);
+    EXPECT_TRUE(LibvirtModule::IsAvailable());
+}
+
+TEST_F(TestRmrsLibvirtModule, InitShouldReturnOkDirectlyWhenAlreadyAvailable)
+{
+    LibvirtModule libvirtModule;
+    LibvirtModule::available = true;
+    uint32_t result = libvirtModule.Init();
+    EXPECT_EQ(result, RMRS_OK);
 }
 
 TEST_F(TestRmrsLibvirtModule, InitShouldReturnErrorWhenDlopenReturnNullptr)
@@ -493,6 +508,15 @@ TEST_F(TestRmrsLibvirtModule, InitShouldReturnErrorWhenDlopenReturnNullptr)
     MOCKER_CPP(dlopen, void *(*)(const char *, int)).stubs().will(returnValue((void *)nullptr));
     uint32_t result = libvirtModule.Init();
     EXPECT_EQ(result, RMRS_ERROR);
+    EXPECT_FALSE(LibvirtModule::IsAvailable());
+}
+
+TEST_F(TestRmrsLibvirtModule, GetSymbolShouldReturnNullptrWhenHandleIsNull)
+{
+    LibvirtModule libvirtModule;
+    LibvirtModule::libvirtHandle = nullptr;
+    VirConnectOpenFunc result = libvirtModule.VirConnectOpen();
+    EXPECT_EQ(result, nullptr);
 }
 
 void *VirConnectOpenMock(const char *data)

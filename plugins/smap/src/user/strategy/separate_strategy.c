@@ -117,8 +117,8 @@ static uint64_t BuildFreqBucketsForNode(ProcessAttr *process, int nid, uint64_t 
     return count;
 }
 
-static uint64_t CalcFreqWeightForVm(ProcessAttr *process, int localNid, int remoteNid,
-                                     const uint32_t *l2Buckets, uint64_t l2ActcLen)
+static uint64_t CalcFreqWeightForVm(ProcessAttr *process, int localNid, int remoteNid, const uint32_t *l2Buckets,
+                                    uint64_t l2ActcLen)
 {
     uint64_t freqWt;
     actc_t l1FreqMax = process->scanAttr.actCount[localNid].freqMax;
@@ -151,8 +151,8 @@ static uint64_t CalcFreqWeightForVm(ProcessAttr *process, int localNid, int remo
 }
 
 static uint64_t CalLowMigrateNumByBuckets(uint64_t migrateNum, uint64_t freqWt, uint32_t slowThred,
-                                           const uint32_t *l1Buckets, const uint32_t *l2Buckets,
-                                           uint64_t l1Count, uint64_t l2Count)
+                                          const uint32_t *l1Buckets, const uint32_t *l2Buckets, uint64_t l1Count,
+                                          uint64_t l2Count)
 {
     uint64_t low = 0;
     uint64_t high = MIN(migrateNum, MIN(l1Count, l2Count));
@@ -173,8 +173,8 @@ static uint64_t CalLowMigrateNumByBuckets(uint64_t migrateNum, uint64_t freqWt, 
     return low;
 }
 
-static uint64_t CalcSwapNumForVm(ProcessAttr *process, int localNid, int remoteNid,
-                                    const uint64_t numaOffset[], const uint64_t numaFreePage[])
+static uint64_t CalcSwapNumForVm(ProcessAttr *process, int localNid, int remoteNid, const uint64_t numaOffset[],
+                                 const uint64_t numaFreePage[])
 {
     uint64_t migrateNum;
     uint64_t freqWt;
@@ -195,8 +195,8 @@ static uint64_t CalcSwapNumForVm(ProcessAttr *process, int localNid, int remoteN
     }
 
     // 构建频率桶
-    uint32_t l1Buckets[FREQ_BUCKETS_SIZE] = {0};
-    uint32_t l2Buckets[FREQ_BUCKETS_SIZE] = {0};
+    uint32_t l1Buckets[FREQ_BUCKETS_SIZE] = { 0 };
+    uint32_t l2Buckets[FREQ_BUCKETS_SIZE] = { 0 };
 
     uint64_t l1Count = BuildFreqBucketsForNode(process, localNid, localOffset, l1Buckets);
     uint64_t l2Count = BuildFreqBucketsForNode(process, remoteNid, remoteOffset, l2Buckets);
@@ -209,7 +209,7 @@ static uint64_t CalcSwapNumForVm(ProcessAttr *process, int localNid, int remoteN
     migrateNum = MIN(localLen - localOffset, remoteLen - remoteOffset);
     migrateNum = MIN(migrateNum, process->separateParam.maxMigrate);
     migrateNum = MIN(migrateNum, numaFreePage[localNid]);
-    migrateNum = MIN(migrateNum, remoteActCount->freqNum);  // 远端有频次的页面数
+    migrateNum = MIN(migrateNum, remoteActCount->freqNum); // 远端有频次的页面数
 
     // 检查是否开启 swap
     if (!process->enableSwap) {
@@ -221,18 +221,17 @@ static uint64_t CalcSwapNumForVm(ProcessAttr *process, int localNid, int remoteN
     freqWt = CalcFreqWeightForVm(process, localNid, remoteNid, l2Buckets, remoteLen - remoteOffset);
     slowThred = process->separateParam.slowThred * freqWt;
 
-    SMAP_LOGGER_INFO("Pid %d VM swap: freqWt %lu, slowThred: %u, localNid: %d, remoteNid: %d.",
-                      process->pid, freqWt, slowThred, localNid, remoteNid);
+    SMAP_LOGGER_INFO("Pid %d VM swap: freqWt %lu, slowThred: %u, localNid: %d, remoteNid: %d.", process->pid, freqWt,
+                     slowThred, localNid, remoteNid);
 
     // 使用桶统计 + 二分查找计算迁移数量
-    migrateNum = CalLowMigrateNumByBuckets(migrateNum, freqWt, slowThred,
-                                            l1Buckets, l2Buckets, l1Count, l2Count);
+    migrateNum = CalLowMigrateNumByBuckets(migrateNum, freqWt, slowThred, l1Buckets, l2Buckets, l1Count, l2Count);
 
     return migrateNum;
 }
 
-static uint64_t CalcSwapNum(ProcessAttr *process, int localNid, int remoteNid,
-                              const uint64_t numaOffset[], const uint64_t numaFreePage[])
+static uint64_t CalcSwapNum(ProcessAttr *process, int localNid, int remoteNid, const uint64_t numaOffset[],
+                            const uint64_t numaFreePage[])
 {
     if (process->type == PROCESS_TYPE) {
         uint64_t migrateNum;
@@ -273,7 +272,7 @@ static uint64_t CalcSwapNum(ProcessAttr *process, int localNid, int remoteNid,
 }
 
 void FindThreshold(const SelectionMode mode, uint64_t nrMig, const uint32_t *buckets, int *thresholdFreq,
-                          uint32_t *takeAtThreshold)
+                   uint32_t *takeAtThreshold)
 {
     (*thresholdFreq) = mode == SELECT_TOP_K ? 0 : FREQ_BUCKETS_SIZE;
     (*takeAtThreshold) = 0;
@@ -306,14 +305,14 @@ void FindThreshold(const SelectionMode mode, uint64_t nrMig, const uint32_t *buc
     }
 }
 
-static void CollectPagesVm(const SelectionMode mode, uint64_t actcLen, ActcData *currentData,
-                           struct MigList *currMlist, uint64_t nrMig, int thresholdFreq,
-                           uint32_t takeAtThreshold, uint32_t *selectedBuckets)
+static size_t CollectPagesVm(const SelectionMode mode, uint64_t actcLen, ActcData *currentData,
+                             struct MigList *currMlist, uint64_t nrMig, int thresholdFreq, uint32_t takeAtThreshold,
+                             uint32_t *selectedBuckets)
 {
     int nrLocalNuma = GetNrLocalNuma();
 
     /* Pre-pass: 统计边界频次页面的 prior 分布 */
-    uint64_t priorCounts[PRIOR_MAX_VALUE + 1] = {0};
+    uint64_t priorCounts[PRIOR_MAX_VALUE + 1] = { 0 };
     for (size_t i = 0; i < actcLen; ++i) {
         if (currentData[i].isSelected) {
             continue;
@@ -326,7 +325,7 @@ static void CollectPagesVm(const SelectionMode mode, uint64_t actcLen, ActcData 
 
     /* 计算每个 prior 级别需取多少页 */
     uint32_t remaining = takeAtThreshold;
-    uint64_t takeFrom[PRIOR_MAX_VALUE + 1] = {0};
+    uint64_t takeFrom[PRIOR_MAX_VALUE + 1] = { 0 };
     for (int p = PRIOR_MAX_VALUE; p >= 0 && remaining > 0; --p) {
         uint64_t take = MIN(priorCounts[p], remaining);
         takeFrom[p] = take;
@@ -341,8 +340,7 @@ static void CollectPagesVm(const SelectionMode mode, uint64_t actcLen, ActcData 
         }
 
         int freq = currentData[i].freq;
-        bool shouldTake = (mode == SELECT_TOP_K) ?
-                          (freq > thresholdFreq) : (freq < thresholdFreq);
+        bool shouldTake = (mode == SELECT_TOP_K) ? (freq > thresholdFreq) : (freq < thresholdFreq);
 
         if (!shouldTake && freq == thresholdFreq && takeFrom[currentData[i].prior] > 0) {
             shouldTake = true;
@@ -361,12 +359,12 @@ static void CollectPagesVm(const SelectionMode mode, uint64_t actcLen, ActcData 
         currentData[i].isSelected = 1;
     }
 
-    currMlist->nr = collectedCount;
+    return collectedCount;
 }
 
-static void CollectPages4K(const SelectionMode mode, uint64_t actcLen, ActcData *currentData,
-                         struct MigList *currMlist, uint64_t nrMig, int thresholdFreq, uint32_t takeAtThreshold,
-                         uint32_t *selectedBuckets)
+static size_t CollectPages4K(const SelectionMode mode, uint64_t actcLen, ActcData *currentData,
+                             struct MigList *currMlist, uint64_t nrMig, int thresholdFreq, uint32_t takeAtThreshold,
+                             uint32_t *selectedBuckets)
 {
     int nrLocalNuma = GetNrLocalNuma();
     uint32_t tmp = takeAtThreshold;
@@ -397,7 +395,8 @@ static void CollectPages4K(const SelectionMode mode, uint64_t actcLen, ActcData 
             }
         }
     }
-    currMlist->nr = collectedCount;
+
+    return collectedCount;
 }
 
 static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
@@ -437,24 +436,91 @@ static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_
     /* 计算剩余范围的频次桶 = freqBuckets - selectedBuckets */
     /* freqBuckets 在 CalcActcStats 中已排除白名单页面，迁出场景正确 */
     for (int f = 0; f < FREQ_BUCKETS_SIZE; f++) {
-        remainBuckets[f] = actCount->freqBuckets[f] - selectedBuckets[f];
+        remainBuckets[f] =
+            actCount->freqBuckets[f] > selectedBuckets[f] ? actCount->freqBuckets[f] - selectedBuckets[f] : 0;
     }
 
     int thresholdFreq;
     uint32_t takeAtThreshold;
     FindThreshold(mode, nrMig, remainBuckets, &thresholdFreq, &takeAtThreshold);
-
+    size_t collected;
     if (process->type == VM_TYPE) {
-        CollectPagesVm(mode, n, currentData, currentMig, nrMig, thresholdFreq, takeAtThreshold, selectedBuckets);
+        collected =
+            CollectPagesVm(mode, n, currentData, currentMig, nrMig, thresholdFreq, takeAtThreshold, selectedBuckets);
     } else {
-        CollectPages4K(mode, n, currentData, currentMig, nrMig, thresholdFreq, takeAtThreshold, selectedBuckets);
+        collected =
+            CollectPages4K(mode, n, currentData, currentMig, nrMig, thresholdFreq, takeAtThreshold, selectedBuckets);
     }
 
+    currentMig->nr = collected;
+    return 0;
+}
+
+static int BuildPairMlist(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
+                          uint64_t numaOffset[MAX_NODES], int from, int to, uint32_t nrMigrate, SelectionMode mode)
+{
+    if (nrMigrate == 0) {
+        return 0;
+    }
+
+    mlist[from][to].nr = nrMigrate;
+    int ret = BuildSelectKMlistAddr(process, mlist, numaOffset, from, to, mode);
+    if (ret) {
+        return ret;
+    }
+    numaOffset[from] += mlist[from][to].nr;
+    return 0;
+}
+
+int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    if (!process || nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM || nrLocalNuma + REMOTE_NUMA_NUM > MAX_NODES) {
+        return -EINVAL;
+    }
+
+    uint64_t numaOffset[MAX_NODES] = { 0 };
+    StrategyAttribute *strategy = &process->strategyAttr;
+    for (int localNid = 0; localNid < nrLocalNuma; localNid++) {
+        for (int remoteNid = nrLocalNuma; remoteNid < nrLocalNuma + REMOTE_NUMA_NUM; remoteNid++) {
+            uint32_t localToRemote = strategy->nrMigratePages[localNid][remoteNid];
+            uint32_t remoteToLocal = strategy->nrMigratePages[remoteNid][localNid];
+            if (IsNodeForbidden(remoteNid)) {
+                if (localToRemote > 0 || remoteToLocal > 0) {
+                    SMAP_LOGGER_INFO("Pid %d pair %d-%d skips migration to and from disabled remote.", process->pid,
+                                     localNid, remoteNid);
+                }
+                continue;
+            }
+            uint32_t swapPages = MIN(localToRemote, remoteToLocal);
+            uint32_t demotePages = localToRemote - swapPages;
+            uint32_t promotePages = remoteToLocal - swapPages;
+            if (strategy->ubBwRestrict[remoteNid] == UB_BW_SWAP_STOP) {
+                SMAP_LOGGER_INFO("Pid %d pair %d-%d UB bandwidth restricts swap, swapPages %u -> 0, "
+                                 "demotePages %u, promotePages %u.",
+                                 process->pid, localNid, remoteNid, swapPages, demotePages, promotePages);
+                swapPages = 0;
+            }
+
+            int ret = BuildPairMlist(process, mlist, numaOffset, localNid, remoteNid, demotePages + swapPages,
+                                     SELECT_BOTTOM_K);
+            if (!ret) {
+                ret = BuildPairMlist(process, mlist, numaOffset, remoteNid, localNid, promotePages + swapPages,
+                                     SELECT_TOP_K);
+            }
+            if (ret) {
+                SMAP_LOGGER_ERROR("Build pid %d pair %d-%d migration list failed: %d.", process->pid, localNid,
+                                  remoteNid, ret);
+                FreeMlist(mlist);
+                return ret;
+            }
+        }
+    }
     return 0;
 }
 
 static int SeparateStrategyInner(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
-                                   uint64_t numaOffset[MAX_NODES], struct NumaInfo info, uint64_t swapNum)
+                                 uint64_t numaOffset[MAX_NODES], struct NumaInfo info, uint64_t swapNum)
 {
     int ret = 0;
     int localNid = info.localNid;
@@ -581,7 +647,7 @@ int SeparateStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_N
                 continue;
             }
             if ((ret = SeparateStrategyInner(process, mlist, numaOffset, info,
-                                               swapNum[info.localNid][info.remoteNid])) != 0) {
+                                             swapNum[info.localNid][info.remoteNid])) != 0) {
                 FreeMlist(mlist);
                 return ret;
             }
@@ -656,8 +722,8 @@ static uint64_t CalcMultiNumaVmSwapNumByFreq(ProcessAttr *process, LevelActcData
     uint64_t freqWt = 0;
     uint64_t freqNum = 0;
     uint32_t slowThred = 0;
-    uint16_t l1FreqMax = 0;
-    uint16_t l2FreqMax = 0;
+    actc_t l1FreqMax = 0;
+    actc_t l2FreqMax = 0;
     for (int i = 0; i < levelActcLen[L2]; i++) {
         if (levelActcData[L2][i].freq > 0) {
             freqNum++;

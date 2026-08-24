@@ -7,9 +7,10 @@
 #include "mockcpp/mokc.h"
 
 #include "manage/manage.h"
+#include "smap_user_log.h"
+#include "strategy/grouped_strategy.h"
 #include "strategy/separate_strategy.h"
 #include "strategy/strategy.h"
-#include "smap_user_log.h"
 
 using namespace std;
 
@@ -29,6 +30,7 @@ protected:
 };
 
 extern "C" int RunStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], size_t mlistSize);
+extern "C" int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]);
 TEST_F(StrategyTest, TestRunStrategyOne)
 {
     size_t mlistSize = NR_LEVEL;
@@ -66,6 +68,29 @@ TEST_F(StrategyTest, TestRunStrategyThree)
     MOCKER(SeparateStrategy).stubs().will(returnValue(0));
     int ret = RunStrategy(&process, mlist, mlistSize);
     EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(StrategyTest, TestRunStrategyUsesPairMigrationForNormalProcess)
+{
+    ProcessAttr process = {};
+    ActcData actcData = {};
+    process.scanAttr.actcData[0] = &actcData;
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    MOCKER(PairMigrationStrategy).expects(once()).will(returnValue(7));
+
+    EXPECT_EQ(7, RunStrategy(&process, mlist, MAX_NODES));
+}
+
+TEST_F(StrategyTest, TestRunStrategyKeepsGroupedMigrationIndependent)
+{
+    ProcessAttr process = {};
+    ActcData actcData = {};
+    process.scanAttr.actcData[0] = &actcData;
+    process.groupPolicy.enabled = true;
+    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    MOCKER(GroupedMigrationStrategy).expects(once()).will(returnValue(8));
+
+    EXPECT_EQ(8, RunStrategy(&process, mlist, MAX_NODES));
 }
 
 extern "C" int snprintf_s(char *strDest, unsigned long destMax, unsigned long count, const char *format, ...);

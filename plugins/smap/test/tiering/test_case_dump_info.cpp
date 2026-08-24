@@ -78,9 +78,10 @@ TEST_F(DumpInfoTest, rename_file_dt)
     EXPECT_EQ(ret, 1);
 }
 
-extern "C" void filter_4k_migrate_info(void);
+extern "C" void filter_4k_migrate_info(size_t *nr_abnormal);
 TEST_F(DumpInfoTest, Filter4kMigrateInfo)
 {
-    filter_4k_migrate_info();
+    size_t nr_abnormal[NR_ABNORMAL] = {0};
+    filter_4k_migrate_info(nr_abnormal);
     GlobalMockObject::verify();
 }

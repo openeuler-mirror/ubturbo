@@ -10,7 +10,6 @@
 #include "smap_msg.h"
 #include "migrate_task.h"
 
-#define MAX_NR_MIGRATE_THREADS 32
 #define MAX_MIG_LIST_NR (1 << 28)
 
 extern int nr_local_numa;

@@ -11,59 +11,56 @@
  */
 #define _GNU_SOURCE
 #include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "smap_user_log.h"
+#include "securec.h"
 #include "manage.h"
 #include "thread.h"
+#include "strategy/migration.h"
 
 static void *ThreadMain(void *args)
 {
-    ThreadCtx *ctx = args;
+    struct ProcessManager *manager = args;
 
-    SMAP_LOGGER_INFO("Thread %lu created.", gettid());
-    while (!EnvAtomicRead(&ctx->stop)) {
-        EnvMsleep(ctx->period);
-        ctx->workFunc(ctx);
+    SMAP_LOGGER_INFO("ScanMigrate thread %lu created.", gettid());
+    while (!EnvAtomicRead(&manager->scanMigrateStop)) {
+        EnvMsleep(manager->migPeriod);
+        ScanMigrateWork(manager);
     }
     return NULL;
 }
 
-int InitThread(struct ProcessManager *manager, uint32_t period, WorkFunc workFunc)
+int InitScanMigrateThread(struct ProcessManager *manager, uint32_t period)
 {
     int ret;
-    ThreadCtx *ctx = malloc(sizeof(ThreadCtx));
-    if (!ctx) {
-        SMAP_LOGGER_ERROR("Alloc mem for thread failed.");
-        return -ENOMEM;
-    }
-    ctx->period = period;
-    EnvAtomicSet(&ctx->stop, 0);
-    ctx->processManager = manager;
-    ctx->workFunc = workFunc;
-    ret = pthread_create(&ctx->thread, NULL, ThreadMain, ctx);
+    manager->migPeriod = period;
+    EnvAtomicSet(&manager->scanMigrateStop, 0);
+    /* 先清零 pthread_t，确保 pthread_create 失败时不残留未定义值，
+     * DestroyScanMigrateThread 通过判断 pthread_t 是否为零来跳过无效 join */
+    (void)memset_s(&manager->scanMigrateThread, sizeof(manager->scanMigrateThread), 0,
+                   sizeof(manager->scanMigrateThread));
+    ret = pthread_create(&manager->scanMigrateThread, NULL, ThreadMain, manager);
     if (ret) {
-        SMAP_LOGGER_ERROR("Create thread failed: %d.", ret);
-        free(ctx);
+        SMAP_LOGGER_ERROR("Create scan migrate thread failed: %d.", ret);
+        (void)memset_s(&manager->scanMigrateThread, sizeof(manager->scanMigrateThread), 0,
+                       sizeof(manager->scanMigrateThread));
         return -ret;
     }
-    manager->threadCtx[manager->nrThread] = ctx;
-    manager->nrThread++;
     return 0;
 }
 
-int DestroyAllThread(struct ProcessManager *manager)
+int DestroyScanMigrateThread(struct ProcessManager *manager)
 {
-    uint16_t nrThread = manager->nrThread;
-    for (int i = 0; i < nrThread; i++) {
-        ThreadCtx *ctx = manager->threadCtx[i];
-        if (ctx) {
-            EnvAtomicSet(&ctx->stop, 1);
-            pthread_join(ctx->thread, NULL);
-            free(ctx);
-            manager->threadCtx[i] = NULL;
-            manager->nrThread--;
-            SMAP_LOGGER_INFO("Thread%d destroyed.", i);
-        }
+    pthread_t zeroThread;
+    (void)memset_s(&zeroThread, sizeof(zeroThread), 0, sizeof(zeroThread));
+
+    EnvAtomicSet(&manager->scanMigrateStop, 1);
+    /* 仅在 pthread_t 非零（即线程已成功创建）时才 join，避免对未初始化的 pthread_t 执行未定义行为 */
+    if (memcmp(&manager->scanMigrateThread, &zeroThread, sizeof(pthread_t)) != 0) {
+        pthread_join(manager->scanMigrateThread, NULL);
     }
+    SMAP_LOGGER_INFO("ScanMigrate thread destroyed.");
     return 0;
 }
