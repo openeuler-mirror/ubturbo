@@ -2902,10 +2902,12 @@ static bool IsRemoteNidRatioValid(pid_t pid, int nid, int ratio)
 
 static int GetAttrNidInitMemSize(pid_t pid, int nid, uint64_t *memSize)
 {
-    ProcessAttr *attr = GetProcessAttr(pid);
     if (!memSize) {
         return -EINVAL;
     }
+    int nrLocalNuma = GetNrLocalNuma();
+    uint64_t curMemSize = 0;
+    ProcessAttr *attr = GetProcessAttr(pid);
     if (!attr) {
         return -EINVAL;
     }
