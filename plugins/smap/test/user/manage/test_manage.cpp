@@ -813,33 +813,6 @@ TEST_F(ManageTest, TestPidIsValid)
     EXPECT_EQ(ret, false);
 }
 
-extern "C" long readlink(const char *path, char *buf, unsigned long bufsiz);
-TEST_F(ManageTest, TestIsSystemPid)
-{
-    bool ret;
-    /* 固定系统进程 0/1/2 直接判为系统 pid，不依赖 readlink */
-    EXPECT_EQ(IsSystemPid(0), true);
-    EXPECT_EQ(IsSystemPid(1), true);
-    EXPECT_EQ(IsSystemPid(2), true);
-
-    /* 内核线程：readlink 失败 -> 判为系统 pid */
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
-        .stubs()
-        .will(returnValue(0));
-    MOCKER(readlink).stubs().will(returnValue((long)-1));
-    ret = IsSystemPid(100);
-    EXPECT_EQ(ret, true);
-
-    GlobalMockObject::verify();
-    /* 普通进程：readlink 成功 -> 非系统 pid */
-    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
-        .stubs()
-        .will(returnValue(0));
-    MOCKER(readlink).stubs().will(returnValue((long)10));
-    ret = IsSystemPid(100);
-    EXPECT_EQ(ret, false);
-}
-
 extern "C" int snprintf_s(char *strDest, unsigned long destMax, unsigned long count, const char *format, ...);
 extern "C" FILE *fopen(const char *__restrict __filename, const char *__restrict __modes);
 extern "C" FILE *popen(const char *command, const char *type);
@@ -1070,33 +1043,6 @@ TEST_F(ManageTest, TestGetPidNumaPagesFromNumaMapsOpenFailure)
     MOCKER(OpenNumaMaps).expects(once()).will(returnValue(static_cast<FILE *>(nullptr)));
     int ret = GetPidNumaPagesFromNumaMaps(1234, numaPages, false);
     EXPECT_EQ(-EINVAL, ret);
-}
-
-extern "C" bool IsPidUsingHugePages(pid_t pid);
-TEST_F(ManageTest, TestIsPidUsingHugePagesOpenFailure)
-{
-    MOCKER(OpenNumaMaps).expects(once()).will(returnValue(static_cast<FILE *>(nullptr)));
-    EXPECT_EQ(false, IsPidUsingHugePages(1234));
-}
-
-TEST_F(ManageTest, TestIsPidUsingHugePagesHasHuge)
-{
-    char line[] = "7f000000 default file d... N0=10 kernelpagesize_kB=2048\n";
-    FILE fp;
-    MOCKER(OpenNumaMaps).stubs().will(returnValue(&fp));
-    MOCKER(fgets).stubs().with(outBoundP(static_cast<char *>(line), sizeof(line))).will(returnValue(static_cast<char *>(line))).then(returnValue(static_cast<char *>(nullptr)));
-    MOCKER(pclose).stubs().will(returnValue(0));
-    EXPECT_EQ(true, IsPidUsingHugePages(1234));
-}
-
-TEST_F(ManageTest, TestIsPidUsingHugePagesNoHuge)
-{
-    char line[] = "7f000000 default file d... N0=10\n";
-    FILE fp;
-    MOCKER(OpenNumaMaps).stubs().will(returnValue(&fp));
-    MOCKER(fgets).stubs().with(outBoundP(static_cast<char *>(line), sizeof(line))).will(returnValue(static_cast<char *>(line))).then(returnValue(static_cast<char *>(nullptr)));
-    MOCKER(pclose).stubs().will(returnValue(0));
-    EXPECT_EQ(false, IsPidUsingHugePages(1234));
 }
 
 extern "C" bool IsNumaMapLineHuge(char *line);
@@ -1593,8 +1539,6 @@ TEST_F(ManageTest, TestProcessAddGroupedManageRejectsInvalidInputs)
 {
     GroupMigrationPolicy policy = {};
     FillPolicyForManageTest(&policy);
-    g_processManager.tracking.pageSize = PAGESIZE_2M;
-    g_pageSizeHuge = PAGESIZE_2M;
 
     MOCKER(DetectPidType).stubs().will(returnValue(-EINVAL));
     int ret = ProcessAddGroupedManage(1234, 0x11, &policy);

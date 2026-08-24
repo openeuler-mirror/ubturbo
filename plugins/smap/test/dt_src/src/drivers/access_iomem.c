@@ -1,0 +1,319 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
+ * Description: SMAP3.0 Tiering Memory Solution: access 内存地址模块
+ */
+
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/list.h>
+#include <linux/errno.h>
+#include <linux/ioport.h>
+#include <linux/slab.h>
+#include <linux/mmzone.h>
+#include <linux/memory.h>
+#include <linux/spinlock.h>
+
+#include "check.h"
+#include "access_tracking.h"
+#include "access_iomem.h"
+
+#define REMOTE_RAM_NAME "System RAM (Remote)"
+#undef pr_fmt
+#define pr_fmt(fmt) "access-iomem: " fmt
+
+LIST_HEAD(drivers_remote_ram_list);
+EXPORT_SYMBOL(drivers_remote_ram_list);
+
+DEFINE_RWLOCK(rem_ram_list_lock);
+EXPORT_SYMBOL(rem_ram_list_lock);
+
+ void drivers_free_remote_ram(struct list_head *head)
+{
+	struct ram_segment *seg, *tmp;
+	list_for_each_entry_safe(seg, tmp, head, node) {
+		list_del(&seg->node);
+		kfree(seg);
+	}
+}
+
+ void move_remote_ram(struct list_head *dst, struct list_head *src)
+{
+	struct ram_segment *seg, *tmp;
+	list_for_each_entry_safe(seg, tmp, src, node) {
+		list_move_tail(&seg->node, dst);
+	}
+}
+
+ void drivers_merge_ram_segments(struct list_head *head)
+{
+	struct ram_segment *cur, *next, *tmp;
+
+	if (list_empty(head))
+		return;
+
+	cur = list_first_entry(head, struct ram_segment, node);
+	while (cur) {
+		next = list_next_entry(cur, node);
+		if (list_entry_is_head(next, head, node))
+			break;
+		if (cur->numa_node == next->numa_node &&
+		    cur->end + 1 == next->start) {
+			cur->end = next->end;
+			list_del(&next->node);
+			kfree(next);
+			tmp = cur;
+		} else {
+			tmp = next;
+		}
+		cur = tmp;
+	}
+}
+
+ int drivers_insert_remote_ram(u64 pa_start, u64 pa_end, struct list_head *head)
+{
+	struct ram_segment *seg, *tmp;
+	u64 start, end;
+	unsigned long pfn;
+	int nid;
+
+	start = pa_start;
+	while (start < pa_end) {
+		pfn = PHYS_PFN(start);
+		if (!pfn_valid(pfn) || !pfn_to_online_page(pfn)) {
+			start += MIN_MEMORY_BLOCK_SIZE;
+			continue;
+		}
+		nid = page_to_nid(pfn_to_online_page(pfn));
+		if (nid == NUMA_NO_NODE)
+			return -EINVAL;
+		end = start + MIN_MEMORY_BLOCK_SIZE - 1;
+		if (nid >= SMAP_MAX_NUMNODES) {
+			start = end + 1;
+			continue;
+		}
+		seg = kmalloc(sizeof(*seg), GFP_KERNEL);
+		if (!seg)
+			return -ENOMEM;
+
+		end = MIN(pa_end, end);
+		seg->start = start;
+		seg->end = end;
+		seg->numa_node = nid;
+
+		if (list_empty(head)) {
+			list_add_tail(&seg->node, head);
+		} else {
+			tmp = list_last_entry(head, struct ram_segment, node);
+			if (seg->start == tmp->end + 1 &&
+			    nid == tmp->numa_node) {
+				tmp->end = seg->end;
+				kfree(seg);
+			} else {
+				list_add_tail(&seg->node, head);
+			}
+		}
+
+		start = end + 1;
+	}
+	return 0;
+}
+
+ int drivers_update_resource(struct resource *r, void *arg)
+{
+	int ret;
+	struct list_head *head = (struct list_head *)arg;
+
+	if (!r || !arg)
+		return -EINVAL;
+
+	if (r->flags & IORESOURCE_SYSRAM_DRIVER_MANAGED) {
+		ret = drivers_insert_remote_ram(r->start, r->end, head);
+		if (ret) {
+			drivers_free_remote_ram(head);
+			return ret;
+		}
+	}
+	return 0;
+}
+
+ int drivers_walk_system_ram_remote_range(struct list_head *head)
+{
+	if (!head)
+		return -EINVAL;
+	return walk_iomem_res_desc(IORES_DESC_NONE, IORESOURCE_SYSTEM_RAM, 0,
+				   -1, head, drivers_update_resource);
+}
+
+void drivers_release_remote_ram(void)
+{
+	write_lock(&rem_ram_list_lock);
+	drivers_free_remote_ram(&drivers_remote_ram_list);
+	write_unlock(&rem_ram_list_lock);
+}
+
+int drivers_refresh_remote_ram(void)
+{
+	LIST_HEAD(tmp_head);
+	int ret;
+	ret = drivers_walk_system_ram_remote_range(&tmp_head);
+	if (ret)
+		return ret;
+	drivers_merge_ram_segments(&tmp_head);
+	write_lock(&rem_ram_list_lock);
+	drivers_free_remote_ram(&drivers_remote_ram_list);
+	move_remote_ram(&drivers_remote_ram_list, &tmp_head);
+	drivers_free_remote_ram(&tmp_head);
+	write_unlock(&rem_ram_list_lock);
+	return 0;
+}
+
+int get_numa_by_pfn(unsigned long pfn)
+{
+	struct ram_segment *seg;
+	u64 pa = PFN_PHYS(pfn);
+	int nid = NUMA_NO_NODE;
+
+	read_lock(&rem_ram_list_lock);
+	list_for_each_entry(seg, &drivers_remote_ram_list, node) {
+		if (pa >= seg->start && pa <= seg->end) {
+			nid = seg->numa_node;
+			break;
+		}
+	}
+	read_unlock(&rem_ram_list_lock);
+	return nid;
+}
+
+u64 get_node_page_cnt_iomem(int nid, int page_size)
+{
+	u64 len = 0;
+	struct ram_segment *seg, *tmp;
+
+	if (unlikely(nid < drivers_nr_local_numa))
+		return 0;
+
+	read_lock(&rem_ram_list_lock);
+	list_for_each_entry_safe(seg, tmp, &drivers_remote_ram_list, node) {
+		if (seg->numa_node != nid)
+			continue;
+
+		if (page_size == g_pagesize_huge)
+			len += calc_huge_count(seg->end - seg->start + 1);
+		else if (page_size == PAGE_SIZE)
+			len += calc_normal_count(seg->end - seg->start + 1);
+	}
+	read_unlock(&rem_ram_list_lock);
+
+	return len;
+}
+EXPORT_SYMBOL(get_node_page_cnt_iomem);
+
+int drivers_calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size)
+{
+	struct ram_segment *seg;
+	int shift = __builtin_ctz(page_size);
+	int numa = NUMA_NO_NODE;
+	u64 idx[SMAP_MAX_NUMNODES] = { 0 };
+
+	read_lock(&rem_ram_list_lock);
+	list_for_each_entry(seg, &drivers_remote_ram_list, node) {
+		if (seg->numa_node >= SMAP_MAX_NUMNODES) {
+			pr_err("numa %d is invalid\n", seg->numa_node);
+			read_unlock(&rem_ram_list_lock);
+			return -ERANGE;
+		}
+		if (pa < seg->start)
+			break;
+		if (pa <= seg->end) {
+			numa = seg->numa_node;
+			idx[numa] += ((pa - seg->start) >> shift);
+			break;
+		}
+		idx[seg->numa_node] += ((seg->end - seg->start + 1) >> shift);
+	}
+
+	if (unlikely(list_entry_is_head(seg, &drivers_remote_ram_list, node))) {
+		read_unlock(&rem_ram_list_lock);
+		return -ERANGE;
+	}
+	read_unlock(&rem_ram_list_lock);
+	if (unlikely(numa == NUMA_NO_NODE))
+		return -ERANGE;
+	*nid = numa;
+	*index = idx[numa];
+	return 0;
+}
+
+int calc_paddr_acidx_iomem_known_nid(u64 pa, int nid, u64 *index, int page_size)
+{
+	struct ram_segment *seg;
+	int shift = __builtin_ctz(page_size);
+	u64 idx = 0;
+
+	read_lock(&rem_ram_list_lock);
+	list_for_each_entry(seg, &drivers_remote_ram_list, node) {
+		if (seg->numa_node != nid) {
+			continue;
+		}
+		if (pa < seg->start) {
+			break;
+		}
+		if (pa <= seg->end) {
+			idx += ((pa - seg->start) >> shift);
+			*index = idx;
+			read_unlock(&rem_ram_list_lock);
+			return 0;
+		}
+		idx += ((seg->end - seg->start + 1) >> shift);
+	}
+	read_unlock(&rem_ram_list_lock);
+	return -ERANGE;
+}
+
+int drivers_calc_acidx_paddr_iomem(int nid, u64 acidx, u64 *paddr, int page_size)
+{
+	struct ram_segment *seg;
+	u64 range;
+	int shift = __builtin_ctz(page_size);
+	u64 offset = acidx << shift;
+
+	read_lock(&rem_ram_list_lock);
+	list_for_each_entry(seg, &drivers_remote_ram_list, node) {
+		if (seg->numa_node != nid)
+			continue;
+		range = seg->end - seg->start + 1;
+		if (offset >= range) {
+			offset -= range;
+			continue;
+		}
+		*paddr = seg->start + offset;
+		read_unlock(&rem_ram_list_lock);
+		return 0;
+	}
+	read_unlock(&rem_ram_list_lock);
+	return -ERANGE;
+}
+
+int smap_is_remote_addr_valid(int nid, u64 pa_start, u64 pa_end)
+{
+	struct ram_segment *seg = NULL;
+
+	if (pa_start >= pa_end) {
+		pr_err("start physical address is greater than end physical address\n");
+		return -EINVAL;
+	}
+
+	read_lock(&rem_ram_list_lock);
+	list_for_each_entry(seg, &drivers_remote_ram_list, node) {
+		if (seg->numa_node != nid)
+			continue;
+		if (pa_start >= seg->start && pa_end <= seg->end + 1) {
+			read_unlock(&rem_ram_list_lock);
+			return 0;
+		}
+	}
+	read_unlock(&rem_ram_list_lock);
+	return -EINVAL;
+}
+EXPORT_SYMBOL(smap_is_remote_addr_valid);

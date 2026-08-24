@@ -1,0 +1,1 @@
+savedcmd_/home/yyx/master/ubturbo/plugins/smap/src/drivers/smap_access_tracking.o := ld -EL  -maarch64linux -z norelro -z noexecstack --no-warn-rwx-segments   -r -o /home/yyx/master/ubturbo/plugins/smap/src/drivers/smap_access_tracking.o @/home/yyx/master/ubturbo/plugins/smap/src/drivers/smap_access_tracking.mod 

@@ -65,7 +65,6 @@ bool InterfaceTest::EnvMutexIsRelease(EnvMutex *mutex)
 }
 
 extern "C" bool IsRatioValid(int ratio);
-extern "C" bool IsSystemPid(pid_t pid);
 TEST_F(InterfaceTest, TestIsRatioValidOne)
 {
     int ratio = 25;
@@ -1130,23 +1129,6 @@ TEST_F(InterfaceTest, TestCheckGroupedMigrateOutMsgRejectsInvalidInputs)
     EXPECT_EQ(-EINVAL, ret);
 }
 
-TEST_F(InterfaceTest, TestCheckGroupedMigrateOutMsgRejectsSystemPid)
-{
-    struct GroupedMigrateOutMsg msg = {};
-
-    g_pageSizeNormal = PAGESIZE_4K;
-    g_pageSizeHuge = PAGESIZE_2M;
-    g_processManager.tracking.pageSize = PAGESIZE_2M;
-    msg.count = 1;
-    FillGroupedPayload(&msg.payload[0], 1234, 0, 4);
-
-    MOCKER(IsSystemPid).stubs().will(returnValue(true));
-    int ret = CheckGroupedMigrateOutMsg(&msg, PAGETYPE_HUGE);
-    EXPECT_EQ(-EINVAL, ret);
-
-    GlobalMockObject::verify();
-}
-
 TEST_F(InterfaceTest, TestBuildGroupedPoliciesForInvalidPidSkipsNumaMaps)
 {
     struct GroupedMigrateOutMsg msg = {};
@@ -1178,88 +1160,6 @@ static int CheckGroupedAccessAddPidPayload(int len, struct AccessAddPidPayload *
     EXPECT_EQ(NON_EXIST_PID, payload[1].pid);
     EXPECT_EQ((uint32_t)0x22, payload[1].numaNodes);
     return 0;
-}
-
-extern "C" int ProcessAddTrackingManage(struct MigrateOutMsg *msg, uint32_t *nodeBitmap);
-static int CheckTrackingAccessAddPidPayload(int len, struct AccessAddPidPayload *payload)
-{
-    EXPECT_EQ(2, len);
-    EXPECT_EQ(1234, payload[0].pid);
-    EXPECT_EQ((uint32_t)200, payload[0].scanTime);
-    EXPECT_EQ((uint32_t)60, payload[0].duration);
-    EXPECT_EQ(NON_EXIST_PID, payload[1].pid);
-    return 0;
-}
-
-TEST_F(InterfaceTest, TestProcessAddTrackingManageExistingProcess)
-{
-    struct MigrateOutMsg msg = {};
-    ProcessAttr current = {};
-    current.pid = 1234;
-    current.type = VM_TYPE;
-    current.scanTime = 200;
-    current.duration = 60;
-    current.next = nullptr;
-    g_processManager.processes = &current;
-    g_processManager.nrLocalNuma = 4;
-    g_processManager.tracking.pageSize = PAGESIZE_2M;
-    g_pageSizeHuge = PAGESIZE_2M;
-
-    msg.count = 2;
-    msg.payload[0].pid = 1234;
-    msg.payload[0].count = 1;
-    msg.payload[0].inner[0].destNid = 4;
-    msg.payload[1].pid = 5678;
-    MOCKER(PidIsValid).stubs().will(returnValue(true)).then(returnValue(false));
-    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
-    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
-    MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
-    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&current)).then(returnValue((ProcessAttr *)nullptr));
-    MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckTrackingAccessAddPidPayload));
-
-    int ret = ProcessAddTrackingManage(&msg, nullptr);
-    EXPECT_EQ(0, ret);
-    g_processManager.processes = nullptr;
-}
-
-TEST_F(InterfaceTest, TestProcessAddTrackingManageNewProcess)
-{
-    struct MigrateOutMsg msg = {};
-    msg.count = 0;
-
-    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
-
-    int ret = ProcessAddTrackingManage(&msg, nullptr);
-    EXPECT_EQ(0, ret);
-}
-
-TEST_F(InterfaceTest, TestProcessAddTrackingManageNewProcessReturnsEbadf)
-{
-    struct MigrateOutMsg msg = {};
-    ProcessAttr current = {};
-    current.pid = 1234;
-    current.next = nullptr;
-    g_processManager.processes = &current;
-    g_processManager.nrLocalNuma = 4;
-    g_processManager.tracking.pageSize = PAGESIZE_2M;
-    g_pageSizeHuge = PAGESIZE_2M;
-
-    msg.count = 1;
-    msg.payload[0].pid = 1234;
-    msg.payload[0].count = 1;
-    msg.payload[0].inner[0].destNid = 4;
-    MOCKER(PidIsValid).stubs().will(returnValue(true));
-    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
-    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
-    MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
-    MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
-    MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttr *)nullptr));
-    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-EBADF));
-
-    int ret = ProcessAddTrackingManage(&msg, nullptr);
-    EXPECT_EQ(-EBADF, ret);
-    g_processManager.processes = nullptr;
 }
 
 TEST_F(InterfaceTest, TestProcessAddGroupedTrackingManageBuildsPayload)
@@ -2543,11 +2443,10 @@ TEST_F(InterfaceTest, TestIsPidArrValid)
 
 TEST_F(InterfaceTest, TestIsPidArrValidNormal)
 {
-    pid_t pidArr[] = { 1000 };
+    pid_t pidArr[] = { 1 };
     ProcessAttr pid1;
     MOCKER(GetProcessAttr).stubs().will(returnValue(&pid1));
     MOCKER(PidIsValid).stubs().will(returnValue(true));
-    MOCKER(IsSystemPid).stubs().will(returnValue(false));
     bool ret = IsPidArrValid(pidArr, 1, true);
     EXPECT_EQ(true, ret);
 }
@@ -4418,7 +4317,6 @@ TEST_F(InterfaceTest, TestIsPidArrValidIgnoreUnmanaged)
 {
     pid_t pidArr[1] = { 123 };
     MOCKER(PidIsValid).stubs().will(returnValue(true));
-    MOCKER(IsSystemPid).stubs().will(returnValue(false));
     bool ret = IsPidArrValid(pidArr, 1, true);
     EXPECT_EQ(true, ret);
 }

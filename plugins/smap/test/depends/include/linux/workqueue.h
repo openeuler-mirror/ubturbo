@@ -62,16 +62,6 @@ struct workqueue_attrs {
     int no_numa;
 };
 
-struct workqueue_attrs {
-    cpumask_var_t cpumask;
-    int nice;
-    int no_numa;
-};
-
-struct workqueue_attrs *alloc_workqueue_attrs(void);
-void free_workqueue_attrs(struct workqueue_attrs *attrs);
-int apply_workqueue_attrs(struct workqueue_struct *wq, const struct workqueue_attrs *attrs);
-
 struct timer_list;
 struct delayed_work {
 	struct work_struct work;

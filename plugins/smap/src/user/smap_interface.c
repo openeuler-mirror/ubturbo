@@ -381,7 +381,6 @@ static int BuildProcessTargetConfig(const struct MigrateOutPayload *payload, Pro
 static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
 {
     int i;
-    int ret;
     if (!msg) {
         SMAP_LOGGER_ERROR("Smap mig out msg is null.");
         return -EINVAL;
@@ -393,11 +392,6 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
     if (!IsCountValid(msg->count, MAX_NR_MIGOUT)) {
         SMAP_LOGGER_ERROR("migrate out count: %d is invalid.", msg->count);
         return -EINVAL;
-    }
-
-    ret = CheckSystemMigOutPids(msg);
-    if (ret) {
-        return ret;
     }
 
     for (i = 0; i < msg->count; i++) {
@@ -564,7 +558,6 @@ static int CheckGroupedPayload(struct GroupedMigrateOutPayload *payload, int pay
 
 static int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pageType)
 {
-    int ret;
     if (!msg) {
         SMAP_LOGGER_ERROR("grouped migrate out msg is null.");
         return -EINVAL;
@@ -576,10 +569,6 @@ static int CheckGroupedMigrateOutMsg(struct GroupedMigrateOutMsg *msg, int pageT
     if (!IsCountValid(msg->count, MAX_NR_GROUPED_MIGOUT)) {
         SMAP_LOGGER_ERROR("grouped migrate out count %d invalid.", msg->count);
         return -EINVAL;
-    }
-    ret = CheckSystemGroupedPids(msg);
-    if (ret) {
-        return ret;
     }
     for (int i = 0; i < msg->count; i++) {
         if (GetPidTypeFromComm(msg->payload[i].pid) != VM_TYPE) {

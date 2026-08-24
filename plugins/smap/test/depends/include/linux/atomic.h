@@ -6,9 +6,4 @@
 #include <linux/atomic/atomic-long.h>
 #include <asm/atomic.h>
 
-/* Stub cmpxchg for UT environment */
-#ifndef cmpxchg
-#define cmpxchg(ptr, old, new) (old)
-#endif
-
 #endif /* _LINUX_ATOMIC_H */

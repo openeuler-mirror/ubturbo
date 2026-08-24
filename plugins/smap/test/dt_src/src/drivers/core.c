@@ -1,0 +1,431 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2023-2024. All rights reserved.
+ * Description: SMAP Tiering Memory Solution: driver: tracking_core
+ */
+
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/list.h>
+#include <linux/device.h>
+#include <linux/slab.h>
+#include <linux/bitops.h>
+#include <linux/cdev.h>
+#include <linux/fs.h>
+#include <linux/uio.h>
+#include <linux/vmalloc.h>
+#include <linux/uaccess.h>
+
+#include "tracking_ioctl.h"
+#include "tracking_private.h"
+#include "bus.h"
+
+#undef pr_fmt
+#define pr_fmt(fmt) "tracking_core: " fmt
+#define DEFAULT_NR_SEG 1
+
+struct tracking_core_ctrl {
+	unsigned long node_bitmap;
+	struct list_head node_cdev;
+};
+
+ struct class_stub *tracking_class;
+ struct tracking_core_ctrl *trk_core_ctrl;
+ dev_t tracking_chr_devt;
+
+#define NUM 10
+void activate_stack_protect(void)
+{
+	int i;
+	int test_vec[NUM];
+	test_vec[NUM - 1] = NUM;
+	for (i = 0; i < NUM; i++) {
+		pr_info("%d", test_vec[i]);
+	}
+}
+
+ int node_cdev_open(struct inode *inode, struct file *file)
+{
+	struct tracking_node_dev *node_dev =
+		container_of(inode->i_cdev, struct tracking_node_dev, cdev);
+
+	file->private_data = node_dev;
+	return 0;
+}
+
+ int node_cdev_release(struct inode *inode, struct file *file)
+{
+	return 0;
+}
+
+void node_tracking_enable(struct tracking_node_dev *node_dev)
+{
+	struct tracking_dev *trk_dev;
+	list_for_each_entry(trk_dev, &node_dev->dev_list, list) {
+		if (trk_dev->ops && trk_dev->ops->tracking_enable)
+			trk_dev->ops->tracking_enable(trk_dev->dev);
+	}
+}
+
+int node_tracking_disable(struct tracking_node_dev *node_dev)
+{
+	struct tracking_dev *trk_dev;
+
+	list_for_each_entry(trk_dev, &node_dev->dev_list, list) {
+		if (trk_dev->ops && trk_dev->ops->tracking_disable) {
+			int ret = trk_dev->ops->tracking_disable(trk_dev->dev);
+			if (ret)
+				return ret;
+		}
+	}
+	return 0;
+}
+
+int node_tracking_set_page_size(struct tracking_node_dev *node_dev,
+				u8 page_size)
+{
+	struct tracking_dev *trk_dev;
+	list_for_each_entry(trk_dev, &node_dev->dev_list, list) {
+		if (trk_dev->ops && trk_dev->ops->tracking_set_page_size &&
+		    trk_dev->ops->tracking_set_page_size(trk_dev->dev,
+							 page_size))
+			return -EINVAL;
+	}
+	return 0;
+}
+
+int node_tracking_set_trk_mode(struct tracking_node_dev *node_dev, u8 mode)
+{
+	struct tracking_dev *trk_dev;
+	list_for_each_entry(trk_dev, &node_dev->dev_list, list) {
+		if (trk_dev->ops && trk_dev->ops->tracking_mode_set)
+			if (trk_dev->ops->tracking_mode_set(trk_dev->dev, mode))
+				return -EINVAL;
+	}
+	return 0;
+}
+
+ long handle_tracking_cmd(struct tracking_node_dev *node_dev,
+				unsigned long arg)
+{
+	if (arg == TRACKING_DISABLED) {
+		return node_tracking_disable(node_dev);
+	} else {
+		node_tracking_enable(node_dev);
+		return 0;
+	}
+}
+
+ long handle_mode_set_cmd(struct tracking_node_dev *node_dev,
+				unsigned long arg)
+{
+	if (arg >= MODE_MAX) {
+		pr_err("invalid tracking mode: %lu passed to set\n", arg);
+		return -EINVAL;
+	}
+	if (node_tracking_set_trk_mode(node_dev, (u8)arg)) {
+		pr_err("unable to set tracking mode which is not supported\n");
+		return -EINVAL;
+	}
+	return 0;
+}
+
+ long handle_page_size_set_cmd(struct tracking_node_dev *node_dev,
+				     unsigned long arg)
+{
+	if (node_tracking_set_page_size(node_dev, (u8)arg)) {
+		pr_err("invalid page size passed to set\n");
+		return -EINVAL;
+	}
+	return 0;
+}
+
+ long handle_ub_watch_cmd(struct tracking_node_dev *node_dev,
+				void __user *argp)
+{
+	struct ub_flux_mb_statistic result = { 0 };
+	struct tracking_dev *trk_dev;
+
+	if (!argp)
+		return -EINVAL;
+
+	list_for_each_entry(trk_dev, &node_dev->dev_list, list) {
+		if (trk_dev->ops && trk_dev->ops->tracking_ub_watch) {
+			long ret = trk_dev->ops->tracking_ub_watch(trk_dev->dev,
+								   &result);
+			if (ret)
+				return ret;
+			if (copy_to_user(argp, &result,
+					 sizeof(struct ub_flux_mb_statistic)))
+				return -EFAULT;
+			return 0;
+		}
+	}
+
+	return -ENODEV;
+}
+
+ long handle_ub_watch_config_cmd(struct tracking_node_dev *node_dev,
+				       unsigned long arg)
+{
+	struct ub_watch_config config;
+	struct tracking_dev *trk_dev;
+
+	if (copy_from_user(&config, (void __user *)arg, sizeof(config)))
+		return -EFAULT;
+
+	list_for_each_entry(trk_dev, &node_dev->dev_list, list) {
+		if (trk_dev->ops && trk_dev->ops->tracking_ub_watch_config)
+			return trk_dev->ops->tracking_ub_watch_config(
+				trk_dev->dev, config.duration_ms);
+	}
+	return -ENODEV;
+}
+
+ long node_cdev_user_ioctl(struct file *file, unsigned int cmd,
+				 unsigned long arg)
+{
+	struct tracking_node_dev *node_dev = file->private_data;
+	void __user *argp = (void __user *)arg;
+
+	switch (cmd) {
+	case SMAP_IOCTL_TRACKING_CMD:
+		return handle_tracking_cmd(node_dev, arg);
+	case SMAP_IOCTL_MODE_SET_CMD:
+		return handle_mode_set_cmd(node_dev, arg);
+	case SMAP_IOCTL_PAGE_SIZE_SET_CMD:
+		return handle_page_size_set_cmd(node_dev, arg);
+	case SMAP_IOCTL_UB_WATCH_CMD:
+		return handle_ub_watch_cmd(node_dev, argp);
+	case SMAP_IOCTL_UB_WATCH_CONFIG_CMD:
+		return handle_ub_watch_config_cmd(node_dev, arg);
+	default:
+		pr_err("invalid command type: %d passed to ioctl\n", cmd);
+		return -EINVAL;
+	}
+}
+
+int node_trk_data_read(struct tracking_node_dev *node_dev, void *buffer,
+		       u32 length)
+{
+	struct tracking_dev *trk_dev;
+	int result = 0;
+
+	list_for_each_entry(trk_dev, &node_dev->dev_list, list) {
+		if (trk_dev->ops && trk_dev->ops->tracking_read) {
+			result = trk_dev->ops->tracking_read(trk_dev->dev,
+							     buffer, length);
+			if (result == 0)
+				return -EIO;
+		}
+	}
+	return result;
+}
+
+ssize_t node_cdev_read_iter(struct kiocb *iocb, struct iov_iter *iov)
+{
+	struct file *filp = iocb->ki_filp;
+	struct tracking_node_dev *node_dev = filp->private_data;
+	u32 length = iov->kvec->iov_len;
+	void *buffer = iov->kvec->iov_base;
+
+	if (iov->nr_segs != DEFAULT_NR_SEG) {
+		return -EINVAL;
+	}
+	return node_trk_data_read(node_dev, buffer, length);
+}
+
+ const struct file_operations node_dev_fops = {
+	.owner = THIS_MODULE,
+	.open = node_cdev_open,
+	.release = node_cdev_release,
+	.unlocked_ioctl = node_cdev_user_ioctl,
+	.read_iter = node_cdev_read_iter,
+};
+
+  void tracking_device_release(struct device *dev)
+{
+	pr_debug("Releasing device %s\n", dev_name(dev));
+}
+
+ int init_tracking_device(struct tracking_node_dev *node_dev, int node_id)
+{
+	int result;
+
+	node_dev->target_node = node_id;
+	INIT_LIST_HEAD(&node_dev->dev_list);
+	device_initialize(&node_dev->cdev_device);
+	node_dev->device = &node_dev->cdev_device;
+	node_dev->device->devt =
+		MKDEV(MAJOR(tracking_chr_devt), (u32)node_dev->target_node);
+	node_dev->device->class_stub = tracking_class;
+	node_dev->device->parent = NULL;
+	node_dev->device->release = tracking_device_release;
+	dev_set_drvdata(node_dev->device, node_dev);
+
+	result = dev_set_name(node_dev->device, "smap_node%d",
+			      node_dev->target_node);
+	if (result) {
+		put_device(node_dev->device);
+		return result;
+	}
+
+	cdev_init(&node_dev->cdev, &node_dev_fops);
+	node_dev->cdev.owner = THIS_MODULE;
+	result = cdev_device_add(&node_dev->cdev, node_dev->device);
+	if (result) {
+		pr_err("unable to add SMAP tracking device on NUMA node: %d\n",
+		       node_dev->target_node);
+		put_device(node_dev->device);
+		return result;
+	}
+
+	return 0;
+}
+
+ void register_tracking_device(struct tracking_node_dev *node_dev,
+				     int node_id, struct tracking_dev *dev)
+{
+	list_add_tail(&node_dev->list, &trk_core_ctrl->node_cdev);
+	dev->trk_node_device = node_dev;
+	set_bit(node_id, &trk_core_ctrl->node_bitmap);
+}
+
+ int tracking_device_probe(struct tracking_dev *dev)
+{
+	int result;
+	struct tracking_node_dev *node_device;
+	int node_id = dev->target_node;
+
+	if (!test_bit(node_id, &trk_core_ctrl->node_bitmap)) {
+		struct tracking_node_dev *node_dev =
+			kzalloc(sizeof(*node_dev), GFP_KERNEL);
+		if (!node_dev)
+			return -ENOMEM;
+		result = init_tracking_device(node_dev, node_id);
+		if (result) {
+			goto free_node_dev;
+		}
+
+		register_tracking_device(node_dev, node_id, dev);
+		goto init_ok;
+free_node_dev:
+		kfree(node_dev);
+		return result;
+	}
+
+init_ok:
+	list_for_each_entry(node_device, &trk_core_ctrl->node_cdev, list) {
+		if (node_device->target_node == dev->target_node) {
+			list_add_tail(&dev->list, &node_device->dev_list);
+			dev->trk_node_device = node_device;
+		}
+	}
+
+	return 0;
+}
+
+ void node_tracking_set_reinit_pending(struct tracking_node_dev *node_dev,
+					     int nid)
+{
+	struct tracking_dev *trk_dev;
+	list_for_each_entry(trk_dev, &node_dev->dev_list, list) {
+		if (trk_dev->target_node != nid)
+			continue;
+		if (trk_dev->ops && trk_dev->ops->tracking_set_reinit_pending)
+			trk_dev->ops->tracking_set_reinit_pending(trk_dev->dev);
+	}
+}
+
+void set_reinit_pending_flag(int nid)
+{
+	struct tracking_node_dev *node_device;
+
+	list_for_each_entry(node_device, &trk_core_ctrl->node_cdev, list) {
+		if (node_device->target_node == nid) {
+			node_tracking_set_reinit_pending(node_device, nid);
+		}
+	}
+}
+EXPORT_SYMBOL(set_reinit_pending_flag);
+
+ void tracking_device_remove(struct tracking_dev *dev)
+{
+	struct tracking_node_dev *node_dev = dev->trk_node_device;
+	int node_id = dev->target_node;
+
+	list_del(&dev->list);
+
+	if (list_empty(&node_dev->dev_list)) {
+		cdev_device_del(&node_dev->cdev, &node_dev->cdev_device);
+		put_device(node_dev->device);
+		list_del(&node_dev->list);
+		clear_bit(node_id, &trk_core_ctrl->node_bitmap);
+		kfree(node_dev);
+	}
+}
+
+ struct tracking_driver tracking_device_driver = {
+	.probe = tracking_device_probe,
+	.remove = tracking_device_remove,
+	.match_always = 1
+};
+
+ int __init tracking_core_init(void)
+{
+	int result = -ENOMEM;
+
+	tracking_class = class_create("tracking");
+	if (IS_ERR(tracking_class))
+		return PTR_ERR(tracking_class);
+
+	result = tracking_bus_init();
+	if (result)
+		goto destory_class;
+
+	result = tracking_driver_register(&tracking_device_driver);
+	if (result)
+		goto uinit_bus;
+
+	result = alloc_chrdev_region(&tracking_chr_devt, 0, MAX_NODE_NUM,
+				     "tracking");
+	if (result < 0)
+		goto unregister_driver;
+
+	trk_core_ctrl = kzalloc(sizeof(*trk_core_ctrl), GFP_KERNEL);
+	if (!trk_core_ctrl) {
+		result = -ENOMEM;
+		goto free_chrdev;
+	}
+
+	INIT_LIST_HEAD(&trk_core_ctrl->node_cdev);
+
+	return 0;
+
+free_chrdev:
+	unregister_chrdev_region(tracking_chr_devt, MAX_NODE_NUM);
+unregister_driver:
+	tracking_driver_unregister(&tracking_device_driver);
+uinit_bus:
+	tracking_bus_exit();
+destory_class:
+	class_destroy(tracking_class);
+
+	return result;
+}
+
+ void __exit tracking_core_exit(void)
+{
+	unregister_chrdev_region(tracking_chr_devt, MAX_NODE_NUM);
+	tracking_driver_unregister(&tracking_device_driver);
+	tracking_bus_exit();
+	class_destroy(tracking_class);
+	kfree(trk_core_ctrl);
+	trk_core_ctrl = NULL;
+}
+
+MODULE_AUTHOR("Huawei Tech. Co., Ltd.");
+MODULE_LICENSE("GPL v2");
+module_init(tracking_core_init);
+module_exit(tracking_core_exit);

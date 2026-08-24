@@ -1,0 +1,159 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ *
+ * smap is licensed under the Mulan PSL v2.
+ * You can use this software according to the terms and conditions of the Mulan PSL v2.
+ * You may obtain a copy of Mulan PSL v2 at:
+ *      http://license.coscl.org.cn/MulanPSL2
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+ * See the Mulan PSL v2 for more details.
+ */
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <errno.h>
+#include "smap_log_core.h"
+#include "securec.h"
+#include "smap_user_log.h"
+
+#define SMAP_MAX_FILE_SIZE (200 * 1024 * 1024) // 每个日志文件的最大大小
+#define SMAP_MAX_FILE_NUM 50
+
+#define SMAP_LOG_BUF_LEN 512
+
+#define SMAP_LOG_MODULE_NAME "SMAP "
+
+typedef enum {
+    EXT_LOGGER_DEBUG = 0,
+    EXT_LOGGER_INFO,
+    EXT_LOGGER_WARNING,
+    EXT_LOGGER_ERROR,
+} ExtLoggerLevel;
+
+typedef void (*Logfunc)(int level, const char *str, const char *moduleName);
+
+ Logfunc g_subscribers;
+
+void UpstreamSubscribeLogger(Logfunc extlog)
+{
+    g_subscribers = extlog;
+}
+
+int SmapStartULog(const char *ulogPath)
+{
+    char logBuf[SMAP_LOG_BUF_LEN];
+    int ret;
+    SmapLogConfig config;
+
+    if (ulogPath == NULL) {
+        return -EINVAL;
+    }
+
+    ret = sprintf_s(logBuf, SMAP_LOG_BUF_LEN, "%s", ulogPath);
+    if (ret < 0) {
+        return -1;
+    }
+
+#ifndef USE_DT
+    errno_t res = strncpy_s(config.filePath, sizeof(config.filePath), logBuf, sizeof(config.filePath) - 1);
+    if (res != EOK) {
+        SMAP_LOGGER_ERROR("strncpy_s failed, ret(%d).", res);
+        return -1;
+    }
+    config.maxFileSize = SMAP_MAX_FILE_SIZE;
+    config.maxFileCount = SMAP_MAX_FILE_NUM;
+    config.minLogLevel = SMAP_LOG_CORE_DEBUG;
+
+    ret = SmapLogCoreInit(&config);
+    if (ret != 0) {
+        return -EIO;
+    }
+#endif
+
+    return 0;
+}
+
+ int LogLevelMapping(int logLevel)
+{
+    switch (logLevel) {
+        case SMAP_LOG_CORE_TRACE:
+        case SMAP_LOG_CORE_DEBUG:
+            return EXT_LOGGER_DEBUG;
+        case SMAP_LOG_CORE_INFO:
+            return EXT_LOGGER_INFO;
+        case SMAP_LOG_CORE_WARN:
+            return EXT_LOGGER_WARNING;
+        case SMAP_LOG_CORE_ERROR:
+        default:
+            return EXT_LOGGER_ERROR;
+    }
+}
+
+ void SmapUlogInner(int logLevel, const char *prefix, const char *msg)
+{
+    if (g_subscribers != NULL) {
+        int level = LogLevelMapping(logLevel);
+        char exLogMsg[SMAP_LOG_BUF_LEN] = SMAP_LOG_MODULE_NAME;
+        errno_t ret = strncat_s(exLogMsg, sizeof(exLogMsg), prefix, SMAP_LOG_BUF_LEN - 1);
+        if (ret) {
+            return;
+        }
+        g_subscribers(level, msg, exLogMsg);
+        return;
+    }
+#ifndef USE_DT
+    SmapLogCoreWrite(logLevel, prefix, msg);
+#endif
+}
+
+void SMAP_Ulog(int logLevel, const char *funcName, int funcLine, const char *fileName, const char *format, ...)
+{
+    int ret;
+    va_list argPtr;
+    char head[SMAP_LOG_BUF_LEN] = { 0 };
+    char data[SMAP_LOG_BUF_LEN] = { 0 };
+
+    if (snprintf_s(head, sizeof(head), sizeof(head) - 1, "%s %d %s", fileName, funcLine, funcName) == 0) {
+        return;
+    }
+    va_start(argPtr, format);
+    ret = vsnprintf_s(data, SMAP_LOG_BUF_LEN, sizeof(data) - 1, format, argPtr);
+    if (ret < 0) {
+#ifndef USE_DT
+        SmapLogCoreWrite(SMAP_LOG_CORE_ERROR, head, "vsnprintf_s failed.");
+#endif
+        va_end(argPtr);
+        return;
+    }
+    va_end(argPtr);
+
+    switch (logLevel) {
+        case SMAP_LOG_INFO:
+            SmapUlogInner(SMAP_LOG_CORE_INFO, head, data);
+            break;
+        case SMAP_LOG_WARNING:
+            SmapUlogInner(SMAP_LOG_CORE_WARN, head, data);
+            break;
+        case SMAP_LOG_ERROR:
+            SmapUlogInner(SMAP_LOG_CORE_ERROR, head, data);
+            break;
+        case SMAP_LOG_DEBUG:
+            SmapUlogInner(SMAP_LOG_CORE_DEBUG, head, data);
+            break;
+        default:
+            break;
+    }
+
+    return;
+}
+
+void SmapLoggerExit(void)
+{
+    if (g_subscribers != NULL) {
+        g_subscribers = NULL;
+    }
+#ifndef USE_DT
+    SmapLogCoreExit();
+#endif
+}

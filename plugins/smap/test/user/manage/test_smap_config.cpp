@@ -699,8 +699,6 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigTwo)
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
-    MOCKER(IsHugeMode).stubs().will(returnValue(false));
-    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(false));
     MOCKER(calloc).stubs().will(returnValue(static_cast<void *>(nullptr)));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(IsPidUsingHugePages).stubs().will(returnValue(false));

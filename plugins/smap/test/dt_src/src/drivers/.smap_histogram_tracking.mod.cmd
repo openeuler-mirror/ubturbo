@@ -1,0 +1,1 @@
+savedcmd_/home/yyx/master/ubturbo/plugins/smap/src/drivers/smap_histogram_tracking.mod := printf '%s\n'   ub_hist.o | awk '!x[$$0]++ { print("/home/yyx/master/ubturbo/plugins/smap/src/drivers/"$$0) }' > /home/yyx/master/ubturbo/plugins/smap/src/drivers/smap_histogram_tracking.mod

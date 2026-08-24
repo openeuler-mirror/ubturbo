@@ -873,47 +873,6 @@ static int32_t EnsureDirectoryExists(const char *dirPath)
     return RETURN_OK;
 }
 
-static int32_t InitStrategyConfigFileBufferInner(char strategyDefaultConfig[STRATEGY_CONFIG_ENTRY][STRATEGY_CONFIG_BUFFSIZE], size_t numConfigs)
-{
-    const char *scanCpuConfigEnableStr = "smap.scan.cpu.enable = false\n";
-    size_t scanCpuConfigEnableStrLen = strlen(scanCpuConfigEnableStr);
-    int ret = strncpy_s(strategyDefaultConfig[numConfigs], STRATEGY_CONFIG_BUFFSIZE, scanCpuConfigEnableStr, scanCpuConfigEnableStrLen);
-    if (ret != EOK) {
-        SMAP_LOGGER_ERROR("Strncpy smap scan cpu enable failed.");
-        return RETURN_ERROR;
-    }
-    const char *scanCpuConfigNote = "// min: min cpu number max: max cpu number\n";
-    size_t scanCpuConfigNoteLen = strlen(scanCpuConfigNote);
-    ret= strncpy_s(strategyDefaultConfig[numConfigs + 1], STRATEGY_CONFIG_BUFFSIZE, scanCpuConfigNote, scanCpuConfigNoteLen);
-    if (ret != EOK) {
-        SMAP_LOGGER_ERROR("Strncpy smap scan cpu range failed.");
-        return RETURN_ERROR;
-    }
-    const char *cpuScanRangeStr = "smap.scan.cpu = min-max\n";
-    size_t cpuScanRangeStrLen = strlen(cpuScanRangeStr);
-    ret = strncpy_s(strategyDefaultConfig[numConfigs + 2], STRATEGY_CONFIG_BUFFSIZE, cpuScanRangeStr, cpuScanRangeStrLen);
-    if (ret != EOK) {
-        SMAP_LOGGER_ERROR("Strncpy smap scan cpu range failed.");
-        return RETURN_ERROR;
-    }
-    const char *migrateModeEnable = "smap.migrate.mode.enable = false\n";
-    size_t migrateModeEnableStrLen = strlen(migrateModeEnable);
-    ret = strncpy_s(strategyDefaultConfig[numConfigs + 3], STRATEGY_CONFIG_BUFFSIZE, migrateModeEnable, migrateModeEnableStrLen);
-    if (ret != EOK) {
-        SMAP_LOGGER_ERROR("Strncpy smap migrate mode enable failed.");
-        return RETURN_ERROR;
-    }
-    const char *migrateMode = "smap.migrate.mode = %d\n";
-    ret = snprintf_s(strategyDefaultConfig[numConfigs + 4], STRATEGY_CONFIG_BUFFSIZE, STRATEGY_CONFIG_BUFFSIZE - 1,
-                        migrateMode, DEFAULT_MIGRATE_MODE);
-    if (ret < 0) {
-        SMAP_LOGGER_ERROR("Snprintf failed for smap migrate mode.");
-        return RETURN_ERROR;
-    }
-
-    return RETURN_OK;
-}
-
 static int32_t InitStrategyConfigFileBuffer(char strategyDefaultConfig[STRATEGY_CONFIG_ENTRY][STRATEGY_CONFIG_BUFFSIZE])
 {
     int32_t ret;

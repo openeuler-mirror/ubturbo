@@ -35,7 +35,6 @@
 #include "access_mmu.h"
 #include "access_tracking.h"
 #include "accessed_bit.h"
-#include "smap_page_flags.h"
 
 #define DECIMAL 10
 #define DEFAULT_REF_COUNT 0
@@ -1409,9 +1408,6 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 			pte_walk->group_hot = is_young;
 		else if (pte_walk->group_hot) {
 			pte_walk->group_hot_skip_cnt++;
-			if (!is_file_or_shared_page(page) && is_young) {
-				inc_smap_acc_cnt(page, pte_walk->ap->prior_decay);
-			}
 			goto save_res;
 		}
 	}

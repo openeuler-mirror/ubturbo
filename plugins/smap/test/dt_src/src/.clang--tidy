@@ -1,0 +1,46 @@
+---
+# .clang-tidy for Linux Kernel Module / Driver Development
+# ️ 警告：内核代码包含大量宏，Clang-Tidy 极易产生误报。
+# 此配置仅开启最基础的通用检查，严禁开启 C++ 或现代 C++ 规则。
+
+HeaderFilterRegex: '.*'
+
+Checks: >
+  -*,
+
+  # --- 仅保留最核心的静态分析 ---
+  # 这些检查器相对“聪明”，能处理部分宏展开后的逻辑
+  clang-analyzer-core.NullDereference,
+  clang-analyzer-core.UndefinedBinaryOperatorResult,
+  clang-analyzer-deadcode.DeadStores,
+  
+  # --- 极少量的通用 Bug 检查 ---
+  # 注意：很多 bugprone 规则在内核宏面前会失效，需小心开启
+  bugprone-reserved-identifier,
+  bugprone-macro-parentheses,     # 即使在内核中，宏括号也是好习惯
+  
+  # --- 简单的可读性检查 ---
+  readability-braces-around-statements, # 强制加括号，符合内核风格
+  readability-duplicate-include,
+  readability-misleading-indentation    # 误导性的缩进
+
+WarningsAsErrors: ''
+
+CheckOptions:
+  # --- 关键配置：告诉 Clang-Tidy 这是 C 代码 ---
+  - key: clang-analyzer-optin.core.EnumCastOutOfRange.Enabled
+    value: true
+
+  # --- 命名规范 (尽量贴近内核风格，但很难完全自动化) ---
+  # 内核通常使用 snake_case (下划线命名)
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.VariableNameStyle
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.MacroDefinitionCase
+    value: UPPER_CASE
+    
+  # --- 抑制特定误报 ---
+  # 内核经常使用复杂的宏，可能会触发某些误报，可以在这里根据实际报错添加抑制

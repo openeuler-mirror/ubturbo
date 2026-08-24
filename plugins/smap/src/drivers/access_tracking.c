@@ -33,7 +33,6 @@
 #include "access_pid.h"
 #include "hist_ops.h"
 #include "access_tracking.h"
-#include "smap_page_flags.h"
 
 #define WORKQ_FILE_PATH_LEN 64
 #define WORKQ_FILE_BUF_LEN 512
@@ -160,44 +159,6 @@ int set_scan_cpus(u32 cpu_start, u32 cpu_end)
 		sw.result);
 
 	return sw.result;
-}
-
-int set_scan_cpus(u32 cpu_start, u32 cpu_end)
-{
-#ifdef KERNEL_OPENEULER
-	u32 cpu_index;
-	struct workqueue_attrs *attrs;
-	struct access_tracking_dev *adev;
-
-	attrs = alloc_workqueue_attrs();
-	if (!attrs)
-		return -ENOMEM;
-
-	cpumask_clear(attrs->cpumask);
-	for (cpu_index = cpu_start; cpu_index <= cpu_end; cpu_index++) {
-		if (!cpu_online(cpu_index)) {
-			pr_err("cpu %d is not online, cannot be used for scan\n", cpu_index);
-			free_workqueue_attrs(attrs);
-			return -EINVAL;
-		}
-		cpumask_set_cpu(cpu_index, attrs->cpumask);
-	}
-
-	adev = get_first_access_dev();
-	if (adev && adev->scanq) {
-		if (apply_workqueue_attrs(adev->scanq, attrs)) {
-			pr_err("failed to apply workqueue attrs for scan cpu range\n");
-			free_workqueue_attrs(attrs);
-			return -EINVAL;
-		}
-	}
-
-	free_workqueue_attrs(attrs);
-#else
-	pr_warn("set scan cpus is not supported on this kernel version\n");
-#endif
-
-	return 0;
 }
 
 void submit_one_work(struct access_pid *ap)
@@ -509,7 +470,8 @@ static void adev_buffer_down_read(void)
 {
 	struct access_tracking_dev *adev;
 	list_for_each_entry(adev, &access_dev, list) {
-		down_read(&adev->buffer_lock);
+		if (!adev->is_hist)
+			down_read(&adev->buffer_lock);
 	}
 }
 
@@ -517,7 +479,8 @@ static void adev_buffer_up_read(void)
 {
 	struct access_tracking_dev *adev;
 	list_for_each_entry(adev, &access_dev, list) {
-		up_read(&adev->buffer_lock);
+		if (!adev->is_hist)
+			up_read(&adev->buffer_lock);
 	}
 }
 
@@ -582,7 +545,6 @@ static void access_work_func(struct work_struct *work)
 		up_write(&ap_data.lock);
 	}
 
-	ap->prior_decay = access_pid_cur_prior_decay(ap);
 	adev_buffer_down_read();
 	down_read(&ap_data.lock);
 	page_size = get_page_size(adev);
@@ -600,7 +562,6 @@ static void access_work_func(struct work_struct *work)
 		       adev->page_count, page_size, adev->node);
 	}
 	ap->cur_times++;
-	ap->acc_times = ap->prior_decay ? 0 : (ap->acc_times + 1);
 	pr_debug("pid[%d] cpu[%d], scan took %lldus for %dth time\n", ap->pid,
 		 raw_smp_processor_id(), scan_time, ap->cur_times);
 

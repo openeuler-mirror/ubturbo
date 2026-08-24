@@ -985,9 +985,8 @@ TEST_F(SmapMigratePagesTest, TestSetRemoteMigrateModeAsync)
 
 TEST_F(SmapMigratePagesTest, TestSetRemoteMigrateModeDmaOffloading)
 {
-    unsigned int orig = remote_migrate_mode;
     set_remote_migrate_mode(1);
-    EXPECT_EQ(remote_migrate_mode, orig);
+    EXPECT_EQ(remote_migrate_mode, MIGRATE_ASYNC_DMA_OFFLOADING);
 }
 
 // ========== New DT supplement: smap_check_huge_page_for_migration ==========

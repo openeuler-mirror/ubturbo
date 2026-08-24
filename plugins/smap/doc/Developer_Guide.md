@@ -118,7 +118,6 @@ struct MigrateOutMsg {
 * Pair 未收敛时优先执行净迁出或迁回，不执行冷热 swap；多个 local 共享同一 remote 且无法可靠识别页面来源时也不执行该 Pair 的 swap。以上限制不影响净迁出和迁回。
 * 建议在相关本地 NUMA 和远端 NUMA 上预留不低于计划迁移规模 5%~10% 的空闲内存；对于2M huge page 虚机应预留相应数量的空闲 2M huge page。该预留值是部署建议，不是接口校验条件。
 * 迁移会过滤掉共享页。
-* 传入的pid若包含系统进程（固定PID 0/1/2，或无用户态可执行文件的内核线程），接口返回-22，不做迁出。
 
 ### ubturbo_smap_migrate_out_grouped
 
@@ -209,7 +208,6 @@ struct GroupedMigrateOutMsg {
 * 上述预留值为部署建议，不是接口入参校验条件；调用成功仅表示策略配置成功，不保证后续每轮冷热迁移都能实际迁移页面。
 * grouped policy当前不支持smap_config持久化与恢复，SMAP重启后需要重新下发配置。
 * 页面迁移会过滤掉共享页。
-* 传入的pid若包含系统进程（固定PID 0/1/2，或无用户态可执行文件的内核线程），接口返回-22，不做迁出。
 
 ### ubturbo_smap_remote_numa_info_set
 

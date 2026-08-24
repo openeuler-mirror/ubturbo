@@ -21,8 +21,6 @@
 #include "access_tracking.h"
 #include "access_mmu.h"
 #include "access_pid.h"
-#include "access_acpi_mem.h"
-#include "smap_page_flags.h"
 
 #undef pr_fmt
 #define pr_fmt(fmt) "access_pid: " fmt
@@ -235,28 +233,6 @@ static int mem_freq_open(struct inode *inode, struct file *file)
 
 static int mem_freq_release(struct inode *inode, struct file *file)
 {
-	return 0;
-}
-
-static u8 get_page_prior_flag(int nid, size_t acidx)
-{
-	u64 paddr = 0;
-	unsigned long pfn;
-	struct page *page;
-	if (nid < nr_local_numa) {
-		if (calc_acidx_paddr_acpi(nid, acidx, &paddr, PAGE_SIZE))
-			return 0;
-	}
-	else {
-		if (calc_acidx_paddr_iomem(nid, acidx, &paddr, PAGE_SIZE))
-			return 0;
-
-	}
-	pfn = PHYS_PFN(paddr);
-	if (pfn_valid(pfn)) {
-		page = pfn_to_page(pfn);
-		return get_smap_acc_cnt(page);
-	}
 	return 0;
 }
 
@@ -1017,52 +993,55 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 int access_add_pid(int len, struct access_add_pid_payload *payload)
 {
 	int i, ret;
-	struct access_pid *ap, *existing;
+	struct access_pid *ap, *tmp, *existing;
+	LIST_HEAD(tmp_head);
+
+	/* Pre-check: mark completely duplicate pids */
+	down_read(&ap_data.lock);
+	for (i = 0; i < len; i++) {
+		if (payload[i].pid < 0)
+			continue;
+		list_for_each_entry(existing, &ap_data.list, node) {
+			if (payload[i].pid == existing->pid &&
+			    payload[i].numa_nodes == existing->numa_nodes &&
+			    payload[i].scan_time == existing->scan_time &&
+			    payload[i].type == existing->type &&
+			    payload[i].ntimes == existing->ntimes) {
+				pr_info("pid %d is completely duplicate, skip processing\n",
+					payload[i].pid);
+				payload[i].pid = DUPLICATE_PID;
+				break;
+			}
+		}
+	}
+	up_read(&ap_data.lock);
 
 	for (i = 0; i < len; i++) {
 		if (payload[i].pid < 0)
 			continue;
-
-		down_write(&ap_data.lock);
-		list_for_each_entry(existing, &ap_data.list, node) {
-			if (payload[i].pid == existing->pid) {
-				if (payload[i].numa_nodes == existing->numa_nodes &&
-				    payload[i].scan_time == existing->scan_time &&
-				    payload[i].type == existing->type &&
-				    payload[i].ntimes == existing->ntimes) {
-					pr_info("pid %d is completely duplicate, skip processing\n",
-						payload[i].pid);
-				} else {
-					pr_info("set pid: %d NUMA mask from %#x to %#x\n",
-						existing->pid, existing->numa_nodes,
-						payload[i].numa_nodes);
-					existing->numa_nodes = payload[i].numa_nodes;
-					existing->scan_time = payload[i].scan_time;
-					existing->ntimes = payload[i].ntimes;
-					existing->type = payload[i].type;
-					existing->pid_type = payload[i].pid_type;
-				}
-				up_write(&ap_data.lock);
-				goto next_pid;
+		/* check if payload has duplicate pid */
+		list_for_each_entry(tmp, &tmp_head, node) {
+			if (unlikely(payload[i].pid == tmp->pid)) {
+				ret = -EINVAL;
+				goto err;
 			}
 		}
-
+		/* allocate memory for pid */
 		ret = init_access_pid(&payload[i], &ap);
-		if (ret) {
-			up_write(&ap_data.lock);
-			return ret;
-		}
-		ap->cur_times = 0;
-		pid_pte_mkold(ap);
-		submit_one_work(ap);
-		list_add_tail(&ap->node, &ap_data.list);
-		up_write(&ap_data.lock);
+		if (ret)
+			goto err;
+		list_add_tail(&ap->node, &tmp_head);
+	}
+	move_to_ap_data_list(&tmp_head);
+	return 0;
 
-next_pid:
-		continue;
+err:
+	list_for_each_entry_safe(ap, tmp, &tmp_head, node) {
+		list_del(&ap->node);
+		destroy_access_pid(ap);
 	}
 
-	return 0;
+	return ret;
 }
 
 void access_remove_ham_pid(int len, struct access_remove_pid_payload *payload)

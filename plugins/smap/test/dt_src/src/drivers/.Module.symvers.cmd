@@ -1,0 +1,1 @@
+savedcmd_/home/yyx/master/ubturbo/plugins/smap/src/drivers/Module.symvers :=  scripts/mod/modpost -M -m -a      -o /home/yyx/master/ubturbo/plugins/smap/src/drivers/Module.symvers -n -T /home/yyx/master/ubturbo/plugins/smap/src/drivers/modules.order -i Module.symvers -e 

@@ -1,0 +1,1604 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
+ * Description: SMAP : hist_ops
+ */
+#include <asm/types.h>
+#include <linux/init.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/pci.h>
+#include <linux/delay.h>
+#include <linux/string.h>
+#include <linux/kthread.h>
+#include <linux/workqueue.h>
+#include <linux/hrtimer.h>
+#include <linux/vmalloc.h>
+#include <linux/mmzone.h>
+#include <linux/pfn.h>
+#include <linux/sort.h>
+#include <linux/minmax.h>
+#include <linux/cpumask.h>
+#include <linux/topology.h>
+
+#include "access_iomem.h"
+#include "access_acpi_mem.h"
+#include "ub_hist.h"
+#include "hist_tracking.h"
+#include "hist_ops.h"
+
+#undef pr_fmt
+#define pr_fmt(fmt) "hist_ops: " fmt
+
+#define HOT_WINDOW_RATIO (10)
+#define SCAN_INTERVAL_RANGE_US 1000
+
+ struct smap_hist_dev g_smap_hist_dev;
+
+/**
+ * hist_4k_scan_mode_set - Callback for setting scan mode parameter
+ * @val: String containing the new scan mode value
+ * @kp: Pointer to kernel_param structure
+ *
+ * When user modifies the parameter via sysfs:
+ * - Update the global device's scan mode
+ * - Reset sequential loop scan offsets (start from index 0 for the new mode)
+ */
+ int hist_4k_scan_mode_set(const char *val, const struct kernel_param *kp)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	unsigned int new_mode;
+	int ret;
+	u32 i;
+
+	/* Parse parameter value */
+	ret = kstrtouint(val, 10, &new_mode);
+	if (ret)
+		return ret;
+
+	/* Validate parameter range */
+	if (new_mode > HIST_4K_SCAN_SEQ_LOOP) {
+		pr_err("invalid scan mode: %u, valid: 0-1\n", new_mode);
+		return -EINVAL;
+	}
+
+	/* If mode unchanged, return directly */
+	if (new_mode == dev->scan_mode)
+		return 0;
+
+	pr_info("hist 4k scan mode changed: %u -> %u\n", dev->scan_mode,
+		new_mode);
+
+	/* Update scan mode */
+	dev->scan_mode = new_mode;
+
+	/* Reset sequential loop scan offsets: start from beginning when switching mode */
+	for (i = 0; i < dev->ba_cnt; ++i) {
+		dev->seq_loop_ba_offset[i] = -1;
+	}
+
+	return 0;
+}
+
+/* Custom parameter operations structure */
+ const struct kernel_param_ops hist_4k_scan_mode_ops = {
+	.set = hist_4k_scan_mode_set,
+	.get = param_get_uint,
+};
+
+/* 4K scan mode kernel parameter: 0=multi-granularity sliding, 1=sequential loop (default) */
+ unsigned int hist_4k_scan_mode_param = HIST_4K_SCAN_SEQ_LOOP;
+module_param_cb(hist_4k_scan_mode_param, &hist_4k_scan_mode_ops,
+		&hist_4k_scan_mode_param, 0644);
+MODULE_PARM_DESC(hist_4k_scan_mode_param,
+		 "4K scan mode: 0=multi-granularity, 1=seq-loop (default)");
+
+ int hist_scan_duration_per_win_set(const char *val,
+					  const struct kernel_param *kp);
+
+/* Custom parameter operations structure */
+ const struct kernel_param_ops hist_scan_duration_per_win_ops = {
+	.set = hist_scan_duration_per_win_set,
+	.get = param_get_uint,
+};
+
+/* Scan duration per window kernel parameter: default 64ms */
+unsigned int hist_scan_duration_per_win = 64;
+module_param_cb(hist_scan_duration_per_win, &hist_scan_duration_per_win_ops,
+		&hist_scan_duration_per_win, 0644);
+MODULE_PARM_DESC(hist_scan_duration_per_win,
+		 "Scan duration per window in ms (default: 64)");
+
+/**
+ * hist_scan_duration_per_win_set - Callback for setting scan duration per window parameter
+ * @val: String containing the new scan duration value
+ * @kp: Pointer to kernel_param structure
+ *
+ * When user modifies the parameter via sysfs:
+ * - Validate the value is positive
+ * - Update the global scan duration per window
+ */
+ int hist_scan_duration_per_win_set(const char *val,
+					  const struct kernel_param *kp)
+{
+	unsigned int new_duration;
+	int ret;
+
+	/* Parse parameter value */
+	ret = kstrtouint(val, 10, &new_duration);
+	if (ret)
+		return ret;
+
+	/* Validate parameter range: must be positive */
+	if (new_duration == 0 || new_duration > HIST_THREAD_PERIOD) {
+		pr_err("invalid scan duration per win: %u, must be > 0 and < 512\n",
+		       new_duration);
+		return -EINVAL;
+	}
+
+	pr_info("hist scan duration per win changed: %u -> %u\n",
+		hist_scan_duration_per_win, new_duration);
+
+	/* Update scan duration */
+	hist_scan_duration_per_win = new_duration;
+
+	return 0;
+}
+
+ unsigned int ub_watch_perf_prd_ms = 200;
+ unsigned int ub_watch_sample_interval_ms = 1000;
+
+/**
+ * ub_watch_perf_prd_ms_set - Callback for setting ub_watch perf period parameter
+ * @val: String containing the new perf period value (in ms)
+ * @kp: Pointer to kernel_param structure
+ *
+ * Validates that 0 < new value <= ub_watch_sample_interval_ms before updating.
+ */
+ int ub_watch_perf_prd_ms_set(const char *val,
+				    const struct kernel_param *kp)
+{
+	unsigned int new_val;
+	int ret;
+
+	ret = kstrtouint(val, 10, &new_val);
+	if (ret)
+		return ret;
+
+	if (new_val == 0 || new_val > ub_watch_sample_interval_ms) {
+		pr_err("ub_watch_perf_prd_ms must be in (0, %u]\n",
+		       ub_watch_sample_interval_ms);
+		return -EINVAL;
+	}
+
+	*(unsigned int *)kp->arg = new_val;
+	pr_info("ub_watch_perf_prd_ms changed to %u\n", new_val);
+	return 0;
+}
+
+ const struct kernel_param_ops ub_watch_perf_prd_ms_ops = {
+	.set = ub_watch_perf_prd_ms_set,
+	.get = param_get_uint,
+};
+
+module_param_cb(ub_watch_perf_prd_ms, &ub_watch_perf_prd_ms_ops,
+		&ub_watch_perf_prd_ms, 0644);
+MODULE_PARM_DESC(
+	ub_watch_perf_prd_ms,
+	"ub_watch performance period in ms (default 200, must be 0 < value <= ub_watch_sample_interval_ms)");
+
+/**
+ * ub_watch_sample_interval_ms_set - Callback for setting ub_watch sample interval parameter
+ * @val: String containing the new sample interval value (in ms)
+ * @kp: Pointer to kernel_param structure
+ *
+ * Validates that new value >= ub_watch_perf_prd_ms (i.e. 0 < perf <= interval)
+ * before updating.
+ */
+ int ub_watch_sample_interval_ms_set(const char *val,
+					   const struct kernel_param *kp)
+{
+	unsigned int new_val;
+	int ret;
+
+	ret = kstrtouint(val, 10, &new_val);
+	if (ret)
+		return ret;
+
+	if (new_val == 0 || new_val < ub_watch_perf_prd_ms) {
+		pr_err("ub_watch_sample_interval_ms must be in [%u, +inf)\n",
+		       ub_watch_perf_prd_ms);
+		return -EINVAL;
+	}
+
+	*(unsigned int *)kp->arg = new_val;
+	pr_info("ub_watch_sample_interval_ms changed to %u\n", new_val);
+	return 0;
+}
+
+ const struct kernel_param_ops ub_watch_sample_interval_ms_ops = {
+	.set = ub_watch_sample_interval_ms_set,
+	.get = param_get_uint,
+};
+
+module_param_cb(ub_watch_sample_interval_ms, &ub_watch_sample_interval_ms_ops,
+		&ub_watch_sample_interval_ms, 0644);
+MODULE_PARM_DESC(
+	ub_watch_sample_interval_ms,
+	"ub_watch sample interval in ms (default 1000, must be >= ub_watch_perf_prd_ms)");
+
+  u64 align_addr(u64 addr, u32 low_bit_len)
+{
+	return (addr >> low_bit_len) << low_bit_len;
+}
+
+  bool addr_is_aligned(u64 addr, u32 low_bit_len)
+{
+	return !(addr & ((1ULL << low_bit_len) - 1));
+}
+
+  u64 get_hist_scan_win_size(enum ub_hist_sts_size sts_size)
+{
+	u64 hist_win_size;
+	u64 page_size;
+
+	page_size = (sts_size == STS_SIZE_2M) ? SIZE_2M : SIZE_4K;
+	hist_win_size = g_smap_hist_dev.freq_register_cnt * page_size;
+	return hist_win_size;
+}
+
+  u32 get_hist_addr_shift(enum ub_hist_sts_size sts_size)
+{
+	u32 shift;
+	u64 hist_win_size;
+
+	hist_win_size = get_hist_scan_win_size(sts_size);
+	for (shift = 0; hist_win_size > 1; shift++) {
+		hist_win_size >>= 1;
+	}
+	return shift;
+}
+
+  u64 align_addr_by_sts_size(u64 addr,
+					 enum ub_hist_sts_size sts_size)
+{
+	u32 shift = get_hist_addr_shift(sts_size);
+	return align_addr(addr, shift);
+}
+
+  bool paddr_within_ba(u64 pa, struct ub_hist_ba_info *ba_info)
+{
+	if (ba_info->cc_range.start <= pa && pa < ba_info->cc_range.end)
+		return true;
+	if (ba_info->nc_range.start <= pa && pa < ba_info->nc_range.end)
+		return true;
+	return false;
+}
+
+ int calc_ba_tag(u64 start_addr, uint64_t *ba_tag)
+{
+	u64 i;
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	for (i = 0; i < dev->ba_cnt; i++) {
+		if (paddr_within_ba(start_addr, &dev->ba_info[i])) {
+			*ba_tag = dev->ba_info[i].ba_tag;
+			return 0;
+		}
+	}
+	return -EINVAL;
+}
+
+ bool addr_seg_is_valid(struct segs_info *info)
+{
+	u32 i;
+	u64 start, size, ba_tag;
+	if (!info) {
+		pr_err("null segment info passed to histogram tracking\n");
+		return false;
+	}
+	if (!info->segs) {
+		pr_err("null address segment passed to histogram tracking\n");
+		return false;
+	}
+	for (i = 0; i < info->cnt; i++) {
+		start = info->segs[i].start;
+		size = info->segs[i].size;
+		if (!addr_is_aligned(start, HIST_ADDR_SHIFT_32M) ||
+		    !addr_is_aligned(start + size, HIST_ADDR_SHIFT_32M)) {
+			pr_err("segment [%d] start address or size %llu is not in 32M-aligned\n",
+			       i, size);
+			return false;
+		}
+
+		if (calc_ba_tag(start, &ba_tag)) {
+			pr_err("segment is not belong to remote memory\n");
+			return false;
+		}
+	}
+	return true;
+}
+
+ int addr_seg_cmp_start(const void *seg1, const void *seg2)
+{
+	struct addr_seg *s1 = (struct addr_seg *)seg1;
+	struct addr_seg *s2 = (struct addr_seg *)seg2;
+	if (s1->start > s2->start) {
+		return 1;
+	} else if (s1->start < s2->start) {
+		return -1;
+	} else {
+		return 0;
+	}
+}
+
+ int addr_seg_cmp_max(const void *win1, const void *win2)
+{
+	struct addr_seg *w1, *w2;
+	w1 = (struct addr_seg *)win1;
+	w2 = (struct addr_seg *)win2;
+	if (w1->ba_tag == w2->ba_tag) {
+		if (w1->max == w2->max)
+			return 0;
+		return (w1->max < w2->max) ? 1 : -1;
+	}
+	return (w1->ba_tag < w2->ba_tag) ? -1 : 1;
+}
+
+  u64 seg_end(struct addr_seg *seg)
+{
+	return seg->start + seg->size - 1;
+}
+
+  bool
+addr_seg_is_continuous_scan_wins(struct addr_seg *seg1, struct addr_seg *seg2,
+				 enum ub_hist_sts_size sts_size)
+{
+	u64 scan_win_size = get_hist_scan_win_size(sts_size);
+	if (seg2->start - seg_end(seg1) <= scan_win_size)
+		return true;
+
+	return false;
+}
+
+ u32 count_nr_windows(struct addr_seg *segs, int cnt,
+			    enum ub_hist_sts_size sts_size)
+{
+	u64 start, end;
+	u32 total_scans = 0;
+	int i;
+	u32 shift = get_hist_addr_shift(sts_size);
+
+	for (i = 0; i < cnt; i++) {
+		start = segs[i].start >> shift;
+		end = seg_end(&segs[i]) >> shift;
+		total_scans += (end - start) + 1;
+	}
+	return total_scans;
+}
+
+ void align_segments(struct addr_seg *segs, int cnt,
+			   enum ub_hist_sts_size sts_size)
+{
+	u32 hist_addr_shift = get_hist_addr_shift(sts_size);
+	u64 hist_win_size = get_hist_scan_win_size(sts_size);
+	int i;
+	for (i = 0; i < cnt; i++) {
+		u32 nr_wins = count_nr_windows(&segs[i], 1, sts_size);
+		segs[i].start = align_addr(segs[i].start, hist_addr_shift);
+		segs[i].size = hist_win_size * nr_wins;
+	}
+}
+
+ int merge_segments(struct addr_seg *segs, int cnt,
+			  enum ub_hist_sts_size sts_size)
+{
+	int i, merged_cnt = 0;
+	for (i = 1; i < cnt; i++) {
+		bool is_continuous = addr_seg_is_continuous_scan_wins(
+			&segs[merged_cnt], &segs[i], sts_size);
+		if (is_continuous) {
+			segs[merged_cnt].size =
+				max_t(u64, seg_end(&segs[merged_cnt]),
+				      seg_end(&segs[i])) -
+				segs[merged_cnt].start + 1;
+		} else {
+			merged_cnt++;
+			segs[merged_cnt] = segs[i];
+		}
+	}
+	return merged_cnt + 1;
+}
+
+  bool is_intersect(struct addr_seg *seg1, struct addr_seg *seg2,
+				u64 *inter_start, u64 *inter_end)
+{
+	if (seg_end(seg1) < seg2->start || seg_end(seg2) < seg1->start) {
+		return false;
+	}
+	*inter_start = (seg1->start > seg2->start) ? seg1->start : seg2->start;
+	*inter_end = (seg_end(seg1) < seg_end(seg2)) ? seg_end(seg1)
+						     : seg_end(seg2);
+
+	return true;
+}
+
+ void calc_4k_scan_hot_wins(struct segs_info *info, u16 *buf,
+				  struct segs_info *win_info)
+{
+	u32 seg_pages = 0, win_cnt = 0;
+	unsigned int i;
+	u64 shift = get_hist_scan_win_size(STS_SIZE_4K);
+	for (i = 0; i < info->cnt; i++) {
+		u64 start = info->segs[i].start;
+		u64 ba_tag;
+		calc_ba_tag(start, &ba_tag);
+		while (start < seg_end(&info->segs[i])) {
+			u64 max_val = 0, nr = shift / SIZE_2M;
+			u64 offset = (start - info->segs[i].start) >>
+				     HIST_ADDR_SHIFT_2M;
+			u16 *buf_ptr = &buf[seg_pages + offset];
+			while (nr--) {
+				max_val = max_t(u16, max_val, *buf_ptr++);
+			}
+			if (win_cnt >= win_info->cnt) {
+				pr_err("out-of-bounds when calc wins.[nr_wins:%u]\n",
+				       win_info->cnt);
+				start += shift;
+				continue;
+			}
+			win_info->segs[win_cnt].start = start;
+			win_info->segs[win_cnt].size = shift;
+			win_info->segs[win_cnt].max = max_val;
+			win_info->segs[win_cnt].ba_tag = ba_tag;
+			win_cnt++;
+
+			start += shift;
+		}
+		seg_pages += info->segs[i].size >> HIST_ADDR_SHIFT_2M;
+	}
+}
+
+ int cut_into_scan_wins(struct addr_seg *segs, int cnt,
+			      struct addr_seg *aligned_segs, int aligned_cnt,
+			      enum ub_hist_sts_size sts_size)
+{
+	int i;
+	u32 nr_wins = 0;
+	u64 shift = get_hist_scan_win_size(sts_size);
+	for (i = 0; i < cnt; i++) {
+		u64 start = segs[i].start;
+		u64 size = segs[i].size;
+		while (size > 0) {
+			if (nr_wins >= aligned_cnt) {
+				pr_err("out-of-bounds when creating segs.[i:%d, total:%d]\n",
+				       nr_wins, aligned_cnt);
+				return -EINVAL;
+			}
+			aligned_segs[nr_wins].start = start;
+			aligned_segs[nr_wins].size = shift;
+			calc_ba_tag(start, &aligned_segs[nr_wins].ba_tag);
+			start += shift;
+			size -= shift;
+			nr_wins++;
+		}
+	}
+	if (nr_wins == 0)
+		return -EINVAL;
+	return 0;
+}
+
+/**
+ * generate_aligned_scan_wins_info - Generate aligned scan windows (generic version)
+ * @win_info: Output window information
+ * @info: Input remote memory address segment information
+ * @sts_size: Scan granularity (STS_SIZE_2M or STS_SIZE_4K)
+ *
+ * Generate all scan windows for specified granularity, without hot window filtering
+ */
+ int generate_aligned_scan_wins_info(struct segs_info *win_info,
+					   struct segs_info *info,
+					   enum ub_hist_sts_size sts_size)
+{
+	int merged_cnt, ret;
+	u32 total_wins;
+	struct addr_seg *merged_segs, *aligned_segs;
+
+	if (info->cnt == 0)
+		return -EINVAL;
+
+	merged_segs = vzalloc(info->cnt * sizeof(struct addr_seg));
+	if (!merged_segs)
+		return -ENOMEM;
+
+	memcpy(merged_segs, info->segs, info->cnt * sizeof(struct addr_seg));
+	merged_cnt = merge_segments(merged_segs, info->cnt, sts_size);
+	align_segments(merged_segs, merged_cnt, sts_size);
+	total_wins = count_nr_windows(merged_segs, merged_cnt, sts_size);
+	if (total_wins == 0) {
+		vfree(merged_segs);
+		return -EINVAL;
+	}
+	aligned_segs = vzalloc(total_wins * sizeof(struct addr_seg));
+	if (!aligned_segs) {
+		vfree(merged_segs);
+		return -ENOMEM;
+	}
+
+	ret = cut_into_scan_wins(merged_segs, merged_cnt, aligned_segs,
+				 total_wins, sts_size);
+	if (ret) {
+		vfree(aligned_segs);
+	} else {
+		win_info->cnt = total_wins;
+		win_info->segs = aligned_segs;
+	}
+	vfree(merged_segs);
+	return ret;
+}
+
+/**
+ * Filter windows by BA tag and store qualified 4k windows back to win_info->segs
+ * @win_info: Windows set information structure containing all 4k scan windows
+ * @max_wins_4k_per_ba: Maximum 4k scan windows to keep per BA
+ * Return 0 on success, negative error code on failure
+ */
+ int filter_4k_scan_hot_wins(struct segs_info *win_info,
+				   u32 max_wins_4k_per_ba)
+{
+	u64 current_ba_tag;
+	u32 wins_count_sel_per_ba = 1;
+	u32 parallel_scan_count = 1;
+	u32 index = 1;
+	u32 total_wins_sel = 1;
+	u32 max_scan_wins_per_ba = 1;
+
+	if (!win_info || !win_info->segs || win_info->cnt == 0 ||
+	    max_wins_4k_per_ba == 0)
+		return -EINVAL;
+	current_ba_tag = win_info->segs[0].ba_tag;
+	for (; index < win_info->cnt;) {
+		/* If same BA tag and not reached max count */
+		if (current_ba_tag == win_info->segs[index].ba_tag &&
+		    wins_count_sel_per_ba < max_wins_4k_per_ba) {
+			win_info->segs[total_wins_sel++] =
+				win_info->segs[index++];
+			wins_count_sel_per_ba++;
+			max_scan_wins_per_ba = max_t(u32, max_scan_wins_per_ba,
+						     wins_count_sel_per_ba);
+			continue;
+		}
+
+		/* Skip all segments with current BA tag */
+		while (index < win_info->cnt &&
+		       current_ba_tag == win_info->segs[index].ba_tag) {
+			index++;
+		}
+
+		/* Move to next BA tag if available, and reset windows selected count for new BA tag */
+		if (index < win_info->cnt) {
+			current_ba_tag = win_info->segs[index].ba_tag;
+			wins_count_sel_per_ba = 0;
+			/* Increment parallel scan counter when switching to new BA tag */
+			parallel_scan_count++;
+		}
+	}
+
+	pr_debug(
+		"4k scan, paral_scan_cnt: %u, max_scan_wins_per_ba: %u, total_wins_num: %u",
+		parallel_scan_count, max_scan_wins_per_ba, total_wins_sel);
+	win_info->cnt = total_wins_sel;
+	return 0;
+}
+
+ int generate_aligned_4k_scan_wins_info(struct segs_info *win_info,
+					      struct segs_info *info, u16 *buf)
+{
+	struct addr_seg *wins_4k;
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	int ret;
+	int max_wins_4k_per_ba =
+		HIST_THREAD_PERIOD / hist_scan_duration_per_win -
+		dev->scan_wins_num_per_ba;
+	u32 nr_wins_4k = count_nr_windows(info->segs, info->cnt, STS_SIZE_4K);
+	if (nr_wins_4k == 0 || max_wins_4k_per_ba <= 0)
+		return -EINVAL;
+
+	wins_4k = vzalloc(nr_wins_4k * sizeof(struct addr_seg));
+	if (!wins_4k)
+		return -ENOMEM;
+
+	win_info->cnt = nr_wins_4k;
+	win_info->segs = wins_4k;
+	/*
+	 * Firstly, we look up each 32MB or 128MB long tracking window and calculate
+	 * the max access count within its range
+	 */
+	calc_4k_scan_hot_wins(info, buf, win_info);
+	/*
+	 * Secondly, sort windows by ba_tag in ascending order,
+	 * and for the same ba_tag, sort by frequency in descending order
+	 */
+	sort(win_info->segs, win_info->cnt, sizeof(struct addr_seg),
+	     addr_seg_cmp_max, NULL);
+	/*
+	 * Finally, filter the hottest part of the windows,
+	 * each BA is constrained to a maximum of max_wins_4k_per_ba windows
+	 */
+	ret = filter_4k_scan_hot_wins(win_info, max_wins_4k_per_ba);
+	if (ret) {
+		pr_err("filter_4k_scan_hot_wins failed.[ret:%d]\n", ret);
+		return ret;
+	}
+	return 0;
+}
+
+/**
+ * find_hdev_by_node - Find the histogram tracking device for a specific NUMA node
+ * @node: NUMA node ID to search for
+ *
+ * Search through the global access_dev list to find the access_tracking_dev
+ * that matches the given NUMA node and is configured for histogram tracking.
+ *
+ * Return: Pointer to the matching access_tracking_dev, or NULL if not found.
+ */
+ struct access_tracking_dev *find_hdev_by_node(int node)
+{
+	struct access_tracking_dev *hdev;
+	list_for_each_entry(hdev, &access_dev, list) {
+		if (hdev->is_hist && hdev->node == node)
+			return hdev;
+	}
+	return NULL;
+}
+
+/**
+ * do_actc_update - Update frequency counts in hdev buffer
+ */
+ void do_actc_update(struct access_tracking_dev *hdev, u64 seg_offset,
+			   u64 hist_offset, u64 inter_pages, u16 *freq)
+{
+	u64 j;
+
+	down_read(&hdev->buffer_lock);
+	for (j = 0; j < inter_pages; j++) {
+		u32 idx = seg_offset + j;
+		/* 硬件扫描: u16 频次开根号压缩成 u8 后累加进 access_bit_actc_data(actc_t) */
+		u32 sum = hdev->access_bit_actc_data[idx] +
+			  compress_freq(freq[hist_offset + j]);
+		hdev->access_bit_actc_data[idx] = (sum < U8_MAX) ? sum : U8_MAX;
+	}
+	up_read(&hdev->buffer_lock);
+}
+
+/**
+ * find_rseg_by_start - Find ram_segment by start address
+ */
+ struct ram_segment *find_rseg_by_start(u64 start)
+{
+	struct ram_segment *rseg;
+
+	list_for_each_entry(rseg, &drivers_remote_ram_list, node) {
+		if (rseg->start == start)
+			return rseg;
+	}
+	return NULL;
+}
+
+/**
+ * update_actc_direct - Directly update access frequency to hdev without intermediate buffer
+ */
+ void update_actc_direct(struct segs_info *rmem_info,
+			       struct addr_seg *seg, u16 *freq, u32 buf_len,
+			       enum ub_hist_sts_size sts_size)
+{
+	u32 shift = (sts_size == STS_SIZE_2M) ? HIST_ADDR_SHIFT_2M
+					      : HIST_ADDR_SHIFT_4K;
+	u64 inter_start, inter_end, inter_pages;
+	u64 seg_offset, hist_offset;
+	struct access_tracking_dev *hdev;
+	struct ram_segment *rseg;
+	struct addr_seg *cur_seg;
+	unsigned int i;
+	u64 preceding_pages[SMAP_MAX_NUMNODES] = { 0 };
+
+	read_lock(&rem_ram_list_lock);
+	for (i = 0; i < rmem_info->cnt; i++) {
+		cur_seg = &rmem_info->segs[i];
+
+		/* Find the ram_segment for NUMA node lookup */
+		rseg = find_rseg_by_start(cur_seg->start);
+		if (!rseg)
+			continue;
+
+		/* Check intersection between scan window and remote memory segment */
+		if (!is_intersect(cur_seg, seg, &inter_start, &inter_end)) {
+			preceding_pages[rseg->numa_node] += cur_seg->size >>
+							    shift;
+			continue;
+		}
+
+		hdev = find_hdev_by_node(rseg->numa_node);
+		if (!hdev || !hdev->access_bit_actc_data) {
+			preceding_pages[rseg->numa_node] += cur_seg->size >>
+							    shift;
+			continue;
+		}
+
+		/* Calculate offsets and page count in intersection region */
+		hist_offset = (inter_start - seg->start) >> shift;
+		seg_offset = ((inter_start - cur_seg->start) >> shift) +
+			     preceding_pages[rseg->numa_node];
+		inter_pages = (inter_end - inter_start + 1) >> shift;
+
+		if (seg_offset + inter_pages > hdev->page_count) {
+			pr_err("exceeded hdev buffer: %llu > %llu\n",
+			       seg_offset + inter_pages, hdev->page_count);
+			preceding_pages[rseg->numa_node] += cur_seg->size >>
+							    shift;
+			continue;
+		}
+
+		/* Update frequency counts directly to hdev buffer */
+		do_actc_update(hdev, seg_offset, hist_offset, inter_pages,
+			       freq);
+		preceding_pages[rseg->numa_node] += cur_seg->size >> shift;
+	}
+	read_unlock(&rem_ram_list_lock);
+}
+
+ void copy_actc_to_buf(struct segs_info *info, struct addr_seg *seg,
+			     u16 *dst_buf, u16 *freq, u32 buf_len,
+			     enum ub_hist_sts_size sts_size)
+{
+	u32 shift = (sts_size == STS_SIZE_2M) ? HIST_ADDR_SHIFT_2M
+					      : HIST_ADDR_SHIFT_4K;
+	u64 inter_start, inter_end, inter_pages, j;
+	u64 seg_offset, hist_offset, seg_pages = 0;
+	u16 *dst;
+	unsigned int i;
+	for (i = 0; i < info->cnt; i++) {
+		if (is_intersect(&info->segs[i], seg, &inter_start,
+				 &inter_end)) {
+			hist_offset = (inter_start - seg->start) >> shift;
+			seg_offset = (inter_start - info->segs[i].start) >>
+				     shift;
+			inter_pages = (inter_end - inter_start + 1) >> shift;
+			if (seg_pages + seg_offset + inter_pages > buf_len) {
+				pr_err("exceeded upper bound: %u when coping to ACTC buffer\n",
+				       buf_len);
+				continue;
+			}
+			dst = dst_buf + seg_pages + seg_offset;
+			for (j = hist_offset; j < (hist_offset + inter_pages);
+			     j++) {
+				*dst++ = freq[j];
+			}
+		}
+		seg_pages += info->segs[i].size >> shift;
+	}
+}
+
+ bool addr_is_cc_mem(u64 addr)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	u32 i;
+	for (i = 0; i < dev->ba_cnt; i++) {
+		if (dev->ba_info[i].cc_range.start <= addr &&
+		    addr < dev->ba_info[i].cc_range.end)
+			return true;
+	}
+	return false;
+}
+
+ int submit_ba_task(uint64_t ba_tag, u64 start_addr,
+			  enum ub_hist_sts_size sts_size)
+{
+	u64 base_addr;
+	u32 shift;
+	union hi_upa_smap_cfg_smap_cfg00 *smap_cfg00;
+	struct ub_hist_ba_config cfg = { 0 };
+
+	pr_debug("submit_ba_task: ba_tag=%#llx, start_addr=%#llx\n", ba_tag,
+		 start_addr);
+
+	base_addr = align_addr_by_sts_size(start_addr, sts_size);
+	shift = get_hist_addr_shift(STS_SIZE_4K);
+	cfg.reg_offset = BA_CTRL_REG_OFFSET;
+	ub_hist_get_state(&cfg, ba_tag);
+	smap_cfg00 = (union hi_upa_smap_cfg_smap_cfg00 *)&cfg.reg_value;
+	smap_cfg00->page_size = sts_size;
+	smap_cfg00->sts_rd_en = true;
+	smap_cfg00->sts_wr_en = addr_is_cc_mem(base_addr) ? false : true;
+	smap_cfg00->sts_enable = true;
+	smap_cfg00->sts_base_addr = (base_addr >> shift);
+
+	return ub_hist_set_state(&cfg, ba_tag);
+}
+
+  void wait_ba_task(u64 ms)
+{
+	pr_debug("wait_ba_task, %llu ms\n", ms);
+	u64 min_us = ms * USEC_PER_MSEC;
+	u64 max_us = min_us + SCAN_INTERVAL_RANGE_US;
+	usleep_range(min_us, max_us);
+}
+
+  int disable_ba_task(uint64_t ba_tag)
+{
+	struct ub_hist_ba_config cfg;
+	union hi_upa_smap_cfg_smap_cfg00 *smap_cfg00;
+
+	cfg.reg_offset = BA_CTRL_REG_OFFSET;
+	ub_hist_get_state(&cfg, ba_tag);
+	smap_cfg00 = (union hi_upa_smap_cfg_smap_cfg00 *)&cfg.reg_value;
+	smap_cfg00->sts_enable = false;
+
+	return ub_hist_set_state(&cfg, ba_tag);
+}
+
+  void disable_all_ba_tasks(u32 *offset, u32 end)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	u32 ba_idx = dev->ba_cnt;
+	while (ba_idx--) {
+		if (offset[ba_idx] <
+		    end) /* skip the BA which has no scan task */
+			disable_ba_task(dev->ba_info[ba_idx].ba_tag);
+	}
+}
+
+  bool pick_one_seg(u64 ba_tag, struct segs_info *win_info,
+				int *offset, bool do_4k_seq_loop)
+{
+	int i;
+	if (do_4k_seq_loop && *offset == win_info->cnt)
+		*offset = -1;
+	for (i = *offset + 1; i < win_info->cnt; i++) {
+		if (ba_tag == win_info->segs[i].ba_tag) {
+			*offset = i;
+			pr_debug("ba_tag: %#llx, offset: %d\n", ba_tag,
+				 *offset);
+			return true;
+		}
+	}
+	*offset = win_info->cnt;
+	return false;
+}
+
+  bool pick_complete(u32 *offset, u32 len, u32 end)
+{
+	bool complete_flag = true;
+	u32 i;
+	for (i = 0; i < len; i++) {
+		complete_flag &= (offset[i] == end);
+	}
+	return complete_flag;
+}
+
+ int get_hist_results(uint64_t ba_tag,
+			    struct ub_hist_ba_result *ba_result)
+{
+	int ret;
+	ba_result->ba_tag = ba_tag;
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	ret = ub_hist_get_statistic_result(ba_result);
+	if (ret) {
+		pr_err("ub_hist_get_statistic_result error (%d)\n", ret);
+		return ret;
+	}
+	if (dev->abort_flag) {
+		pr_debug("hist scan paused\n");
+		return -EAGAIN;
+	}
+	return 0;
+}
+
+ int smap_hist_read_paral(struct segs_info *win_info,
+				struct segs_info *rmem_info,
+				enum ub_hist_sts_size sts_size, u16 *buf,
+				u32 scan_time, u32 buf_len, bool direct_update)
+{
+	int ret = 0, i, ba_cnt;
+	u64 ba_tag;
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	bool do_4k_seq_loop = (sts_size == STS_SIZE_4K &&
+			       dev->scan_mode == HIST_4K_SCAN_SEQ_LOOP);
+	struct ub_hist_ba_result *ba_result =
+		kmalloc(sizeof(*ba_result), GFP_KERNEL);
+	int *offset = kzalloc(sizeof(*offset) * dev->ba_cnt, GFP_KERNEL);
+	if (!ba_result || !offset) {
+		kfree(ba_result);
+		kfree(offset);
+		return -ENOMEM;
+	}
+
+	/*
+	 * Initialize offsets for each BA:
+	 * - Sequential loop mode with 4K scan: use seq_loop_ba_offset recorded offset
+	 * - Other modes: start from -1 (scan from beginning)
+	 */
+	for (i = 0; i < dev->ba_cnt; ++i) {
+		/* 越界保护 */
+		if (do_4k_seq_loop)
+			offset[i] = (dev->seq_loop_ba_offset[i] < win_info->cnt)
+					    ? dev->seq_loop_ba_offset[i]
+					    : -1;
+		else
+			offset[i] = -1;
+	}
+
+	while (1) {
+		ba_cnt = dev->ba_cnt;
+		while (ba_cnt--) {
+			ba_tag = dev->ba_info[ba_cnt].ba_tag;
+			if (pick_one_seg(ba_tag, win_info, &offset[ba_cnt],
+					 do_4k_seq_loop)) {
+				submit_ba_task(
+					ba_tag,
+					win_info->segs[offset[ba_cnt]].start,
+					sts_size);
+			}
+		}
+		if (pick_complete(offset, dev->ba_cnt, win_info->cnt)) {
+			if (do_4k_seq_loop)
+				continue;
+			break;
+		}
+
+		wait_ba_task(scan_time);
+		disable_all_ba_tasks(offset, win_info->cnt);
+		ba_cnt = dev->ba_cnt;
+		while (ba_cnt--) {
+			if (offset[ba_cnt] >= win_info->cnt)
+				continue;
+
+			ret = get_hist_results(dev->ba_info[ba_cnt].ba_tag,
+					       ba_result);
+			if (ret && ret != -EAGAIN) {
+				kfree(ba_result);
+				kfree(offset);
+				return ret;
+			}
+			/*
+			 * Scan interrupted (abort_flag): save current BA offset,
+			 * continue from here on next scan
+			 */
+			if (do_4k_seq_loop && ret == -EAGAIN) {
+				dev->seq_loop_ba_offset[ba_cnt] =
+					offset[ba_cnt];
+				pr_debug(
+					"seq_loop scan paused, ba[%d] offset: %d\n",
+					ba_cnt, offset[ba_cnt]);
+			}
+
+			if (direct_update) {
+				update_actc_direct(
+					rmem_info,
+					&win_info->segs[offset[ba_cnt]],
+					ba_result->buffer, buf_len, sts_size);
+			} else {
+				copy_actc_to_buf(
+					rmem_info,
+					&win_info->segs[offset[ba_cnt]], buf,
+					ba_result->buffer, buf_len, sts_size);
+			}
+		}
+		/* Check abort_flag after saving scanned data */
+		if (ret == -EAGAIN) {
+			pr_debug("hist scan paused\n");
+			kfree(ba_result);
+			kfree(offset);
+			return ret;
+		}
+		cond_resched();
+	}
+	kfree(ba_result);
+	kfree(offset);
+	return ret;
+}
+
+ u32 get_2m_scan_wins_per_ba(struct segs_info *win_info)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	u32 cnt, max_cnt = 1, ba_cnt = dev->ba_cnt, paral_cnt = 0;
+	int offset;
+	u64 ba_tag;
+	while (ba_cnt--) {
+		cnt = 0;
+		offset = -1;
+		ba_tag = dev->ba_info[ba_cnt].ba_tag;
+		while (pick_one_seg(ba_tag, win_info, &offset, false)) {
+			cnt++;
+		}
+		if (cnt)
+			paral_cnt++;
+		max_cnt = max_t(u32, cnt, max_cnt);
+	}
+	pr_debug(
+		"2m scan, paral_scan_cnt: %u, max_scan_wins_per_ba: %u, total_wins_num: %u\n",
+		paral_cnt, max_cnt, win_info->cnt);
+	return max_cnt;
+}
+
+ int do_hist_scan_sliding(struct segs_info *info, bool do_multi_gran,
+				u16 *buf, u32 buf_len,
+				enum ub_hist_sts_size sts_size,
+				bool direct_update)
+{
+	int ret;
+	struct segs_info win_info;
+	u32 scan_time;
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	bool do_4k_seq_loop = (sts_size == STS_SIZE_4K &&
+			       dev->scan_mode == HIST_4K_SCAN_SEQ_LOOP);
+
+	/*
+	 * Sequential loop scan mode: generate all windows directly, without hot window filtering
+	 * Multi-granularity scan mode: generate windows based on sts_size, may filter hot windows
+	 */
+	if (do_4k_seq_loop || sts_size == STS_SIZE_2M) {
+		ret = generate_aligned_scan_wins_info(&win_info, info,
+						      sts_size);
+	} else {
+		ret = generate_aligned_4k_scan_wins_info(&win_info, info, buf);
+	}
+	if (ret) {
+		pr_err("generate aligned segs info failed. ret: %d\n", ret);
+		return ret;
+	}
+
+	/* Secondly, calculate scan period of a single window */
+	if (sts_size == STS_SIZE_2M) {
+		dev->scan_wins_num_per_ba = get_2m_scan_wins_per_ba(&win_info);
+	}
+
+	/*
+	 * Sequential loop scan: fixed 64ms
+	 * Multi-granularity scan: dynamically calculated based on window count
+	 */
+	scan_time = (do_multi_gran || do_4k_seq_loop)
+			    ? hist_scan_duration_per_win
+			    : HIST_THREAD_PERIOD / dev->scan_wins_num_per_ba;
+	pr_debug("scan_time_per_win: %u ms\n", scan_time);
+
+	/* Finally, launch scan job for every windows */
+	ret = smap_hist_read_paral(&win_info, info, sts_size, buf, scan_time,
+				   buf_len, direct_update);
+	vfree(win_info.segs);
+	return ret;
+}
+
+ int hist_scan_sliding(struct segs_info *info, u32 scan_time_total,
+			     u32 pgsize)
+{
+	int ret = 0;
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	bool do_multi_gran = (pgsize == SIZE_4K &&
+			      dev->scan_mode == HIST_4K_SCAN_MULTI_GRAN);
+	bool do_4k_seq_loop =
+		(pgsize == SIZE_4K && dev->scan_mode == HIST_4K_SCAN_SEQ_LOOP);
+	u16 *tmpbuffer = NULL;
+
+	if (!addr_seg_is_valid(info)) {
+		pr_err("invalid address segment passed to sliding scan\n");
+		return -EINVAL;
+	}
+	if (!scan_time_total) {
+		pr_err("invalid scan period passed to sliding scan\n");
+		return -EINVAL;
+	}
+
+	if (do_multi_gran) {
+		/* 4K mode: allocate tmpbuffer for 2M scan results */
+		tmpbuffer = vzalloc(dev->pgcount * sizeof(u16));
+		if (!tmpbuffer)
+			return -ENOMEM;
+	}
+
+	/* 2M scan */
+	if (do_multi_gran) {
+		/* 4K mode: write to tmpbuffer for hot window calculation */
+		ret = do_hist_scan_sliding(info, do_multi_gran, tmpbuffer,
+					   dev->pgcount, STS_SIZE_2M, false);
+		if (ret) {
+			pr_debug("sliding scan on 2M pages failed, ret: %d\n",
+				 ret);
+			vfree(tmpbuffer);
+			return ret;
+		}
+	} else if (pgsize == SIZE_2M) {
+		/* Pure 2M mode: directly write to hdev */
+		ret = do_hist_scan_sliding(info, do_multi_gran, NULL, 0,
+					   STS_SIZE_2M, true);
+		if (ret)
+			pr_debug("sliding scan on 2M pages failed, ret: %d\n",
+				 ret);
+		return ret;
+	}
+
+	/*
+	 * 4K scan: choose method based on scan_mode
+	 * Multi-granularity sliding: first 2M coarse scan to filter hot regions, then 4K fine scan on hot windows
+	 * Sequential loop sliding: directly scan all 4K windows sequentially, fixed 64ms
+	 */
+	if (do_4k_seq_loop) {
+		ret = do_hist_scan_sliding(info, false, NULL, 0, STS_SIZE_4K,
+					   true);
+		if (ret) {
+			pr_debug("seq loop scan on 4K pages failed, ret: %d\n",
+				 ret);
+			return ret;
+		}
+	} else {
+		ret = do_hist_scan_sliding(info, true, tmpbuffer, dev->pgcount,
+					   STS_SIZE_4K, true);
+		vfree(tmpbuffer);
+		if (ret) {
+			pr_debug("sliding scan on 4K pages failed, ret: %d\n",
+				 ret);
+			return ret;
+		}
+	}
+	return ret;
+}
+
+void hist_update_pgsize(u32 pgsize)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	if (pgsize != dev->pgsize) {
+		dev->status.flag.new_pgsize = pgsize;
+	}
+}
+
+void hist_set_iomem(void)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	if (!dev->status.flag.should_update_iomem) {
+		dev->status.flag.should_update_iomem = true;
+	}
+}
+
+void hist_thread_resume(void)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	dev->thread_enable = true;
+	dev->abort_flag = false;
+}
+
+void hist_thread_pause(void)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	dev->thread_enable = false;
+	dev->abort_flag = true;
+}
+
+#define MAR_FLUX_UNIT_BYTES 64 /* each MAR counter unit stands for 64 bytes */
+#define MAR_FLUX_BYTES_PER_MB 1048576 /* 1 MB in bytes */
+
+/* Convert a MAR flux counter (64-byte units) to MB/s over perf_prd_ms. */
+  uint32_t flux_to_mb_per_sec(uint32_t flux, uint32_t perf_prd_ms)
+{
+	if (perf_prd_ms == 0)
+		return 0;
+	return (uint32_t)(((uint64_t)flux * MAR_FLUX_UNIT_BYTES * 1000) /
+			  ((uint64_t)MAR_FLUX_BYTES_PER_MB * perf_prd_ms));
+}
+
+int ub_watch_config(uint32_t duration_ms)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+
+	if (duration_ms == 0) {
+		pr_err("ub_watch_config: duration_ms must be greater than 0\n");
+		return -EINVAL;
+	}
+
+	/* Notify the in-flight measurement loop to exit at the next window checkpoint */
+	dev->measure_state = MEASURE_NOT_STARTED;
+	/* Synchronously wait for the running dwork func to exit (up to one
+	 * sample_interval_ms) so that no concurrent execution happens
+	 * before the new round of work is queued.
+	 */
+	cancel_delayed_work_sync(&dev->ub_watch_dwork);
+
+	dev->ub_watch_duration_ms = duration_ms;
+	dev->ub_watch_perf_prd_ms = MIN(ub_watch_perf_prd_ms, duration_ms);
+	dev->ub_watch_sample_interval_ms =
+		MIN(ub_watch_sample_interval_ms, duration_ms);
+	pr_debug(
+		"ub_watch_config, ub_watch_duration_ms: %ums, ub_watch_perf_prd_ms: %ums\n",
+		dev->ub_watch_duration_ms, dev->ub_watch_perf_prd_ms);
+
+	queue_delayed_work(dev->ub_watch_wq, &dev->ub_watch_dwork, 0);
+	return 0;
+}
+
+  unsigned int get_remote_ram_segs_locked(void)
+{
+	unsigned int nr_segs = 0;
+	struct ram_segment *seg, *tmp;
+
+	list_for_each_entry_safe(seg, tmp, &drivers_remote_ram_list, node) {
+		if (seg->numa_node < drivers_nr_local_numa)
+			continue;
+
+		nr_segs++;
+	}
+	return nr_segs;
+}
+
+ int addr_segs_init(struct smap_hist_dev *dev, u32 pgsize)
+{
+	unsigned int i = 0, nr_segs = 0;
+	u32 pgcount = 0;
+	struct ram_segment *seg, *tmp;
+	u32 shift = pgsize == SIZE_2M ? HIST_ADDR_SHIFT_2M : HIST_ADDR_SHIFT_4K;
+	struct addr_seg *tmp_addr_segs;
+
+	read_lock(&rem_ram_list_lock);
+	nr_segs = get_remote_ram_segs_locked();
+	read_unlock(&rem_ram_list_lock);
+	if (nr_segs == 0) {
+		dev->info.cnt = 0;
+		dev->info.segs = NULL;
+		dev->pgcount = 0;
+		dev->pgsize = pgsize;
+		pr_debug("no page passed to address segment init\n");
+		return 0;
+	}
+	tmp_addr_segs = vzalloc(nr_segs * sizeof(struct addr_seg));
+	if (!tmp_addr_segs) {
+		pr_err("unable to allocate memory for address segment info\n");
+		return -ENOMEM;
+	}
+
+	read_lock(&rem_ram_list_lock);
+	dev->info.cnt = get_remote_ram_segs_locked();
+	if (dev->info.cnt != nr_segs) {
+		read_unlock(&rem_ram_list_lock);
+		pr_err("remote segment info has been refreshed unexpectedly\n");
+		vfree(tmp_addr_segs);
+		return -EINVAL;
+	}
+	dev->info.segs = tmp_addr_segs;
+	list_for_each_entry_safe(seg, tmp, &drivers_remote_ram_list, node) {
+		if (seg->numa_node < drivers_nr_local_numa)
+			continue;
+		dev->info.segs[i].start = seg->start;
+		dev->info.segs[i].size = seg->end - seg->start + 1;
+		pgcount += (dev->info.segs[i].size >> shift);
+		i++;
+	}
+	read_unlock(&rem_ram_list_lock);
+	sort(dev->info.segs, dev->info.cnt, sizeof(struct addr_seg),
+	     addr_seg_cmp_start, NULL);
+	dev->pgcount = pgcount;
+	pr_debug("page count has been updated to %u\n", pgcount);
+	dev->pgsize = pgsize;
+	return 0;
+}
+
+ void addr_segs_deinit(struct smap_hist_dev *dev)
+{
+	if (dev->info.segs) {
+		pr_debug("deleting addr segs.\n");
+		vfree(dev->info.segs);
+		dev->info.segs = NULL;
+		dev->info.cnt = 0;
+	}
+}
+
+ int hist_pginfo_reinit(struct smap_hist_dev *dev, u32 pgsize_new)
+{
+	int ret;
+	addr_segs_deinit(dev);
+	ret = addr_segs_init(dev, pgsize_new);
+	if (ret) {
+		pr_err("unable to reinit address segments, ret: %d\n", ret);
+		return -ENOMEM;
+	}
+	return 0;
+}
+
+#define REMOTE_NUMA_OVERFLOW_SIZE 824633720832
+ int is_total_seg_overflow(struct segs_info *info)
+{
+	u32 i = 0;
+	u64 total_size = 0;
+	for (; i < info->cnt; ++i) {
+		total_size += info->segs[i].size;
+	}
+	if (total_size >= REMOTE_NUMA_OVERFLOW_SIZE) {
+		pr_debug("remote numa total memory size overflow with %llu\n",
+			 total_size);
+		return 1;
+	}
+	return 0;
+}
+
+ int scan_thread_run(void *data)
+{
+	int ret;
+	struct smap_hist_dev *dev = (struct smap_hist_dev *)data;
+	int flag = 0;
+	while (!kthread_should_stop()) {
+		if (flag == 1) {
+			if (is_total_seg_overflow(&dev->info) == 0) {
+				flag = 0;
+			}
+			msleep(1);
+			continue;
+		}
+		if (dev->status.status_all) {
+			u32 pgsize = dev->status.flag.new_pgsize ?: dev->pgsize;
+
+			pr_debug(
+				"histogram tracking page info has been reinited, status: %#x\n",
+				dev->status.status_all);
+
+			/* 由于周期性重建remote_ram_list，不需要重置seq_loop_ba_offset，会导致扫描不到靠后的地址段 */
+			ret = hist_pginfo_reinit(dev, pgsize);
+			if (ret) {
+				pr_err("failed to reinit histogram tracking page info, ret: %d\n",
+				       ret);
+				msleep(THREAD_SLEEP);
+				continue;
+			}
+		}
+		dev->status.status_all = 0;
+
+		if (!dev->thread_enable || !dev->pgcount) {
+			msleep(1);
+			continue;
+		}
+
+		if (is_total_seg_overflow(&dev->info) == 1) {
+			flag = 1;
+			continue;
+		}
+
+		ret = hist_scan_sliding(&dev->info, dev->period, dev->pgsize);
+		if (ret) {
+			pr_debug("failed to do scan sliding, ret: %d\n", ret);
+			msleep(THREAD_SLEEP);
+			continue;
+		}
+	}
+	return 0;
+}
+
+ int scan_thread_init(struct smap_hist_dev *dev)
+{
+	dev->kthread = kthread_run(scan_thread_run, dev, "hist-scan-thread");
+	if (!dev->kthread) {
+		pr_err("failed to create scan threads\n");
+		return -ECHILD;
+	}
+
+	return 0;
+}
+
+ void scan_thread_deinit(struct smap_hist_dev *dev)
+{
+	if (dev->kthread) {
+		hist_thread_pause();
+		pr_info("scan thread has been deleted\n");
+		kthread_stop(dev->kthread);
+		dev->kthread = NULL;
+	}
+}
+
+ void ub_watch_dwork_func(struct work_struct *work)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	int i;
+	int window_cnt =
+		dev->ub_watch_duration_ms / dev->ub_watch_sample_interval_ms;
+	int valid_cnt = 0;
+	uint32_t flux_wr[MAR_CFG_REG_CNT] = { 0 };
+	uint32_t flux_rd[MAR_CFG_REG_CNT] = { 0 };
+
+	memset(dev->ub_watch_acc_flux_rd, 0, sizeof(dev->ub_watch_acc_flux_rd));
+	memset(dev->ub_watch_acc_flux_wr, 0, sizeof(dev->ub_watch_acc_flux_wr));
+	memset(dev->ub_watch_avg_flux_rd, 0, sizeof(dev->ub_watch_avg_flux_rd));
+	memset(dev->ub_watch_avg_flux_wr, 0, sizeof(dev->ub_watch_avg_flux_wr));
+	dev->measure_state = MEASURE_IN_PROGRESS;
+
+	for (i = 0; i < window_cnt; i++) {
+		ub_hist_mar_perf_en(dev->ub_watch_perf_prd_ms);
+		msleep(dev->ub_watch_sample_interval_ms);
+		if (dev->measure_state != MEASURE_IN_PROGRESS) {
+			pr_info("ub_watch: measurement interrupted at window %d/%d, stopping\n",
+				i, window_cnt);
+			return;
+		}
+		if (!ub_hist_mar_perf_check()) {
+			pr_warn("ub_watch: perf register reset during window %d/%d, skipping\n",
+				i, window_cnt);
+			continue;
+		}
+		ub_hist_get_access_count(flux_wr, flux_rd);
+		for (int j = 0; j < MAR_CFG_REG_CNT; j++) {
+			uint32_t rd_mb = flux_to_mb_per_sec(
+				flux_rd[j], dev->ub_watch_perf_prd_ms);
+			uint32_t wr_mb = flux_to_mb_per_sec(
+				flux_wr[j], dev->ub_watch_perf_prd_ms);
+			pr_debug(
+				"ub_watch: window %d/%d, index %d, prd_ms %u, flux_rd %u MB/s, flux_wr %u MB/s\n",
+				i, window_cnt, j, dev->ub_watch_perf_prd_ms,
+				rd_mb, wr_mb);
+			dev->ub_watch_acc_flux_rd[j] += flux_rd[j];
+			dev->ub_watch_acc_flux_wr[j] += flux_wr[j];
+		}
+		valid_cnt++;
+		for (int j = 0; j < MAR_CFG_REG_CNT; j++) {
+			dev->ub_watch_avg_flux_rd[j] =
+				(uint32_t)(dev->ub_watch_acc_flux_rd[j] /
+					   valid_cnt);
+			dev->ub_watch_avg_flux_wr[j] =
+				(uint32_t)(dev->ub_watch_acc_flux_wr[j] /
+					   valid_cnt);
+		}
+	}
+
+	if (valid_cnt == 0) {
+		pr_warn("ub_watch: all %d windows invalidated by perf reset\n",
+			window_cnt);
+		memset(dev->ub_watch_avg_flux_rd, 0,
+		       sizeof(dev->ub_watch_avg_flux_rd));
+		memset(dev->ub_watch_avg_flux_wr, 0,
+		       sizeof(dev->ub_watch_avg_flux_wr));
+	}
+
+	dev->measure_state = MEASURE_COMPLETED;
+}
+
+int ub_watch(struct ub_flux_mb *result)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	if (!result)
+		return -EINVAL;
+
+	if (dev->measure_state == MEASURE_NOT_STARTED)
+		return -ENODATA;
+
+	for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+		result->read[i] =
+			flux_to_mb_per_sec(dev->ub_watch_avg_flux_rd[i],
+					   dev->ub_watch_perf_prd_ms);
+		result->write[i] =
+			flux_to_mb_per_sec(dev->ub_watch_avg_flux_wr[i],
+					   dev->ub_watch_perf_prd_ms);
+	}
+	return 0;
+}
+
+ int ub_watch_work_init(struct smap_hist_dev *dev)
+{
+	dev->ub_watch_wq = alloc_workqueue("ub_watch", WQ_UNBOUND, 1);
+	if (!dev->ub_watch_wq) {
+		pr_err("failed to create ub watch workqueue\n");
+		return -ENOMEM;
+	}
+
+	INIT_DELAYED_WORK(&dev->ub_watch_dwork, ub_watch_dwork_func);
+	dev->measure_state = MEASURE_NOT_STARTED;
+
+	return 0;
+}
+
+ void ub_watch_work_deinit(struct smap_hist_dev *dev)
+{
+	if (dev->ub_watch_wq) {
+		cancel_delayed_work_sync(&dev->ub_watch_dwork);
+		destroy_workqueue(dev->ub_watch_wq);
+		dev->ub_watch_wq = NULL;
+	}
+}
+
+struct smap_hist_dev *get_hist_dev(void)
+{
+	return &g_smap_hist_dev;
+}
+
+ int query_hist_ba_info(void)
+{
+	int i, ret;
+	u64 *ba_tags;
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	dev->ba_cnt = ub_hist_query_ba_count();
+	if (!dev->ba_cnt) {
+		pr_err("No smap-histogram dev found\n");
+		return -EINVAL;
+	}
+	pr_info("%d smap-histogram devices found\n", dev->ba_cnt);
+	ba_tags = kmalloc(sizeof(u64) * dev->ba_cnt, GFP_KERNEL);
+	if (!ba_tags) {
+		pr_err("malloc memory failed for ba_tags\n");
+		return -ENOMEM;
+	}
+	ret = ub_hist_query_ba_tags(ba_tags, dev->ba_cnt);
+	if (ret) {
+		kfree(ba_tags);
+		return ret;
+	}
+
+	dev->ba_info = kmalloc(sizeof(struct ub_hist_ba_info) * dev->ba_cnt,
+			       GFP_KERNEL);
+	if (!dev->ba_info) {
+		kfree(ba_tags);
+		pr_err("malloc memory failed for ba_info\n");
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < dev->ba_cnt; i++) {
+		ub_hist_query_ba_info(ba_tags[i], &dev->ba_info[i]);
+	}
+	kfree(ba_tags);
+	return 0;
+}
+
+void hist_deinit(void)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	ub_watch_work_deinit(dev);
+	scan_thread_deinit(dev);
+	addr_segs_deinit(dev);
+	kfree(dev->ba_info);
+	ub_hist_exit();
+}
+
+int hist_init(u32 pgsize)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	int ret;
+	u32 i;
+
+	ret = ub_hist_init();
+	if (ret)
+		return ret;
+	dev->hw_type = ub_hist_get_hw_type();
+	pr_info("Smap hist dev init start, dev->hw_type: %u\n", dev->hw_type);
+	dev->freq_register_cnt = (dev->hw_type == UB_HIST_SMAP_TYPE_N6)
+					 ? BA_STS_VALUE_N6_COUNT
+					 : BA_STS_VALUE_N7_COUNT;
+
+	ret = query_hist_ba_info();
+	if (ret)
+		goto exit_hist;
+
+	dev->period = HIST_THREAD_PERIOD;
+
+	/* Initialize scan mode using kernel parameter, default is sequential loop sliding */
+	dev->scan_mode = hist_4k_scan_mode_param;
+
+	/* Initialize sequential loop scan offset for each BA to -1 (start from beginning) */
+	for (i = 0; i < HIST_STS_DEV_CNT; ++i) {
+		dev->seq_loop_ba_offset[i] = -1;
+	}
+
+	ret = addr_segs_init(dev, pgsize);
+	if (ret)
+		goto free_hist;
+
+	ret = scan_thread_init(dev);
+	if (ret)
+		goto free_segs;
+
+	ret = ub_watch_work_init(dev);
+	if (ret)
+		goto deinit_thread;
+
+	pr_info("histogram tracking device init successfully\n");
+	return 0;
+
+deinit_thread:
+	scan_thread_deinit(dev);
+free_segs:
+	addr_segs_deinit(dev);
+free_hist:
+	kfree(dev->ba_info);
+exit_hist:
+	ub_hist_exit();
+	return ret;
+}

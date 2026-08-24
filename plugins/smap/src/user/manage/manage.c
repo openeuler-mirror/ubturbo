@@ -18,7 +18,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <limits.h>
 #include <sched.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -1409,7 +1408,6 @@ void CheckAndRemoveInvalidProcess(void)
         pid_t pid = attr->pid;
         SMAP_LOGGER_INFO("check if pid %d is valid.", pid);
         if (!PidIsValid(pid)) {
-            PidType pidType = attr->type;
             // send ioctl to remove pid
             struct AccessRemovePidPayload payload = { .pid = pid };
             int ret = AccessIoctlRemovePid(1, &payload);
