@@ -34,7 +34,7 @@ enum hist_status {
 #define AB_ACTC_ELEM_SIZE 16
 #define WORKQ_NAME_SIZE 32
 #define WORKQ_NAME_MAX_LEN (WORKQ_NAME_SIZE - 1)
-#define WQ_MAX_THREADS 0
+#define WQ_MAX_THREADS 8
 
 extern struct list_head access_dev;
 extern u8 access_page_size;
@@ -58,6 +58,18 @@ static inline struct access_tracking_dev *get_access_tracking_dev(int node_id)
 static inline struct access_tracking_dev *get_first_access_dev(void)
 {
 	return list_first_entry(&access_dev, struct access_tracking_dev, list);
+}
+
+/*
+ * 扫描模块是否处于 enable 状态。add_pid 在非 enable（disable/migrate 期间）时
+ * 不应立即提交扫描任务，pid 留在 ap_data.list 中等下次 enable 由 submit_scan_works 拉起。
+ * access_dev 为空（如单测环境）按 disable 处理，避免对空表 list_first_entry 越界读 enable_on。
+ */
+static inline bool access_scan_enabled(void)
+{
+	if (list_empty(&access_dev))
+		return false;
+	return get_first_access_dev()->enable_on;
 }
 
 static inline int get_page_size(struct access_tracking_dev *adev)

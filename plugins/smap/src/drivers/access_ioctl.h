@@ -7,8 +7,8 @@
 #ifndef _SRC_ACCESS_IOCTL_H
 #define _SRC_ACCESS_IOCTL_H
 
-#include <linux/types.h>
 #include <linux/proc_fs.h>
+#include <linux/types.h>
 
 #include "check.h"
 #include "drv_common.h"
@@ -23,15 +23,14 @@
 #define SMAP_PROC_ROOT "smap"
 
 struct actc_data {
-	actc_t freq;       /* 访问频次 */
-	u8 flags;  /* 位域:bit0=白名单页, bit1=已选中, bits2-7=优先级 */
+	actc_t freq; /* 访问频次 */
+	u8 flags; /* 位域:bit0=白名单页, bit1=已选中, bits2-7=优先级 */
 } __attribute__((packed));
 
-#define ACTC_WHITE_LIST_BIT  BIT(0)
-#define ACTC_SELECT_BIT      BIT(1)
-#define ACTC_PRIOR_BITS      6
-#define ACTC_PRIOR_GET(f)    (((f) >> 2) & 0x3F)
-#define ACTC_PRIOR_SET(p)    (((p) & 0x3F) << 2)
+#define ACTC_WHITE_LIST_BIT BIT(0)
+#define ACTC_SELECT_BIT BIT(1)
+#define ACTC_PRIOR_GET(f) (((f) >> 2) & 0x3F)
+#define ACTC_PRIOR_SET(p) (((p)&0x3F) << 2)
 
 typedef enum {
 	NO_SCAN = -1,
@@ -54,7 +53,7 @@ struct access_add_pid_payload {
 	u32 duration;
 	scan_type type;
 	u32 ntimes;
-	u32 pid_type;
+	smap_pid_type pid_type;
 };
 
 struct access_add_pid_msg {
@@ -74,7 +73,7 @@ struct access_remove_pid_msg {
 struct tracking_info_payload {
 	pid_t pid;
 	u32 length;
-	actc_t *data;
+	u16 *data; /* DFX 统计扫描频次，保留原始 u16 真值，不压缩 */
 };
 
 struct access_pid_freq_msg {
@@ -109,7 +108,8 @@ extern struct proc_dir_entry *smap_procfs_root;
 #define SMAP_ACCESS_CREATE_PROCFS _IOW(SMAP_ACCESS_MAGIC, 6, struct user_info)
 #define SMAP_ACCESS_GET_NR_LOCAL_NUMA _IOR(SMAP_ACCESS_MAGIC, 7, int)
 #define SMAP_ACCESS_REFRESH_REMOTE_RAM _IO(SMAP_ACCESS_MAGIC, 8)
-#define SMAP_ACCESS_SET_SCAN_CPU _IOW(SMAP_ACCESS_MAGIC, 9, struct smap_scan_cpu_range)
+#define SMAP_ACCESS_SET_SCAN_CPU \
+	_IOW(SMAP_ACCESS_MAGIC, 9, struct smap_scan_cpu_range)
 
 void access_ioctl_exit(void);
 int access_ioctl_init(void);

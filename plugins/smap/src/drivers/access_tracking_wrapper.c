@@ -183,3 +183,5 @@ pte_t smap_huge_ptep_get(pte_t *ptep)
 	}
 	return orig_pte;
 }
+
+EXPORT_SYMBOL(get_pfnblock_flags_mask);

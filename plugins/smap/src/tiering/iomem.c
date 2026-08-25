@@ -34,8 +34,6 @@
 #define MAX_MEMID_RETRY 2
 #define HEX 16
 
-LIST_HEAD(remote_ram_list);
-
 struct obmm_dev_info {
 	struct list_head list;
 	struct mutex lock;
@@ -45,126 +43,7 @@ struct obmm_dev_info obmm_dev = {
 	.lock = __MUTEX_INITIALIZER(obmm_dev.lock),
 };
 
-static void free_remote_ram(struct list_head *head)
-{
-	struct ram_segment *seg, *tmp;
-	list_for_each_entry_safe(seg, tmp, head, node) {
-		list_del(&seg->node);
-		kfree(seg);
-	}
-}
-
-static void copy_remote_ram(struct list_head *dst, struct list_head *src)
-{
-	struct ram_segment *seg, *tmp;
-	list_for_each_entry_safe(seg, tmp, src, node) {
-		list_move_tail(&seg->node, dst);
-	}
-}
-
-static void merge_ram_segments(struct list_head *head)
-{
-	struct ram_segment *cur, *next, *tmp;
-
-	if (list_empty(head))
-		return;
-
-	cur = list_first_entry(head, struct ram_segment, node);
-	while (cur) {
-		next = list_next_entry(cur, node);
-		if (list_entry_is_head(next, head, node))
-			break;
-		if (cur->numa_node == next->numa_node &&
-		    cur->end + 1 == next->start) {
-			cur->end = next->end;
-			list_del(&next->node);
-			kfree(next);
-			tmp = cur;
-		} else {
-			tmp = next;
-		}
-		cur = tmp;
-	}
-}
-
-static int insert_remote_ram(u64 pa_start, u64 pa_end, struct list_head *head)
-{
-	struct ram_segment *seg, *tmp;
-	u64 start, end;
-	unsigned long pfn;
-	int nid;
-
-	start = pa_start;
-	while (start < pa_end) {
-		pfn = PHYS_PFN(start);
-		if (!pfn_valid(pfn) || !pfn_to_online_page(pfn)) {
-			start += MIN_MEMORY_BLOCK_SIZE;
-			continue;
-		}
-		nid = page_to_nid(pfn_to_online_page(pfn));
-		if (nid == NUMA_NO_NODE) {
-			return -EINVAL;
-		}
-		end = start + MIN_MEMORY_BLOCK_SIZE - 1;
-		if (nid >= SMAP_MAX_NUMNODES) {
-			start = end + 1;
-			continue;
-		}
-		seg = kmalloc(sizeof(*seg), GFP_KERNEL);
-		if (!seg) {
-			return -ENOMEM;
-		}
-
-		end = MIN(pa_end, end);
-		seg->start = start;
-		seg->end = end;
-		seg->numa_node = nid;
-
-		if (list_empty(head)) {
-			list_add_tail(&seg->node, head);
-		} else {
-			tmp = list_last_entry(head, struct ram_segment, node);
-			if (seg->start == tmp->end + 1 &&
-			    nid == tmp->numa_node) {
-				tmp->end = seg->end;
-				kfree(seg);
-			} else {
-				list_add_tail(&seg->node, head);
-			}
-		}
-
-		start = end + 1;
-	}
-	return 0;
-}
-
-static int update_resource(struct resource *r, void *arg)
-{
-	int ret;
-	struct list_head *head = (struct list_head *)arg;
-
-	if (!r || !arg)
-		return -EINVAL;
-
-	if (r->flags & IORESOURCE_SYSRAM_DRIVER_MANAGED) {
-		ret = insert_remote_ram(r->start, r->end, head);
-		if (ret) {
-			free_remote_ram(head);
-			return ret;
-		}
-	}
-	return 0;
-}
-
-static int walk_system_ram_remote_range(struct list_head *head)
-{
-	if (!head)
-		return -EINVAL;
-	return walk_iomem_res_desc(IORES_DESC_NONE, IORESOURCE_SYSTEM_RAM, 0,
-				   -1, head, update_resource);
-}
-
-static void free_obmm_dev(void)
+void free_obmm_dev(void)
 {
 	struct memid_range *mr, *tmp;
 
@@ -432,6 +311,7 @@ int iterate_obmm_dev(void)
 	ret = iterate_obmm_dev_dir();
 	if (ret) {
 		pr_err("failed to iterate obmm_dev directory, ret: %d\n", ret);
+		free_obmm_dev();
 		goto out;
 	}
 
@@ -442,54 +322,6 @@ out:
 	mutex_unlock(&obmm_dev.lock);
 
 	return ret;
-}
-
-void release_remote_ram(void)
-{
-	free_remote_ram(&remote_ram_list);
-	free_obmm_dev();
-}
-
-int refresh_remote_ram(void)
-{
-	int ret;
-	LIST_HEAD(tmp_head);
-
-	ret = walk_system_ram_remote_range(&tmp_head);
-	if (ret) {
-		return ret;
-	}
-	merge_ram_segments(&tmp_head);
-	free_remote_ram(&remote_ram_list);
-	copy_remote_ram(&remote_ram_list, &tmp_head);
-	free_remote_ram(&tmp_head);
-	ret = iterate_obmm_dev();
-	if (ret) {
-		pr_err("failed to interate obmm_dev, ret: %d\n", ret);
-	}
-	return ret;
-}
-
-int calc_acidx_paddr_iomem(u64 index, int nid, u64 *paddr)
-{
-	struct ram_segment *seg;
-	u64 range;
-	int shift = is_smap_pg_huge() ? __builtin_ctz(g_pagesize_huge)
-				      : PAGE_SHIFT;
-	u64 tmp_index = index << shift;
-
-	list_for_each_entry(seg, &remote_ram_list, node) {
-		if (seg->numa_node != nid)
-			continue;
-		range = seg->end - seg->start + 1;
-		if (tmp_index >= range) {
-			tmp_index -= range;
-			continue;
-		}
-		*paddr = seg->start + tmp_index;
-		return 0;
-	}
-	return -ERANGE;
 }
 
 int find_range_by_memid(u64 memid, u64 *start, u64 *end)

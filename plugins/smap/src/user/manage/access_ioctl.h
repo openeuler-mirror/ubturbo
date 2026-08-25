@@ -28,7 +28,7 @@ struct AccessAddPidPayload {
     uint32_t duration;
     ScanType type;
     uint32_t nTimes;
-    uint32_t pidType; /* per-pid 身份：VM_TYPE/PROCESS_TYPE，与全局 pageType 解耦，镜像内核 access_pid.pid_type */
+    PidType pidType; /* per-pid 身份：VM_TYPE/PROCESS_TYPE，与全局 pageType 解耦，镜像内核 access_pid.pid_type */
 };
 
 struct AccessAddPidMsg {
@@ -54,7 +54,7 @@ struct AccessPidFreq {
 struct TrakingInfoPayload {
     pid_t pid;
     uint32_t length;
-    actc_t *data;
+    uint16_t *data; /* DFX 统计扫描频次，保留原始 u16 真值，不压缩 */
 };
 
 struct UserInfo {

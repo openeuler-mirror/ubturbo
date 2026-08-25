@@ -21,15 +21,13 @@
 #include "access_tracking.h"
 #include "access_mmu.h"
 #include "access_pid.h"
-#include "access_acpi_mem.h"
-#include "smap_page_flags.h"
 
 #undef pr_fmt
 #define pr_fmt(fmt) "access_pid: " fmt
 
 #define NODE_PATH "/dev/smap_node%d"
 
-#define VM_MEMSLOT_PRIOR_THRE (3 * (1 << GB_TO_4K_SHIFT))
+#define VM_MEMSLOT_PRIOR_THRE (3 * (1 << GB_TO_NORMAL_PAGE_SHIFT))
 #define SEC_TO_MS 1000
 #define SCAN_TIMES_NEEDED_BY_NEW_PID 2
 #define DEFAULT_PERIOD_MS 50
@@ -134,18 +132,18 @@ static int scan_kvm_gfn(struct kvm *kvm, struct vm_mapping_info *info)
 	}
 
 	kvm_for_each_memslot(memslot, bkt, slots) {
-		if (memslot->npages < (1 << HUGE_TO_4K_SHIFT))
+		if (memslot->npages < (1 << HUGE_TO_NORMAL_PAGE_SHIFT))
 			continue;
-		if (memslot->base_gfn < (1 << GB_TO_4K_SHIFT))
+		if (memslot->base_gfn < (1 << GB_TO_NORMAL_PAGE_SHIFT))
 			continue;
-		if (memslot->base_gfn == (1 << GB_TO_4K_SHIFT) &&
+		if (memslot->base_gfn == (1 << GB_TO_NORMAL_PAGE_SHIFT) &&
 		    memslot->npages > gfn_thre) {
 			tmp_slot = memslot;
 			add_kvm_seg(info, memslot, gfn_thre, memslot->npages);
 		} else {
 			add_kvm_seg(info, memslot, 0, memslot->npages);
 		}
-		info->vm_size += (memslot->npages >> HUGE_TO_4K_SHIFT);
+		info->vm_size += (memslot->npages >> HUGE_TO_NORMAL_PAGE_SHIFT);
 	}
 	if (tmp_slot) {
 		u64 gfn = MIN(gfn_thre, tmp_slot->npages);
@@ -238,28 +236,6 @@ static int mem_freq_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static u8 get_page_prior_flag(int nid, size_t acidx)
-{
-	u64 paddr = 0;
-	unsigned long pfn;
-	struct page *page;
-	if (nid < nr_local_numa) {
-		if (calc_acidx_paddr_acpi(nid, acidx, &paddr, PAGE_SIZE))
-			return 0;
-	}
-	else {
-		if (calc_acidx_paddr_iomem(nid, acidx, &paddr, PAGE_SIZE))
-			return 0;
-
-	}
-	pfn = PHYS_PFN(paddr);
-	if (pfn_valid(pfn)) {
-		page = pfn_to_page(pfn);
-		return get_smap_acc_cnt(page);
-	}
-	return 0;
-}
-
 /**
  * fill_actc_data_by_bitmap - 根据bitmap生成actc_data数组
  * @ap: access_pid结构体指针
@@ -312,15 +288,17 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 		/* 填充prior - 从priors获取 */
 		if (ap->info.vm_size && ap->info.priors) {
 			if ((mapping_offset + len_cnt) < ap->info.vm_size) {
-				flags |= ACTC_PRIOR_SET(ap->info.priors[mapping_offset + len_cnt]);
+				flags |= ACTC_PRIOR_SET(
+					ap->info.priors[mapping_offset +
+							len_cnt]);
 			}
 		} else {
-			flags |= ACTC_PRIOR_SET(get_page_prior_flag(nid, acidx));
+			flags |= ACTC_PRIOR_SET(0);
 		}
 
 		/* 填充is_white_list */
 		if (ap->white_list_bm[nid] &&
-			test_bit(acidx, ap->white_list_bm[nid])) {
+		    test_bit(acidx, ap->white_list_bm[nid])) {
 			flags |= ACTC_WHITE_LIST_BIT;
 		}
 
@@ -556,8 +534,10 @@ void print_access_pid_list(void)
 	pr_debug("access pid list:\n");
 	down_read(&ap_data.lock);
 	list_for_each_entry(ap, &ap_data.list, node) {
-		pr_debug("pid %d, pid_type %d, numa_nodes %x, scan_time %d, type %d\n",
-			 ap->pid, ap->pid_type, ap->numa_nodes, ap->scan_time, ap->type);
+		pr_debug(
+			"pid %d, pid_type %d, numa_nodes %x, scan_time %d, type %d\n",
+			ap->pid, ap->pid_type, ap->numa_nodes, ap->scan_time,
+			ap->type);
 	}
 	up_read(&ap_data.lock);
 	pr_debug("---------------------\n");
@@ -603,7 +583,7 @@ static int init_ham_pid_memory(struct ham_tracking_info *info,
 		pr_err("unable to allocate memory for HAM access pid physical address array\n");
 		return -ENOMEM;
 	}
-	info->freq[level] = vzalloc(info->len[level] * sizeof(actc_t));
+	info->freq[level] = vzalloc(info->len[level] * sizeof(u16));
 	if (!info->freq[level]) {
 		vfree(info->paddr[level]);
 		pr_err("unable to allocate memory for HAM access pid frequency array\n");
@@ -964,55 +944,104 @@ int access_add_statistic_pid(int len, struct access_add_pid_payload *payload,
 	return ret;
 }
 
+static void move_to_ap_data_list(struct list_head *tmp_head)
+{
+	struct access_pid *ap, *tmp, *tmp2;
+	LIST_HEAD(dup_head);
+
+	down_write(&ap_data.lock);
+	/* check if pids to be added already exists in ap_data.list */
+	list_for_each_entry_safe(ap, tmp, tmp_head, node) {
+		list_for_each_entry(tmp2, &ap_data.list, node) {
+			if (ap->pid == tmp2->pid) {
+				pr_info("set pid: %d NUMA mask from %#x to %#x\n",
+					ap->pid, tmp2->numa_nodes,
+					ap->numa_nodes);
+				tmp2->numa_nodes = ap->numa_nodes;
+				tmp2->scan_time = ap->scan_time;
+				tmp2->ntimes = ap->ntimes;
+				tmp2->type = ap->type;
+				tmp2->pid_type = ap->pid_type;
+				list_move_tail(&ap->node, &dup_head);
+				break;
+			}
+		}
+	}
+	/* move all new pids to ap_data.list */
+	list_for_each_entry_safe(ap, tmp, tmp_head, node) {
+		ap->cur_times = 0;
+		if (access_scan_enabled()) {
+			submit_one_work(ap);
+		} else {
+			/* Disable/migrate 窗口内新加的 pid 不提交扫描，留在
+			 * ap_data.list 等下次 enable 由 submit_scan_works 拉起，
+			 * 避免扫描与 migrate 的 paddr_bm 重分配竞态。
+			 * 同时 complete(work_done) 使 completion_done() 返回
+			 * true，避免 disable 误判 -EBUSY。
+			 */
+			complete(&ap->work_done);
+		}
+		list_move_tail(&ap->node, &ap_data.list);
+	}
+	up_write(&ap_data.lock);
+	list_for_each_entry_safe(ap, tmp, &dup_head, node) {
+		list_del(&ap->node);
+		destroy_access_pid(ap);
+	}
+}
+
 int access_add_pid(int len, struct access_add_pid_payload *payload)
 {
 	int i, ret;
-	struct access_pid *ap, *existing;
+	struct access_pid *ap, *tmp, *existing;
+	LIST_HEAD(tmp_head);
+
+	/* Pre-check: mark completely duplicate pids */
+	down_read(&ap_data.lock);
+	for (i = 0; i < len; i++) {
+		if (payload[i].pid < 0)
+			continue;
+		list_for_each_entry(existing, &ap_data.list, node) {
+			if (payload[i].pid == existing->pid &&
+			    payload[i].numa_nodes == existing->numa_nodes &&
+			    payload[i].scan_time == existing->scan_time &&
+			    payload[i].type == existing->type &&
+			    payload[i].ntimes == existing->ntimes) {
+				pr_info("pid %d is completely duplicate, skip processing\n",
+					payload[i].pid);
+				payload[i].pid = DUPLICATE_PID;
+				break;
+			}
+		}
+	}
+	up_read(&ap_data.lock);
 
 	for (i = 0; i < len; i++) {
 		if (payload[i].pid < 0)
 			continue;
-
-		down_write(&ap_data.lock);
-		list_for_each_entry(existing, &ap_data.list, node) {
-			if (payload[i].pid == existing->pid) {
-				if (payload[i].numa_nodes == existing->numa_nodes &&
-				    payload[i].scan_time == existing->scan_time &&
-				    payload[i].type == existing->type &&
-				    payload[i].ntimes == existing->ntimes) {
-					pr_info("pid %d is completely duplicate, skip processing\n",
-						payload[i].pid);
-				} else {
-					pr_info("set pid: %d NUMA mask from %#x to %#x\n",
-						existing->pid, existing->numa_nodes,
-						payload[i].numa_nodes);
-					existing->numa_nodes = payload[i].numa_nodes;
-					existing->scan_time = payload[i].scan_time;
-					existing->ntimes = payload[i].ntimes;
-					existing->type = payload[i].type;
-					existing->pid_type = payload[i].pid_type;
-				}
-				up_write(&ap_data.lock);
-				goto next_pid;
+		/* check if payload has duplicate pid */
+		list_for_each_entry(tmp, &tmp_head, node) {
+			if (unlikely(payload[i].pid == tmp->pid)) {
+				ret = -EINVAL;
+				goto err;
 			}
 		}
-
+		/* allocate memory for pid */
 		ret = init_access_pid(&payload[i], &ap);
-		if (ret) {
-			up_write(&ap_data.lock);
-			return ret;
-		}
-		ap->cur_times = 0;
-		pid_pte_mkold(ap);
-		submit_one_work(ap);
-		list_add_tail(&ap->node, &ap_data.list);
-		up_write(&ap_data.lock);
+		if (ret)
+			goto err;
+		list_add_tail(&ap->node, &tmp_head);
+	}
+	move_to_ap_data_list(&tmp_head);
+	return 0;
 
-next_pid:
-		continue;
+err:
+	list_for_each_entry_safe(ap, tmp, &tmp_head, node) {
+		list_del(&ap->node);
+		destroy_access_pid(ap);
 	}
 
-	return 0;
+	return ret;
 }
 
 void access_remove_ham_pid(int len, struct access_remove_pid_payload *payload)
@@ -1248,27 +1277,6 @@ int access_walk_pagemap_prepare(struct access_pid *ap)
 		free_ap_bm_white_list(ap);
 		return ret;
 	}
-	return 0;
-}
-
-int access_walk_pagemap(struct access_pid *ap)
-{
-	int ret;
-	struct pagemapread pm = { 0 };
-	if (!ap) {
-		return -EINVAL;
-	}
-	if (ap->type != NORMAL_SCAN) {
-		return 0;
-	}
-	ret = access_walk_pagemap_prepare(ap);
-	if (ret)
-		return ret;
-	pm.ap = ap;
-	pm.mig_info.pid = ap->pid;
-	pm.mig_type = NORMAL_MIGRATE;
-	walk_pid_pagemap(&pm);
-
 	return 0;
 }
 

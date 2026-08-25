@@ -10,10 +10,9 @@
 #include <linux/types.h>
 
 #include "drv_common.h"
+#include "ub_hist.h"
 
 #define SMAP_IOCTL_TRACKING_CMD _IOW('N', 0, unsigned long)
-
-#define SMAP_IOCTL_MODE_SET_CMD _IOW('N', 1, unsigned long)
 
 #define SMAP_IOCTL_MAP_MODE_CMD _IOW('N', 2, unsigned long)
 
@@ -21,7 +20,13 @@
 
 #define SMAP_IOCTL_PAGE_SIZE_SET_CMD _IOW('N', 4, unsigned long)
 
-#define SMAP_IOCTL_REFRESH_REMOTE_RAM_CMD _IO('N', 5)
+#define SMAP_IOCTL_UB_WATCH_CMD _IOR('N', 5, struct ub_flux_mb_statistic)
+
+struct ub_watch_config {
+	uint32_t duration_ms;
+};
+
+#define SMAP_IOCTL_UB_WATCH_CONFIG_CMD _IOW('N', 6, struct ub_watch_config)
 
 enum node_tracking_cmd {
 	TRACKING_DISABLED,

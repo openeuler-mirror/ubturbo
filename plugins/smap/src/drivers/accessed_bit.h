@@ -41,7 +41,7 @@ struct ham_tracking_info {
 	struct proc_dir_entry *pde;
 	u64 len[NR_LEVEL];
 	u64 *paddr[NR_LEVEL];
-	actc_t *freq[NR_LEVEL];
+	u16 *freq[NR_LEVEL];
 	struct list_head node;
 };
 
@@ -78,10 +78,9 @@ struct pte_walk {
 
 struct freq_info {
 	u64 hpa;
-	actc_t freq;
+	u16 freq; /* HAM 频次为内核态迁移决策真值, 保留 u16 不压缩, 与 ham_migration.h 对齐 */
 };
 
-int pid_pte_mkold(struct access_pid *ap);
 int smap_create_tracking_info_file(struct ham_tracking_info *info);
 int get_ham_pages_freqs(pid_t pid, struct freq_info **freq_info_array,
 			uint64_t *freq_info_num);

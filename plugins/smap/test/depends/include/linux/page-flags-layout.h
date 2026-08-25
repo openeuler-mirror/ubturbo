@@ -11,15 +11,13 @@
 #define ZONES_SHIFT 2
 #define ZONES_WIDTH		ZONES_SHIFT
 
+#if SECTIONS_WIDTH + ZONES_WIDTH + NODES_SHIFT <= BITS_PER_LONG - NR_PAGEFLAGS
 #define NODES_WIDTH		NODES_SHIFT
-
-/* SMAP uses LAST_CPUPID field for accumulated access count */
-#define NR_PAGEFLAGS		56
-#define ZONES_PGOFF		(BITS_PER_LONG - ZONES_WIDTH)
-#define LAST_CPUPID_SHIFT	8
-#define LAST_CPUPID_WIDTH	LAST_CPUPID_SHIFT
-#define LAST_CPUPID_PGOFF	(ZONES_PGOFF - LAST_CPUPID_WIDTH)
-#define LAST_CPUPID_PGSHIFT	(LAST_CPUPID_PGOFF)
-#define LAST_CPUPID_MASK	((1UL << LAST_CPUPID_SHIFT) - 1)
+#else
+#ifdef CONFIG_SPARSEMEM_VMEMMAP
+#error "[Depends] Vmemmap: No space for nodes field in page flags"
+#endif
+#define NODES_WIDTH		0
+#endif
 
 #endif

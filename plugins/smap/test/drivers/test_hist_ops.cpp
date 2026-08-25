@@ -14,6 +14,9 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/rwsem.h>
+extern "C" {
+#include <linux/delay.h>
+}
 
 #include "access_iomem.h"
 #include "ub_hist.h"
@@ -36,7 +39,7 @@ protected:
     }
 };
 
-extern list_head drivers_remote_ram_list;
+extern list_head remote_ram_list;
 extern "C" struct smap_hist_dev g_smap_hist_dev;
 extern "C" int ub_hist_init(void);
 
@@ -397,7 +400,7 @@ TEST_F(HistOpsTest, generate_aligned_scan_wins_info_4k_seq_loop)
 }
 
 extern "C" int generate_aligned_4k_scan_wins_info(struct segs_info *win_info,
-    struct segs_info *info, actc_t *buf);
+    struct segs_info *info, u16 *buf);
 extern "C" int filter_4k_scan_hot_wins(struct segs_info *win_info, u32 max_wins_4k_per_ba);
 TEST_F(HistOpsTest, generate_aligned_4k_scan_wins_info)
 {
@@ -411,7 +414,7 @@ TEST_F(HistOpsTest, generate_aligned_4k_scan_wins_info)
     segs[0].start = 0;
     segs[0].size = 0x14000000;
     info.segs = segs;
-    actc_t *buffer = (actc_t *)malloc(sizeof(actc_t) * buf_len);
+    u16 *buffer = (u16 *)malloc(sizeof(u16) * buf_len);
     g_smap_hist_dev.scan_wins_num_per_ba = 1;
     g_smap_hist_dev.freq_register_cnt = 16384;
     g_smap_hist_dev.ba_cnt = 2;
@@ -432,10 +435,10 @@ TEST_F(HistOpsTest, generate_aligned_4k_scan_wins_info)
     free(g_smap_hist_dev.ba_info);
 }
 
-extern "C" int do_hist_scan_sliding(struct segs_info *info, bool do_multi_gran, actc_t *buf,
+extern "C" int do_hist_scan_sliding(struct segs_info *info, bool do_multi_gran, u16 *buf,
     u32 buf_len, enum ub_hist_sts_size sts_size, bool direct_update);
 extern "C" void copy_actc_to_buf(struct segs_info *info, struct addr_seg *seg,
-    actc_t *dst_buf, u16 *freq, u32 buf_len, enum ub_hist_sts_size sts_size);
+    u16 *dst_buf, u16 *freq, u32 buf_len, enum ub_hist_sts_size sts_size);
 extern "C" int hist_scan_sliding(struct segs_info *info, u32 scan_time_total, u32 pgsize);
 
 TEST_F(HistOpsTest, hist_scan_sliding_seq_loop)
@@ -513,7 +516,7 @@ TEST_F(HistOpsTest, addr_segs_init)
 {
     int ret;
     struct smap_hist_dev dev;
-    INIT_LIST_HEAD(&drivers_remote_ram_list);
+    INIT_LIST_HEAD(&remote_ram_list);
     nr_local_numa = 1;
     struct ram_segment newdata1 = {
         .numa_node = 0,
@@ -526,8 +529,8 @@ TEST_F(HistOpsTest, addr_segs_init)
         .start = 0x1000,
         .end = 0x401000,
     };
-    list_add(&newdata1.node, &drivers_remote_ram_list);
-    list_add(&newdata2.node, &drivers_remote_ram_list);
+    list_add(&newdata1.node, &remote_ram_list);
+    list_add(&newdata2.node, &remote_ram_list);
     ret = addr_segs_init(&dev, SIZE_2M);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(2, dev.pgcount);
@@ -638,6 +641,7 @@ extern "C" void smap_hist_init(void);
 extern "C" void ub_hist_exit(void);
 extern "C" int ub_hist_query_ba_info(uint64_t ba_tag, struct ub_hist_ba_info *ba_info);
 extern "C" int query_hist_ba_info(void);
+extern "C" int ub_watch_work_init(struct smap_hist_dev *dev);
 TEST_F(HistOpsTest, hist_init)
 {
     int ret;
@@ -645,6 +649,7 @@ TEST_F(HistOpsTest, hist_init)
     MOCKER(query_hist_ba_info).stubs().will(returnValue(0));
     MOCKER(addr_segs_init).stubs().will(returnValue(0));
     MOCKER(scan_thread_init).stubs().will(returnValue(0));
+    MOCKER(ub_watch_work_init).stubs().will(returnValue(0));
     ret = hist_init(SIZE_2M);
     EXPECT_EQ(0, ret);
 }
@@ -799,11 +804,11 @@ TEST_F(HistOpsTest, update_actc_direct_to_hdev)
     init_rwsem(&hdev.buffer_lock);
 
     /* Setup ram_segment list */
-    INIT_LIST_HEAD(&drivers_remote_ram_list);
+    INIT_LIST_HEAD(&remote_ram_list);
     rseg.start = 0;
     rseg.end = 0xFFFF;
     rseg.numa_node = 0;
-    list_add(&rseg.node, &drivers_remote_ram_list);
+    list_add(&rseg.node, &remote_ram_list);
 
     /* Setup access_dev list so find_hdev_by_node can find our hdev */
     INIT_LIST_HEAD(&access_dev);
@@ -813,13 +818,12 @@ TEST_F(HistOpsTest, update_actc_direct_to_hdev)
     g_smap_hist_dev.freq_register_cnt = 16384;
     update_actc_direct(&rmem_info, &scan_seg, freq_buffer, 4, STS_SIZE_4K);
 
-    /* Verify: access_bit_actc_data should be updated with freq values */
-    /* Since freq values are 100, 200, 300, 400 and original values are 0 */
-    /* After update, values should be the same as freq (sum < U16_MAX) */
-    EXPECT_EQ(100, hdev.access_bit_actc_data[0]);
-    EXPECT_EQ(200, hdev.access_bit_actc_data[1]);
-    EXPECT_EQ(300, hdev.access_bit_actc_data[2]);
-    EXPECT_EQ(400, hdev.access_bit_actc_data[3]);
+    /* Verify: access_bit_actc_data should be updated with compress_freq(freq) */
+    /* freq 100/200/300/400 -> floor(sqrt) = 10/14/17/20 (sum < U8_MAX) */
+    EXPECT_EQ(10, hdev.access_bit_actc_data[0]);
+    EXPECT_EQ(14, hdev.access_bit_actc_data[1]);
+    EXPECT_EQ(17, hdev.access_bit_actc_data[2]);
+    EXPECT_EQ(20, hdev.access_bit_actc_data[3]);
 
     free(rmem_segs);
     free(hdev.access_bit_actc_data);
@@ -852,16 +856,16 @@ TEST_F(HistOpsTest, update_actc_direct_overflow_handling)
     hdev.is_hist = true;
     hdev.page_count = 10;
     hdev.access_bit_actc_data = (actc_t *)calloc(10, sizeof(actc_t));
-    hdev.access_bit_actc_data[0] = U16_MAX - 1; /* Near overflow */
-    hdev.access_bit_actc_data[1] = 1000;
+    hdev.access_bit_actc_data[0] = U8_MAX - 1; /* Near overflow */
+    hdev.access_bit_actc_data[1] = 100;
     init_rwsem(&hdev.buffer_lock);
 
     /* Setup lists */
-    INIT_LIST_HEAD(&drivers_remote_ram_list);
+    INIT_LIST_HEAD(&remote_ram_list);
     rseg.start = 0;
     rseg.end = 0xFFFF;
     rseg.numa_node = 0;
-    list_add(&rseg.node, &drivers_remote_ram_list);
+    list_add(&rseg.node, &remote_ram_list);
 
     INIT_LIST_HEAD(&access_dev);
     list_add(&hdev.list, &access_dev);
@@ -869,11 +873,11 @@ TEST_F(HistOpsTest, update_actc_direct_overflow_handling)
     g_smap_hist_dev.freq_register_cnt = 16384;
     update_actc_direct(&rmem_info, &scan_seg, freq_buffer, 2, STS_SIZE_4K);
 
-    /* Verify overflow handling: sum should clamp to U16_MAX */
-    /* index 0: (U16_MAX-1) + U16_MAX = overflow, should be U16_MAX */
-    EXPECT_EQ(U16_MAX, hdev.access_bit_actc_data[0]);
-    /* index 1: 1000 + U16_MAX = overflow, should be U16_MAX */
-    EXPECT_EQ(U16_MAX, hdev.access_bit_actc_data[1]);
+    /* Verify overflow handling: sum should clamp to U8_MAX */
+    /* index 0: (U8_MAX-1) + compress_freq(U16_MAX)=254+255 -> clamp U8_MAX */
+    EXPECT_EQ(U8_MAX, hdev.access_bit_actc_data[0]);
+    /* index 1: 100 + compress_freq(U16_MAX)=100+255 -> clamp U8_MAX */
+    EXPECT_EQ(U8_MAX, hdev.access_bit_actc_data[1]);
 
     free(rmem_segs);
     free(hdev.access_bit_actc_data);
@@ -1173,40 +1177,170 @@ TEST_F(HistOpsTest, pick_one_seg_seq_loop_no_wrap)
     EXPECT_EQ(1, offset_val);
 }
 
-extern "C" unsigned int hist_scan_duration_per_win;
-extern "C" int hist_scan_duration_per_win_set(const char *val, const struct kernel_param *kp);
-TEST_F(HistOpsTest, HistScanDurationPerWinSetValid)
+extern "C" int ub_watch_config(uint32_t duration_ms);
+extern "C" int ub_watch(struct ub_flux_mb *result);
+extern "C" void ub_watch_dwork_func(struct work_struct *work);
+extern "C" bool queue_delayed_work(struct workqueue_struct *wq,
+                                   struct delayed_work *dwork, unsigned long delay);
+extern "C" bool cancel_delayed_work_sync(struct delayed_work *dwork);
+extern "C" unsigned int ub_watch_perf_prd_ms;
+extern "C" unsigned int ub_watch_sample_interval_ms;
+
+TEST_F(HistOpsTest, ub_watch_config_normal)
 {
-    hist_scan_duration_per_win = 64;
-    struct kernel_param kp;
-    int ret = hist_scan_duration_per_win_set("128", &kp);
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->measure_state = MEASURE_NOT_STARTED;
+    ub_watch_perf_prd_ms = 200;
+    ub_watch_sample_interval_ms = 1000;
+
+    MOCKER(cancel_delayed_work_sync).stubs().will(returnValue(false));
+    MOCKER(queue_delayed_work).stubs().will(returnValue(true));
+    int ret = ub_watch_config(2000);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(128U, hist_scan_duration_per_win);
+    EXPECT_EQ(2000, dev->ub_watch_duration_ms);
+    EXPECT_EQ(200, dev->ub_watch_perf_prd_ms);
+    EXPECT_EQ(1000, dev->ub_watch_sample_interval_ms);
 }
 
-TEST_F(HistOpsTest, HistScanDurationPerWinSetZeroInvalid)
+TEST_F(HistOpsTest, ub_watch_config_interrupt_in_progress)
 {
-    hist_scan_duration_per_win = 64;
-    struct kernel_param kp;
-    int ret = hist_scan_duration_per_win_set("0", &kp);
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->measure_state = MEASURE_IN_PROGRESS;
+    ub_watch_perf_prd_ms = 200;
+    ub_watch_sample_interval_ms = 1000;
+
+    MOCKER(cancel_delayed_work_sync).stubs().will(returnValue(false));
+    MOCKER(queue_delayed_work).stubs().will(returnValue(true));
+    int ret = ub_watch_config(3000);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(MEASURE_NOT_STARTED, dev->measure_state);
+    EXPECT_EQ(3000, dev->ub_watch_duration_ms);
+}
+
+TEST_F(HistOpsTest, ub_watch_config_clamp_to_duration)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->measure_state = MEASURE_NOT_STARTED;
+    ub_watch_perf_prd_ms = 5000;
+    ub_watch_sample_interval_ms = 10000;
+
+    MOCKER(cancel_delayed_work_sync).stubs().will(returnValue(false));
+    MOCKER(queue_delayed_work).stubs().will(returnValue(true));
+    int ret = ub_watch_config(1000);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1000, dev->ub_watch_perf_prd_ms);
+    EXPECT_EQ(1000, dev->ub_watch_sample_interval_ms);
+}
+
+TEST_F(HistOpsTest, ub_watch_query_not_started)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->measure_state = MEASURE_NOT_STARTED;
+
+    struct ub_flux_mb result;
+    int ret = ub_watch(&result);
+    EXPECT_EQ(-ENODATA, ret);
+}
+
+TEST_F(HistOpsTest, ub_watch_query_null_result)
+{
+    int ret = ub_watch(nullptr);
     EXPECT_EQ(-EINVAL, ret);
-    EXPECT_EQ(64U, hist_scan_duration_per_win);
 }
 
-TEST_F(HistOpsTest, HistScanDurationPerWinSetTooLargeInvalid)
+TEST_F(HistOpsTest, ub_watch_query_in_progress_returns_intermediate)
 {
-    hist_scan_duration_per_win = 64;
-    struct kernel_param kp;
-    int ret = hist_scan_duration_per_win_set("600", &kp);
-    EXPECT_EQ(-EINVAL, ret);
-    EXPECT_EQ(64U, hist_scan_duration_per_win);
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->measure_state = MEASURE_IN_PROGRESS;
+    dev->ub_watch_perf_prd_ms = 200;
+    /* avg_flux=163840 → 163840*64/1048576=10, 10*1000/200=50 MB/s */
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        dev->ub_watch_avg_flux_rd[i] = 163840;
+        dev->ub_watch_avg_flux_wr[i] = 81920;
+    }
+
+    struct ub_flux_mb result;
+    int ret = ub_watch(&result);
+    EXPECT_EQ(0, ret);
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        EXPECT_EQ(50, result.read[i]);
+        EXPECT_EQ(25, result.write[i]);
+    }
 }
 
-TEST_F(HistOpsTest, HistScanDurationPerWinSetParseFailed)
+TEST_F(HistOpsTest, ub_watch_query_completed_returns_final)
 {
-    hist_scan_duration_per_win = 64;
-    struct kernel_param kp;
-    int ret = hist_scan_duration_per_win_set("abc", &kp);
-    EXPECT_NE(0, ret);
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->measure_state = MEASURE_COMPLETED;
+    dev->ub_watch_perf_prd_ms = 100;
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        dev->ub_watch_avg_flux_rd[i] = 1048576;
+        dev->ub_watch_avg_flux_wr[i] = 0;
+    }
+
+    struct ub_flux_mb result;
+    int ret = ub_watch(&result);
+    EXPECT_EQ(0, ret);
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        EXPECT_EQ(640, result.read[i]);
+        EXPECT_EQ(0, result.write[i]);
+    }
 }
 
+TEST_F(HistOpsTest, ub_watch_dwork_func_interrupted)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->ub_watch_duration_ms = 1000;
+    dev->ub_watch_perf_prd_ms = 200;
+    dev->ub_watch_sample_interval_ms = 500;
+    dev->measure_state = MEASURE_NOT_STARTED;
+
+    /* Simulate interruption: perf_check returns false for all windows,
+     * which causes all windows to be skipped (similar to interruption) */
+    MOCKER(ub_hist_mar_perf_en).stubs().will(ignoreReturnValue());
+    MOCKER(msleep).stubs().will(ignoreReturnValue());
+    MOCKER(ub_hist_mar_perf_check).stubs().will(returnValue(false));
+
+    ub_watch_dwork_func(nullptr);
+    EXPECT_EQ(MEASURE_COMPLETED, dev->measure_state);
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        EXPECT_EQ(0, dev->ub_watch_avg_flux_rd[i]);
+    }
+}
+
+TEST_F(HistOpsTest, ub_watch_dwork_func_all_windows_invalid)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->ub_watch_duration_ms = 1000;
+    dev->ub_watch_perf_prd_ms = 200;
+    dev->ub_watch_sample_interval_ms = 500;
+    dev->measure_state = MEASURE_IN_PROGRESS;
+
+    MOCKER(ub_hist_mar_perf_en).stubs().will(ignoreReturnValue());
+    MOCKER(msleep).stubs().will(ignoreReturnValue());
+    MOCKER(ub_hist_mar_perf_check).stubs().will(returnValue(false));
+
+    ub_watch_dwork_func(nullptr);
+    EXPECT_EQ(MEASURE_COMPLETED, dev->measure_state);
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        EXPECT_EQ(0, dev->ub_watch_avg_flux_rd[i]);
+        EXPECT_EQ(0, dev->ub_watch_avg_flux_wr[i]);
+    }
+}
+
+TEST_F(HistOpsTest, ub_watch_dwork_func_normal_completion)
+{
+    struct smap_hist_dev *dev = &g_smap_hist_dev;
+    dev->ub_watch_duration_ms = 1000;
+    dev->ub_watch_perf_prd_ms = 200;
+    dev->ub_watch_sample_interval_ms = 500;
+    dev->measure_state = MEASURE_IN_PROGRESS;
+
+    MOCKER(ub_hist_mar_perf_en).stubs().will(ignoreReturnValue());
+    MOCKER(msleep).stubs().will(ignoreReturnValue());
+    MOCKER(ub_hist_mar_perf_check).stubs().will(returnValue(true));
+    MOCKER(ub_hist_get_access_count).stubs().will(ignoreReturnValue());
+
+    ub_watch_dwork_func(nullptr);
+    EXPECT_EQ(MEASURE_COMPLETED, dev->measure_state);
+}

@@ -34,8 +34,8 @@ protected:
     }
 };
 
-extern "C" struct list_head drivers_remote_ram_list;
-extern "C" void drivers_free_remote_ram(struct list_head *head);
+extern "C" struct list_head remote_ram_list;
+extern "C" void free_remote_ram(struct list_head *head);
 TEST_F(AccessIomemTest, free_remote_ram)
 {
     LIST_HEAD(head);
@@ -43,7 +43,7 @@ TEST_F(AccessIomemTest, free_remote_ram)
     struct ram_segment seg2;
 
     MOCKER(kfree).expects(exactly(2)).will(ignoreReturnValue());
-    drivers_free_remote_ram(&head);
+    free_remote_ram(&head);
     EXPECT_TRUE(list_empty(&head));
 }
 
@@ -63,7 +63,7 @@ TEST_F(AccessIomemTest, move_remote_ram)
 extern "C" bool pfn_valid(unsigned long pfn);
 extern "C" struct page *pfn_to_online_page(unsigned long pfn);
 extern "C" int page_to_nid(const struct page *page);
-extern "C" int drivers_insert_remote_ram(u64 pa_start, u64 pa_end, struct list_head *head);
+extern "C" int insert_remote_ram(u64 pa_start, u64 pa_end, struct list_head *head);
 TEST_F(AccessIomemTest, insert_remote_ram)
 {
     int ret;
@@ -84,7 +84,7 @@ TEST_F(AccessIomemTest, insert_remote_ram)
     MOCKER(pfn_valid).stubs().will(returnValue(true));
     MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(page_to_nid).stubs().will(returnValue(remoteNid[0])).then(returnValue(remoteNid[1]));
-    ret = drivers_insert_remote_ram(start, end, &head);
+    ret = insert_remote_ram(start, end, &head);
     EXPECT_EQ(0, ret);
     list_for_each_entry_safe(seg, tmp, &head, node) {
         if (len++ == 0) {
@@ -118,20 +118,20 @@ TEST_F(AccessIomemTest, insert_remote_ram_two)
     pfn[1] = (unsigned long)PHYS_PFN(start + MIN_MEMORY_BLOCK_SIZE);
     MOCKER(pfn_to_nid).stubs().will(returnValue(hcomNid));
     MOCKER(kmalloc).expects(never()).will(returnValue(nullptr));
-    ret = drivers_insert_remote_ram(start, end, &head);
+    ret = insert_remote_ram(start, end, &head);
     EXPECT_EQ(0, ret);
 }
 
-extern "C" int drivers_update_resource(struct resource *r, void *arg);
+extern "C" int update_resource(struct resource *r, void *arg);
 TEST_F(AccessIomemTest, update_resource)
 {
     struct resource r;
     LIST_HEAD(head);
 
     r.flags = 0x02000000;
-    MOCKER(drivers_insert_remote_ram).stubs().will(returnValue(-1));
-    MOCKER(drivers_free_remote_ram).stubs();
-    int ret = drivers_update_resource(&r, &head);
+    MOCKER(insert_remote_ram).stubs().will(returnValue(-1));
+    MOCKER(free_remote_ram).stubs();
+    int ret = update_resource(&r, &head);
     EXPECT_EQ(-1, ret);
 }
 
@@ -140,47 +140,47 @@ TEST_F(AccessIomemTest, update_resource_two)
     struct resource r;
     LIST_HEAD(head);
 
-    int ret = drivers_update_resource(nullptr, nullptr);
+    int ret = update_resource(nullptr, nullptr);
     EXPECT_EQ(-EINVAL, ret);
 
     r.flags = 0;
-    ret = drivers_update_resource(&r, &head);
+    ret = update_resource(&r, &head);
     EXPECT_EQ(0, ret);
 }
 
 extern "C" int walk_iomem_res_desc(unsigned long desc, unsigned long flags, u64 start,
     u64 end, void *arg, int (*func)(struct resource *, void *));
-extern "C" int drivers_walk_system_ram_remote_range(struct list_head *head);
+extern "C" int walk_system_ram_remote_range(struct list_head *head);
 TEST_F(AccessIomemTest, walk_system_ram_remote_range)
 {
-    int ret = drivers_walk_system_ram_remote_range(nullptr);
+    int ret = walk_system_ram_remote_range(nullptr);
     EXPECT_EQ(-EINVAL, ret);
 
     LIST_HEAD(head);
     MOCKER(walk_iomem_res_desc).stubs().will(returnValue(0));
-    ret = drivers_walk_system_ram_remote_range(&head);
+    ret = walk_system_ram_remote_range(&head);
     EXPECT_EQ(0, ret);
 }
 
-extern "C" void drivers_release_remote_ram(void);
+extern "C" void release_remote_ram(void);
 TEST_F(AccessIomemTest, release_remote_ram)
 {
-    MOCKER(drivers_free_remote_ram).stubs();
-    drivers_release_remote_ram();
+    MOCKER(free_remote_ram).stubs();
+    release_remote_ram();
 }
 
 TEST_F(AccessIomemTest, refresh_remote_ram)
 {
     int ret;
-    MOCKER(drivers_walk_system_ram_remote_range).stubs().will(returnValue(-EINVAL));
-    ret = drivers_refresh_remote_ram();
+    MOCKER(walk_system_ram_remote_range).stubs().will(returnValue(-EINVAL));
+    ret = refresh_remote_ram();
     EXPECT_EQ(-EINVAL, ret);
 
     GlobalMockObject::reset();
-    MOCKER(drivers_walk_system_ram_remote_range).stubs().will(returnValue(0));
-    MOCKER(drivers_free_remote_ram).stubs().will(ignoreReturnValue());
+    MOCKER(walk_system_ram_remote_range).stubs().will(returnValue(0));
+    MOCKER(free_remote_ram).stubs().will(ignoreReturnValue());
     MOCKER(move_remote_ram).stubs().will(ignoreReturnValue());
-    ret = drivers_refresh_remote_ram();
+    ret = refresh_remote_ram();
     EXPECT_EQ(0, ret);
 }
 
@@ -190,7 +190,7 @@ TEST_F(AccessIomemTest, get_numa_by_pfn)
     seg.numa_node = 4;
     seg.start = 4000;
     seg.end = 5000;
-    list_add(&seg.node, &drivers_remote_ram_list);
+    list_add(&seg.node, &remote_ram_list);
 
     int ret = get_numa_by_pfn(1);
     EXPECT_EQ(4, ret);
@@ -198,7 +198,7 @@ TEST_F(AccessIomemTest, get_numa_by_pfn)
 }
 
 extern "C" u64 get_node_page_cnt_iomem(int nid, int page_size);
-extern "C" int drivers_nr_local_numa;
+extern "C" int nr_local_numa;
 TEST_F(AccessIomemTest, get_node_page_cnt_iomem)
 {
     u64 ret;
@@ -207,39 +207,39 @@ TEST_F(AccessIomemTest, get_node_page_cnt_iomem)
     struct ram_segment seg2 = { .numa_node = 1, .start = 0x0, .end = 0xfffff, };
     struct ram_segment seg3 = { .numa_node = 1, .start = 0x200000, .end = 0x3fffff, };
 
-    drivers_nr_local_numa = 1;
+    nr_local_numa = 1;
     ret = get_node_page_cnt_iomem(0, PAGE_SIZE_2M);
     EXPECT_EQ(0, ret);
 
     GlobalMockObject::reset();
     cout << "second" << endl;
-    ASSERT_TRUE(list_empty(&drivers_remote_ram_list));
-    list_add_tail(&seg1.node, &drivers_remote_ram_list);
-    list_add_tail(&seg2.node, &drivers_remote_ram_list);
-    list_add_tail(&seg3.node, &drivers_remote_ram_list);
+    ASSERT_TRUE(list_empty(&remote_ram_list));
+    list_add_tail(&seg1.node, &remote_ram_list);
+    list_add_tail(&seg2.node, &remote_ram_list);
+    list_add_tail(&seg3.node, &remote_ram_list);
     len += calc_huge_count(seg2.end - seg2.start + 1);
     len += calc_huge_count(seg3.end - seg3.start + 1);
-    ret = get_node_page_cnt_iomem(drivers_nr_local_numa, PAGE_SIZE_2M);
+    ret = get_node_page_cnt_iomem(nr_local_numa, PAGE_SIZE_2M);
     EXPECT_EQ(len, ret);
     list_del(&seg1.node);
     list_del(&seg2.node);
     list_del(&seg3.node);
 }
 
-extern "C" int drivers_calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
+extern "C" int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
 TEST_F(AccessIomemTest, CalcPaddrAcidxIomemTest)
 {
     u64 index = 3;
     u64 pa = 2;
     int nid = 2;
     int pagesize = 4096;
-    int ret = drivers_calc_paddr_acidx_iomem(pa, &nid, &index, pagesize);
+    int ret = calc_paddr_acidx_iomem(pa, &nid, &index, pagesize);
     EXPECT_EQ(-ERANGE, ret);
 
     struct ram_segment seg = { .numa_node = 1, .start = 0x0, .end = 0xfffff, };
-    list_add(&seg.node, &drivers_remote_ram_list);
+    list_add(&seg.node, &remote_ram_list);
     pa = 0x1000;
-    ret = drivers_calc_paddr_acidx_iomem(pa, &nid, &index, pagesize);
+    ret = calc_paddr_acidx_iomem(pa, &nid, &index, pagesize);
     EXPECT_EQ(0, ret);
     list_del(&seg.node);
 }
@@ -257,7 +257,7 @@ TEST_F(AccessIomemTest, smap_is_remote_addr_valid)
 TEST_F(AccessIomemTest, smap_is_remote_addr_valid_two)
 {
     struct ram_segment seg = { .numa_node = 1, .start = 0x0, .end = 0xfffff, };
-    list_add(&seg.node, &drivers_remote_ram_list);
+    list_add(&seg.node, &remote_ram_list);
 
     int ret = smap_is_remote_addr_valid(0, 0x10, 0x100);
     EXPECT_EQ(-EINVAL, ret);

@@ -14,7 +14,6 @@
 
 #include "smap_env.h"
 #include "manage/manage.h"
-#include "manage/thread.h"
 
 #define DEFAULT_FROM_NODE (-1)
 #define DEFAULT_TO_NODE (-1)
@@ -22,8 +21,8 @@
 #define SIG_THREAD_MIG_OUT 1
 #define LESS_THREAD_MIG_OUT 4
 #define MORE_THREAD_MIG_OUT 8
-#define LESS_MIG_OUT_2M_PAGE_THRE 40
-#define MORE_MIG_OUT_2M_PAGE_THRE 400
+#define LESS_MIG_OUT_HUGE_PAGE_THRE 40
+#define MORE_MIG_OUT_HUGE_PAGE_THRE 400
 #define MAX_PER_PID_MIG_LIST_COUNT 8
 #define REMOTE_MIG_FAIL 92
 
@@ -33,7 +32,15 @@ void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager);
 
 int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager);
 
-int ScanMigrateWork(ThreadCtx *ctx);
+int ScanMigrateWork(struct ProcessManager *manager);
 
 int MigrateRemoteNuma(struct ProcessManager *manager, struct MigrateNumaIoctlMsg *msg);
+
+int CollectNodeFreeSnapshot(bool hugePage, int nrLocalNuma, PairPlanContext *context);
+int BuildPairPlans(const PairPlan inputs[], size_t inputCnt, PairPlanContext *context, PairPidBudget pidBudgets[],
+                   size_t pidBudgetCnt, PairPlan plans[], size_t planCap, size_t *planCnt);
+int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCnt, PairPlanContext *context,
+                       PairPidBudget pidBudgets[], size_t pidBudgetCnt);
+int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt);
+int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt);
 #endif /* __MIGRATION_H__ */

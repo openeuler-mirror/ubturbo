@@ -32,7 +32,7 @@ extern "C" {
 #define MAX_MIGRATION_GROUP_NUM 8
 #endif
 #ifndef MAX_GROUP_LOCAL_NUMA
-#define MAX_GROUP_LOCAL_NUMA 4
+#define MAX_GROUP_LOCAL_NUMA LOCAL_NUMA_NUM
 #endif
 #ifndef MAX_GROUP_REMOTE_NUMA
 #define MAX_GROUP_REMOTE_NUMA REMOTE_NUMA_NUM
@@ -83,7 +83,7 @@ struct MigrateOutPayloadInner {
 };
 
 struct MigrateOutPayload {
-    int srcNid; // 是否指定迁出源节点（-1表示不指定）
+    int srcNid; // 普通 migrate-out 永久忽略，仅为兼容既有 ABI 保留
     pid_t pid;
     int count;
     struct MigrateOutPayloadInner inner[REMOTE_NUMA_NUM];
@@ -236,6 +236,10 @@ int ubturbo_smap_stop(void);
  * @brief 紧急迁移本地内存到远端，在发生本地内存无资源场景
  *
  * @param size [IN] 需要紧急迁移的大小
+ *
+ * @note 紧急迁出按 numa_maps 段级过滤收集候选页，无法识别共享页归属，段内共享页可能被一并迁到远端。
+ *       OOM 场景首要目标是压低本地水线、避免 kill，允许共享页短暂误迁。水线下降后，调用方应把相关
+ *       pid 重新加入 SMAP 管理，SMAP 管理态扫描会按 pidType/pageType 纠正共享页归属。
  */
 void ubturbo_smap_urgent_migrate_out(uint64_t size);
 

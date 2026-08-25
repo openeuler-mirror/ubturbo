@@ -20,7 +20,7 @@
 * 成功返回0。
 * 同进程重复初始化返回-1。
 * 其它进程已初始化返回-13。
-* SMAP初始化异常返回-9 。
+* SMAP初始化异常返回-9。
 * 内存申请失败返回-12。
 * SMAP内核驱动未安装返回-19。
 * 参数错误返回-22。
@@ -58,7 +58,8 @@ N/A
 
 #### 函数定义
 
-配置虚拟机/进程的远端NUMA和迁出比例。
+配置虚拟机/进程的普通迁出目标。一个 PID 可同时配置多个远端 NUMA；
+SMAP自动发现并维护该 PID 的受管本地 NUMA 集合，再按 local -> remote Pair 执行迁出、迁回和冷热优化。
 
 #### 实现方法
 
@@ -68,8 +69,8 @@ N/A
 
 | 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
 | --- | --- | --- | --- | --- |
-| msg | struct MigrateOutMsg\* | * 单次最多配置40个pid。SMAP可管理的最大虚机个数为100个，最大4K进程个数为300个。* 配置的虚机PID重复时参数错误。* 远端NUMA需要存在。* 迁出比例有效值为[0-100]。* 迁出内存量memSize单位KB，必须为2MB的倍数* PID对应进程名在黑名单中时参数错误。* 虚拟化内存水线场景下，迁出比例非精确的迁出比例，其含义为pid可迁出到远端NUMA的内存比例，SMAP会根据SetSmapRemoteNumaInfo接口传入的借用内存量进行调整；在多虚机场景也会根据虚机的冷热信息调整实际迁出比例。* 内存碎片场景下，migrateMode只能是按照memSize迁移。在保证迁出内存足够的情况下，迁出比例含义为pid总的实际使用内存的迁出比例，迁移大小为pid总的实际使用内存的迁出大小（KB）。 | 入参 | 详细如下 |
-| pageType | int | {0,1} | 入参 | 页面类型：0=4K页，1=2M页。 |
+| msg | struct MigrateOutMsg\* | 单次最多配置 40 个 PID；同一请求中的 PID 不能重复。每个 `payload` 的 `count` 取值为 0 到 `REMOTE_NUMA_NUM`，各 `inner[].destNid` 必须是在线且互不重复的远端 NUMA。一个 PID 的所有目标必须使用同一种 `migrateMode`；ratio 模式下各 remote 的 ratio 总和不超过 100；memSize 单位为 KB，必须按当前页型对齐（4K 或 2M）。 | 入参 | 普通迁出配置，详细语义见下文。 |
+| pageType | int | {0,1}，且必须与 `ubturbo_smap_start` 的当前页型一致 | 入参 | 0：4K 普通进程；1：2M 虚机。 |
 
 ```
 #define MAX_NR_MIGOUT 40 
@@ -82,7 +83,7 @@ struct MigrateOutPayloadInner {
 };
 
 struct MigrateOutPayload {
-    int srcNid;
+    int srcNid; // 普通 migrate-out 忽略该字段，仅保留 ABI 兼容
     pid_t pid;
     int count;
     struct MigrateOutPayloadInner inner[REMOTE_NUMA_NUM];
@@ -100,21 +101,23 @@ struct MigrateOutMsg {
 * SMAP未初始化返回-1。
 * 内存申请失败返回-12。
 * 参数错误返回-22。
+* 进程不存在返回-3。
 
 #### 约束和注意事项
 
 * SMAP初始化后才能调用。
 * pageType需要和当前场景匹配。
-* HCCS代际远端NUMA最大值为17。
-* UB代际远端NUMA最大值为17。
-* 远端NUMA被禁用时无法配置迁出（调用SmapMigrateBack接口时会默认禁用远端NUMA）。
-* 如果已配置某虚机的远端NUMA，后续配置不能改变虚机的远端NUMA，只能通过SmapMigratePidRemoteNuma接口改变远端NUMA。
+* 远端 NUMA 使用当前机器的动态拓扑范围校验，不存在固定的 NID 上限；目标必须是在线 remote NUMA。
+* `srcNid` 不参与普通 migrate-out 的目标选择；本地 NUMA 由 SMAP 根据 CPU affinity、页面驻留和已有 Pair 账本自动维护，调用方无需、也不能通过本接口指定 local NUMA。
+* 每次调用都是该 PID 普通迁出目标的**全量替换**：新请求中未列出的 remote 目标会清零；`payload.count == 0` 表示清空该 PID 的全部普通迁出目标。配置更新发生在该 PID 正在迁移时，新配置会在本轮迁移结果结算后原子生效。
+* ratio 表示该 PID 在指定 remote 上的聚合目标比例；memSize 表示该 PID 在指定 remote 上的最终聚合驻留量，而不是本轮增量。两种模式均可用于普通多 local、多 remote 迁移，不能混用。
+* 远端 NUMA 被禁用时，不能为其配置非零新目标；已配置目标和已有远端页会被保留，禁用期间不再向该 remote 迁出，但允许按需要迁回本地。
+* 调用成功表示请求已保存，不表示本轮一定能迁出页面。远端容量不足、Pair 暂时无法分配或本地回迁空闲页不足时，SMAP 保留用户目标，并在容量或页面条件恢复后继续收敛。
 * 配置pid内存迁出后，由SMAP线程异步迁移，在迁移周期到来时才会执行迁移操作。
-* 配置PID内存迁出后，PID会被SMAP纳管并参与后续周期冷热迁移；冷热迁移依赖迁移目标NUMA存在可用空闲内存。对于2M huge page虚机场景，本地NUMA和远端NUMA均需要存在可用的空闲2M huge page；若本地NUMA空闲2M huge page不足，远端热页回迁或冷热交换可能无法执行；若远端NUMA空闲2M huge page不足，初始迁出或后续冷页迁出可能无法执行，实际迁移效果会受限。
-* 建议在PID相关的本地NUMA和远端NUMA上均预留不低于计划迁移规模5%~10%的空闲内存；对于2M huge page虚机，该预留量应换算为对应数量的空闲2M huge page。上述预留值为部署建议，不是接口入参校验条件；调用成功仅表示策略配置成功，不保证后续每轮冷热迁移都能实际迁移页面。
-* 4K进程迁移不支持远端多NUMA。
+* 配置 PID 内存迁出后，PID 会被 SMAP 纳管并参与后续周期冷热迁移。远端容量由`ubturbo_smap_remote_numa_info_set` 的 private/shared 容量合同跨 PID 统一仲裁；不再按 PID 配置顺序直接消费容量。
+* Pair 未收敛时优先执行净迁出或迁回，不执行冷热 swap；多个 local 共享同一 remote 且无法可靠识别页面来源时也不执行该 Pair 的 swap。以上限制不影响净迁出和迁回。
+* 建议在相关本地 NUMA 和远端 NUMA 上预留不低于计划迁移规模 5%~10% 的空闲内存；对于2M huge page 虚机应预留相应数量的空闲 2M huge page。该预留值是部署建议，不是接口校验条件。
 * 迁移会过滤掉共享页。
-* 传入的pid若包含系统进程（固定PID 0/1/2，或无用户态可执行文件的内核线程），接口返回-22，不做迁出。
 
 ### ubturbo_smap_migrate_out_grouped
 
@@ -140,7 +143,7 @@ struct MigrateOutMsg {
 | msg.payload[].groups[].targetCount | int | 1到MAX_GROUP_REMOTE_NUMA的整数。 | 入参 | 当前group的target remote NUMA数量。 |
 | msg.payload[].groups[].targets[].nid | int | 当前机器有效remote NUMA，且未被禁用。 | 入参 | target remote NUMA ID。 |
 | msg.payload[].groups[].targets[].size | uint64\_t | 单位KB，至少为2MB。 | 入参 | 当前target remote NUMA的最大驻留容量quota。 |
-| pageType | int | 1 | 入参 | 页面类型，需与当前场景匹配。 |
+| pageType | int | 1 | 入参 | 进程pid类型，仅支持虚机2M页类型。 |
 
 ```
 #define MAX_NR_GROUPED_MIGOUT MAX_NR_MIGOUT
@@ -180,6 +183,7 @@ struct GroupedMigrateOutMsg {
 * PID不存在返回-3，本接口会回滚已添加配置，不提供部分成功语义。
 * 内存申请失败返回-12。
 * 参数错误返回-22。
+* 内核驱动访问失败返回-9。
 
 #### 约束和注意事项
 
@@ -204,13 +208,12 @@ struct GroupedMigrateOutMsg {
 * 上述预留值为部署建议，不是接口入参校验条件；调用成功仅表示策略配置成功，不保证后续每轮冷热迁移都能实际迁移页面。
 * grouped policy当前不支持smap_config持久化与恢复，SMAP重启后需要重新下发配置。
 * 页面迁移会过滤掉共享页。
-* 传入的pid若包含系统进程（固定PID 0/1/2，或无用户态可执行文件的内核线程），接口返回-22，不做迁出。
 
 ### ubturbo_smap_remote_numa_info_set
 
 #### 函数定义
 
-通知SMAP，本地NUMA向远端NUMA借用的内存用量。
+配置普通迁出的远端容量合同，而不是直接发起迁移。该容量在所有普通 PID 间统一仲裁。
 
 #### 实现方法
 
@@ -220,7 +223,7 @@ struct GroupedMigrateOutMsg {
 
 | 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
 | --- | --- | --- | --- | --- |
-| msg | struct SetRemoteNumaInfoMsg\* | * srcNid为本地NUMA id或者为-1，其它返回异常。* destNid为本节点远端NUMA id，非本节点远端NUMA id返回异常。* size为本地srcNid对应在远端NUMA上借用的内存量，单位MB，若srcNid为-1，则代表所有本地NUMA可共享这段内存。 | 入参 | 详细如下 |
+| msg | struct SetRemoteNumaInfoMsg\* | `srcNid` 为本地 NUMA ID 或 -1；`destNid` 为在线远端 NUMA ID；`size` 单位为 MB。 | 入参 | 配置一份 private 或 shared 远端容量。 |
 
 ```
 struct SetRemoteNumaInfoMsg {
@@ -235,32 +238,31 @@ struct SetRemoteNumaInfoMsg {
 * 成功返回0。
 * SMAP未初始化返回-1。
 * 参数错误返回-22。
+* 配置同步到内核失败返回-9。
 
 #### 约束和注意事项
 
 * SMAP初始化后才能调用。
-* HCCS代际远端NUMA最大值为17。
-* UB代际远端NUMA最大值为17。
-* 如果已配置某虚机的远端NUMA，后续配置不能改变虚机的远端NUMA，只能通过SmapMigratePidRemoteNuma接口改变远端NUMA。
-* 当配置的pid可迁出的量大于借用内存量时，SMAP不会使用完所有的借用量，每个本地NUMA对应的远端借用都有MIN[借用量的5%，200MB]的量不会使用，这是为了迁移内存时能申请到新的内存页面。例如：numa0 numa1分别借用了2G和6G共8G，numa0借的2G的预留按5%来算是100M，numa1借的6G的预留是200M，合计一共300M。
-* 此接口仅在水线场景中生效，且水线场景调用SmapMigrateOut接口前需通过此接口设置远端NUMA使用量才能迁出pid的内存。
-* 如果未调用SetSmapRemoteNumaInfo接口，默认初始化size值为0。
+* `destNid` 按当前机器的远端 NUMA 范围校验，并且必须能由 `numastat` 识别为在线节点；不存在固定的 NID 上限。
+* `srcNid >= 0` 配置该 local -> remote Pair 的 private 容量；`srcNid == -1` 配置该 remote可由全部受管 local 共享的 shared 容量。
+* 每个远端的普通迁出容量由所有 private 容量和 shared 容量组成。SMAP 先在对应 Pair 间仲裁private 容量，再将未满足需求参与同一 remote 的 shared 容量仲裁；容量不足会裁剪有效目标，但不会删除 PID 的原始 migrate-out 请求。
+* 本接口可在普通 migrate-out 配置前后调用；未配置的 private/shared 容量默认为 0。容量恢复后，已保存的普通迁出目标会在后续周期自动重新参与分配。
 
 ### ubturbo_smap_migrate_back
 
 #### 函数定义
 
-将指定远端NUMA的内存迁移到同一远端NUMA的其他地址段。
+将指定远端 NUMA 上、由 `memid` 标识的内存段迁回本地 NUMA。
 
 #### 实现方法
 
-<pre class="screen"><p class="p" id="p9161121421813">int SmapMigrateBack(struct MigrateBackMsg *msg);</p></pre>
+<pre class="screen"><p class="p" id="p9161121421813">int ubturbo_smap_migrate_back(struct MigrateBackMsg *msg);</p></pre>
 
 #### 参数说明
 
 | 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
 | --- | --- | --- | --- | --- |
-| msg | struct MigrateBackMsg\* | * 远端NUMA有效值范围为[0,9]，且是远端NUMA。* 远端NUMA和传入的地址段需要匹配。 | 入参 | 详细如下 |
+| msg | struct MigrateBackMsg\* | `count` 为 1 到 `MAX_NR_MIGBACK`（当前为 50）。每个 payload 的 `srcNid` 必须是当前机器的远端 NUMA；`destNid` 必须是有效本地 NUMA，或为 -1 以由内核按任务 affinity/轮询选择本地 NUMA；`memid` 必须能解析为属于 `srcNid` 的已登记远端内存段。 | 入参 | 详细如下 |
 
 ```
 #define MAX_NR_MIGBACK 50
@@ -268,8 +270,7 @@ struct SetRemoteNumaInfoMsg {
 struct MigrateBackPayload { 
     int srcNid; 
     int destNid; 
-     uint64_t paStart; 
-    uint64_t paEnd; 
+    uint64_t memid;
 };
 
 struct MigrateBackMsg { 
@@ -291,11 +292,13 @@ struct MigrateBackMsg {
 
 * SMAP初始化后才能调用。
 * 不支持并发调用此接口，否则会引起内存归还失败。
-* 远端NUMA和传入的地址段需要匹配。
+* `srcNid` 是待迁回的远端 NUMA，不使用固定的 `[0,9]` 范围；有效范围随当前机器的local/remote NUMA 拓扑确定。
+* `memid` 由内核解析为物理地址范围，调用方无需也不能传入 `paStart`/`paEnd`；该内存段必须属于 `srcNid`，否则调用失败。
+* `destNid == -1` 时，内核优先按页面所属任务的 affinity 选择本地 NUMA，无法确定时在有足够空闲页的本地 NUMA 间轮询选择。
 * 调用此接口后，SMAP默认禁止指定远端NUMA的冷热流动，只允许迁回任务中的迁移。
-* 若远端NUMA的其他地址段的空闲页面不够，迁移任务会失败。
-* 虚拟化水线场景下，请调用此接口前，调用SetSmapRemoteNumaInfo接口通知SMAP更新借用内存量，保证远端NUMA有足够的内存空间。
-* 内存碎片场景下，调用此接口，需由调用方预留足够内存空间，否则会迁回失败。
+* 若目标本地 NUMA 的空闲页面不足，迁回任务会失败。
+* 虚拟化水线场景下，如迁回会改变借用容量，应配合`ubturbo_smap_remote_numa_info_set` 更新相应的容量合同；需要预留的是目标本地 NUMA 的空间，而不是源远端 NUMA 的空间。
+* 内存碎片场景下，调用方同样需要在目标本地 NUMA 预留足够内存空间，否则会迁回失败。
 * 迁回任务为异步执行，执行状态在/sys/kernel/debug/smap/mb\_[taskID]中进行查询。
 * 同一个远端NUMA不支持并发调用，并发调用可能导致迁移数据无法迁移干净。
 
@@ -303,7 +306,7 @@ struct MigrateBackMsg {
 
 #### 函数定义
 
-移除指定的虚机/进程的远端numa，当远端numa全被移除时，整个进程被移除SMAP管理。
+移除 PID 的 SMAP 管理状态，或仅删除普通迁出策略中的指定远端 NUMA 目标。该接口只更新管理、跟踪和配置状态，不会主动迁回页面。
 
 #### 实现方法
 
@@ -313,15 +316,15 @@ struct MigrateBackMsg {
 
 | 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
 | --- | --- | --- | --- | --- |
-| msg | struct RemoveMsg\* | * 单次最多移除的虚机/进程数量为40。 | 入参 | 详细如下|
-| pageType | int | {0,1} | 入参 | 页面类型：0=4K页，1=2M页。 |
+| msg | struct RemoveMsg\* | `msg.count` 为 1 到 `MAX_NR_REMOVE`（当前为 40），同一请求中的 PID 不能重复。每个 `payload.count` 为 0 到 `REMOTE_NUMA_NUM`；大于 0 时 `nid[]` 中的项必须是互不重复的有效远端 NUMA。 | 入参 | 详细语义见下文。 |
+| pageType | int | {0,1}，且必须与 `ubturbo_smap_start` 的当前页型一致 | 入参 | 0：4K 普通进程；1：2M 虚机。 |
 
 ```
 #define MAX_NR_REMOVE 40
 
 struct RemovePayload {
     pid_t pid;
-    int count;
+    int count; // 0：整个 PID；大于 0：仅删除 nid[] 指定的 remote
     int nid[REMOTE_NUMA_NUM];
 };
 
@@ -334,22 +337,24 @@ struct RemoveMsg {
 #### 返回值
 
 * 成功返回0。
-* SMAP未初始化返回-1。
-* SMAP处理异常返回-9。
-* 参数错误返回-22。
-* 申请内存失败返回-12。
+* SMAP未初始化或已停止返回-1。
+* 参数错误、页型不匹配、remote NID 非法/重复、PID 重复，或对 grouped PID 执行局部删除时返回-22。
+* 更新 tracking 设备失败时返回相应设备错误码。
 
 #### 约束和注意事项
 
 * SMAP初始化后才能调用。
 * pageType需要和当前场景匹配。
-* 当调用SmapMigrateBack接口迁回完所有地址后，需使用SmapRemove接口移除虚机管理，保证后续流程正常。
+* `payload.count == 0` 立即按 PID 整体删除 SMAP 管理状态；无需在请求中列出该 PID 的所有 remote。
+* `payload.count > 0` 仅适用于普通 `ubturbo_smap_migrate_out` 策略，删除 `nid[]` 所列 remote 的目标、Pair 账本和 tracking 节点；删除后若该 PID 已没有 remote 目标，会自动按整体删除处理。
+* grouped policy 只能使用 `payload.count == 0` 整体删除，不支持按 remote 局部删除。
+* 本接口不迁回远端页面。调用局部或整体删除前，应先通过`ubturbo_smap_migrate_back` 或策略收敛将需要保留的远端页面迁回；否则删除后 SMAP 不再继续跟踪和管理这些页面。
 
 ### ubturbo_smap_node_enable
 
 #### 函数定义
 
-启用NUMA迁入，允许其它NUMA的内存向该NUMA进行迁移。
+启用或禁用指定远端 NUMA 的普通迁移流动。
 
 #### 实现方法
 
@@ -359,12 +364,12 @@ struct RemoveMsg {
 
 | 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
 | --- | --- | --- | --- | --- |
-| msg | struct EnableNodeMsg\* | 传入NUMA最大值为17，且为远端NUMA。 | 入参 | 详细如下 |
+| msg | struct EnableNodeMsg\* | `nid` 必须是当前机器的远端 NUMA，即位于 `[nrLocalNuma, MAX_NODES)`；`enable` 仅允许 `DISABLE_NUMA_MIG`（0）或 `ENABLE_NUMA_MIG`（1）。 | 入参 | 详细如下 |
 
 ```
 struct EnableNodeMsg { 
-    int enable; 
-    int nid;
+    int enable; // 0：禁用迁移，1：启用迁移
+    int nid;    // 远端 NUMA ID
  };
 ```
 
@@ -372,12 +377,15 @@ struct EnableNodeMsg {
 
 * 成功返回0。
 * SMAP未初始化返回-1。
-* 参数错误返回-22。
+* 参数错误（空消息、`nid` 非远端 NUMA 或 `enable` 非法）返回-22。
+* 启用的 remote 仍有迁回任务在执行时返回-11。
 
 #### 约束和注意事项
 
 * SMAP初始化后才能调用。
-* 此接口与SmapMigrateBack接口配合使用，目的是在SmapMigrateBack接口调用后，恢复对应远端NUMA的冷热流动。
+* `enable == 0` 禁止向该 remote 产生新的迁出；已有页面仍可按需要迁回本地。
+* `enable == 1` 清除用户禁用和已完成迁回留下的禁用状态，恢复对应 remote 的普通迁移流动。
+* 本接口可与 `ubturbo_smap_migrate_back` 配合使用：迁回完成后重新启用该 remote；迁回任务未完成时启用会被拒绝，避免与迁回任务并发。
 
 ### ubturbo_smap_freq_query
 
@@ -403,6 +411,9 @@ struct EnableNodeMsg {
 * 成功返回0。
 * SMAP未初始化返回-1。
 * 参数错误返回-22。
+* 统计模式扫描时长未达到预期返回-11。
+* 内核态内存申请失败返回-12。
+* 内核ioctl访问失败返回-9。
 
 #### 约束和注意事项
 
@@ -413,7 +424,7 @@ struct EnableNodeMsg {
 
 #### 函数定义
 
-设置SMAP运行模式。
+设置兼容运行模式。
 
 #### 实现方法
 
@@ -425,7 +436,7 @@ struct EnableNodeMsg {
 | - | - | - | - | - |
 | ------------------------------------------------ |
 
-| runMode | int | * 0：水线场景。* 1：内存碎片场景。* 其它值：返回错误。 | 入参 | 设置SMAP的运行模式，当前包括水线场景，内存碎片场景。 |
+| runMode | int | * 0：水线场景。* 1：内存碎片场景。* 其它值：返回错误。 | 入参 | 兼容已有场景配置。普通 `ubturbo_smap_migrate_out` 不再使用该值解释 ratio/memSize，也不按该值选择单 NUMA 或多 NUMA 路径。 |
 | - | - | - | - | - |
 
 #### 返回值
@@ -433,6 +444,7 @@ struct EnableNodeMsg {
 * 成功返回0。
 * SMAP未初始化返回-1。
 * 参数错误返回-22。
+* 非大页场景设置内存碎片模式返回-22。
 * 同步配置文件失败返回-9。
 
 #### 约束和注意事项
@@ -440,6 +452,7 @@ struct EnableNodeMsg {
 * SMAP初始化后才能调用。
 * 未设置的情况下，默认为水线场景。
 * 如果是4K场景，不支持设置SMAP运行模式为内存碎片模式。
+* `ubturbo_smap_migrate_out_sync` 仍要求内存池化模式；该约束不适用于普通异步 migrate-out。
 
 ### ubturbo_smap_process_migrate_enable
 
@@ -507,7 +520,7 @@ struct EnableNodeMsg {
 #### 约束和注意事项
 
 * 传入的地址段需要和源NUMA ID对应的地址段匹配。
-* 调用该接口前必须调用SmapEnableProcessMigrate禁用pid迁移功能。
+* 调用该接口前必须调用 `ubturbo_smap_process_migrate_enable` 禁用 PID 迁移功能。
 
 ### ubturbo_smap_pid_remote_numa_migrate
 
@@ -538,6 +551,7 @@ struct EnableNodeMsg {
 * 成功返回0。
 * SMAP未初始化返回-1。
 * 迁移成功但修改进程远端NUMA失败返回-9。
+* 迁移失败返回-92。
 * srcNid不是PID的源远端NUMA，返回-6。
 * 参数错误返回-22。
 * 内存申请失败返回-12。
@@ -546,7 +560,7 @@ struct EnableNodeMsg {
 
 * 目的NUMA ID内存余量充足。
 * 不支持重复调用。
-* 调用该接口前必须调用SmapEnableProcessMigrate禁用pid迁移功能。
+* 调用该接口前必须调用 `ubturbo_smap_process_migrate_enable` 禁用 PID 迁移功能。
 
 ### ubturbo_smap_process_tracking_add
 
@@ -573,6 +587,7 @@ struct EnableNodeMsg {
 * 成功返回0。
 * SMAP未初始化返回-1。
 * 参数错误返回-22。
+* 进程状态非PROC_MOVE无法切换扫描类型返回-16。
 * 内核态内存申请失败返回-9。
 * 用户态内存申请失败返回-12。
 
@@ -607,10 +622,12 @@ struct EnableNodeMsg {
 * 成功返回0。
 * SMAP未初始化返回-1。
 * 参数错误返回-22。
+* 内存申请失败返回-12。
+* 内核ioctl移除PID失败返回-9。
 
 #### 约束和注意事项
 
-* 只有通过SmapAddProcessTracking接口设置的flag为0的pid才能被这个接口移除。
+* 只有通过 `ubturbo_smap_process_tracking_add` 接口设置 flag 为 0 的 PID 才能被本接口移除。
 
 <a id="proc-pid_tracking_info"></a>
 ### /proc/ {PID}\_t/tracking\_info
@@ -654,11 +671,9 @@ struct EnableNodeMsg {
 | msg | struct MigrateOutMsg \* | NA | 入参 | 迁移信息。 |
 | msg.count | int | 1-40的整数。 | 入参 | 迁移数量。 |
 | msg.payload[].pid | pid\_t | NA | 入参 | 进程pid。 |
-| msg.payload[].ratio | int | 0-100的整数。 | 入参 | 迁移比例。 |
-| msg.payload[].destNid | int | 大于等于本地NUMA数量小于10。 | 入参 | 目的NUMA ID。 |
-| msg.payload[].memSize | uint64\_t | 单位为KB，必须为2MB的整数倍 | 入参 | 内存迁移大小 |
-| msg.payload[].migrateMode | MigrateMode | 枚举类型：枚举值为MIG\_RATIO\_MODE = 0， MIG\_MEMSIZE\_MODE = 1 | 入参 | MIG\_RATIO\_MODE表示按照比例迁移，MIG\_MEMSIZE\_MODE表示按照内存大小迁移 |
-| pageType | int | 1 | 入参 | 页面类型：0=4K页，1=2M页。 |
+| msg.payload[].count | int | 0 到 `REMOTE_NUMA_NUM` | 入参 | 该 PID 的远端目标数量。 |
+| msg.payload[].inner[] | struct MigrateOutPayloadInner | 与普通 `ubturbo_smap_migrate_out` 相同：remote 唯一、模式一致；ratio 总和不超过 100；memSize 按当前页型对齐。 | 入参 | 多 remote 聚合迁出目标。 |
+| pageType | int | 1 | 入参 | 进程pid类型，1表示虚机类型。 |
 | maxWaitTime | uint64\_t | 10s-1min(单位ms) | 入参 | 一次调用最大等待时间。 |
 
 #### 返回值
@@ -669,11 +684,14 @@ struct EnableNodeMsg {
 * 等待超时返回-16。
 * 内存申请失败返回-12。
 * pid无效返回-3。
+* 部分或全部pid无效返回-3。
 
 #### 约束和注意事项
 
 * 只支持在虚拟化场景调用。
 * 只支持内存池化场景。
+* 与普通 migrate-out 一样支持一个 PID 配置多个 remote；`srcNid` 忽略，local NUMA 由 SMAP 自动管理。
+* 同步初始迁出绕过普通 remote 容量合同，不消耗 `ubturbo_smap_remote_numa_info_set` 配置的 private/shared 容量；后续周期策略仍按保存的目标继续运行。
 * 本接口同步完成初始迁出后，PID仍会被SMAP纳管并参与后续周期冷热迁移；冷热迁移依赖迁移目标NUMA存在可用空闲内存。对于2M huge page虚机场景，本地NUMA和远端NUMA均需要存在可用的空闲2M huge page；若本地NUMA空闲2M huge page不足，远端热页回迁或冷热交换可能无法执行；若远端NUMA空闲2M huge page不足，后续冷页迁出可能无法执行。
 * 建议在PID相关的本地NUMA和远端NUMA上均预留不低于计划迁移规模5%~10%的空闲内存；对于2M huge page虚机，该预留量应换算为对应数量的空闲2M huge page。上述预留值为部署建议，不是接口入参校验条件；调用成功仅表示策略配置成功，不保证后续每轮冷热迁移都能实际迁移页面。
 
@@ -737,3 +755,4 @@ SMAP紧急迁移接口。
 #### 约束和注意事项
 
 * 在OOM场景下由上层组件调用。
+* 紧急迁出按 numa\_maps 段级过滤收集候选页，无法识别共享页归属，段内共享页可能被一并迁到远端；OOM 场景首要目标是压低本地水线、避免 kill，允许共享页短暂误迁。水线下降后，调用方应把相关 pid 重新加入 SMAP 管理，SMAP 管理态扫描会按 pidType/pageType 纠正共享页归属。

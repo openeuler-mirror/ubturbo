@@ -12,13 +12,11 @@
 #ifndef __MANAGE_H__
 #define __MANAGE_H__
 
-#include "virt.h"
 #include "smap_env.h"
 #include "numa_nodes.h"
 #include "advanced-strategy/scene_info.h"
+#include "smap_ioctl.h"
 
-#define LOCAL_NUMA_NUM 4
-#define REMOTE_NUMA_NUM 18
 #ifndef MAX_NR_GROUPED_MIGOUT
 #define MAX_NR_GROUPED_MIGOUT MAX_NR_MIGOUT
 #endif
@@ -31,11 +29,9 @@
 #ifndef MAX_GROUP_REMOTE_NUMA
 #define MAX_GROUP_REMOTE_NUMA REMOTE_NUMA_NUM
 #endif
-#define RESERVED_DIVISOR 20
-#define RESERVED_MEMORY 200
 #define MAX_4K_PROCESSES_CNT 300
 #define MAX_2M_PROCESSES_CNT 100
-#define MAX_THREADS 10
+#define MAX_PAIR_TARGET_COUNT (MAX_4K_PROCESSES_CNT * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM)
 #define MAX_RES_LEN 4
 #define PAGE_SHIFT 12
 #define PAGE_SIZE (1UL << PAGE_SHIFT)
@@ -63,8 +59,6 @@
 #define NUMAMAP_HUGE_2M_SUBSTR "kernelpagesize_kB=2048"
 
 #define MMAP_TYPE_STRING_LEN 20
-#define MMAP_TYPE_SHARED_SEG1 "memAccess='shared'"
-#define MMAP_TYPE_SHARED_SEG2 "access mode='shared'"
 
 #define STRATEGY_CONFIG_PATH "/opt/ubturbo/conf/smap/period.config"
 #define DEFAULT_NMEMB 1
@@ -75,6 +69,8 @@
 #define MAX_CHECK_ALREADY_FORBIDDEN_TIME 100
 #define WAIT_CHECK_ALREADY_FORBIDDEN_PERIOD 200
 
+#define MANAGED_LOCAL_AFFINITY_REFRESH_INTERVAL_MS 30000U
+
 #define WAIT_PROC_STATE_PERIOD 100
 #define WAIT_PROC_STATE_MAX_RETRY 300
 #define MAX_NR_MIGRATE_NUMA_RANGE 50
@@ -84,7 +80,6 @@
 #define NUMA_MAPS_MAX_PATTERN_LEN 20
 
 #define FREQ_BUCKETS_SIZE 256
-#define PRIOR_HISTOGRAM_SIZE 256
 
 extern EnvAtomic g_forbiddenNodes[MAX_NODES];
 
@@ -92,7 +87,8 @@ extern EnvAtomic g_forbiddenNodes[MAX_NODES];
 #define NODE_FORBIDDEN_MIGBACK_DONE (1 << 1)
 #define NODE_FORBIDDEN_MIGBACK_BUSY (1 << 2)
 
-typedef uint16_t actc_t;
+/* 导出/传输类型：经内核 sqrt 压缩后落在 0..255，对齐 FREQ_BUCKETS_SIZE(256) */
+typedef uint8_t actc_t;
 
 typedef enum {
     WATERLINE_MODE = 0,
@@ -118,6 +114,11 @@ typedef enum {
     SWAP,
 } MigrateDirection;
 
+typedef enum {
+    UB_BW_NORMAL = 0,
+    UB_BW_SWAP_STOP,
+} UbBwRestrictType;
+
 typedef enum { MMAP_PARIVATE, MMAP_SHARED, NR_MMAP_TYPE } MmapType;
 
 enum {
@@ -127,9 +128,9 @@ enum {
 
 typedef struct {
     actc_t freq;
-    uint8_t isWhiteListPage : 1;  // bit 0
-    uint8_t isSelected : 1;         // bit 1
-    uint8_t prior : 6;            // bits 2-7
+    uint8_t isWhiteListPage : 1; // bit 0
+    uint8_t isSelected : 1; // bit 1
+    uint8_t prior : 6; // bits 2-7
 } __attribute__((packed)) ActcData;
 
 typedef struct {
@@ -140,8 +141,8 @@ typedef struct {
 } LevelActcData;
 
 typedef struct {
-    uint16_t freqMin;
-    uint16_t freqMax;
+    uint8_t freqMin;
+    uint8_t freqMax;
     uint32_t freqZero;
     uint64_t freqNum;
     uint64_t pageNum;
@@ -231,16 +232,114 @@ typedef struct {
     uint32_t numaNodes; // numa bitmap: 0-unused, 1-used
 } NumaAttribute;
 
+/*
+ * User-requested aggregate target for one remote NUMA node. The process-level
+ * migrate mode determines whether ratio or memSizeKB is effective.
+ */
 typedef struct {
-    double initRemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 接口设置的内存比例
-    uint64_t memSize[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 仅密度场景：迁移内存大小,单位为KB
+    int remoteNid;
+    uint32_t ratio;
+    uint64_t memSizeKB;
+} ProcessRemoteTarget;
+
+/*
+ * Source of truth for a process's normal migrate-out request. Pair-level
+ * runtime matrices must not be used to reconstruct this configuration.
+ */
+typedef struct {
+    MigrateMode migrateMode;
+    uint32_t count;
+    ProcessRemoteTarget targets[REMOTE_NUMA_NUM];
+} ProcessTargetConfig;
+
+typedef struct {
+    uint32_t managedLocalMask;
+    uint32_t observedLocalMask;
+    uint32_t residentLocalMask;
+    uint32_t affinityLocalMask;
+    uint32_t affinityRefreshElapsedMs;
+    uint32_t accountLocalMask[REMOTE_NUMA_NUM];
+    bool affinityValid;
+    bool affinitySampled;
+} ManagedLocalState;
+
+/* Runtime-only assigned request and capacity-clipped target for one Pair. */
+typedef struct {
+    pid_t pid;
+    int localNid;
+    int remoteNid;
+    uint32_t requestedPages;
+    uint32_t targetPages;
+} PairTarget;
+
+/*
+ * Explicit, immutable inputs used while deriving Pair requested targets.
+ * capacityLocalMask only identifies eligible pairs; it does not reserve or
+ * consume any private/shared capacity.
+ */
+typedef struct {
+    int nrLocalNuma;
+    uint64_t pageSizeKB;
+    uint32_t capacityLocalMask[REMOTE_NUMA_NUM];
+} PairRequestContext;
+
+typedef struct {
+    uint64_t managedTotalPages;
+    /* Original aggregate request derived from ProcessTargetConfig. */
+    uint64_t requestedRemotePages[REMOTE_NUMA_NUM];
+    /* Aggregate request limited only by the process's managed pages. */
+    uint64_t effectiveRemotePages[REMOTE_NUMA_NUM];
+    /*
+     * Portion of effectiveRemotePages that cannot currently be assigned to
+     * any eligible local -> remote Pair. The aggregate request remains in
+     * ProcessTargetConfig and can be assigned when Pair eligibility returns.
+     */
+    uint64_t unassignedRequestedPages[REMOTE_NUMA_NUM];
+} PairRequestSummary;
+
+/* Runtime-only migration decision for one local-to-remote pair. */
+typedef struct {
+    pid_t pid;
+    int localNid;
+    int remoteNid;
+    int remoteIndex;
+    uint32_t targetPages;
+    uint32_t actualPages;
+    uint32_t demotePages;
+    uint32_t promotePages;
+    uint32_t swapPages;
+} PairPlan;
+
+/* Per-cycle destination-node budget shared by all processes and Pairs. */
+typedef struct {
+    int nrLocalNuma;
+    uint64_t freePages[MAX_NODES];
+    uint64_t safetyReservePages[MAX_NODES];
+    uint64_t plannedPages[MAX_NODES];
+} PairPlanContext;
+
+/* Per-cycle migration budget shared by all Pairs of one process. */
+typedef struct {
+    pid_t pid;
+    uint64_t maxMigratePages;
+    uint64_t plannedPages;
+} PairPidBudget;
+
+typedef struct {
+    /*
+     * Pair-level compatibility fields generated from ProcessTargetConfig.
+     * They are runtime state, not the source of the user-requested target.
+     */
+    double initRemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
+    uint64_t memSize[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
     uint32_t allocRemoteNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 根据账本计算的，各本地numa对应的远端page的数量
     uint32_t nrPagesPerLocalNuma[LOCAL_NUMA_NUM]; // 根据账本计算的，各本地numa可支配的内存
-    double l2RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 水线场景，分配远端内存后设置的内存比例
-    double l3RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 水线场景：自适应调整后的远端内存占比
+    double l2RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
+    double l3RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
     uint32_t nrMigratePages[MAX_NODES][MAX_NODES]; // 水线场景：消减后的迁移量；密度场景：接口设置的比例
     uint32_t remoteNrPagesAfterMigrate[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 迁移后记录账本
     MigrateDirection dir[MAX_NODES]; // 算法决策各numa的迁出的方向 demote/promote/swap
+    UbBwRestrictType ubBwRestrict[MAX_NODES]; // 各NUMA的UB带宽限制策略
     SeparateParam separateParam;
 } StrategyAttribute;
 
@@ -248,16 +347,12 @@ typedef struct {
     uint32_t scanTime;
     ScanType scanType; // 标识添加进程组件 HAM/普通冷热
     uint64_t actcLen[MAX_NODES];
-    ActcData *actcData[MAX_NODES]; // actc数据
+    ActcData *actcData[MAX_NODES]; // actc数据，按nid偏移指向同一连续缓冲区，第一个非空即缓冲区起始
     ActCount actCount[MAX_NODES]; // 统计数据
     uint32_t selectedBuckets[MAX_NODES][FREQ_BUCKETS_SIZE]; // 已选频次为freq的页面数
-    /* prior 历史频次的直方图统计 */
-    uint32_t priorHistogram[PRIOR_HISTOGRAM_SIZE]; // 累积统计 prior 分布
-    uint8_t priorThre; // 估算的prior阈值（供下次使用）
 } ScanAttribute;
 
 typedef struct {
-    int domainId; // 虚机pid使用
     MmapType mmapType; // 内存映射模式SHARED/PRIVATE
 } VMPidAttribute;
 
@@ -278,10 +373,18 @@ struct ProcessAttribute {
     bool isFirstScan; // 标记首次扫描，需要恢复扫描周期
     bool autoRemoveWhenRemoteEmpty; // 上层将远端目标调为0后，远端页清空时自动移除纳管
     bool syncWaitRemoteEmpty; // 同步迁移等待远端页清空时，临时保护进程不被自动移除
+    /* Runtime-only compatibility mode for migrate_out_sync targets. */
+    bool ignoreRemoteCapacity;
+    bool pendingIgnoreRemoteCapacity;
     struct { // 迁移相关参数
         int nid;
         uint64_t memSize; // 迁移内存大小,单位为KB
     } migrateParam[REMOTE_NUMA_NUM];
+    ProcessTargetConfig targetConfig;
+    ProcessTargetConfig pendingTargetConfig;
+    bool pendingTargetConfigValid;
+    uint32_t pendingTargetNumaNodes;
+    ManagedLocalState managedLocalState;
     SeparateParam separateParam;
     NumaAttribute numaAttr;
     WalkPage walkPage;
@@ -298,6 +401,42 @@ struct ProcessAttribute {
     struct ProcessAttribute *next;
 };
 typedef struct ProcessAttribute ProcessAttr;
+
+#define MAX_PID_SLOTS MAX_4K_PROCESSES_CNT
+
+enum {
+    PID_SLOT_FREE = 0,
+    PID_SLOT_RESERVED = 1,
+    PID_SLOT_INUSE = 2,
+    PID_SLOT_REMOVING = 3,
+};
+
+/*
+ * 并发 PID 管理：槽位数组 + 原子状态机（无锁增删）+ 每 pid 细粒度锁 + 引用计数延迟回收。
+ * - add: CAS FREE->RESERVED 抢槽，填元数据后发布 INUSE
+ * - remove: CAS INUSE->REMOVING 摘除，释放自身引用；引用归零由最后使用者回收
+ * - 读路径无锁扫描槽位，命中后取引用 + 加本 pid attrLock 读写
+ * aligned(64) 避免多槽位假共享。
+ */
+struct PidSlot {
+    EnvAtomic state;
+    pid_t pid;
+    ProcessAttr *attr;
+    EnvAtomic refs;
+    EnvMutex attrLock;
+} __attribute__((aligned(64)));
+
+/*
+ * A prepared process update that is published only after access tracking has
+ * accepted prepared->numaAttr.numaNodes. The prepared ProcessAttr is the
+ * candidate introduced by the target-configuration transaction.
+ */
+typedef struct {
+    ProcessAttr *active;
+    ProcessAttr *prepared;
+    bool isNew;
+    bool isPending;
+} ProcessManageCandidate;
 
 typedef struct {
     uint16_t nrSegment;
@@ -317,15 +456,9 @@ struct MigList {
     uint64_t *addr;
 };
 
-struct MigPra {
-    int pageSize;
-    int nrThread;
-    bool isMulThread;
-};
-
 struct MigrateMsg {
     int cnt;
-    struct MigPra mulMig;
+    int pageSize;
     struct MigList *migList;
 };
 
@@ -356,10 +489,7 @@ struct MigPidRemoteNumaIoctlMsg {
 // 反向扫描参数，所有process共享
 typedef struct {
     uint32_t pageSize;
-    uint64_t nrColdPage; // 冷页数量
-    uint64_t nrHotPage; // 热页数量
-    uint16_t scanPeriod; // 扫描周期
-    uint16_t scanMode; // 扫描模式
+    bool trackingEnabled; // tracking当前是否处于enable状态
 } TrackingAttr;
 
 typedef struct { // tracking设备与迁移设备的fd
@@ -383,19 +513,25 @@ struct RemoteNumaInfo {
     struct RemoteNumaUsedInfo privateUsedInfo[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
 };
 
+struct UbBwMonitor {
+    uint32_t ubBwThreshold; // UB带宽阈值(MB/s)
+    struct UbFluxMbStatistic currentFluxMb; // 当前周期UB带宽数据
+    int currentFluxRet; // 当前周期UB带宽查询结果
+};
+
 struct ProcessManager {
-    ProcessAttr *processes;
-    uint16_t smapMigTime; // 扫描次数
+    struct PidSlot slots[MAX_PID_SLOTS];
     SceneInfo sceneInfo;
     uint16_t nr[TYPE_MAX];
-    uint16_t nrThread; // 线程数量
     uint16_t nrLocalNuma; // local numa数量
     DevFds fds;
     TrackingAttr tracking; // 反向扫描参数
-    void *threadCtx[MAX_THREADS]; // 管理的线程上下文
+    uint32_t migPeriod; // 迁移周期，运行时动态调整
+    EnvAtomic scanMigrateStop; // 扫描迁移线程停止标志
+    pthread_t scanMigrateThread; // 扫描迁移线程
     struct RemoteNumaInfo remoteNumaInfo; // 借用远端内存数量
-    EnvMutex lock;
     EnvMutex threadLock;
+    struct UbBwMonitor ubBwMonitor; // UB带宽监控
 };
 
 struct ProcessMemBitmap {
@@ -415,6 +551,9 @@ typedef struct {
         uint64_t memSize;
         MigrateMode migrateMode;
     } numaParam[REMOTE_NUMA_NUM];
+    bool targetConfigValid;
+    bool ignoreRemoteCapacity;
+    ProcessTargetConfig targetConfig;
 } ProcessParam;
 
 void DebugProcessAttr(struct ProcessManager *manager);
@@ -424,6 +563,14 @@ int GetNrLocalNuma(void);
 /* Range-check a remote NUMA id against the manager's local/remote layout. */
 bool IsRemoteNidValid(int nid);
 
+void InitProcessTargetConfig(ProcessTargetConfig *config);
+void ClearProcessTargetConfig(ProcessTargetConfig *config);
+int CopyProcessTargetConfig(ProcessTargetConfig *dest, const ProcessTargetConfig *src);
+bool RemoveProcessRemoteTarget(ProcessTargetConfig *config, int remoteNid);
+int MoveProcessRemoteTarget(ProcessTargetConfig *config, int srcNid, int destNid, uint64_t memSizeKB, int ratio);
+const ProcessRemoteTarget *FindProcessRemoteTarget(const ProcessTargetConfig *config, int remoteNid);
+int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex);
+void InitProcessMigrationTargetState(ProcessAttr *attr);
 int ProcessManagerInit(uint32_t pageType);
 
 int DestroyProcessManager(void);
@@ -433,8 +580,6 @@ int LoadMangerNrProcessNum(void);
 int LoadMangerNrVmNum(void);
 
 bool PidIsValid(pid_t pid);
-
-bool IsSystemPid(pid_t pid);
 
 int GetPidTypeFromComm(pid_t pid);
 
@@ -448,12 +593,20 @@ uint32_t GetPageSize(void);
 
 ProcessAttr *GetProcessAttr(pid_t pid);
 
+int ReadCmdlineByPid(pid_t pid, char *buf, int len);
+
 int VMPreprocess(pid_t pid, ProcessAttr *attr);
 
 int SetProcessLocalNuma(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag);
 int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
 
+int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate);
+void DiscardProcessManageCandidate(ProcessManageCandidate *candidate);
+void PublishProcessManageCandidate(ProcessManageCandidate *candidate);
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap);
+int UpdateManagedProcessTrackingMode(ProcessAttr *attr, ScanType scanType, uint32_t scanTime, uint32_t duration);
+int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config);
+int ApplyPendingMigrationTargets(ProcessAttr *attr);
 int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
 int ProcessSetPendingGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
 int ApplyPendingGroupedPolicy(ProcessAttr *attr);
@@ -465,6 +618,15 @@ void RemoveManagedProcess(int nr, pid_t *pidArr);
 int MigrateMemoryBack(pid_t pid, int srcNid, int desNid, uint64_t paStart, uint64_t paEnd);
 
 int BuildAllPidData(void);
+void CalibratePairAccount(ProcessAttr *attr);
+int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext *context, PairTarget targets[],
+                              size_t targetCap, size_t *targetCnt, PairRequestSummary *summary);
+int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], size_t targetCap, size_t *targetCnt);
+int BuildAllPairPlanInputs(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
+                           PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt);
+int BuildAllPairPlanInputsForState(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
+                                   PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt,
+                                   bool migrateOnly);
 
 int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size);
 
@@ -487,8 +649,20 @@ bool CheckReadyMigrateBack(int destNid);
 RunMode GetRunMode(void);
 void SetRunMode(RunMode runMode);
 
-void LinkedListAdd(ProcessAttr **head, ProcessAttr **add);
-void LinkedListRemove(ProcessAttr **remove, ProcessAttr **head);
+void PidSlotInit(struct ProcessManager *manager);
+void PidSlotDestroy(struct ProcessManager *manager);
+int PidSlotAdd(struct ProcessManager *manager, ProcessAttr *attr);
+void PidSlotRemove(struct ProcessManager *manager, pid_t pid);
+bool PidSlotEmpty(struct ProcessManager *manager);
+struct PidSlot *PidSlotGetRef(pid_t pid);
+size_t PidSlotCollectRefs(struct ProcessManager *manager, struct PidSlot *arr[], size_t cap);
+void PidSlotReleaseRefs(struct PidSlot *arr[], size_t n);
+void PutProcessAttr(ProcessAttr *attr);
+
+static inline ProcessAttr *PidSlotAttr(struct PidSlot *s)
+{
+    return s ? s->attr : NULL;
+}
 
 static inline bool IsNodeInvalid(int nid)
 {
@@ -575,13 +749,15 @@ int IsPidArrayStateChangeReady(pid_t *pidArr, int len, int enable);
 int IsPidArrInState(pid_t *pidArr, int len, enum ProcessState state);
 bool IsAllL2NodePidInState(enum ProcessState state, int l2Node);
 int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg);
-ProcessAttr *GetProcessAttrLocked(pid_t pid);
 
 bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid);
 FILE *OpenNumaMaps(pid_t pid);
 int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge);
 bool IsPidUsingHugePages(pid_t pid);
 int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[MAX_NODES]);
+
+void UpdateRemoteNumaCriticalErr(void);
+bool IsRemoteNumaCriticalErr(int nid);
 
 static inline uint64_t KBToHugePageCeil(uint64_t memSize)
 {
@@ -639,19 +815,9 @@ static inline int GetAttrL1(ProcessAttr *attr)
     return GetL1(attr->numaAttr.numaNodes);
 }
 
-static inline void SetAttrL1(ProcessAttr *attr, int nid)
-{
-    SetL1(&attr->numaAttr.numaNodes, nid);
-}
-
 static inline bool EqualToAttrL1(ProcessAttr *attr, int nid)
 {
     return EqualToL1(attr->numaAttr.numaNodes, nid);
-}
-
-static inline bool NotEqualToAttrL1(ProcessAttr *attr, int nid)
-{
-    return !EqualToAttrL1(attr, nid);
 }
 
 static inline bool InAttrL1(ProcessAttr *attr, int nid)

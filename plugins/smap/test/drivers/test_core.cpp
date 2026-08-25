@@ -184,37 +184,6 @@ TEST_F(DriversCoreTest, NodeTrackingSetPageSize)
     }
 }
 
-extern "C" int node_tracking_set_trk_mode(struct tracking_node_dev *node_dev, u8 mode);
-TEST_F(DriversCoreTest, NodeTrackingSetTrkMode)
-{
-    int ret = -1;
-    int mode = 0;
-    ret = node_tracking_set_trk_mode(node_dev, mode);
-    EXPECT_EQ(0, ret);
-    list_for_each_entry (trk_dev_temp, &node_dev->dev_list, list) {
-        EXPECT_EQ(0, trk_dev_temp->dev->numa_node);
-    }
-    trk_dev->ops = &stub_tracking_ops;
-    ret = node_tracking_set_trk_mode(node_dev, mode);
-    EXPECT_EQ(0, ret);
-    list_for_each_entry (trk_dev_temp, &node_dev->dev_list, list) {
-        EXPECT_EQ(0, trk_dev_temp->dev->numa_node);
-    }
-    stub_tracking_ops.tracking_mode_set = stub_tracking_mode_set;
-    ret = node_tracking_set_trk_mode(node_dev, mode);
-    EXPECT_EQ(-EINVAL, ret);
-    list_for_each_entry (trk_dev_temp, &node_dev->dev_list, list) {
-        EXPECT_EQ(4, trk_dev_temp->dev->numa_node);
-    }
-
-    MOCKER(stub_tracking_mode_set).stubs().will(returnValue(0));
-    ret = node_tracking_set_trk_mode(node_dev, mode);
-    EXPECT_EQ(0, ret);
-    list_for_each_entry (trk_dev_temp, &node_dev->dev_list, list) {
-        EXPECT_EQ(4, trk_dev_temp->dev->numa_node);
-    }
-}
-
 extern "C" long handle_tracking_cmd(struct tracking_node_dev *node_dev, unsigned long arg);
 TEST_F(DriversCoreTest, HandTrackingCmd)
 {
@@ -227,43 +196,6 @@ TEST_F(DriversCoreTest, HandTrackingCmd)
 
     MOCKER(node_tracking_enable).stubs().will(ignoreReturnValue());
     ret = handle_tracking_cmd(t_node_dev, TRACKING_ENABLED);
-    EXPECT_EQ(0, ret);
-}
-
-extern "C" long handle_mode_set_cmd(struct tracking_node_dev *node_dev, unsigned long arg);
-TEST_F(DriversCoreTest, HandModeSetCmdCaseOne)
-{
-    struct tracking_node_dev node_dev;
-    unsigned long arg = 0;
-    long ret = 0;
-
-    arg = MODE_MAX;
-    ret = handle_mode_set_cmd(&node_dev, arg);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
-extern "C" long handle_mode_set_cmd(struct tracking_node_dev *node_dev, unsigned long arg);
-TEST_F(DriversCoreTest, HandModeSetCmdCaseTwo)
-{
-    struct tracking_node_dev node_dev;
-    unsigned long arg = 0;
-    long ret = 0;
-    arg = ACCESS_MODE_SUM;
-    MOCKER(node_tracking_set_trk_mode).stubs().will(returnValue(-EINVAL));
-    ret = handle_mode_set_cmd(&node_dev, arg);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
-extern "C" long handle_mode_set_cmd(struct tracking_node_dev *node_dev, unsigned long arg);
-TEST_F(DriversCoreTest, HandModeSetCmdCaseThree)
-{
-    struct tracking_node_dev node_dev;
-    unsigned long arg = 0;
-    long ret = 0;
-
-    arg = ACCESS_MODE_SUM;
-    MOCKER(node_tracking_set_trk_mode).stubs().will(returnValue((int)0));
-    ret = handle_mode_set_cmd(&node_dev, arg);
     EXPECT_EQ(0, ret);
 }
 
@@ -296,19 +228,6 @@ TEST_F(DriversCoreTest, NodeCdevUserIoctlTra)
 
     cmd = SMAP_IOCTL_TRACKING_CMD;
     MOCKER(handle_tracking_cmd).stubs().will(returnValue(0));
-    ret = node_cdev_user_ioctl(&file, cmd, arg);
-    EXPECT_EQ(0, ret);
-}
-
-TEST_F(DriversCoreTest, NodeCdevUserIoctlMod)
-{
-    struct file file;
-    unsigned int cmd = 0;
-    unsigned long arg = 0;
-    int ret;
-
-    cmd = SMAP_IOCTL_MODE_SET_CMD;
-    MOCKER(handle_mode_set_cmd).stubs().will(returnValue(0));
     ret = node_cdev_user_ioctl(&file, cmd, arg);
     EXPECT_EQ(0, ret);
 }

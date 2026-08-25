@@ -46,9 +46,11 @@ static int check_msg_validity(struct access_add_pid_msg *msg)
 		pr_err("null pid message passed to access tracking\n");
 		return -EINVAL;
 	}
-	int max_count = is_access_hugepage() ? MAX_2M_PROCESSES_CNT : MAX_4K_PROCESSES_CNT;
+	int max_count = is_access_hugepage() ? MAX_2M_PROCESSES_CNT
+					     : MAX_4K_PROCESSES_CNT;
 	if (msg->count <= 0 || msg->count > max_count) {
-		pr_err("invalid message count: %d passed to access tracking\n", msg->count);
+		pr_err("invalid message count: %d passed to access tracking\n",
+		       msg->count);
 		return -EINVAL;
 	}
 	if (!msg->payload) {
@@ -393,7 +395,7 @@ static int smap_access_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static void update_tracking_data(actc_t *tracking_data,
+static void update_tracking_data(u16 *tracking_data,
 				 struct statistics_tracking_info *stat_info,
 				 struct tracking_info_payload *payload_info)
 {
@@ -426,7 +428,7 @@ static long ioctl_get_tracking(void __user *argp)
 {
 	int ret = 0;
 	struct tracking_info_payload msg;
-	actc_t *tracking_data;
+	u16 *tracking_data;
 	struct statistics_tracking_info *tmp;
 	pr_info("Receive ioctl get tracking\n");
 	if (copy_from_user(&msg, argp, sizeof(msg)))
@@ -441,7 +443,7 @@ static long ioctl_get_tracking(void __user *argp)
 		pr_err("null buffer passed to get tracking data\n");
 		return -EINVAL;
 	}
-	tracking_data = vzalloc(sizeof(actc_t) * msg.length);
+	tracking_data = vzalloc(sizeof(u16) * msg.length);
 	if (!tracking_data) {
 		pr_err("unable to allocate memory for tracking data payload\n");
 		return -ENOMEM;
@@ -453,19 +455,19 @@ static long ioctl_get_tracking(void __user *argp)
 			update_tracking_data(tracking_data, tmp, &msg);
 	}
 	up_read(&statistic_lock);
+	/* GET_TRACKING 为 DFX 统计扫描频次，保留原始 u16 真值，不做压缩 */
 	if (copy_to_user(argp, &msg, sizeof(msg))) {
 		pr_err("failed to copy message to user space\n");
 		ret = -EFAULT;
-		goto out_free_payload;
+		goto out_free;
 	}
-	if (copy_to_user(msg.data, tracking_data,
-			 sizeof(actc_t) * msg.length)) {
+	if (copy_to_user(msg.data, tracking_data, sizeof(u16) * msg.length)) {
 		pr_err("failed to copy tracking data to user space buffer\n");
 		ret = -EFAULT;
 	}
 	pr_info("Exit ioctl get tracking, ret: %d, outlen: %d\n", ret,
 		msg.length);
-out_free_payload:
+out_free:
 	vfree(tracking_data);
 	return ret;
 }
@@ -489,16 +491,18 @@ static long ioctl_set_scan_cpu(void __user *argp)
 		return -EFAULT;
 	}
 
-	if (range.cpu_min > range.cpu_max || range.cpu_max >= num_possible_cpus()) {
-		pr_err("invalid scan cpu range: %d-%d\n", range.cpu_min, range.cpu_max);
+	if (range.cpu_min > range.cpu_max ||
+	    range.cpu_max >= num_possible_cpus()) {
+		pr_err("invalid scan cpu range: %d-%d\n", range.cpu_min,
+		       range.cpu_max);
 		return -EINVAL;
 	}
 
 	if (set_scan_cpus(range.cpu_min, range.cpu_max)) {
-		pr_err("failed to set scan cpu range: %d-%d\n", range.cpu_min, range.cpu_max);
+		pr_err("failed to set scan cpu range: %d-%d\n", range.cpu_min,
+		       range.cpu_max);
 		return -EINVAL;
 	}
-	pr_info("set scan cpu range: %d-%d\n", range.cpu_min, range.cpu_max);
 	return 0;
 }
 

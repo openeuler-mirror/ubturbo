@@ -51,9 +51,7 @@ int OpenAndFlockFd(int fd);
 }
 TEST_F(DeviceTest, TestIInitTrackingDevOne)
 {
-    struct ProcessManager pm = {
-        .nrThread = 0
-    };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
     int ret;
 
     MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(-1));
@@ -63,9 +61,7 @@ TEST_F(DeviceTest, TestIInitTrackingDevOne)
 
 TEST_F(DeviceTest, TestIInitTrackingDevTwo)
 {
-    struct ProcessManager pm = {
-        .nrThread = 0
-    };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
     int ret;
 
     MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
@@ -90,9 +86,7 @@ extern "C" int ConfigureTrackingDevices(struct ProcessManager *manager);
 TEST_F(DeviceTest, TestIInitTrackingDevThree)
 {
     int ret;
-    struct ProcessManager pm = {
-        .nrThread = 0
-    };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
 
     MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
         .stubs()
@@ -109,9 +103,7 @@ TEST_F(DeviceTest, TestIInitTrackingDevThree)
 extern "C" int SendCmdToAllNodes(int fds[], unsigned long cmd, int arg);
 TEST_F(DeviceTest, TestEnableTracking)
 {
-    struct ProcessManager pm = {
-        .nrThread = 0
-    };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
     int ret;
 
     MOCKER(SendCmdToAllNodes).stubs().will(returnValue(0));
@@ -121,9 +113,7 @@ TEST_F(DeviceTest, TestEnableTracking)
 
 TEST_F(DeviceTest, TestDisableTracking)
 {
-    struct ProcessManager pm = {
-        .nrThread = 0
-    };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
     int ret;
 
     MOCKER(SendCmdToAllNodes).stubs().will(returnValue(0));
@@ -172,13 +162,8 @@ TEST_F(DeviceTest, TestConfigTrackingDev)
 extern "C" int DisableTracking(struct ProcessManager *manager);
 TEST_F(DeviceTest, TestDeinitTrackingDev)
 {
-    struct ProcessManager pm = {
-        .fds = {
-            .nodes = { 1, 2 },
-            .migrate = 3,
-            .access = 4,
-        }
-    };
+    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
+    pm.fds.nodes[0] = 1; pm.fds.nodes[1] = 2; pm.fds.migrate = 3; pm.fds.access = 4;
     for (int i = 2; i < MAX_NODES; i++) {
         pm.fds.nodes[i] = DEFAULT_FD;
     }
@@ -303,4 +288,150 @@ TEST_F(DeviceTest, TestConfigureTrackingDevicesSuccess)
     MOCKER(ConfigTrackingDev).stubs().will(returnValue(0));
     int ret = ConfigureTrackingDevices(&manager);
     EXPECT_EQ(0, ret);
+}
+
+extern "C" bool IsNumaCriticalErr(int nid);
+TEST_F(DeviceTest, TestIsNumaCriticalErrPathBuildFailed)
+{
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(-1));
+    bool ret = IsNumaCriticalErr(4);
+    EXPECT_FALSE(ret);
+}
+
+TEST_F(DeviceTest, TestIsNumaCriticalErrFileNotFound)
+{
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(0));
+    MOCKER(fopen).stubs().will(returnValue((FILE *)nullptr));
+    bool ret = IsNumaCriticalErr(4);
+    EXPECT_FALSE(ret);
+}
+
+TEST_F(DeviceTest, TestIsNumaCriticalErrFileEmpty)
+{
+    FILE tmpFile;
+
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(0));
+    MOCKER(fopen).stubs().will(returnValue(&tmpFile));
+    MOCKER(fgetc).stubs().will(returnValue(EOF));
+    MOCKER(fclose).stubs().will(returnValue(0));
+    bool ret = IsNumaCriticalErr(4);
+    EXPECT_FALSE(ret);
+}
+
+TEST_F(DeviceTest, TestIsNumaCriticalErrNotCritical)
+{
+    FILE tmpFile;
+
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(0));
+    MOCKER(fopen).stubs().will(returnValue(&tmpFile));
+    MOCKER(fgetc).stubs().will(returnValue('0'));
+    MOCKER(fclose).stubs().will(returnValue(0));
+    bool ret = IsNumaCriticalErr(4);
+    EXPECT_FALSE(ret);
+}
+
+TEST_F(DeviceTest, TestIsNumaCriticalErrIsCritical)
+{
+    FILE tmpFile;
+
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(0));
+    MOCKER(fopen).stubs().will(returnValue(&tmpFile));
+    MOCKER(fgetc).stubs().will(returnValue('1'));
+    MOCKER(fclose).stubs().will(returnValue(0));
+    bool ret = IsNumaCriticalErr(4);
+    EXPECT_TRUE(ret);
+}
+
+TEST_F(DeviceTest, TestIsNumaCriticalErrCloseFailed)
+{
+    FILE tmpFile;
+
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(0));
+    MOCKER(fopen).stubs().will(returnValue(&tmpFile));
+    MOCKER(fgetc).stubs().will(returnValue('1'));
+    MOCKER(fclose).stubs().will(returnValue(1));
+    bool ret = IsNumaCriticalErr(4);
+    EXPECT_TRUE(ret);
+}
+
+extern "C" void GetUbFluxMb(void);
+TEST_F(DeviceTest, TestGetUbFluxMbAllNodesFail)
+{
+    struct ProcessManager *pm = GetProcessManager();
+    int savedFds[MAX_NODES];
+    for (int i = 0; i < MAX_NODES; i++) {
+        savedFds[i] = pm->fds.nodes[i];
+        pm->fds.nodes[i] = -1;
+    }
+    pm->ubBwMonitor.ubBwThreshold = 500;
+
+    GetUbFluxMb();
+    EXPECT_NE(0, pm->ubBwMonitor.currentFluxRet);
+
+    for (int i = 0; i < MAX_NODES; i++) {
+        pm->fds.nodes[i] = savedFds[i];
+    }
+}
+
+TEST_F(DeviceTest, TestGetUbFluxMbSuccess)
+{
+    struct ProcessManager *pm = GetProcessManager();
+    int savedFd = pm->fds.nodes[LOCAL_NUMA_NUM];
+    pm->fds.nodes[LOCAL_NUMA_NUM] = 10;
+    pm->ubBwMonitor.ubBwThreshold = 500;
+
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl))
+        .stubs()
+        .will(returnValue(0));
+
+    GetUbFluxMb();
+    EXPECT_EQ(0, pm->ubBwMonitor.currentFluxRet);
+
+    pm->fds.nodes[LOCAL_NUMA_NUM] = savedFd;
+}
+
+extern "C" int ConfigUbWatch(uint32_t durationMs);
+TEST_F(DeviceTest, TestConfigUbWatchAllNodesFail)
+{
+    struct ProcessManager *pm = GetProcessManager();
+    int savedFds[MAX_NODES];
+    for (int i = 0; i < MAX_NODES; i++) {
+        savedFds[i] = pm->fds.nodes[i];
+        pm->fds.nodes[i] = -1;
+    }
+
+    int ret = ConfigUbWatch(2000);
+    EXPECT_EQ(-ENODEV, ret);
+
+    for (int i = 0; i < MAX_NODES; i++) {
+        pm->fds.nodes[i] = savedFds[i];
+    }
+}
+
+TEST_F(DeviceTest, TestConfigUbWatchSuccess)
+{
+    struct ProcessManager *pm = GetProcessManager();
+    int savedFd = pm->fds.nodes[LOCAL_NUMA_NUM];
+    pm->fds.nodes[LOCAL_NUMA_NUM] = 10;
+
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl))
+        .stubs()
+        .will(returnValue(0));
+
+    int ret = ConfigUbWatch(2000);
+    EXPECT_EQ(0, ret);
+
+    pm->fds.nodes[LOCAL_NUMA_NUM] = savedFd;
 }

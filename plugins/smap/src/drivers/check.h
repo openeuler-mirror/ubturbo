@@ -11,8 +11,8 @@
 #define TWO_MEGA_SHIFT 21
 #define TWO_MEGA_SIZE (1UL << TWO_MEGA_SHIFT)
 #define TWO_MEGA_MASK (~(TWO_MEGA_SIZE - 1))
-#define GB_TO_4K_SHIFT (18)
-#define HUGE_TO_4K_SHIFT (__builtin_ctz(g_pagesize_huge) - PAGE_SHIFT)
+#define GB_TO_NORMAL_PAGE_SHIFT (30 - PAGE_SHIFT)
+#define HUGE_TO_NORMAL_PAGE_SHIFT (__builtin_ctz(g_pagesize_huge) - PAGE_SHIFT)
 
 #define PAGE_SIZE_4K (1UL << 12)
 #define PAGE_SIZE_64K (1UL << 16)
@@ -26,7 +26,11 @@
 #define MIN(a, b) ((a) <= (b) ? (a) : (b))
 #endif
 
+#ifndef USE_DT
+#define SMAP_MAX_LOCAL_NUMNODES 8
+#else
 #define SMAP_MAX_LOCAL_NUMNODES 4
+#endif
 #define SMAP_MAX_REMOTE_NUMNODES 18
 #define SMAP_MAX_NUMNODES (SMAP_MAX_LOCAL_NUMNODES + SMAP_MAX_REMOTE_NUMNODES)
 

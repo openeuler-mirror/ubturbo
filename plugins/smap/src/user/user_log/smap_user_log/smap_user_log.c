@@ -63,7 +63,7 @@ int SmapStartULog(const char *ulogPath)
     }
     config.maxFileSize = SMAP_MAX_FILE_SIZE;
     config.maxFileCount = SMAP_MAX_FILE_NUM;
-    config.minLogLevel = SMAP_LOG_CORE_DEBUG;
+    config.minLogLevel = SMAP_LOG_CORE_INFO; /* 默认INFO级别，DEBUG日志不输出 */
 
     ret = SmapLogCoreInit(&config);
     if (ret != 0) {
@@ -92,6 +92,9 @@ static int LogLevelMapping(int logLevel)
 
 static void SmapUlogInner(int logLevel, const char *prefix, const char *msg)
 {
+    if (logLevel < SmapLogCoreGetMinLogLevel()) {
+        return;
+    }
     if (g_subscribers != NULL) {
         int level = LogLevelMapping(logLevel);
         char exLogMsg[SMAP_LOG_BUF_LEN] = SMAP_LOG_MODULE_NAME;
@@ -114,7 +117,7 @@ void SMAP_Ulog(int logLevel, const char *funcName, int funcLine, const char *fil
     char head[SMAP_LOG_BUF_LEN] = { 0 };
     char data[SMAP_LOG_BUF_LEN] = { 0 };
 
-    if (snprintf_s(head, sizeof(head), sizeof(head) - 1, "%s %d %s", fileName, funcLine, funcName) == 0) {
+    if (snprintf_s(head, sizeof(head), sizeof(head) - 1, "%s %d", fileName, funcLine) == 0) {
         return;
     }
     va_start(argPtr, format);

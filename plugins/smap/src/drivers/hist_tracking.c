@@ -44,7 +44,7 @@
 
 extern struct list_head access_dev;
 
-static inline void reset_actc_data(struct access_tracking_dev *hdev)
+static inline void hist_reset_actc_data(struct access_tracking_dev *hdev)
 {
 	size_t len = hdev->page_count * sizeof(actc_t);
 
@@ -62,7 +62,7 @@ static int hist_tracking_disable(struct device *ldev)
 	return 0;
 }
 
-static void actc_buffer_deinit(struct access_tracking_dev *hdev)
+static void hist_actc_buffer_deinit(struct access_tracking_dev *hdev)
 {
 	hdev->page_count = 0;
 	if (hdev->access_bit_actc_data) {
@@ -79,7 +79,7 @@ static inline int hist_get_page_size(struct access_tracking_dev *hdev)
 	return PAGE_SIZE;
 }
 
-static u64 calc_access_len(struct access_tracking_dev *hdev)
+static u64 hist_calc_access_len(struct access_tracking_dev *hdev)
 {
 	int page_size = hist_get_page_size(hdev);
 	u64 page_count;
@@ -100,18 +100,18 @@ static void hist_dev_pgsize_update(u8 page_size_mode)
 	hist_update_pgsize(pgsize);
 }
 
-static int actc_buffer_reinit(struct access_tracking_dev *hdev)
+static int hist_actc_buffer_reinit(struct access_tracking_dev *hdev)
 {
 	u64 page_count;
-	page_count = calc_access_len(hdev);
+	page_count = hist_calc_access_len(hdev);
 	if (!page_count) {
 		pr_debug("no page found on node: %d\n", hdev->node);
 	}
 	if (hdev->page_count == page_count) {
-		reset_actc_data(hdev);
+		hist_reset_actc_data(hdev);
 		return 0;
 	}
-	actc_buffer_deinit(hdev);
+	hist_actc_buffer_deinit(hdev);
 	if (page_count) {
 		hdev->access_bit_actc_data =
 			vzalloc(page_count * sizeof(actc_t));
@@ -130,7 +130,7 @@ static void hist_tracking_enable(struct device *ldev)
 
 	hdev = to_access_tracking_dev(ldev);
 	down_write(&hdev->buffer_lock);
-	ret = actc_buffer_reinit(hdev);
+	ret = hist_actc_buffer_reinit(hdev);
 	if (ret) {
 		pr_err("unable to reinit ACTC buffer\n");
 		up_write(&hdev->buffer_lock);
@@ -155,7 +155,7 @@ static int hist_tracking_set_page_size(struct device *ldev, u8 pgsize)
 	hdev->enable_on = false;
 	hdev->page_size_mode = pgsize;
 	hist_dev_pgsize_update(pgsize);
-	ret = actc_buffer_reinit(hdev);
+	ret = hist_actc_buffer_reinit(hdev);
 	if (ret) {
 		up_write(&hdev->buffer_lock);
 		pr_err("Actc buffer reinit failed. ret:%d\n", ret);
@@ -165,15 +165,80 @@ static int hist_tracking_set_page_size(struct device *ldev, u8 pgsize)
 	return ret;
 }
 
+static inline bool is_numa_flux_updated(struct ub_flux_mb_statistic *stc,
+					int numa_id)
+{
+	int i;
+
+	for (i = 0; i < stc->len; i++) {
+		if (stc->flux[i].numa_id == numa_id)
+			return true;
+	}
+	return false;
+}
+
+static int hist_tracking_ub_watch(struct device *ldev, void *result)
+{
+	struct ub_flux_mb flux_mb;
+	struct ub_flux_mb_statistic *stc =
+		(struct ub_flux_mb_statistic *)result;
+	struct ram_segment *seg, *tmp;
+	int idx = 0, ret;
+
+	if (!stc)
+		return -EINVAL;
+
+	ret = ub_watch(&flux_mb);
+	if (ret)
+		return ret;
+
+	stc->len = 0;
+	read_lock(&rem_ram_list_lock);
+	list_for_each_entry_safe(seg, tmp, &remote_ram_list, node) {
+		if (stc->len >= SMAP_MAX_REMOTE_NUMNODES) {
+			pr_err("too many remote NUMA nodes\n");
+			read_unlock(&rem_ram_list_lock);
+			return -EINVAL;
+		}
+
+		if (is_numa_flux_updated(stc, seg->numa_node))
+			continue;
+
+		ret = get_path_idx_by_addr(seg->start, &idx);
+		if (ret) {
+			pr_err("get path index failed for seg %#llx\n",
+			       seg->start);
+			read_unlock(&rem_ram_list_lock);
+			return ret;
+		}
+
+		stc->flux[stc->len].numa_id = seg->numa_node;
+		stc->flux[stc->len].read_mb = flux_mb.read[idx];
+		stc->flux[stc->len].write_mb = flux_mb.write[idx];
+		stc->len++;
+	}
+
+	read_unlock(&rem_ram_list_lock);
+
+	return 0;
+}
+
+static int hist_tracking_ub_watch_config(struct device *ldev, u32 duration_ms)
+{
+	return ub_watch_config(duration_ms);
+}
+
 static struct tracking_operations g_hist_tracking_ops = {
 	.tracking_enable = hist_tracking_enable,
 	.tracking_disable = hist_tracking_disable,
 	.tracking_set_page_size = hist_tracking_set_page_size,
+	.tracking_ub_watch = hist_tracking_ub_watch,
+	.tracking_ub_watch_config = hist_tracking_ub_watch_config,
 };
 
-static int actc_buffer_init(struct access_tracking_dev *hdev)
+static int hist_actc_buffer_init(struct access_tracking_dev *hdev)
 {
-	hdev->page_count = calc_access_len(hdev);
+	hdev->page_count = hist_calc_access_len(hdev);
 	pr_info("page count: %llu for node: %d\n", hdev->page_count,
 		hdev->node);
 	if (!hdev->page_count)
@@ -194,7 +259,7 @@ static void hist_tracking_deinit(void)
 		if (!hdev->is_hist)
 			continue;
 		tracking_dev_remove(hdev->tracking_dev);
-		actc_buffer_deinit(hdev);
+		hist_actc_buffer_deinit(hdev);
 		device_unregister(&hdev->ldev);
 		kfree(hdev);
 	}
@@ -226,7 +291,7 @@ static int hist_tracking_init(void)
 		hdev->page_size_mode = PAGE_MODE_2M;
 		hdev->is_hist = true;
 
-		ret = actc_buffer_init(hdev);
+		ret = hist_actc_buffer_init(hdev);
 		if (ret) {
 			pr_err("unable to init ACTC buffer, ret: %d\n", ret);
 			goto free_hdev;
@@ -264,7 +329,7 @@ static int hist_tracking_init(void)
 del_dev:
 	device_del(&hdev->ldev);
 deinit_buf:
-	actc_buffer_deinit(hdev);
+	hist_actc_buffer_deinit(hdev);
 	put_device(&hdev->ldev);
 free_hdev:
 	kfree(hdev);

@@ -34,6 +34,14 @@ bool queue_delayed_work(struct workqueue_struct *wq,
 	return true;
 }
 
+bool queue_work(struct workqueue_struct *wq, struct work_struct *work)
+{
+	return true;
+}
+
+struct workqueue_struct *system_unbound_wq;
+struct workqueue_struct *system_wq;
+
 struct workqueue_attrs *alloc_workqueue_attrs(void)
 {
     struct workqueue_attrs *attrs = (struct workqueue_attrs *)calloc(1, sizeof(struct workqueue_attrs));

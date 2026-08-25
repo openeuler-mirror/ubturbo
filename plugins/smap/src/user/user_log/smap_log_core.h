@@ -54,5 +54,6 @@ int SmapLogCoreInit(const SmapLogConfig *config);
 void SmapLogCoreExit(void);
 int SmapLogCoreWrite(int level, const char *prefix, const char *message);
 int SmapLogCoreGetMinLogLevel(void);
+void SmapLogCoreSetMinLogLevel(int level);
 
 #endif /* SMAP_LOG_CORE_H */

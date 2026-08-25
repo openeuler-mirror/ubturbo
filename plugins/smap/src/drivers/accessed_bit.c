@@ -35,7 +35,6 @@
 #include "access_mmu.h"
 #include "access_tracking.h"
 #include "accessed_bit.h"
-#include "smap_page_flags.h"
 
 #define DECIMAL 10
 #define DEFAULT_REF_COUNT 0
@@ -89,7 +88,8 @@ static int scan_group_size_set(const char *val, const struct kernel_param *kp)
 		return -EINVAL;
 	}
 
-	pr_info("scan group size changed: %lu -> %lu\n", scan_group_size, new_size);
+	pr_info("scan group size changed: %lu -> %lu\n", scan_group_size,
+		new_size);
 
 	/* Update scan group size */
 	scan_group_size = new_size;
@@ -185,10 +185,10 @@ static int get_pid_from_tracking_file(const struct file *file)
 static inline void clear_tracking_info(struct ham_tracking_info *info)
 {
 	memset(info->paddr[L1], 0, sizeof(u64) * info->len[L1]);
-	memset(info->freq[L1], 0, sizeof(actc_t) * info->len[L1]);
+	memset(info->freq[L1], 0, sizeof(u16) * info->len[L1]);
 	if (info->paddr[L2]) {
 		memset(info->paddr[L2], 0, sizeof(u64) * info->len[L2]);
-		memset(info->freq[L2], 0, sizeof(actc_t) * info->len[L2]);
+		memset(info->freq[L2], 0, sizeof(u16) * info->len[L2]);
 	}
 }
 
@@ -420,7 +420,24 @@ static void actc_data_update(int nid, u64 pa_index)
 
 	if (unlikely(!adev || pa_index >= adev->page_count))
 		return;
-	adev->access_bit_actc_data[pa_index]++;
+	if (!adev->is_hist && adev->access_bit_actc_data[pa_index] < U8_MAX)
+		adev->access_bit_actc_data[pa_index]++;
+}
+
+/*
+ * Force the freq of a shared file page to the maximum so that the cold/hot
+ * swap path (SELECT_TOP_K) picks it for migrate-back first. Shared file pages
+ * migrated to remote memory should be promoted back promptly.
+ */
+static void actc_data_set_max(struct page *page, int nid, u64 pa_index)
+{
+	struct access_tracking_dev *adev = get_access_tracking_dev(nid);
+
+	if (unlikely(!adev || pa_index >= adev->page_count))
+		return;
+	if (!is_shared_file_page(page))
+		return;
+	adev->access_bit_actc_data[pa_index] = (actc_t)-1;
 }
 
 static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
@@ -448,7 +465,8 @@ static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
 	if (unlikely(!adev || pa_index >= adev->page_count))
 		return;
 
-	adev->access_bit_actc_data[pa_index]++;
+	if (!adev->is_hist && adev->access_bit_actc_data[pa_index] < U8_MAX)
+		adev->access_bit_actc_data[pa_index]++;
 }
 
 static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
@@ -693,10 +711,10 @@ static void update_statistic_scan_num(pid_t pid)
 
 static bool memslot_is_mem(struct kvm_memory_slot *memslot)
 {
-	if (memslot->base_gfn < (1 << GB_TO_4K_SHIFT)) {
+	if (memslot->base_gfn < (1 << GB_TO_NORMAL_PAGE_SHIFT)) {
 		return false;
 	}
-	if (memslot->npages <= (1 << HUGE_TO_4K_SHIFT)) {
+	if (memslot->npages <= (1 << HUGE_TO_NORMAL_PAGE_SHIFT)) {
 		return false;
 	}
 	return true;
@@ -730,30 +748,62 @@ static int collect_statistic_vaddr(struct kvm *kvm,
 	return 0;
 }
 
+static void smap_on_pte_young_cb(u64 gpa, bool is_young, bool pte_valid,
+				 void *arg)
+{
+	struct smap_stage2_range_mkold_data *ctx = arg;
+	unsigned long hva;
+	struct access_pid *ap = (struct access_pid *)ctx->ap;
+	bool set_young;
+
+	if (!is_young && !access_pid_cur_last_scanning(ap))
+		return;
+
+	hva = gfn_to_hva_memslot(ctx->memslot, gpa_to_gfn(gpa));
+	if (!get_vma_if_huge_page(ctx->kvm, hva))
+		return;
+	set_young = is_young && pte_valid;
+	if (set_young || access_pid_cur_last_scanning(ap))
+		(void)hva_to_hpa(ctx->kvm, hva, ap, set_young);
+}
+
+static void smap_on_hole_cb(u64 gpa_start, u64 gpa_end, void *arg)
+{
+	struct smap_stage2_range_mkold_data *ctx = arg;
+	struct access_pid *ap = ctx->ap;
+	unsigned long hva;
+	gfn_t start = gpa_start >> PAGE_SHIFT;
+	gfn_t end = gpa_end >> PAGE_SHIFT;
+	gfn_t gfn;
+
+	if (!access_pid_cur_last_scanning(ap))
+		return;
+
+	for (gfn = start; gfn < end; gfn += ctx->stride) {
+		hva = gfn_to_hva_memslot(ctx->memslot, gfn);
+		(void)hva_to_hpa(ctx->kvm, hva, ap, false);
+	}
+}
+
 static int process_memslot_pages(struct kvm *kvm,
 				 struct kvm_memory_slot *memslot,
 				 struct access_pid *ap, int page_size)
 {
-	gpa_t gpa;
-	unsigned long hva;
-	bool is_young;
-	int ret;
+	u64 memslot_start = memslot->base_gfn << PAGE_SHIFT;
+	u64 memslot_end = (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
+	struct smap_stage2_range_mkold_data data = {
+		.kvm = kvm,
+		.memslot = memslot,
+		.ap = (void *)ap,
+		.on_pte_young = smap_on_pte_young_cb,
+		.on_hole = smap_on_hole_cb,
+	};
+	data.stride = (page_size == PAGE_SIZE_2M) ? PTRS_PER_PMD : 1;
 
-	for (gpa = memslot->base_gfn << PAGE_SHIFT;
-	     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
-	     gpa += (gpa_t)page_size) {
-		is_young =
-			smap_kvm_pgtable_stage2_mkold(kvm->arch.mmu.pgt, gpa);
-		if (!is_young && !access_pid_cur_last_scanning(ap))
-			continue;
-		hva = gfn_to_hva_memslot(memslot, gpa_to_gfn(gpa));
-		if (!get_vma_if_huge_page(kvm, hva))
-			continue;
-		ret = hva_to_hpa(kvm, hva, ap, is_young);
-		if (ret)
-			continue;
-	}
-	return 0;
+	return smap_kvm_pgtable_stage2_mkold_range(kvm->arch.mmu.pgt,
+						   memslot_start,
+						   memslot_end - memslot_start,
+						   &data);
 }
 
 static int scan_kvm_memslots(struct kvm *kvm, struct access_pid *ap,
@@ -1343,11 +1393,7 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 	struct pte_walk *pte_walk = walk->private;
 	pte_t ptent = ptep_get(pte);
 	phys_addr_t paddr = (phys_addr_t)__pte_to_phys(ptent);
-	unsigned long pfn = PHYS_PFN(paddr);
-	struct page *page = NULL;
 	bool is_young = pte_young(ptent);
-	bool is_local = false;
-	u8 nid;
 
 	if (paddr == 0 || is_swap_pte(ptent) || !pte_present(ptent))
 		return 0;
@@ -1355,14 +1401,6 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 	if (pte_walk->scan_result_cnt >= SCAN_RESULT_CAPACITY)
 		return 0;
 
-	/* 锁内：获取 page 用于 inc_smap_acc_cnt */
-	if (!pfn_valid(pfn))
-		return 0;
-	page = pfn_to_online_page(pfn);
-	if (!page)
-		return 0;
-	nid = page_to_nid(page);
-	is_local = nid < nr_local_numa;
 	/* 64KiB分组优化：NORMAL_SCAN类型，首页young则跳过后续页 */
 	if (pte_walk->type == NORMAL_SCAN) {
 		bool is_first = (addr & (scan_group_size - 1)) == 0;
@@ -1370,9 +1408,6 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 			pte_walk->group_hot = is_young;
 		else if (pte_walk->group_hot) {
 			pte_walk->group_hot_skip_cnt++;
-			if (!is_file_or_shared_page(page) && is_young) {
-				inc_smap_acc_cnt(page, pte_walk->ap->prior_decay);
-			}
 			goto save_res;
 		}
 	}
@@ -1381,21 +1416,16 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 		if (pte_walk->type == STATISTIC_SCAN)
 			pte_walk->statistic_vaddr[pte_walk->statistic_cnt++] =
 				addr;
-		if (!is_file_or_shared_page(page)) {
 #ifdef KERNEL_VELINUX
-			__ptep_test_and_clear_young(pte);
+		__ptep_test_and_clear_young(pte);
 #else
-			__ptep_test_and_clear_young(NULL, 0, pte);
+		__ptep_test_and_clear_young(NULL, 0, pte);
 #endif
-			if (pte_walk->type == NORMAL_SCAN)
-				inc_smap_acc_cnt(page, pte_walk->ap->prior_decay);
-		}
 		pte_walk->flag = true;
 	}
 
 save_res:
 	pte_walk->scan_results[pte_walk->scan_result_cnt].paddr = paddr;
-	pte_walk->scan_results[pte_walk->scan_result_cnt].nid = nid;
 	pte_walk->scan_results[pte_walk->scan_result_cnt].hot = is_young;
 	pte_walk->scan_result_cnt++;
 
@@ -1406,11 +1436,26 @@ static const struct mm_walk_ops pte_range_ops = {
 	.pte_entry = check_pte_young,
 };
 
+static inline int cal_acidx_and_node_by_paddr(phys_addr_t paddr, int *nid,
+					      u64 *pa_idx, int page_size)
+{
+	int ret;
+
+	ret = calc_paddr_acidx_acpi(paddr, nid, pa_idx, page_size);
+	if (ret) {
+		ret = calc_paddr_acidx_iomem(paddr, nid, pa_idx, page_size);
+	}
+
+	return ret;
+}
+
 static void process_scan_results(struct pte_walk *pte_walk)
 {
 	u64 i, pa_idx;
 	int ret;
 	bool is_last_scan;
+	int nid = 0;
+	struct page *page;
 
 	if (!pte_walk || !pte_walk->ap)
 		return;
@@ -1419,19 +1464,41 @@ static void process_scan_results(struct pte_walk *pte_walk)
 
 	for (i = 0; i < pte_walk->scan_result_cnt; i++) {
 		struct scan_result_entry *entry = &pte_walk->scan_results[i];
-		if (entry->nid < nr_local_numa)
+
+		if (entry->hot) {
+			unsigned long pfn = PHYS_PFN(entry->paddr);
+
+			if (pfn_valid(pfn))
+				folio_set_young(pfn_folio(pfn));
+		}
+
+		if (nid < nr_local_numa) {
 			ret = calc_paddr_acidx_acpi_known_nid(
-				entry->paddr, entry->nid, &pa_idx, PAGE_SIZE);
-		else
+				entry->paddr, nid, &pa_idx, PAGE_SIZE);
+			if (ret) {
+				ret = cal_acidx_and_node_by_paddr(
+					entry->paddr, &nid, &pa_idx, PAGE_SIZE);
+			}
+		} else {
 			ret = calc_paddr_acidx_iomem_known_nid(
-				entry->paddr, entry->nid, &pa_idx, PAGE_SIZE);
+				entry->paddr, nid, &pa_idx, PAGE_SIZE);
+			if (ret) {
+				ret = cal_acidx_and_node_by_paddr(
+					entry->paddr, &nid, &pa_idx, PAGE_SIZE);
+			}
+		}
 		if (ret)
 			continue;
+		entry->nid = nid;
 		if (entry->hot)
 			actc_data_update(entry->nid, pa_idx);
-		if (is_last_scan)
+		if (is_last_scan) {
+			page = smap_paddr_to_page(entry->paddr);
+			if (page && entry->nid >= nr_local_numa)
+				actc_data_set_max(page, entry->nid, pa_idx);
 			add_to_bm_page_fast(entry->paddr, entry->nid, pa_idx,
-					    pte_walk->ap);
+					    pte_walk->ap, page);
+		}
 		cond_resched();
 	}
 }
@@ -1642,67 +1709,6 @@ static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 			 pte_walk.group_hot_skip_cnt);
 
 	return ret;
-}
-
-static int pte_pure_clear(pte_t *pte, unsigned long addr, unsigned long next,
-			  struct mm_walk *walk)
-{
-	struct pte_walk *pte_walk = walk->private;
-
-	if (is_swap_pte(*pte)) {
-		return 0;
-	}
-
-	if (pte_young(*pte)) {
-		pte_walk->flag = true;
-#ifdef KERNEL_VELINUX
-		__ptep_test_and_clear_young(pte);
-#else
-		__ptep_test_and_clear_young(NULL, 0, pte);
-#endif
-	}
-
-	return 0;
-}
-
-int pid_pte_mkold(struct access_pid *ap)
-{
-	int ret;
-	struct mm_struct *mm;
-	struct pte_walk pte_walk = {
-		.flag = false,
-	};
-
-	struct mm_walk_ops pte_tmp_ops = {
-		.pte_entry = pte_pure_clear,
-	};
-
-	mm = get_mm_by_pid(ap->pid);
-	if (IS_ERR(mm) || !mm || !mmget_not_zero(mm)) {
-		pr_err("bad mm of pid: %d\n", ap->pid);
-		return -EINVAL;
-	}
-
-	ret = mmap_read_lock_killable(mm);
-	if (ret) {
-		pr_err("unable to get mmap read lock, ret: %d\n", ret);
-		mmput(mm);
-		return ret;
-	}
-	ret = walk_page_range(mm, 0UL, ~0UL, &pte_tmp_ops, &pte_walk);
-	if (ret) {
-		pr_err("failed to walk page range, ret: %d\n", ret);
-		mmap_read_unlock(mm);
-		mmput(mm);
-		return ret;
-	}
-	mmap_read_unlock(mm);
-	if (pte_walk.flag) {
-		smap_flush_tlb_mm(mm);
-	}
-	mmput(mm);
-	pr_info("PTEs of pid %d are cleaned\n", ap->pid);
-	return 0;
 }
 
 int scan_accessed_bit_forward_vm(struct access_pid *ap, int page_size)

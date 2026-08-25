@@ -14,4 +14,9 @@ uint32_t UBTurboGetBool(const std::string &section, const std::string &configKey
 {
     return 0;
 }
+
+uint32_t UBTurboGetStr(const std::string &section, const std::string &configKey, std::string &configValue)
+{
+    return 0;
+}
 } // namespace turbo::config

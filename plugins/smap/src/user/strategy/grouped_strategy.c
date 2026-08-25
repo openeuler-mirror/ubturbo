@@ -543,7 +543,7 @@ static uint64_t CollectPagesFromNode(ProcessAttr *process, int nid, uint64_t use
     }
 
     uint64_t limit = MIN(usedPages, actcLen - offset);
-    uint32_t buckets[FREQ_BUCKETS_SIZE] = {0};
+    uint32_t buckets[FREQ_BUCKETS_SIZE] = { 0 };
 
     // 统计频率分布
     for (uint64_t j = 0; j < actcLen; j++) {
@@ -1106,76 +1106,6 @@ static int BuildPromoteGroups(ProcessAttr *process, PromoteGroup *groups, int *g
         (*groupCnt)++;
     }
     qsort(groups, *groupCnt, sizeof(PromoteGroup), PromoteGroupCmp);
-    return 0;
-}
-
-static int RunPromoteStage(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
-{
-    PromoteGroup promoteGroups[MAX_MIGRATION_GROUP_NUM] = { 0 };
-    uint64_t remoteOffsets[MAX_NODES] = { 0 };
-    int groupCnt = 0;
-    int ret = BuildPromoteGroups(process, promoteGroups, &groupCnt);
-    if (ret) {
-        return ret;
-    }
-    for (int i = 0; i < groupCnt; i++) {
-        MigrationGroupAttr *group = &process->groupPolicy.groups[promoteGroups[i].groupIdx];
-        uint64_t promoteNeed = MIN(promoteGroups[i].deficit, promoteGroups[i].remoteUsed);
-        SMAP_LOGGER_INFO("grouped pid %d group %d warm-up promote %llu pages.", process->pid, promoteGroups[i].groupIdx,
-                         promoteNeed);
-        ret = BuildPromoteMigList(process, group, remoteOffsets, mlist, promoteNeed);
-        if (ret) {
-            return ret;
-        }
-    }
-    return 0;
-}
-
-static int RunDemoteStage(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
-{
-    for (int i = 0; i < process->groupPolicy.groupCount; i++) {
-        MigrationGroupAttr *group = &process->groupPolicy.groups[i];
-        uint64_t localUsed = CalcLocalUsed(process, group);
-        uint64_t remoteUsed = CalcRemoteUsed(group);
-        uint64_t deficit = CalcGroupDeficit(process, group);
-        uint64_t excess = CalcGroupExcess(process, group);
-        SMAP_LOGGER_INFO("grouped pid %d group %d localUsed %llu deficit %llu excess %llu remoteUsed %llu.",
-                         process->pid, i, localUsed, deficit, excess, remoteUsed);
-        if (deficit > 0 || excess == 0) {
-            SMAP_LOGGER_INFO("grouped pid %d group %d skip demote.", process->pid, i);
-            continue;
-        }
-        uint64_t demoteAllowed = 0;
-        for (int j = 0; j < group->targetCount; j++) {
-            demoteAllowed += CalcRemoteRemaining(group, j);
-        }
-        uint64_t actualDemote = MIN(excess, demoteAllowed);
-        SMAP_LOGGER_INFO("grouped pid %d group %d cool-down demote %llu pages, allowed %llu.", process->pid, i,
-                         actualDemote, demoteAllowed);
-        int ret = BuildDemoteMigList(process, group, mlist, actualDemote);
-        if (ret) {
-            return ret;
-        }
-    }
-    return 0;
-}
-
-static int RunLocalRebalanceStage(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
-{
-    for (int i = 0; i < process->groupPolicy.groupCount; i++) {
-        MigrationGroupAttr *group = &process->groupPolicy.groups[i];
-        uint64_t deficit = CalcGroupDeficit(process, group);
-        uint64_t excess = CalcGroupExcess(process, group);
-        if (deficit == 0 || excess == 0) {
-            continue;
-        }
-        SMAP_LOGGER_INFO("grouped pid %d group %d local rebalance candidate deficit %llu excess %llu.", process->pid, i,
-                         deficit, excess);
-        int ret = BuildLocalRebalanceMigList(process, group, mlist);
-        if (ret) {
-            return ret;
-        }
-    }
     return 0;
 }
 

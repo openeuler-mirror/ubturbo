@@ -4,8 +4,8 @@
  * Description: SMAP ACPI helper header
  */
 
-#ifndef _ACPI_HELPER_H
-#define _ACPI_HELPER_H
+#ifndef _TIERING_ACPI_HELPER_H
+#define _TIERING_ACPI_HELPER_H
 
 #include <linux/acpi.h>
 
@@ -26,4 +26,4 @@ int acpi_parse_entries_array(char *id, unsigned long table_size,
 			     struct acpi_subtable_proc *proc, int proc_num,
 			     unsigned int max_entries);
 
-#endif /* _ACPI_HELPER_H */
+#endif /* _TIERING_ACPI_HELPER_H */

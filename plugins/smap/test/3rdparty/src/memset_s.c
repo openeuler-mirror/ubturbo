@@ -5,9 +5,11 @@
  */
 
 #include <stdlib.h>
+#include <string.h>
 #include "securec.h"
 
 errno_t memset_s(void *dest, size_t destMax, int c, size_t count)
 {
+    memset(dest, c, count);
     return 0;
 }
