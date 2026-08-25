@@ -32,6 +32,7 @@
 #include "access_pid.h"
 #include "hist_ops.h"
 #include "access_tracking.h"
+#include "smap_cold_queue.h"
 
 #define MAX_SCAN_TIME 100000 /* 100s */
 #define MS_TO_US 1000
@@ -583,6 +584,9 @@ static int __init access_tracking_init(void)
 	}
 	spin_lock_init(&ham_lock);
 	init_rwsem(&statistic_lock);
+	ret = smap_cold_queue_init();
+	if (ret)
+		goto err_cold_queue;
 	ret = remote_ram_init();
 	if (ret) {
 		goto err_remote_ram;
@@ -623,6 +627,8 @@ err_ioctl:
 	release_remote_ram();
 err_remote_ram:
 	reset_acpi_mem();
+err_cold_queue:
+	smap_cold_queue_free();
 	return ret;
 }
 
@@ -635,6 +641,7 @@ static void __exit access_tracking_exit(void)
 	release_adev();
 	release_remote_ram();
 	reset_acpi_mem();
+	smap_cold_queue_free();
 	pr_info("access tracking exit successfully\n");
 }
 

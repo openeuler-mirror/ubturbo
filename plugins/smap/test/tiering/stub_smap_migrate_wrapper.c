@@ -89,3 +89,11 @@ void folio_ref_inc(struct folio *folio)
 void folio_clear_hugetlb_freed(struct folio *folio)
 {
 }
+
+void folio_clear_referenced(struct folio *folio)
+{
+}
+
+void folio_test_unevictable(struct folio *folio)
+{
+}

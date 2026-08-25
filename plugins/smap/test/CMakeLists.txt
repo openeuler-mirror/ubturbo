@@ -111,6 +111,7 @@ list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/kvm_pgtable.c)
 # access_pid
 list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_pid.c)
 
+list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/smap_cold_queue.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_tracking.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_tracking_wrapper.c)
 

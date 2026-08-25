@@ -20,6 +20,11 @@ int (*fp_migrate_pages)(struct list_head *from, new_folio_t get_new_folio,
 void (*fp_putback_movable_pages)(struct list_head *l) = NULL;
 bool (*fp_isolate_folio_to_list)(struct folio *folio,
 				 struct list_head *list) = NULL;
+unsigned long (*fp_reclaim_pages)(struct list_head *folio_list,
+				  bool ignore_references) = NULL;
+bool (*fp_isolate_hugetlb)(struct folio *folio, struct list_head *list) = NULL;
+void (*fp_folio_putback_lru)(struct folio *folio) = NULL;
+bool (*fp_folio_isolate_lru)(struct folio *folio) = NULL;
 
 static inline unsigned long *get_pageblock_bitmap(const struct page *p,
 						  unsigned long pfn)
@@ -66,6 +71,23 @@ int smap_process_symbols(void)
 	if (!(fp_migrate_pages && fp_putback_movable_pages &&
 	      fp_isolate_folio_to_list))
 		return -EFAULT;
+
+	/* Reclaim-path symbols for swap-out */
+	fp_reclaim_pages = (unsigned long (*)(struct list_head *, bool))
+		fp_kallsyms_lookup_name("reclaim_pages");
+	fp_isolate_hugetlb = (bool (*)(struct folio *, struct list_head *))
+		fp_kallsyms_lookup_name("isolate_hugetlb");
+	fp_folio_putback_lru = (void (*)(
+		struct folio *))fp_kallsyms_lookup_name("folio_putback_lru");
+	fp_folio_isolate_lru = (bool (*)(
+		struct folio *))fp_kallsyms_lookup_name("folio_isolate_lru");
+	if (!fp_reclaim_pages || !fp_isolate_hugetlb || !fp_folio_putback_lru ||
+	    !fp_folio_isolate_lru)
+		pr_warn("smap: swap-out symbols missing (reclaim_pages=%p "
+			"isolate_hugetlb=%p folio_putback_lru=%p "
+			"folio_isolate_lru=%p)\n",
+			fp_reclaim_pages, fp_isolate_hugetlb,
+			fp_folio_putback_lru, fp_folio_isolate_lru);
 
 	return 0;
 }
