@@ -1038,7 +1038,7 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
             if (!InAttrL1(attr, i)) {
                 continue;
             }
-            if (attr->strategyAttr.memSize[i][srcNodeIndex] == 0) {
+            if (attr->migrateMode == MIG_MEMSIZE_MODE && attr->strategyAttr.memSize[i][srcNodeIndex] == 0) {
                 continue;
             }
             attr->strategyAttr.initRemoteMemRatio[i][destNodeIndex] += ratio;
