@@ -633,6 +633,18 @@ static void InitMigList(struct MigList mList[MAX_NODES][MAX_NODES], int pid)
     }
 }
 
+static bool IsProcessRemoteNumaForbidden(ProcessAttr *process)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+
+    for (int nid = nrLocalNuma; nid < MAX_NODES; nid++) {
+        if (InAttrL2(process, nid) && !IsNodeForbidden(nid)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint64_t *migratePage)
 {
     int ret = CheckActcDataValid(process);
@@ -646,14 +658,14 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
             continue;
         }
         int nid = i - offset;
-        if (IsNodeForbidden(nid) && process->groupPolicy.enabled) {
-            SMAP_LOGGER_INFO("L2 node%d is forbiddened, pid %d stops migrate out.", nid, process->pid);
-            return -EPERM;
-        }
         if (IsRemoteNumaCriticalErr(nid)) {
             SMAP_LOGGER_WARNING("L2 node%d is critical error, pid %d stops migrate out.", nid, process->pid);
             return -ENODEV;
         }
+    }
+    if (process->groupPolicy.enabled && IsProcessRemoteNumaForbidden(process)) {
+        SMAP_LOGGER_INFO("Remote numa is forbiddened, pid %d stops migrate out.", process->pid);
+        return -EPERM;
     }
     if (!migratePage) {
         SMAP_LOGGER_ERROR("migratePage is null.");
@@ -672,6 +684,11 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
     for (int from = 0; from < MAX_NODES; from++) {
         for (int to = 0; to < MAX_NODES; to++) {
             if (!migList[from][to].nr) {
+                continue;
+            }
+            if (IsNodeForbidden(from) || IsNodeForbidden(to)) {
+                SMAP_LOGGER_INFO("Pid %d skips numa %d --> numa %d migration on forbidden L2 node.", process->pid,
+                                 from, to);
                 continue;
             }
             ret = AddMigList(mMsg, &migList[from][to]);
