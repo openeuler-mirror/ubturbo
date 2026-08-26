@@ -1,5 +1,4 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
 * Description: SMAP3.0 驱动模块打桩文件
 */
 #ifndef __STUB_CORE_H__

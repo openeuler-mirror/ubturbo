@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2024. All rights reserved.
  * Description: smap access_tracking module
  */
 
@@ -674,7 +673,7 @@ static void __exit access_tracking_exit(void)
 }
 
 MODULE_DESCRIPTION("Access driver");
-MODULE_AUTHOR("Huawei Tech. Co., Ltd.");
+MODULE_AUTHOR("openEuler");
 MODULE_LICENSE("GPL v2");
 module_init(access_tracking_init);
 module_exit(access_tracking_exit);

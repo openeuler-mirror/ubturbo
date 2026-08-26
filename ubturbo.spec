@@ -4,10 +4,10 @@
 Name:          ubturbo-rmrs
 Version:       %{ubturbo_version}
 Release:       %{release_version}
-Summary:       Huawei ubturbo
+Summary:       openEuler ubturbo
 License:       GPLv2
 Source0:       ubturbo.tar.gz
-Vendor:        Huawei Technologies Co., Ltd.
+Vendor:        openEuler Community
 
 BuildRequires: make
 BuildRequires: gcc

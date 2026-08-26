@@ -6,12 +6,12 @@
 Name:          ubturbo-ucache
 Version:       %{ucache_version}
 Release:       %{release_os_version}
-Summary:       Huawei UCache driver
+Summary:       openEuler UCache driver
 License:       GPLv2
-URL:           https://support.huawei.com
+URL:           https://www.openeuler.org
 Source0:       ucache1.0.tar.gz
 Provides:      %{name}
-Vendor:        Huawei Technologies Co., Ltd.
+Vendor:        openEuler Community
 BuildRoot:     %{buildroot}
 ExclusiveArch: %arm64
 BuildRequires: kernel-devel >= 5.10.0-136.12.0.86 make >= 4.3 gcc >= 10.3.1
@@ -23,7 +23,7 @@ Requires:      ubs_engine
 %define ubturbo_conf_dir /opt/ubturbo/conf
 
 %description
-This package contains the Huawei ucache Driver
+This package contains the openEuler ucache Driver
 
 %prep
 %setup -q -T -b 0 -c -n ucache1.0

@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
  * Description: SMAP5.0 测试代码
  */
 

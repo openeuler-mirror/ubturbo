@@ -1,5 +1,4 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
 * Description: SMAP access mmu测试代码
 */
 #include "gtest/gtest.h"

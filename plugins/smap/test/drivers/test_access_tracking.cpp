@@ -1,5 +1,4 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
 * Description: SMAP3.0 accessed_bit测试代码
 */
 

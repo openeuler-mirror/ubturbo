@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2014-2019.
  * Description: main header for kbox
  */
 

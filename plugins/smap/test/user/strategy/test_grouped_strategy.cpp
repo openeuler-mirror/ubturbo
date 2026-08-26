@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
  * Description: smap grouped migration strategy unit tests
  */
 

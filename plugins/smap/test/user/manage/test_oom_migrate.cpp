@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: smap5.0 user oom migrate ut code (方案B: move_pages + numa_maps 段级本地过滤)
  * Create: 2024-10-25
  */

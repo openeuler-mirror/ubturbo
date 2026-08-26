@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
  * Description: SMAP3.0 migrate_back_debugfs.c测试代码
  */
 
