@@ -598,6 +598,11 @@ static int __init access_tracking_init(void)
 		goto err_ioctl;
 	}
 
+	ret = smap_cold_threshold_sysfs_init();
+	if (ret)
+		pr_warn("cold_period_threshold sysfs node not created (%d)\n",
+			ret);
+
 	ret = access_tracking_add();
 	if (ret) {
 		pr_err("unable to add access tracking device to tracking bus\n");
@@ -621,6 +626,7 @@ static int __init access_tracking_init(void)
 	return ret;
 
 err_tracking_add:
+	smap_cold_threshold_sysfs_exit();
 	release_adev();
 	access_ioctl_exit();
 err_ioctl:
@@ -634,6 +640,7 @@ err_cold_queue:
 
 static void __exit access_tracking_exit(void)
 {
+	smap_cold_threshold_sysfs_exit();
 	access_ioctl_exit();
 	destroy_scan_workqueue();
 	if (enable_hist)

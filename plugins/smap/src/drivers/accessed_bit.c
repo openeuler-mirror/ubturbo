@@ -21,6 +21,9 @@
 #include <linux/pid_namespace.h>
 #include <linux/pid.h>
 #include <linux/proc_fs.h>
+#include <linux/kobject.h>
+#include <linux/sysfs.h>
+#include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/sched/mm.h>
 #include <linux/sched/signal.h>
@@ -289,14 +292,90 @@ static const struct proc_ops proc_file_ops = {
 };
 
 /*
- * Runtime-tunable cold-period threshold, exposed at
- * /proc/smap/cold_period_threshold. Default 10 (matches the old compile-time
- * SMAP_COLD_PERIOD_THRESHOLD). Write a positive integer to adjust at runtime;
- * read with cat. No lock: the 32-bit aligned read/write is atomic, and a
- * torn read of a soft threshold is harmless.
+ * Runtime-tunable cold-period threshold, exposed as a sysfs attribute at
+ * /sys/kernel/smap/cold_period_threshold. Default 10 (matches the old
+ * compile-time SMAP_COLD_PERIOD_THRESHOLD). Write a positive integer to
+ * adjust at runtime; read with cat. No lock: the 32-bit aligned read/write
+ * is atomic, and a torn read of a soft threshold is harmless.
  */
 unsigned int cold_period_thresh = 10;
 EXPORT_SYMBOL(cold_period_thresh);
+
+#define SMAP_COLD_PERIOD_THRESHOLD_MIN 1
+#define SMAP_COLD_PERIOD_THRESHOLD_MAX 14
+
+static struct kobject *smap_kobj;
+
+static ssize_t cold_period_threshold_show(struct kobject *kobj,
+					  struct kobj_attribute *attr,
+					  char *buf)
+{
+	return sysfs_emit(buf, "%u\n", READ_ONCE(cold_period_thresh));
+}
+
+static ssize_t cold_period_threshold_store(struct kobject *kobj,
+					   struct kobj_attribute *attr,
+					   const char *buf, size_t count)
+{
+	unsigned int val;
+	int ret;
+
+	ret = kstrtouint(buf, 10, &val);
+	if (ret)
+		return ret;
+	if (val < SMAP_COLD_PERIOD_THRESHOLD_MIN ||
+	    val > SMAP_COLD_PERIOD_THRESHOLD_MAX) {
+		pr_err("cold_period_threshold %u out of range [%d, %d]\n", val,
+		       SMAP_COLD_PERIOD_THRESHOLD_MIN,
+		       SMAP_COLD_PERIOD_THRESHOLD_MAX);
+		return -EINVAL;
+	}
+	WRITE_ONCE(cold_period_thresh, val);
+	return count;
+}
+
+static struct kobj_attribute cold_period_threshold_attr =
+	__ATTR_RW(cold_period_threshold);
+
+/*
+ * Create /sys/kernel/smap and attach the cold_period_threshold attribute.
+ * Failure is non-fatal: the threshold keeps its default and the scan path
+ * still works, only runtime tuning is unavailable.
+ */
+int smap_cold_threshold_sysfs_init(void)
+{
+	int ret;
+
+	smap_kobj = kobject_create_and_add("smap", kernel_kobj);
+	if (!smap_kobj) {
+		pr_err("failed to create /sys/kernel/smap kobject\n");
+		return -ENOMEM;
+	}
+	ret = sysfs_create_file(smap_kobj, &cold_period_threshold_attr.attr);
+	if (ret) {
+		pr_err("failed to create cold_period_threshold sysfs attr\n");
+		kobject_put(smap_kobj);
+		smap_kobj = NULL;
+		return ret;
+	}
+	return 0;
+}
+
+void smap_cold_threshold_sysfs_exit(void)
+{
+	kobject_put(smap_kobj);
+	smap_kobj = NULL;
+}
+
+/*
+ * Shared kobject backing /sys/kernel/smap. Other translation units attach
+ * their own attributes to it; returns NULL before smap_cold_threshold_sysfs_init
+ * has run (or after _exit).
+ */
+struct kobject *smap_get_kobject(void)
+{
+	return smap_kobj;
+}
 
 int smap_create_tracking_info_file(struct ham_tracking_info *info)
 {
