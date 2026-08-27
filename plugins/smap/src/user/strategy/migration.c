@@ -870,6 +870,12 @@ static int PerformMigration(struct ProcessManager *manager)
     struct MigrateMsg mMsg;
     struct timeval start, end;
 
+    // 迁移周期前先换出冷页:与迁移下发解耦,每个周期无条件 drain 一次
+    ret = ioctl(manager->fds.migrate, SMAP_MIG_DRAIN_COLD_QUEUE);
+    if (ret) {
+        SMAP_LOGGER_WARNING("drain cold queue failed: %d.", ret);
+    }
+
     ret = PreMigration(manager, &mMsg, &migratePages);
     if (ret) {
         SMAP_LOGGER_ERROR("PreMigration failed! ret: %d.", ret);

@@ -77,6 +77,11 @@ struct access_pid {
 	struct proc_dir_entry *proc_root;
 	struct proc_dir_entry *proc_freq;
 	bool first_scan;
+	bool decay_flag;
+	/* Per-PID actc mean value (VM scan path only) */
+	actc_t actc_mean_value;
+	u64 actc_sum;
+	u64 actc_count;
 };
 
 typedef struct {

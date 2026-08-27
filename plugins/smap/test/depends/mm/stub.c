@@ -62,3 +62,8 @@ bool PageAnon(struct page *page)
 {
         return true;
 }
+
+bool folio_test_lru(struct folio *folio)
+{
+    return true;
+}

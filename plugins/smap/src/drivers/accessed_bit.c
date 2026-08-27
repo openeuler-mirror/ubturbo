@@ -35,12 +35,14 @@
 #include "access_mmu.h"
 #include "access_tracking.h"
 #include "smap_page_flags.h"
+#include "smap_cold_queue.h"
 #include "accessed_bit.h"
 
 #define DECIMAL 10
 #define DEFAULT_REF_COUNT 0
 #define TRUE_REF 1
 #define MAX_NR_KVM 100
+#define ACTC_MAX 255
 #undef pr_fmt
 #define pr_fmt(fmt) "access-bit: " fmt
 
@@ -286,6 +288,16 @@ static const struct proc_ops proc_file_ops = {
 	.proc_read = proc_file_read,
 };
 
+/*
+ * Runtime-tunable cold-period threshold, exposed at
+ * /proc/smap/cold_period_threshold. Default 10 (matches the old compile-time
+ * SMAP_COLD_PERIOD_THRESHOLD). Write a positive integer to adjust at runtime;
+ * read with cat. No lock: the 32-bit aligned read/write is atomic, and a
+ * torn read of a soft threshold is harmless.
+ */
+unsigned int cold_period_thresh = 10;
+EXPORT_SYMBOL(cold_period_thresh);
+
 int smap_create_tracking_info_file(struct ham_tracking_info *info)
 {
 	int ret;
@@ -423,7 +435,7 @@ static void actc_data_update(int nid, u64 pa_index)
 }
 
 static void actc_data_add_fast(phys_addr_t paddr, struct page *page,
-			       u32 page_size)
+			       u32 page_size, struct access_pid *ap)
 {
 	struct access_tracking_dev *adev;
 	int ret, nid;
@@ -448,18 +460,44 @@ static void actc_data_add_fast(phys_addr_t paddr, struct page *page,
 	if (unlikely(!adev || pa_index >= adev->page_count || adev->is_hist))
 		return;
 
-	adev->access_bit_actc_data[pa_index]++;
+	if (smap_get_page_init(page)) {
+		smap_clear_page_init(page);
+		/* New pages: use per-PID cached mean value */
+		adev->access_bit_actc_data[pa_index] = ap->actc_mean_value;
+	} else {
+		adev->access_bit_actc_data[pa_index]++;
+		if (adev->access_bit_actc_data[pa_index] >= ACTC_MAX) {
+			ap->decay_flag = true;
+		}
+	}
 }
 
-static void last_scan_update_page_flags(struct page *page, bool young)
+static void last_scan_update_page_flags(u64 pa, struct page *page, bool young,
+				     struct access_pid *ap)
 {
-	if (try_get_page(page)) {
-		if (young)
-			smap_page_cold_periods_reset(page);
-		else
-			smap_page_cold_periods_inc(page);
-		put_page(page);
+	int nid = page_to_nid(page);
+
+	/*
+	 * End of period: update cold-period counter and
+	 * record in bitmap.  A page successfully enqueued
+	 * into cold_queue is handled by the swap-out path
+	 * and skips add_to_bm_page.
+	 */
+	if (!try_get_page(page))
+		return;
+	if (young) {
+		smap_page_cold_periods_reset(page);
+		add_to_bm_page(pa, page, ap);
+	} else {
+		if (PageAnon(page) &&
+		    smap_page_cold_periods_inc(page) >= cold_period_thresh &&
+		    !smap_cold_queue_enqueue(nid, PHYS_PFN(pa))) {
+			/* enqueued into cold_queue; skip bitmap */
+		} else {
+			add_to_bm_page(pa, page, ap);
+		}
 	}
+	put_page(page);
 }
 
 static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
@@ -497,6 +535,7 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 	page = pfn_to_online_page(PHYS_PFN(paddr));
 	if (!page)
 		return 0;
+
 	if (ap->first_scan) {
 		if (try_get_page(page)) {
 			smap_page_cold_periods_reset(page);
@@ -505,11 +544,30 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 	}
 
 	if (is_young)
-		actc_data_add_fast(paddr, page, g_pagesize_huge);
+		actc_data_add_fast(paddr, page, g_pagesize_huge, ap);
 
 	if (access_pid_cur_last_scanning(ap)) {
-		add_to_bm_huge(host_va, paddr, ap);
-		last_scan_update_page_flags(page, is_young);
+		/*
+		 * End of period: update cold-period counter from
+		 * accumulated actc_data.
+		 */
+		if (!try_get_page(page))
+			return 0;
+		if (is_young) {
+			smap_page_cold_periods_reset(page);
+			add_to_bm_huge(host_va, paddr, ap);
+		} else {
+			int nid = pfn_to_nid(PHYS_PFN(paddr));
+
+			if (PageAnon(page) &&
+			    smap_page_cold_periods_inc(page) >= cold_period_thresh &&
+			    !smap_cold_queue_enqueue(nid, PHYS_PFN(paddr))) {
+				/* enqueued into cold_queue; skip bitmap */
+			} else {
+				add_to_bm_huge(host_va, paddr, ap);
+			}
+		}
+		put_page(page);
 	}
 
 	return 0;
@@ -628,12 +686,10 @@ static int hva_to_hpa_4k(struct kvm *kvm, u64 host_va, struct access_pid *ap,
 	if (!page)
 		return 0;
 	if (is_young)
-		actc_data_add_fast(paddr, page, PAGE_SIZE);
+		actc_data_add_fast(paddr, page, PAGE_SIZE, ap);
 
-	if (access_pid_cur_last_scanning(ap)) {
-		add_to_bm_page(paddr, page, ap);
-		last_scan_update_page_flags(page, is_young);
-	}
+	if (access_pid_cur_last_scanning(ap))
+		last_scan_update_page_flags(paddr, page, is_young, ap);
 
 	return 0;
 }
@@ -884,11 +940,9 @@ static int smap_bulk_pte_cb(u64 gpa, u64 hpa, bool young, bool pte_valid,
 			return 0;
 
 		if (young)
-			actc_data_add_fast(hpa, page, PAGE_SIZE);
-		if (access_pid_cur_last_scanning(ap)) {
-			add_to_bm_page(hpa, page, ap);
-			last_scan_update_page_flags(page, young);
-		}
+			actc_data_add_fast(hpa, page, PAGE_SIZE, ap);
+		if (access_pid_cur_last_scanning(ap))
+			last_scan_update_page_flags(hpa, page, young, ap);
 	} else {
 		hva = gfn_to_hva_memslot(ctx->memslot, gpa >> PAGE_SHIFT);
 		ret = hva_to_hpa(ctx->kvm, hva, ap, young);
@@ -1693,8 +1747,8 @@ static void process_scan_results(struct pte_walk *pte_walk)
 		page = pfn_to_online_page(PHYS_PFN(entry->paddr));
 		if (!page)
 			continue;
-		last_scan_update_page_flags(
-			page, adev->access_bit_actc_data[pa_idx] > 0);
+		last_scan_update_page_flags(entry->paddr,
+			page, adev->access_bit_actc_data[pa_idx] > 0, pte_walk->ap);
 	}
 }
 

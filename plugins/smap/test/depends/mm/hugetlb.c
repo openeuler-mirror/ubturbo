@@ -21,6 +21,11 @@ int PageHead(struct page *page)
     return 0;
 }
 
+int PageTail(struct page *page)
+{
+    return 0;
+}
+
 struct hstate *hstate_vma(struct vm_area_struct *vma)
 {
     return NULL;

@@ -15,6 +15,7 @@
 #include <linux/sort.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/list.h>
 
 #include "common.h"
 #include "acpi_mem.h"
@@ -23,6 +24,8 @@
 #ifdef CRITICAL_OFF
 #include "critical.h"
 #endif
+#include "../drivers/smap_page_flags.h"
+#include "../drivers/smap_cold_queue.h"
 #include "mig_init.h"
 
 #undef pr_fmt
@@ -219,6 +222,190 @@ static bool is_migrate_msg_valid(struct migrate_msg *msg)
 		return false;
 	}
 	return true;
+}
+
+static struct folio *smap_get_folio(unsigned long pfn)
+{
+	struct page *page = pfn_to_online_page(pfn);
+	struct folio *folio;
+
+	if (!page || PageTail(page))
+		return NULL;
+
+	folio = page_folio(page);
+	if (folio_test_hugetlb(folio)) {
+		if (unlikely(page_folio(page) != folio))
+			folio = NULL;
+	} else {
+		if (!folio_test_lru(folio) || !folio_try_get(folio))
+			return NULL;
+		if (unlikely(page_folio(page) != folio ||
+			     !folio_test_lru(folio))) {
+			folio_put(folio);
+			folio = NULL;
+		}
+	}
+	return folio;
+}
+
+#define DRAIN_BATCH_SIZE 256
+
+struct drain_stats {
+	u64 nr_total;
+	u64 nr_dequeued;
+	u64 nr_skip_lru;
+	u64 nr_skip_isolated;
+	u64 nr_unevictable;
+	u64 nr_isolated;
+	u64 nr_reclaimed;
+};
+
+static void drain_stats_log(int nid, const struct drain_stats *s)
+{
+	/* Skip nodes with no cold pages queued -- draining the full array every
+	 * migration cycle would otherwise spam 22 lines, most of them empty. */
+	if (s->nr_total == 0)
+		return;
+	pr_info("[cold_drain] nid=%d total=%llu dequeued=%llu "
+		"skip_lru=%llu skip_isolated=%llu unevictable=%llu "
+		"isolated=%llu reclaimed=%llu\n",
+		nid, s->nr_total, s->nr_dequeued, s->nr_skip_lru,
+		s->nr_skip_isolated, s->nr_unevictable, s->nr_isolated,
+		s->nr_reclaimed);
+}
+
+static u64 smap_cold_queue_drain_entry(int nid, struct smap_cold_queue *q,
+				       u64 *batch)
+{
+	struct drain_stats stats = { 0 };
+	u64 i;
+
+	/*
+	 * Lock-free snapshot: during drain the consumer is the only thread
+	 * accessing this per-node queue (all producers have quiesced —
+	 * userspace guarantees drain ioctl arrives after scan is disabled).
+	 * head is touched only here; count is only decremented here.
+	 */
+	stats.nr_total = atomic_read(&q->count);
+	while (1) {
+		LIST_HEAD(folio_list);
+		struct folio *folio;
+		u64 dequeued = 0;
+
+		cond_resched();
+
+		/*
+		 * Dequeue up to DRAIN_BATCH_SIZE PFNs without a lock.
+		 * head is consumer-only; count is atomic because the
+		 * producer (scan) increments it, but during drain no
+		 * producers are active, so atomic_dec is safe.
+		 */
+		while (atomic_read(&q->count) > 0 &&
+		       dequeued < DRAIN_BATCH_SIZE) {
+			batch[dequeued++] = q->pfn[q->head &
+						  SMAP_COLD_QUEUE_MAX_MASK];
+			q->head++;
+			atomic_dec(&q->count);
+		}
+		if (dequeued == 0)
+			break;
+		stats.nr_dequeued += dequeued;
+
+		for (i = 0; i < dequeued; i++) {
+			folio = smap_get_folio(batch[i]);
+			if (!folio) {
+				stats.nr_skip_lru++;
+				continue;
+			}
+
+			if (folio_test_hugetlb(folio)) {
+				if (!fp_isolate_hugetlb(folio, &folio_list)) {
+					stats.nr_skip_isolated++;
+					continue;
+				}
+			} else {
+				folio_clear_referenced(folio);
+				if (!fp_folio_isolate_lru(folio)) {
+					stats.nr_skip_isolated++;
+					folio_put(folio);
+					continue;
+				}
+				if (folio_test_unevictable(folio)) {
+					stats.nr_unevictable++;
+					fp_folio_putback_lru(folio);
+					continue;
+				} else {
+					list_add(&folio->lru, &folio_list);
+					folio_put(folio);
+				}
+			}
+			stats.nr_isolated++;
+		}
+
+		if (!list_empty(&folio_list))
+			stats.nr_reclaimed +=
+				fp_reclaim_pages(&folio_list, true);
+	}
+
+	drain_stats_log(nid, &stats);
+
+	return stats.nr_reclaimed;
+}
+
+extern struct smap_cold_queue smap_cold_numa_queue[SMAP_MAX_NUMNODES];
+
+/*
+ * smap_cold_queue_drain - Drain per-node cold page queues and reclaim via swap
+ *
+ * Dequeues PFNs from every per-node cold queue (populated by the scan path
+ * when a remote page's cold-period counter >= SMAP_COLD_PERIOD_THRESHOLD),
+ * resolves folios, isolates them from LRU, and calls reclaim_pages() in
+ * batches.  Local-node queues are expected to be empty and skipped quickly.
+ *
+ * Returns 0 on success, -ENOSYS if kernel symbols are not resolved.
+ */
+static int smap_cold_queue_drain(void)
+{
+	u64 total_reclaimed = 0;
+	u64 *batch;
+	int nid;
+
+	if (!fp_reclaim_pages || !fp_isolate_hugetlb || !fp_folio_putback_lru ||
+	    !fp_folio_isolate_lru) {
+		pr_err("swap-out symbols not resolved (reclaim_pages=%p "
+		       "isolate_hugetlb=%p folio_putback_lru=%p "
+		       "folio_isolate_lru=%p)\n",
+		       fp_reclaim_pages, fp_isolate_hugetlb,
+		       fp_folio_putback_lru, fp_folio_isolate_lru);
+		return -ENOSYS;
+	}
+
+	/* One batch buffer reused across all nodes. */
+	batch = kmalloc(DRAIN_BATCH_SIZE * sizeof(u64), GFP_KERNEL);
+	if (!batch) {
+		pr_err("[cold_drain] alloc memory failed\n");
+		return -ENOMEM;
+	}
+
+	for (nid = 0; nid < SMAP_MAX_NUMNODES; nid++) {
+		total_reclaimed +=
+			smap_cold_queue_drain_entry(nid,
+						    &smap_cold_numa_queue[nid],
+						    batch);
+	}
+	kfree(batch);
+
+	if (total_reclaimed)
+		pr_info("[cold_drain] total_reclaimed=%llu\n", total_reclaimed);
+	return 0;
+}
+
+static int __ioctl_drain_cold_queue(void)
+{
+	int ret = smap_cold_queue_drain();
+	if (ret)
+		pr_warn("failed to drain cold queue: %d\n", ret);
+	return ret;
 }
 
 static int __ioctl_migrate(void __user *argp)
@@ -574,6 +761,9 @@ static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 	}
 	case SMAP_SET_UB_DMA_AVAIL:
 		rc = __ioctl_set_ub_dma_avail(argp);
+		break;
+	case SMAP_MIG_DRAIN_COLD_QUEUE:
+		rc = __ioctl_drain_cold_queue();
 		break;
 	default:
 		rc = -ENOTTY;
