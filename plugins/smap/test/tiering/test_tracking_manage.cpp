@@ -171,7 +171,9 @@ TEST_F(TrackingManageTest, TestTrackingInitObmmFailure)
     MOCKER(smap_process_symbols).stubs().will(returnValue(0));
     MOCKER(iterate_obmm_dev).stubs().will(returnValue(-1));
     ret = tracking_init();
-    EXPECT_EQ(-1, ret);
+    // obmm is optional: iterate_obmm_dev failure no longer aborts tracking_init;
+    // execution continues to create_workqueue (unmocked -> NULL) returning -EAGAIN
+    EXPECT_EQ(-EAGAIN, ret);
 
     GlobalMockObject::verify();
     MOCKER(smap_process_symbols).stubs().will(returnValue(0));
