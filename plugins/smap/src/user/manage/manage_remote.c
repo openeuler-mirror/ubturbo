@@ -578,16 +578,18 @@ static int ValidateCandidateRemoteResidency(ProcessAttr *candidate, const Proces
 }
 
 static int PrepareProcessTargetCandidate(ProcessAttr *candidate, const ProcessTargetConfig *config,
-                                         const ManagedLocalObservation *observation)
+                                         const ManagedLocalObservation *observation, bool skipRemoteResidencyCheck)
 {
     ProcessTargetConfig targetConfig;
     int ret = CopyProcessTargetConfig(&targetConfig, config);
     if (ret) {
         return ret;
     }
-    ret = ValidateCandidateRemoteResidency(candidate, &targetConfig, observation);
-    if (ret) {
-        return ret;
+    if (!skipRemoteResidencyCheck) {
+        ret = ValidateCandidateRemoteResidency(candidate, &targetConfig, observation);
+        if (ret) {
+            return ret;
+        }
     }
 
     candidate->targetConfig = targetConfig;
@@ -622,7 +624,7 @@ void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *candida
     }
 }
 
-int ApplyProcessTargetConfig(ProcessAttr *attr, const ProcessTargetConfig *config)
+int ApplyProcessTargetConfig(ProcessAttr *attr, const ProcessTargetConfig *config, bool skipRemoteResidencyCheck)
 {
     ManagedLocalObservation observation;
     int ret = CollectProcessCandidateObservation(attr->pid, attr->type == VM_TYPE, &observation);
@@ -631,7 +633,7 @@ int ApplyProcessTargetConfig(ProcessAttr *attr, const ProcessTargetConfig *confi
     }
 
     ProcessAttr candidate = *attr;
-    ret = PrepareProcessTargetCandidate(&candidate, config, &observation);
+    ret = PrepareProcessTargetCandidate(&candidate, config, &observation, skipRemoteResidencyCheck);
     if (ret) {
         return ret;
     }
@@ -664,7 +666,7 @@ int StagePendingMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *c
 }
 
 int ConfigureMigrationTargetsWithCapacityPolicy(ProcessAttr *attr, const ProcessTargetConfig *config,
-                                                bool ignoreRemoteCapacity)
+                                                bool ignoreRemoteCapacity, bool skipRemoteResidencyCheck)
 {
     ProcessTargetConfig targetConfig;
     if (!attr || ValidateProcessTargetConfig(config) || CopyProcessTargetConfig(&targetConfig, config)) {
@@ -675,7 +677,7 @@ int ConfigureMigrationTargetsWithCapacityPolicy(ProcessAttr *attr, const Process
         return StagePendingMigrationTargets(attr, &targetConfig, ignoreRemoteCapacity);
     }
 
-    int ret = ApplyProcessTargetConfig(attr, &targetConfig);
+    int ret = ApplyProcessTargetConfig(attr, &targetConfig, skipRemoteResidencyCheck);
     if (!ret) {
         attr->ignoreRemoteCapacity = ignoreRemoteCapacity;
     }
@@ -684,7 +686,7 @@ int ConfigureMigrationTargetsWithCapacityPolicy(ProcessAttr *attr, const Process
 
 int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config)
 {
-    return ConfigureMigrationTargetsWithCapacityPolicy(attr, config, false);
+    return ConfigureMigrationTargetsWithCapacityPolicy(attr, config, false, false);
 }
 
 int ApplyPendingMigrationTargets(ProcessAttr *attr)
@@ -701,7 +703,7 @@ int ApplyPendingMigrationTargets(ProcessAttr *attr)
     }
 
     ProcessAttr candidate = *attr;
-    ret = PrepareProcessTargetCandidate(&candidate, &config, &observation);
+    ret = PrepareProcessTargetCandidate(&candidate, &config, &observation, false);
     if (ret) {
         return ret;
     }
@@ -744,7 +746,7 @@ bool IsZeroRemoteTargetConfig(ProcessParam *param)
     return IsZeroProcessTargetConfig(&config);
 }
 
-int SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
+int SetProcessConfig(ProcessAttr *attr, ProcessParam *param, bool skipRemoteResidencyCheck)
 {
     ProcessTargetConfig config;
     int ret = BuildProcessTargetConfigFromParam(param, &config);
@@ -753,7 +755,8 @@ int SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
     }
 
     SetBasicProcessConfig(attr, param);
-    return ConfigureMigrationTargetsWithCapacityPolicy(attr, &config, param->ignoreRemoteCapacity);
+    return ConfigureMigrationTargetsWithCapacityPolicy(attr, &config, param->ignoreRemoteCapacity,
+                                                       skipRemoteResidencyCheck);
 }
 
 int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size)

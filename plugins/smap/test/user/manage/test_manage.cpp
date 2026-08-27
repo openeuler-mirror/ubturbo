@@ -1002,7 +1002,7 @@ TEST_F(ManageTest, TestVMProcessParseMmapTypeFailed)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" int SetProcessConfig(ProcessAttr *attr, ProcessParam *param);
+extern "C" int SetProcessConfig(ProcessAttr *attr, ProcessParam *param, bool skipRemoteResidencyCheck);
 TEST_F(ManageTest, TestSetProcessConfig)
 {
     g_processManager.nrLocalNuma = 4;
@@ -1017,13 +1017,49 @@ TEST_F(ManageTest, TestSetProcessConfig)
     attr.numaAttr.numaNodes = 1;
     MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
     MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddEmptyCandidateResidentForTest));
-    int ret = SetProcessConfig(&attr, &param);
+    int ret = SetProcessConfig(&attr, &param, false);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(attr.pid, 1);
     EXPECT_EQ(1U, attr.targetConfig.count);
     EXPECT_EQ(4, attr.targetConfig.targets[0].remoteNid);
     EXPECT_EQ(attr.strategyAttr.initRemoteMemRatio[0][0], 50);
     EXPECT_EQ(attr.numaAttr.numaNodes, 17);
+}
+
+TEST_F(ManageTest, TestSetProcessConfigRejectsUnexpectedRemoteResidency)
+{
+    g_processManager.nrLocalNuma = 4;
+    ProcessAttr attr = {};
+    attr.state = PROC_IDLE;
+    ProcessParam param = {
+        .pid = 1,
+        .count = 1,
+    };
+    param.numaParam[0].nid = 4;
+    param.numaParam[0].ratio = 50;
+    attr.numaAttr.numaNodes = 1;
+    MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddUnexpectedRemoteResidentForTest));
+    int ret = SetProcessConfig(&attr, &param, false);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(ManageTest, TestSetProcessConfigSkipsUnexpectedRemoteResidencyWhenStatScan)
+{
+    g_processManager.nrLocalNuma = 4;
+    ProcessAttr attr = {};
+    attr.state = PROC_IDLE;
+    ProcessParam param = {
+        .pid = 1,
+        .count = 1,
+    };
+    param.numaParam[0].nid = 4;
+    param.numaParam[0].ratio = 50;
+    attr.numaAttr.numaNodes = 1;
+    MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddUnexpectedRemoteResidentForTest));
+    int ret = SetProcessConfig(&attr, &param, true);
+    EXPECT_EQ(0, ret);
 }
 
 extern "C" FILE *OpenNumaMaps(pid_t pid);
@@ -2970,32 +3006,38 @@ TEST_F(ManageTest, TestSetSingleRemoteNumaConfig_DecreaseMigration)
  * ProcessAddManage — ProcessAddManage is not the migrate-out path.
  */
 extern "C" int ConfigureMigrationTargetsWithCapacityPolicy(ProcessAttr *attr, const ProcessTargetConfig *config,
-                                                            bool ignoreRemoteCapacity);
+                                                            bool ignoreRemoteCapacity, bool skipRemoteResidencyCheck);
 
-static int SetIncreasedMemSizeForTest(ProcessAttr *attr, const ProcessTargetConfig *config, bool ignoreRemoteCapacity)
+static int SetIncreasedMemSizeForTest(ProcessAttr *attr, const ProcessTargetConfig *config,
+                                      bool ignoreRemoteCapacity, bool skipRemoteResidencyCheck)
 {
     (void)config;
     (void)ignoreRemoteCapacity;
+    (void)skipRemoteResidencyCheck;
     attr->remoteNumaCnt = 1;
     attr->migrateParam[0].nid = 4;
     attr->migrateParam[0].memSize = 3 * GIB / KIB;  // increased: 1GB -> 3GB
     return 0;
 }
 
-static int SetDecreasedMemSizeForTest(ProcessAttr *attr, const ProcessTargetConfig *config, bool ignoreRemoteCapacity)
+static int SetDecreasedMemSizeForTest(ProcessAttr *attr, const ProcessTargetConfig *config,
+                                      bool ignoreRemoteCapacity, bool skipRemoteResidencyCheck)
 {
     (void)config;
     (void)ignoreRemoteCapacity;
+    (void)skipRemoteResidencyCheck;
     attr->remoteNumaCnt = 1;
     attr->migrateParam[0].nid = 4;
     attr->migrateParam[0].memSize = 1 * GIB / KIB;  // decreased: 3GB -> 1GB
     return 0;
 }
 
-static int SetUnchangedMemSizeForTest(ProcessAttr *attr, const ProcessTargetConfig *config, bool ignoreRemoteCapacity)
+static int SetUnchangedMemSizeForTest(ProcessAttr *attr, const ProcessTargetConfig *config,
+                                      bool ignoreRemoteCapacity, bool skipRemoteResidencyCheck)
 {
     (void)config;
     (void)ignoreRemoteCapacity;
+    (void)skipRemoteResidencyCheck;
     attr->remoteNumaCnt = 1;
     attr->migrateParam[0].nid = 4;
     attr->migrateParam[0].memSize = 2 * GIB / KIB;  // unchanged: 2GB -> 2GB
