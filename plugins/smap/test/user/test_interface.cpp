@@ -194,16 +194,6 @@ TEST_F(InterfaceTest, TestIsPidTypeInValidOne)
     EXPECT_EQ(false, ret);
 }
 
-TEST_F(InterfaceTest, TestIsPidTypeInValidTwo)
-{
-    bool ret;
-    int pidType = PAGETYPE_NORMAL;
-
-    MOCKER(GetProcessManager).stubs().will(returnValue((struct ProcessManager *)nullptr));
-    ret = IsPidTypeValid(pidType);
-    EXPECT_EQ(false, ret);
-}
-
 extern "C" bool IsLocalNidValid(int nid);
 TEST_F(InterfaceTest, TestIsLocalNidValid)
 {
@@ -280,14 +270,14 @@ TEST_F(InterfaceTest, TestInitAllThreadsProcessMode)
 }
 
 extern "C" bool IsNidInNumastat(int nid);
+extern "C" bool IsRemoteNid(int nid);
 extern "C" bool IsRemoteNidValid(int nid);
-extern "C" bool IsOnlineRemoteNidValid(int nid);
 TEST_F(InterfaceTest, IsRemoteNidValid)
 {
     int nid = -1;
     struct ProcessManager pm = { .nrLocalNuma = 2 };
     MOCKER(GetProcessManager).stubs().will(returnValue(&pm));
-    bool ret = IsRemoteNidValid(nid);
+    bool ret = IsRemoteNid(nid);
     EXPECT_EQ(false, ret);
 }
 
@@ -298,7 +288,7 @@ TEST_F(InterfaceTest, IsRemoteNidValidOne)
         .nrLocalNuma = 2,
     };
     MOCKER(GetProcessManager).stubs().will(returnValue(&pm));
-    bool ret = IsRemoteNidValid(nid);
+    bool ret = IsRemoteNid(nid);
     EXPECT_EQ(true, ret);
 }
 
@@ -309,7 +299,7 @@ TEST_F(InterfaceTest, IsRemoteNidValidTwo)
         .nrLocalNuma = 2,
     };
     MOCKER(GetProcessManager).stubs().will(returnValue(&pm));
-    int ret = IsRemoteNidValid(nid);
+    int ret = IsRemoteNid(nid);
     EXPECT_EQ(true, ret);
 }
 
@@ -317,7 +307,7 @@ TEST_F(InterfaceTest, IsRemoteNidValidThree)
 {
     int nid = 11;
     MOCKER(GetProcessManager).stubs().will(returnValue(static_cast<ProcessManager *>(nullptr)));
-    int ret = IsRemoteNidValid(nid);
+    int ret = IsRemoteNid(nid);
     EXPECT_EQ(false, ret);
 }
 
@@ -363,7 +353,7 @@ TEST_F(InterfaceTest, IsNidInNumastatTrue)
 }
 
 extern "C" bool IsMigParaValid(struct MigrateOutPayload *payload);
-extern "C" bool IsDestNidVaild(int nid, pid_t pid);
+extern "C" bool IsDestNidValid(int nid, pid_t pid);
 TEST_F(InterfaceTest, IsMigParaValid)
 {
     struct MigrateOutPayload payload = {
@@ -373,8 +363,8 @@ TEST_F(InterfaceTest, IsMigParaValid)
     payload.inner[0].memSize = 10240;
     payload.inner[0].ratio = 25;
     payload.inner[0].migrateMode = MIG_MEMSIZE_MODE;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
-    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidValid).stubs().will(returnValue(true));
     MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
 
     bool ret = IsMigParaValid(&payload);
@@ -389,8 +379,8 @@ TEST_F(InterfaceTest, IsMigParaValidGreaterThanMigrateMode)
     };
     payload.inner[0].memSize = 10240;
     payload.inner[0].ratio = 25;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
-    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidValid).stubs().will(returnValue(true));
     payload.inner[0].migrateMode = static_cast<MigrateMode>(2);
     MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
 
@@ -419,8 +409,8 @@ TEST_F(InterfaceTest, IsMigParaValidLessThanMigrateMode)
     payload.inner[0].ratio = 25;
     payload.inner[0].migrateMode = static_cast<MigrateMode>(-1);
 
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
-    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidValid).stubs().will(returnValue(true));
     ret = IsMigParaValid(&payload);
     EXPECT_EQ(false, ret);
 }
@@ -434,8 +424,8 @@ TEST_F(InterfaceTest, IsMigParaValidWaterlineModeAndMigMemsizeMode)
     };
     payload.inner[0].memSize = 10240;
     payload.inner[0].ratio = 25;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
-    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidValid).stubs().will(returnValue(true));
     MOCKER(GetRunMode).stubs().will(returnValue(0));
     payload.inner[0].migrateMode = MIG_MEMSIZE_MODE;
 
@@ -452,8 +442,8 @@ TEST_F(InterfaceTest, IsMigParaValidMemPoolModeAndMigRatioMode)
     };
     payload.inner[0].memSize = 10240;
     payload.inner[0].ratio = 25;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
-    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidValid).stubs().will(returnValue(true));
     MOCKER(GetRunMode).stubs().will(returnValue(1));
     payload.inner[0].migrateMode = MIG_RATIO_MODE;
 
@@ -470,8 +460,8 @@ TEST_F(InterfaceTest, IsMigParaValidMigRatioModeWithInvalidRatio)
     };
     payload.inner[0].memSize = 10240;
     payload.inner[0].ratio = 25;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
-    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidValid).stubs().will(returnValue(true));
     MOCKER(GetRunMode).stubs().will(returnValue(1));
     MOCKER(IsRatioValid).stubs().will(returnValue(false));
     payload.inner[0].migrateMode = MIG_RATIO_MODE;
@@ -488,8 +478,8 @@ TEST_F(InterfaceTest, IsMigParaValidInvalidMemSize)
     };
     payload.inner[0].memSize = 10240;
     payload.inner[0].ratio = 25;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
-    MOCKER(IsDestNidVaild).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidValid).stubs().will(returnValue(true));
     MOCKER(GetRunMode).stubs().will(returnValue(1));
     MOCKER(IsRatioValid).stubs().will(returnValue(true));
     payload.inner[0].migrateMode = MIG_MEMSIZE_MODE;
@@ -498,22 +488,22 @@ TEST_F(InterfaceTest, IsMigParaValidInvalidMemSize)
     EXPECT_EQ(false, ret);
 }
 
-TEST_F(InterfaceTest, TestIsDestNidVaild)
+TEST_F(InterfaceTest, TestIsDestNidValid)
 {
     ProcessAttr attr = {};
     attr.pid = 1;
     attr.numaAttr.numaNodes = 0b00010001;
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue((ProcessAttr *)nullptr));
-    bool ret = IsDestNidVaild(1, 1);
+    bool ret = IsDestNidValid(1, 1);
     EXPECT_EQ(true, ret);
 
     GlobalMockObject::verify();
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&attr));
-    ret = IsDestNidVaild(1, 4);
+    ret = IsDestNidValid(1, 4);
     EXPECT_EQ(false, ret);
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
-    ret = IsDestNidVaild(4, 4);
+    ret = IsDestNidValid(4, 4);
     EXPECT_EQ(true, ret);
 }
 
@@ -898,7 +888,7 @@ TEST_F(InterfaceTest, TestCheckGroupedTargetRejectForbiddenTarget)
     group.targetCount = 1;
     group.targets[0].nid = 4;
     group.targets[0].size = 2048;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     EnvAtomicSet(&g_forbiddenNodes[4], 1);
 
     int ret = CheckGroupedTarget(&group, 0, 0);
@@ -917,14 +907,14 @@ TEST_F(InterfaceTest, TestCheckGroupedTargetInvalidCases)
     group.targetCount = 1;
     group.targets[0].nid = 3;
     group.targets[0].size = 2048;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(false));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(false));
     ret = CheckGroupedTarget(&group, 0, 0);
     EXPECT_EQ(-EINVAL, ret);
 
     GlobalMockObject::verify();
     group.targets[0].nid = 4;
     group.targets[0].size = 1024;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
     ret = CheckGroupedTarget(&group, 0, 0);
     EXPECT_EQ(-EINVAL, ret);
@@ -935,7 +925,7 @@ TEST_F(InterfaceTest, TestCheckGroupedTargetInvalidCases)
     group.targets[0].size = 2048;
     group.targets[1].nid = 4;
     group.targets[1].size = 4096;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
     ret = CheckGroupedTarget(&group, 0, 0);
     EXPECT_EQ(-EINVAL, ret);
@@ -957,7 +947,7 @@ TEST_F(InterfaceTest, TestCheckGroupedPayloadAcceptsHigherLocalNid)
     payload.groups[0].targetCount = 1;
     payload.groups[0].targets[0].nid = 6;
     payload.groups[0].targets[0].size = 2048;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
 
     int ret = CheckGroupedPayload(&payload, 0);
@@ -989,7 +979,7 @@ TEST_F(InterfaceTest, TestCheckGroupedPayloadInvalidLocalCases)
     payload.groups[1] = payload.groups[0];
     payload.groups[1].targets[0].nid = 5;
     g_processManager.nrLocalNuma = 4;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
     ret = CheckGroupedPayload(&payload, 0);
     EXPECT_EQ(-EINVAL, ret);
@@ -1007,7 +997,7 @@ TEST_F(InterfaceTest, TestCheckGroupedPayloadAllowsMigratePendingUpdate)
     current.next = nullptr;
     g_processManager.processes = &current;
     g_processManager.nrLocalNuma = 4;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
 
     int ret = CheckGroupedPayload(&payload, 0);
@@ -1058,7 +1048,7 @@ TEST_F(InterfaceTest, TestCheckGroupedMigrateOutMsgValidAndDuplicatePid)
     FillGroupedPayload(&msg.payload[0], 1234, 0, 4);
     FillGroupedPayload(&msg.payload[1], 5678, 1, 5);
 
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsNodeForbidden).stubs().will(returnValue(false));
     int ret = CheckGroupedMigrateOutMsg(&msg, VM_TYPE);
     EXPECT_EQ(0, ret);
@@ -1888,6 +1878,8 @@ TEST_F(InterfaceTest, TestIoctlHandlerThree)
 }
 
 extern "C" void ubturbo_smap_urgent_migrate_out(uint64_t size);
+extern "C" void FindPidMigrateSize(uint64_t size);
+extern "C" bool ubturbo_smap_is_running(void);
 TEST_F(InterfaceTest, TestSmapUrgentMigrateOut)
 {
     int ret;
@@ -1898,6 +1890,15 @@ TEST_F(InterfaceTest, TestSmapUrgentMigrateOut)
     ret = EnvAtomicRead(&g_status);
     EXPECT_EQ(0, ret);
     EnvAtomicSet(&g_status, 1);
+}
+
+TEST_F(InterfaceTest, TestSmapUrgentMigrateOutInvalidSize)
+{
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
+    MOCKER(FindPidMigrateSize).expects(never());
+    ubturbo_smap_urgent_migrate_out(0);
+    GlobalMockObject::verify();
 }
 
 TEST_F(InterfaceTest, TestNullptrError)
@@ -1948,7 +1949,7 @@ TEST_F(InterfaceTest, TestSetSmapRemoteNumaInfo)
     struct ProcessManager manager;
     EnvAtomicSet(&g_status, 1);
     MOCKER(IsLocalNidValid).stubs().will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     msg.size = size;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(SetRemoteNumaInfo).stubs().will(returnValue(0));
@@ -1988,7 +1989,7 @@ TEST_F(InterfaceTest, TestSetSmapRemoteNumaInfoFour)
     EnvAtomicSet(&g_status, 1);
     MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
     MOCKER(IsLocalNidValid).stubs().will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(false));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(false));
     ret = ubturbo_smap_remote_numa_info_set(&msg);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -2002,7 +2003,7 @@ TEST_F(InterfaceTest, TestSetSmapRemoteNumaInfoFive)
     EnvAtomicSet(&g_status, 1);
     MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
     MOCKER(IsLocalNidValid).stubs().will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(SetRemoteNumaInfo).stubs().will(returnValue(-1));
     ret = ubturbo_smap_remote_numa_info_set(&msg);
     EXPECT_EQ(-1, ret);
@@ -2016,7 +2017,7 @@ TEST_F(InterfaceTest, TestSetSmapRemoteNumaInfoMsgSizeInvalid)
     msg.size = size;
     EnvAtomicSet(&g_status, 1);
     MOCKER(IsLocalNidValid).stubs().will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
 
     ret = ubturbo_smap_remote_numa_info_set(&msg);
     EXPECT_EQ(-EINVAL, ret);
@@ -2310,7 +2311,6 @@ TEST_F(InterfaceTest, TimeCheckFailed)
     attr.scanType = STATISTIC_SCAN;
     attr.scanStart = time(nullptr) - 10; // 设置scanStart为10秒前
     attr.duration = 15; // 持续时间为15秒
-
     // 模拟GetProcessAttr返回attr
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
 
@@ -2331,7 +2331,6 @@ TEST_F(InterfaceTest, TimeCheckSuccess)
     attr.scanType = STATISTIC_SCAN;
     attr.scanStart = time(nullptr) - 10; // 设置scanStart为10秒前
     attr.duration = 5; // 持续时间为15秒
-
     // 模拟GetProcessAttr返回attr
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
 
@@ -2556,7 +2555,7 @@ TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaNotAllowedTwo)
     struct MigrateNumaMsg msg = { .srcNid = srcNid, .destNid = destNid, .count = 100 };
     EnvAtomicSet(&g_status, 1);
     MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsRemoteNumaMoveAllowed).stubs().with(eq(srcNid)).will(returnValue(0));
     MOCKER(IsRemoteNumaMoveAllowed).stubs().with(eq(destNid)).will(returnValue(1));
     int ret = ubturbo_smap_remote_numa_migrate(&msg);
@@ -2575,7 +2574,7 @@ TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaNotAllowedThree)
     struct MigrateNumaMsg msg = { .srcNid = srcNid, .destNid = destNid, .count = 100 };
     EnvAtomicSet(&g_status, 1);
     MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsRemoteNumaMoveAllowed).stubs().with(eq(srcNid)).will(returnValue(0));
     MOCKER(IsRemoteNumaMoveAllowed).stubs().with(eq(destNid)).will(returnValue(1));
     int ret = ubturbo_smap_remote_numa_migrate(&msg);
@@ -2592,7 +2591,7 @@ TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaNormal)
     struct MigrateNumaMsg msg = { .srcNid = 4, .destNid = 5, .count = 1 };
     EnvAtomicSet(&g_status, 1);
     MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsRemoteNumaMoveAllowed).stubs().will(returnValue(1));
     MOCKER(CheckMigrateNumaMsg).stubs().will(returnValue(0));
     MOCKER(MigrateRemoteNuma).stubs().will(returnValue(-ENOENT));
@@ -2602,7 +2601,7 @@ TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaNormal)
 
     GlobalMockObject::verify();
     MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsRemoteNumaMoveAllowed).stubs().will(returnValue(1));
     MOCKER(CheckMigrateNumaMsg).stubs().will(returnValue(0));
     MOCKER(MigrateRemoteNuma).stubs().will(returnValue(0));
@@ -2633,7 +2632,7 @@ TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaNormalThree)
     struct MigrateNumaMsg msg = { .srcNid = 100, .destNid = 5, .count = 10000 };
     EnvAtomicSet(&g_status, 1);
     MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsRemoteNumaMoveAllowed).stubs().will(returnValue(1));
     MOCKER(MigrateRemoteNuma).stubs().will(returnValue(-ENOENT));
     MOCKER(ChangePidRemoteByNuma).expects(never());
@@ -2642,7 +2641,7 @@ TEST_F(InterfaceTest, TestSmapMigrateRemoteNumaNormalThree)
 
     GlobalMockObject::verify();
     MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsRemoteNumaMoveAllowed).stubs().will(returnValue(1));
     MOCKER(MigrateRemoteNuma).stubs().will(returnValue(0));
     MOCKER(ChangePidRemoteByNuma).stubs().will(returnValue(0));
@@ -2841,8 +2840,8 @@ TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaIsPidArrMigratePidRemoteNumaFa
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     EnvAtomicSet(&g_status, 1);
     MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().with(eq(msg.payload[0].destNid)).will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().with(eq(msg.payload[0].srcNid)).will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().with(eq(msg.payload[0].destNid)).will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().with(eq(msg.payload[0].srcNid)).will(returnValue(true));
     MOCKER(IsPidArrValid).stubs().will(returnValue(true));
     MOCKER(IsPidArrRemoteNumaMatch).stubs().will(returnValue(1));
 
@@ -2873,8 +2872,8 @@ TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaIsPidArrChangePidRemoteByPid)
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     EnvAtomicSet(&g_status, 1);
     MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().with(eq(msg.payload[0].destNid)).will(returnValue(true));
-    MOCKER(IsOnlineRemoteNidValid).stubs().with(eq(msg.payload[0].srcNid)).will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().with(eq(msg.payload[0].destNid)).will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().with(eq(msg.payload[0].srcNid)).will(returnValue(true));
     MOCKER(IsPidArrValid).stubs().will(returnValue(true));
     MOCKER(IsPidArrRemoteNumaMatch).stubs().will(returnValue(0));
     MOCKER(IsPidArrInState).stubs().will(returnValue(1));
@@ -2889,6 +2888,7 @@ extern "C" bool GetAdaptMem(void);
 extern "C" bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid);
 extern "C" int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime);
 extern "C" int MigrateOutWithCapacityPolicy(struct MigrateOutMsg *msg, int pidType, bool ignoreRemoteCapacity);
+extern "C" bool ubturbo_smap_is_running(void);
 
 static int CheckSyncMigrateOutCapacityPolicy(struct MigrateOutMsg *msg, int pidType, bool ignoreRemoteCapacity)
 {
@@ -2904,6 +2904,7 @@ TEST_F(InterfaceTest, TestSmapMigrateOutSyncErrMaxWaitTime)
     struct MigrateOutMsg msg;
     int pidType = VM_TYPE;
     uint64_t maxWaitTime = 1000;
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
     ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -2914,6 +2915,7 @@ TEST_F(InterfaceTest, TestSmapMigrateOutSyncErrRunMode)
     struct MigrateOutMsg msg;
     int pidType = VM_TYPE;
     uint64_t maxWaitTime = 10000;
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
     MOCKER(GetRunMode).stubs().will(returnValue(0));
     ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
     EXPECT_EQ(-EINVAL, ret);
@@ -2925,6 +2927,7 @@ TEST_F(InterfaceTest, TestSmapMigrateOutSyncErrPidType)
     struct MigrateOutMsg msg;
     int pidType = 0;
     uint64_t maxWaitTime = 10000;
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
     MOCKER(GetRunMode).stubs().will(returnValue(1));
     ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
     EXPECT_EQ(-EINVAL, ret);
@@ -2936,9 +2939,19 @@ TEST_F(InterfaceTest, TestSmapMigrateOutSyncFailSmapMigrateOut)
     struct MigrateOutMsg msg;
     int pidType = VM_TYPE;
     uint64_t maxWaitTime = 10000;
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
     MOCKER(GetRunMode).stubs().will(returnValue(1));
     MOCKER(MigrateOutWithCapacityPolicy).stubs().will(returnValue(-EPERM));
     ret = ubturbo_smap_migrate_out_sync(&msg, pidType, maxWaitTime);
+    EXPECT_EQ(-EPERM, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateOutSyncNotRunning)
+{
+    int ret;
+    struct MigrateOutMsg msg;
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(false));
+    ret = ubturbo_smap_migrate_out_sync(&msg, VM_TYPE, 10000);
     EXPECT_EQ(-EPERM, ret);
 }
 
@@ -2959,6 +2972,7 @@ TEST_F(InterfaceTest, TestSmapMigrateOutSyncSuccess)
     uint64_t maxWaitTime = 10000;
 
     EnvMutexInit(&manager.lock);
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetRunMode).stubs().will(returnValue(1));
     MOCKER(MigrateOutWithCapacityPolicy).expects(once()).will(invoke(CheckSyncMigrateOutCapacityPolicy));
@@ -2984,6 +2998,7 @@ TEST_F(InterfaceTest, TestSmapMigrateOutSyncFail)
     uint64_t maxWaitTime = 10000;
 
     EnvMutexInit(&manager.lock);
+    MOCKER(ubturbo_smap_is_running).stubs().will(returnValue(true));
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetRunMode).stubs().will(returnValue(1));
     MOCKER(MigrateOutWithCapacityPolicy).stubs().will(returnValue(0));
@@ -3296,7 +3311,7 @@ TEST_F(InterfaceTest, AddProcessTrackingNormalScanInvalidRemoteValid)
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&process));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(false));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(false));
 
     ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
     EXPECT_EQ(-22, ret);
@@ -3318,7 +3333,7 @@ TEST_F(InterfaceTest, AddProcessTrackingNormalScanSuccess)
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&process));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
 
     ret = AddProcessTracking(&pid, &scanTime, &duration, len, scanType);
     EXPECT_EQ(0, ret);
@@ -3407,7 +3422,7 @@ TEST_F(InterfaceTest, AddProcessTrackingKeepsAllManagedRemoteNodes)
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
     MOCKER(GetProcessAttrLocked).stubs().will(returnValue(&process));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckTrackingPayloadKeepsAllRemoteNodes));
 
     EXPECT_EQ(0, AddProcessTracking(&pid, &scanTime, &duration, 1, NORMAL_SCAN));
@@ -3607,7 +3622,7 @@ TEST_F(InterfaceTest, TestSmapQueryProcessConfigInvalidNid)
     struct OldProcessPayload payload[4] = {};
 
     inLen = sizeof(payload) / sizeof(payload[0]);
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(false));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(false));
     ret = ubturbo_smap_process_config_query(nid, payload, inLen, &outLen);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -3621,7 +3636,7 @@ TEST_F(InterfaceTest, TestSmapQueryProcessConfigNullResult)
     struct OldProcessPayload payload[4] = {};
 
     inLen = sizeof(payload) / sizeof(payload[0]);
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     ret = ubturbo_smap_process_config_query(nid, nullptr, inLen, &outLen);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -3635,7 +3650,7 @@ TEST_F(InterfaceTest, TestSmapQueryProcessConfigInvalidLen)
     struct OldProcessPayload payload[4] = {};
 
     inLen = 0;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     ret = ubturbo_smap_process_config_query(nid, payload, inLen, &outLen);
     EXPECT_EQ(-EINVAL, ret);
 
@@ -3687,7 +3702,7 @@ TEST_F(InterfaceTest, TestSmapQueryProcessConfigNormal)
 
     EnvAtomicSet(&g_status, 1);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     LinkedListAdd(&manager.processes, &attr1);
     LinkedListAdd(&manager.processes, &attr2);
@@ -3753,7 +3768,7 @@ TEST_F(InterfaceTest, TestSmapQueryProcessConfigNormalTwo)
 
     EnvAtomicSet(&g_status, 1);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     LinkedListAdd(&manager.processes, &attr1);
     LinkedListAdd(&manager.processes, &attr2);
@@ -3810,7 +3825,7 @@ TEST_F(InterfaceTest, TestSmapQueryProcessConfigNormalThree)
 
     EnvAtomicSet(&g_status, 1);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     LinkedListAdd(&manager.processes, &attr1);
     LinkedListAdd(&manager.processes, &attr2);
@@ -3864,7 +3879,7 @@ TEST_F(InterfaceTest, TestSmapQueryRemoteNumaFreq)
     attr2.scanAttr.actCount[4].freqSum = 10;
 
     EnvMutexInit(&manager.lock);
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     int ret = ubturbo_smap_remote_numa_freq_query(numa, freq, 2);
     EXPECT_EQ(0, ret);
@@ -3990,7 +4005,7 @@ TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaCheckInner)
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetRunMode).stubs().will(returnValue(WATERLINE_MODE));
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     MOCKER(GetAttrL1).stubs().will(returnValue(0));
 
@@ -4624,7 +4639,7 @@ TEST_F(InterfaceTest, TestCheckMigrateNumaMsgInvalidSrcNid)
     msg.srcNid = 4;
     msg.destNid = 5;
     msg.count = 1;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(false));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(false));
     int ret = CheckMigrateNumaMsg(&msg);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -4635,7 +4650,7 @@ TEST_F(InterfaceTest, TestCheckMigrateNumaMsgInvalidCount)
     msg.srcNid = 4;
     msg.destNid = 5;
     msg.count = 0;
-    MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
     int ret = CheckMigrateNumaMsg(&msg);
     EXPECT_EQ(-EINVAL, ret);
 }
