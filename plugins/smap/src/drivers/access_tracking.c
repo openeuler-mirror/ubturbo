@@ -602,6 +602,8 @@ static int __init access_tracking_init(void)
 	if (ret)
 		pr_warn("cold_period_threshold sysfs node not created (%d)\n",
 			ret);
+	else if (smap_swap_enable_sysfs_init())
+		pr_warn("swap_enable sysfs node not created\n");
 
 	ret = access_tracking_add();
 	if (ret) {
@@ -640,6 +642,7 @@ err_cold_queue:
 
 static void __exit access_tracking_exit(void)
 {
+	smap_swap_enable_sysfs_exit();
 	smap_cold_threshold_sysfs_exit();
 	access_ioctl_exit();
 	destroy_scan_workqueue();

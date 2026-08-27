@@ -370,6 +370,15 @@ static int smap_cold_queue_drain(void)
 	u64 *batch;
 	int nid;
 
+	/*
+	 * Runtime kill-switch: with swap-out disabled via
+	 * /sys/kernel/smap/swap_enable the scan path stops enqueueing and this
+	 * drain path reclaims nothing. Return 0 so the periodic drain ioctl
+	 * does not warn.
+	 */
+	if (!READ_ONCE(swap_out_enable))
+		return 0;
+
 	if (!fp_reclaim_pages || !fp_isolate_hugetlb || !fp_folio_putback_lru ||
 	    !fp_folio_isolate_lru) {
 		pr_err("swap-out symbols not resolved (reclaim_pages=%p "
