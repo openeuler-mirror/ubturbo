@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2024. All rights reserved.
  * Description: SMAP Tiering Memory Solution: driver: tracking_core
  */
 
@@ -387,7 +386,7 @@ static void __exit tracking_core_exit(void)
 	trk_core_ctrl = NULL;
 }
 
-MODULE_AUTHOR("Huawei Tech. Co., Ltd.");
+MODULE_AUTHOR("openEuler");
 MODULE_LICENSE("GPL v2");
 module_init(tracking_core_init);
 module_exit(tracking_core_exit);

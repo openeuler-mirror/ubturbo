@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  * Description: smap_user_log ut code
  */
 #include <cstring>

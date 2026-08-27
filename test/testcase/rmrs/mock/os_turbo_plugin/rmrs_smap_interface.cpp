@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.‘
  */
 #include "rmrs_smap_interface.h"
 namespace {

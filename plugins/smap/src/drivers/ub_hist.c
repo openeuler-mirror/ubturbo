@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  * Description: SMAP : ub_hist
  */
 
@@ -663,7 +662,7 @@ static void __exit histogram_module_exit(void)
 }
 
 MODULE_DESCRIPTION("SMAP hist driver");
-MODULE_AUTHOR("Huawei Tech. Co., Ltd.");
+MODULE_AUTHOR("openEuler");
 MODULE_LICENSE("GPL v2");
 module_init(histogram_module_init);
 module_exit(histogram_module_exit);

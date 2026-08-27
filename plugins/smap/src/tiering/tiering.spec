@@ -1,11 +1,11 @@
 Name:          smap_tiering
 Version:       %{ver}
 Release:       %{rel}
-Summary:       Huawei smap tiering driver
+Summary:       openEuler smap tiering driver
 License:       GPLv2
-URL:           https://support.huawei.com
+URL:           https://www.openeuler.org
 Provides:      %{name}
-Vendor:        Huawei Technologies Co., Ltd.
+Vendor:        openEuler Community
 BuildRoot:     %{buildroot}
 ExclusiveArch: %{arch}
 Requires:      kernel
@@ -13,7 +13,7 @@ Requires:      kernel
 %define driverdir /lib/modules/smap_tiering
 
 %description
-This package contains the Huawei SMAP tiering Driver
+This package contains the openEuler SMAP tiering Driver
 
 %prep
 echo "########no need to prepare the build########"

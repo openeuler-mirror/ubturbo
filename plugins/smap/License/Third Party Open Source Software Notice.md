@@ -1,4 +1,4 @@
-Please note we provide an open source software notice for the third party open source software along with this software and/or this software component contributed by Huawei (in the following just “this SOFTWARE”). The open source software licenses are granted by the respective right holders.
+Please note we provide an open source software notice for the third party open source software along with this software and/or this software component contributed by openEuler (in the following just “this SOFTWARE”). The open source software licenses are granted by the respective right holders.
 
 ## **Warranty Disclaimer**
 
