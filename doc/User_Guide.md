@@ -94,6 +94,7 @@ rpm -qa | grep ubturbo-rmrs
 [root@controller ~]# rpm -qa | grep ubturbo-rmrs
 ubturbo-rmrs-*.aarch64
 ```
+
 ## 2.6 按实际需求修改配置文件
 
 **说明：**
@@ -122,6 +123,7 @@ ubturbo-rmrs-*.aarch64
   * 配置中key对应插件的插件名称(需要与插件自身配置文件中的名称相对应)，value为初始化函数中需要使用的moduleCode。
   * moduleCode是唯一值。
 * 进程启动成功后，通过执行以下命令来查询哪些插件已加载成功:
+
   ```bash
   cat /var/log/ubturbo/ubturbo.log | grep "loaded successfully"
   ```
@@ -137,14 +139,17 @@ systemctl start ubturbo
 ### 2.7.2 查询服务状态
 
 - 查询服务当前状态，状态为active即表示服务已经启动：
+
   ```bash
   systemctl status ubturbo
   ```
+
 - 查询服务对应进程，观察进程是否存在：
   
   ```bash
   ps -ef | grep ubturbo
   ```
+
 ### 2.7.3 查看启动日志
 
 观察进程是否正常启动。启动成功的标志：TurboMain::Run end.
@@ -162,16 +167,19 @@ journalctl -u ubturbo
   ```bash
   systemctl start ubturbo
   ```
+
 - 服务状态查询
   
   ```bash
   systemctl status ubturbo
   ```
+
 - 停止服务
   
   ```bash
   systemctl stop ubturbo
   ```
+
 - 重启服务
   
   ```bash
@@ -185,6 +193,7 @@ journalctl -u ubturbo
   ```bash
   rpm -Uvh ubturbo-rmrs-*.aarch64.rpm
   ```
+  
 - 回退
   
   ```bash
