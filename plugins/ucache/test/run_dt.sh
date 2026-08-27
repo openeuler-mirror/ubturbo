@@ -70,6 +70,16 @@ cd $CURRENT_PATH/build
 
 cmake .. -DENABLE_TEST=OFF
 cmake --build . -j$(nproc)
+# mockcpp 依赖 4K 内存页对齐（mprotect 修改代码段页属性实现打桩），
+# 非 4K 页环境（如鲲鹏 64K 页）下 mprotect 失败会导致测试进程崩溃。
+# 此处检测页大小，不兼容时跳过 UT 执行，保证整体流程正常完成，
+# 详见 doc/3rdparty_open_source_components.md（2.2 mockcpp 兼容性限制）。
+UT_PAGE_SIZE="${MOCKCPP_PAGE_SIZE_OVERRIDE:-$(getconf PAGESIZE 2>/dev/null || echo 4096)}"
+if [ "${UT_PAGE_SIZE}" != "4096" ]; then
+    echo "[SKIP] 当前系统内存页大小为 ${UT_PAGE_SIZE}（非 4K），mockcpp 不兼容，跳过 UT 执行，不影响整体流程；详见 doc/3rdparty_open_source_components.md"
+    exit 0
+fi
+
 ./ucache_dt
 
 mkdir -p $CURRENT_PATH/build/gcovr_report
