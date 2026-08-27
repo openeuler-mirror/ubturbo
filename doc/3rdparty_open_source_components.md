@@ -30,6 +30,10 @@
 - **引入位置**：`test/3rdparty/CMakeLists.txt` 中 `EXTERNALPROJECT_ADD(mockcpp ...)`
 - **获取方式**：维持原有静态依赖方式，源码通过 git submodule / 手动放置于 `test/3rdparty/mockcpp/`（src-openeuler 中暂无 mockcpp 对应开源件）。构建时拷贝至 build 目录并应用 `mockcpp_support_arm64.patch`（ARM64 支持补丁）
 - **链接产物**：`libmockcpp.a` 静态链接进 `ubturbo_ut`、`rmrs_ut`
+- **兼容性限制（64K 内存页）**：mockcpp 通过 `mprotect` 修改代码段页属性实现 API 打桩，其 ARM64 支持补丁（`mockcpp_support_arm64.patch`）中地址对齐宏 `ADDR_ALIGN_UP`/`ADDR_ALIGN_DOWN` 按 4K 页硬编码；在 64K 内存页环境（如鲲鹏 920 默认配置）下，传入 `mprotect` 的地址未按实际页大小对齐导致调用失败，进程向只读代码段写入指令时崩溃（SIGSEGV）。
+- **64K 页环境 UT 跳过策略（不修改 mockcpp 框架）**：UT 执行脚本（`test/run_ut.sh`、`plugins/smap/test/run_dt.sh`、`plugins/ubdma/test/run_dt.sh`、`plugins/ucache/test/run_dt.sh`）在执行测试二进制前通过 `getconf PAGESIZE` 检测系统内存页大小，非 4K 页时打印说明信息并跳过 UT 执行（含覆盖率统计），脚本正常退出（返回 0），不影响 `./build.sh -t test` 等整体流程的执行。编译构建本身与内存页大小无关，仍正常执行。
+- **跳过逻辑验证**：如需在 4K 页环境验证跳过行为，可设置环境变量 `MOCKCPP_PAGE_SIZE_OVERRIDE`（如 `MOCKCPP_PAGE_SIZE_OVERRIDE=65536 sh test/run_ut.sh`）强制脚本按指定页大小判断；该变量仅用于验证跳过逻辑，请勿在正式环境使用。
+- **直接执行限制**：不兼容环境（非 4K 页）不支持直接运行 `ubturbo_ut`、`rmrs_ut`、`smap_dt`、`ubdma_dt`、`ucache_dt` 等测试二进制，请通过上述脚本执行 UT。
 - **许可证**：Apache-2.0（源码内 `COPYING`）
 - **合规说明**：Apache-2.0 允许静态链接使用，需随源码保留许可证与 NOTICE；该静态库仅存在于测试可执行文件，不进入发布件
 
@@ -79,3 +83,4 @@ ub_turbo_exec / libubturbo_client.so / librmrs_ubturbo_plugin.so
 | 2026-08 | rapidjson 移除 submodule，改用 openEuler 发行版软件包 rapidjson-devel（header-only） |
 | 2026-08 | googletest 移除 submodule，切换为 openEuler 社区开源件 src-openeuler/googletest（humble 分支，1.10.9004），构建时自动拉取 |
 | 2026-08 | mockcpp 维持原有静态依赖方式（源码由 git submodule / 手动放置于 `test/3rdparty/mockcpp`），不随仓库内置 |
+| 2026-08 | 补充 mockcpp 64K 内存页兼容性限制说明；UT 执行脚本增加内存页大小检测，非 4K 页环境自动跳过 UT 执行，不影响整体流程 |
