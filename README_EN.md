@@ -109,3 +109,5 @@ Compilation products:
 chmod +x ub_turbo_exec
 ./ub_turbo_exec
 ```
+
+This open-source project is not a Huawei product. Huawei offers only limited support.

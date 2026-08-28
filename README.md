@@ -1,5 +1,5 @@
-[TOC]
 # UBTurbo
+
 ## 项目简介
 
 UBTurbo是一款开源的节点内资源管理框架, 具备配置读取、插件加载、日志打印和IPC通信能力，集成SMAP能力提供基础的多级内存调度服务。
@@ -8,8 +8,7 @@ UBTurbo是一款开源的节点内资源管理框架, 具备配置读取、插�
 
 ## 目录结构
 
-
-```
+```text
 UBTURBO/
 ├── 3rdparty                    // 源码三方库
 ├── build                       // 项目脚本
@@ -32,16 +31,17 @@ UBTURBO/
 ```
 
 ## 约束说明
+
 - 用户使用UBTurbo进行内存借用时，需保证迁出内存地址和迁入内存地址的安全性一致。
 - 用户管理的需要迁移的虚机或容器对应的用户权限应该和远端内存对应的用户权限保持一致。
 - 客户使用UBTurbo，需要将用户添加到UBTurbo属组，被添加用户须拥有节点内存资源管理员的权限，才能使用UBTurbo内存迁移的能力，在内存迁移中PID由集群资源管理中心管理和下发，UBTurbo组件无法校验PID有效性，需要开发者在整体解决方案中，综合考虑pid、srcNid，destNid等参数传输和存储的安全。
-
 
 ## 项目架构
 
 ![UBTURBO_ARCHITECTURE.png](./doc/images/UBTURBO_ARCHITECTURE.png "UBTURBO_ARCHITECTURE")
 
 **UBTurbo**组件包含以下服务：
+
 - **UBTurboSDK**：UBTurbo服务提供的SDK端，作为一个独立SDK，对外通过接口给外层模块组件使用来使用UBTurbo能力。
 - **Common**：公共组件，提供一些公共能力。
   - **Log**：提供日志功能模块。
@@ -53,10 +53,12 @@ UBTURBO/
 - **SMAP**：分级内存使能模块，通过页面扫描和迁移使能分级内存能力。
 
 主要包含以下关键技术和方案：
+
 1. **配置加载**：从/opt/ubturbo/conf目录下读取ubturbo.conf、ubturbo_plugin_admission.conf以及每个插件的配置文件。
 2. **插件加载**：从指定目录下查找so，通过dlopen加载插件，卸载时通过dlclose关闭动态库。
 3. **进程通信**：通过unix domain socket机制，进行节点内进程间通信，提供面向连接的可靠数据传输功能。使用Reactor模式，server端启动线程监听指定socket文件，接受client端连接后创建一个新线程，调用指定回调函数，将结果发送给client端。
 4. **日志管理**：
+   
   - 1）**异步环形缓冲区**：使用异步环形缓冲区实现异步日志记录，避免阻塞主线程；
   - 2）**锁机制**：采用适当的锁机制确保多线程环境下的线程安全性；
   - 3）**时间戳处理**：利用系统时间函数获取时间戳信息；
@@ -76,7 +78,6 @@ UBTURBO/
 
 - 在ubturbo_plugin_admission.conf中打开插件前，需保证对应插件已安装且配置完成，否则UBTurbo及对应插件将启动异常.
 
-
 ## UBTurbo编译
 
 在根目录下执行:
@@ -86,6 +87,7 @@ git submodule update --init --recursive
 dos2unix build.sh
 sh build.sh
 ```
+
 编译产物：
 
 - 在dist/release/bin下会有以下二进制文件: `ub_turbo_exec`
@@ -103,7 +105,10 @@ sh build.sh
 | 1 | log.level | 日志等级 | 默认值：INFO，取值范围：DEBUG、INFO、WARN、ERROR、CRIT | 所有节点 | 决定主进程和插件的日志输出等级 |
 
 - 在保持上述编译产物的相对位置的前提下，执行如下命令
+
 ```bash
 chmod +x ub_turbo_exec
 ./ub_turbo_exec
 ```
+
+此开源项目非华为产品，仅提供有限支持。
