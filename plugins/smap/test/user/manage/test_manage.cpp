@@ -2508,6 +2508,45 @@ TEST_F(ManageTest, TestChangePidRemoteByPid)
     free(msg.payloads);
 }
 
+TEST_F(ManageTest, TestChangePidRemoteByPidDedupSamePid)
+{
+    struct MigPidRemoteNumaIoctlMsg msg = {
+        .pidCnt = 2,
+    };
+    msg.migResArray = (int *)calloc(2, sizeof(int));
+    msg.payloads = (struct MigPayload *)malloc(2 * sizeof(struct MigPayload));
+    ProcessAttr pid1 = {};
+    pid1.pid = 100;
+    pid1.numaAttr.numaNodes = 0b00010001;
+    pid1.scanTime = 200;
+    pid1.scanType = NORMAL_SCAN;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotAdd(&g_processManager, &pid1);
+
+    msg.payloads[0].pid = pid1.pid;
+    msg.payloads[0].srcNid = 4;
+    msg.payloads[0].destNid = 6;
+    msg.payloads[0].ratio = 100;
+    msg.payloads[0].memSize = 0;
+    msg.payloads[1].pid = pid1.pid;
+    msg.payloads[1].srcNid = 5;
+    msg.payloads[1].destNid = 6;
+    msg.payloads[1].ratio = 100;
+    msg.payloads[1].memSize = 0;
+
+    g_runMode = WATERLINE_MODE;
+    g_processManager.nrLocalNuma = 1;
+    EnvMutexInit(&g_processManager.threadLock);
+    MOCKER(AccessIoctlAddPid).expects(once()).will(returnValue(0));
+    MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
+    int ret = ChangePidRemoteByPid(&msg);
+    EXPECT_EQ(0, ret);
+
+    GlobalMockObject::verify();
+    free(msg.migResArray);
+    free(msg.payloads);
+}
+
 TEST_F(ManageTest, TestEnableProcessMigrateDisableInvalid)
 {
     pid_t pidArr[] = {1};
