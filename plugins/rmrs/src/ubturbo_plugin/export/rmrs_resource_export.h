@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -99,6 +97,9 @@ public:
                                       std::vector<mempooling::PidInfo> &pidInfos);
 
 private:
+    // 惰性初始化libvirt: 未知场景(pageType文件缺失)下由首个虚机业务触发, 失败不改变场景状态以保留重试机会
+    static bool EnsureLibvirtReady();
+
     static std::string hostName;
     static std::string nodeId;
     static std::unordered_map<uint16_t, uint16_t> cpuSocketMap;         // cpu core绑定的Socket

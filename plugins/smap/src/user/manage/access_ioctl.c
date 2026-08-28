@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -15,7 +13,7 @@
 #include <errno.h>
 
 #include "smap_user_log.h"
-#include "thread.h"
+
 #include "manage.h"
 #include "device.h"
 #include "access_ioctl.h"
@@ -34,13 +32,8 @@ int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
         return -ENOMEM;
     }
     struct ProcessManager *manager = GetProcessManager();
-    ThreadCtx *ctx = manager->threadCtx[0];
     uint32_t migrationPeriod;
-    if (ctx) {
-        migrationPeriod = ctx->period;
-    } else {
-        migrationPeriod = IsHugeMode() ? LIGHT_STABLE_MIGRATE_CYCLE : PROCESS_LIGHT_STABLE_MIGRATE_CYCLE;
-    }
+    migrationPeriod = manager->migPeriod;
 
     for (int i = 0; i < len; i++) {
         accessMsg.payload[i].pid = payload[i].pid;
@@ -58,6 +51,7 @@ int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
             accessMsg.payload[i].nTimes = migrationPeriod / payload[i].scanTime;
         }
         accessMsg.payload[i].type = payload[i].type;
+        accessMsg.payload[i].pidType = payload[i].pidType;
     }
     int ret = ioctl(manager->fds.access, SMAP_ACCESS_ADD_PID, &accessMsg);
     free(accessMsg.payload);

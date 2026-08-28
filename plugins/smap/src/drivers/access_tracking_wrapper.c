@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: common symbols for smap drivers
  */
 
@@ -183,3 +182,5 @@ pte_t smap_huge_ptep_get(pte_t *ptep)
 	}
 	return orig_pte;
 }
+
+EXPORT_SYMBOL(get_pfnblock_flags_mask);

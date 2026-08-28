@@ -1,14 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: smap access ioctl module
  */
 
 #ifndef _SRC_ACCESS_IOCTL_H
 #define _SRC_ACCESS_IOCTL_H
 
-#include <linux/types.h>
 #include <linux/proc_fs.h>
+#include <linux/types.h>
 
 #include "check.h"
 #include "drv_common.h"
@@ -23,11 +22,14 @@
 #define SMAP_PROC_ROOT "smap"
 
 struct actc_data {
-	u64 addr; /* 相对索引位置 */
 	actc_t freq; /* 访问频次 */
-	u8 prior; /* 优先级 */
-	u8 is_white_list; /* 是否白名单页 */
+	u8 flags; /* 位域:bit0=白名单页, bit1=已选中, bits2-7=优先级 */
 } __attribute__((packed));
+
+#define ACTC_WHITE_LIST_BIT BIT(0)
+#define ACTC_SELECT_BIT BIT(1)
+#define ACTC_PRIOR_GET(f) (((f) >> 2) & 0x3F)
+#define ACTC_PRIOR_SET(p) (((p)&0x3F) << 2)
 
 typedef enum {
 	NO_SCAN = -1,
@@ -37,6 +39,12 @@ typedef enum {
 	MAX_SCAN_TYPE,
 } scan_type;
 
+/* per-pid 身份，镜像用户态 PidType（PROCESS_TYPE=0 / VM_TYPE=1），数值须一致 */
+typedef enum {
+	SMAP_PID_PROCESS = 0,
+	SMAP_PID_VM,
+} smap_pid_type;
+
 struct access_add_pid_payload {
 	pid_t pid;
 	u32 numa_nodes;
@@ -44,6 +52,7 @@ struct access_add_pid_payload {
 	u32 duration;
 	scan_type type;
 	u32 ntimes;
+	smap_pid_type pid_type;
 };
 
 struct access_add_pid_msg {
@@ -63,7 +72,7 @@ struct access_remove_pid_msg {
 struct tracking_info_payload {
 	pid_t pid;
 	u32 length;
-	actc_t *data;
+	u16 *data; /* DFX 统计扫描频次，保留原始 u16 真值，不压缩 */
 };
 
 struct access_pid_freq_msg {

@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -138,7 +136,7 @@ public:
     void FormatSyslog(std::ostream &os);
 
     TurboLogLevel GetLogLevel();
-    const char *GetSyslogAsString();
+    std::string GetSyslogAsString();
     const char *GetModuleName();
     const char *GetFile();
     uint32_t GetLine();

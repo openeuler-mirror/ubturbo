@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: SMAP 测试代码
  */
 
@@ -57,17 +56,6 @@ TEST_F(IomemTest, free_remote_ram_dt)
     if (ramdata1 != nullptr) {
         delete(ramdata1);
     }
-}
-extern "C" void copy_remote_ram(struct list_head *dst, struct list_head *src);
-TEST_F(IomemTest, copy_remote_ram_dt)
-{
-    ram_segment ramdata1 = {0};
-    ram_segment ramdata2 = {0};
-    list_head test_list;
-    INIT_LIST_HEAD(&test_list);
-    list_add(&ramdata1.node, &test_list);
-    list_add(&ramdata2.node, &test_list);
-    copy_remote_ram(&ramdata1.node, &ramdata2.node);
 }
 
 extern "C" bool pfn_valid(unsigned long pfn);
@@ -355,65 +343,6 @@ TEST_F(IomemTest, fill_obmmdev_dt)
     bool ret = fill_obmmdev(&call.ctx, "obmm", 4, 0, 0, 0);
     EXPECT_EQ(true, ret);
     EXPECT_EQ(0, call.ret);
-}
-
-extern "C" void release_remote_ram(void);
-TEST_F(IomemTest, release_remote_ram_dt)
-{
-    release_remote_ram();
-}
-
-extern "C" int refresh_remote_ram(void);
-TEST_F(IomemTest, refresh_remote_ram_dt)
-{
-    MOCKER(walk_system_ram_remote_range).stubs().will(returnValue(1)).then(returnValue(0));
-    int ret = refresh_remote_ram();
-    EXPECT_EQ(ret, 1);
-    ret = refresh_remote_ram();
-    EXPECT_EQ(ret, 0);
-}
-extern "C" bool is_smap_pg_huge(void);
-extern "C" int calc_acidx_paddr_iomem(u64 index, int nid, u64 *paddr);
-TEST_F(IomemTest, calc_acidx_paddr_iomem_dt)
-{
-    u64 paddr[10] = {0};
-    u64 addr;
-    u64 index = 1;
-    int nid = 1;
-    ram_segment newdata1 = {0};
-    ram_segment newdata2 = {0};
-
-    list_add_tail(&newdata1.node, &remote_ram_list);
-    list_add_tail(&newdata2.node, &remote_ram_list);
-    int ret = calc_acidx_paddr_iomem(index, nid, paddr);
-    EXPECT_EQ(ret, -34);
-    newdata1.end = 1 << 22;
-    nid = 0;
-    ret = calc_acidx_paddr_iomem(index, nid, paddr);
-    EXPECT_EQ(ret, 0);
-    MOCKER(is_smap_pg_huge).stubs().will(returnValue(false));
-    ret = calc_acidx_paddr_iomem(index, nid, paddr);
-    EXPECT_EQ(ret, 0);
-
-    GlobalMockObject::verify();
-
-    nid = 0;
-    index = 0x00000400;
-    newdata1.start = 0x0;
-    newdata1.end =   0x7fffffff;
-    newdata1.numa_node = 0;
-
-    newdata2.start = 0x2080000000;
-    newdata2.end = 0x20807fffff;
-    newdata2.numa_node = 0;
-    
-    MOCKER(is_smap_pg_huge).stubs().will(returnValue(true));
-    ret = calc_acidx_paddr_iomem(index, nid, &addr);
-    ASSERT_EQ(0, ret);
-    EXPECT_EQ(0x2080000000, addr);
-
-    list_del(&newdata1.node);
-    list_del(&newdata2.node);
 }
 
 extern "C" int find_range_by_memid(u64 memid, u64 *start, u64 *end);
@@ -862,51 +791,6 @@ TEST_F(IomemTest, IterateObmmDevWithExistingList)
     EXPECT_EQ(6, mr->seq);
 
     free_obmm_dev();
-}
-
-// ========== DT supplement: calc_acidx_paddr_iomem (additional) ==========
-
-extern "C" u32 g_pagesize_huge;
-
-TEST_F(IomemTest, CalcAcidxPaddrIomemNidNotFound)
-{
-    u64 paddr;
-
-    struct ram_segment *seg = (struct ram_segment *)kmalloc(sizeof(*seg), GFP_KERNEL);
-    ASSERT_NE(nullptr, seg);
-    seg->numa_node = 0;
-    seg->start = 0x1000;
-    seg->end = 0x1FFF;
-    INIT_LIST_HEAD(&remote_ram_list);
-    list_add_tail(&seg->node, &remote_ram_list);
-
-    MOCKER(is_smap_pg_huge).stubs().will(returnValue(false));
-    int ret = calc_acidx_paddr_iomem(0, 5, &paddr);
-    EXPECT_EQ(-34, ret);
-
-    list_del(&seg->node);
-    kfree(seg);
-}
-
-TEST_F(IomemTest, CalcAcidxPaddrIomemIndexOutOfRange)
-{
-    u64 paddr;
-    g_pagesize_huge = 0x200000;
-
-    struct ram_segment *seg = (struct ram_segment *)kmalloc(sizeof(*seg), GFP_KERNEL);
-    ASSERT_NE(nullptr, seg);
-    seg->numa_node = 1;
-    seg->start = 0x1000;
-    seg->end = 0x1FFF;
-    INIT_LIST_HEAD(&remote_ram_list);
-    list_add_tail(&seg->node, &remote_ram_list);
-
-    MOCKER(is_smap_pg_huge).stubs().will(returnValue(true));
-    int ret = calc_acidx_paddr_iomem(10, 1, &paddr);
-    EXPECT_EQ(-34, ret);
-
-    list_del(&seg->node);
-    kfree(seg);
 }
 
 // ========== DT supplement: find_range_by_memid (additional) ==========

@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -27,22 +25,19 @@
 #include "securec.h"
 #include "device.h"
 #include "access_ioctl.h"
-#include "virt.h"
 #include "advanced-strategy/scene.h"
 #include "smap_config.h"
 #include "strategy/strategy_config.h"
 #include "strategy/strategy.h"
 #include "strategy/migration.h"
 #include "manage.h"
-
-#define MAX_GROUP_TARGET_ENTRY (MAX_MIGRATION_GROUP_NUM * MAX_GROUP_REMOTE_NUMA)
+#include "manage_internal.h"
 
 #define UPDATE_CRITICAL_ERR_COUNT 5
 
 static struct ProcessManager g_processManager;
 
 static char g_mmapTypeName[][MMAP_TYPE_STRING_LEN] = { "mmap_private", "mmap_shared" };
-static char *g_nodePattern[LOCAL_NUMA_NUM] = { " N0=", " N1=", " N2=", " N3=" };
 
 uint32_t g_pageSizeNormal;
 uint32_t g_pageSizeHuge;
@@ -60,11 +55,6 @@ RunMode GetRunMode(void)
 void SetRunMode(RunMode runMode)
 {
     g_runMode = runMode;
-}
-
-PidType GetPidType(struct ProcessManager *manager)
-{
-    return manager->tracking.pageSize == g_pageSizeNormal ? PROCESS_TYPE : VM_TYPE;
 }
 
 uint32_t GetNormalPageSize(void)
@@ -104,102 +94,201 @@ int GetNrLocalNuma(void)
     return g_processManager.nrLocalNuma;
 }
 
-void InitProcessTargetConfig(ProcessTargetConfig *config)
+uint32_t BuildAllLocalNumaMask(void)
 {
-    if (!config) {
-        return;
+    int nrLocalNuma = GetNrLocalNuma();
+    if (nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM) {
+        return 0;
     }
-
-    *config = (ProcessTargetConfig){ 0 };
+    return (1U << nrLocalNuma) - 1U;
 }
 
-void ClearProcessTargetConfig(ProcessTargetConfig *config)
-{
-    InitProcessTargetConfig(config);
-}
-
-int CopyProcessTargetConfig(ProcessTargetConfig *dest, const ProcessTargetConfig *src)
-{
-    if (!dest || !src || src->count > REMOTE_NUMA_NUM ||
-        (src->migrateMode != MIG_RATIO_MODE && src->migrateMode != MIG_MEMSIZE_MODE)) {
-        return -EINVAL;
-    }
-
-    *dest = *src;
-    return 0;
-}
-
-static int ValidateProcessTargetConfig(const ProcessTargetConfig *config)
-{
-    ProcessTargetConfig copy;
-    if (CopyProcessTargetConfig(&copy, config)) {
-        return -EINVAL;
-    }
-
-    uint64_t totalRatio = 0;
-    uint64_t pageSizeKB = (IsHugeMode() ? PAGESIZE_2M : PAGESIZE_4K) / KIB;
-    for (uint32_t i = 0; i < copy.count; i++) {
-        for (uint32_t j = i + 1; j < copy.count; j++) {
-            if (copy.targets[i].remoteNid == copy.targets[j].remoteNid) {
-                return -EINVAL;
-            }
-        }
-
-        if (copy.migrateMode == MIG_RATIO_MODE) {
-            if (copy.targets[i].ratio > HUNDRED) {
-                return -EINVAL;
-            }
-            totalRatio += copy.targets[i].ratio;
-            continue;
-        }
-
-        if (copy.targets[i].memSizeKB % pageSizeKB != 0 || copy.targets[i].memSizeKB / pageSizeKB > UINT32_MAX) {
-            return -EINVAL;
-        }
-    }
-
-    if (copy.migrateMode == MIG_RATIO_MODE && totalRatio > HUNDRED) {
-        return -EINVAL;
-    }
-    return 0;
-}
-
-const ProcessRemoteTarget *FindProcessRemoteTarget(const ProcessTargetConfig *config, int remoteNid)
-{
-    if (!config || config->count > REMOTE_NUMA_NUM) {
-        return NULL;
-    }
-
-    for (uint32_t i = 0; i < config->count; i++) {
-        if (config->targets[i].remoteNid == remoteNid) {
-            return &config->targets[i];
-        }
-    }
-    return NULL;
-}
-
-int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex)
-{
-    if (!remoteIndex || nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM || remoteNid < nrLocalNuma ||
-        remoteNid - nrLocalNuma >= REMOTE_NUMA_NUM) {
-        return -EINVAL;
-    }
-
-    *remoteIndex = remoteNid - nrLocalNuma;
-    return 0;
-}
-
-void InitProcessMigrationTargetState(ProcessAttr *attr)
+static uint32_t BuildResidentLocalMask(const ProcessAttr *attr)
 {
     if (!attr) {
-        return;
+        return 0;
     }
 
-    InitProcessTargetConfig(&attr->targetConfig);
-    InitProcessTargetConfig(&attr->pendingTargetConfig);
-    attr->pendingTargetConfigValid = false;
-    attr->pendingTargetNumaNodes = 0;
-    attr->managedLocalState = (ManagedLocalState){ 0 };
+    uint32_t residentLocalMask = 0;
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int localNid = 0; localNid < nrLocalNuma && localNid < LOCAL_NUMA_NUM; localNid++) {
+        if (attr->walkPage.nrPages[localNid] != 0) {
+            AddL1(&residentLocalMask, localNid);
+        }
+    }
+    return residentLocalMask;
+}
+
+uint32_t BuildAccountLocalMask(const ProcessAttr *attr, int remoteIndex)
+{
+    if (!attr || remoteIndex < 0 || remoteIndex >= REMOTE_NUMA_NUM) {
+        return 0;
+    }
+
+    uint32_t accountLocalMask = 0;
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int localNid = 0; localNid < nrLocalNuma && localNid < LOCAL_NUMA_NUM; localNid++) {
+        if (attr->strategyAttr.remoteNrPagesAfterMigrate[localNid][remoteIndex] != 0) {
+            AddL1(&accountLocalMask, localNid);
+        }
+    }
+    return accountLocalMask;
+}
+
+int ApplyManagedLocalObservation(ProcessAttr *attr, const ManagedLocalObservation *observation, bool fullReplacement)
+{
+    if (!attr || !observation || (!observation->affinityValid && !observation->residentValid)) {
+        return -EINVAL;
+    }
+
+    uint32_t allLocalMask = BuildAllLocalNumaMask();
+    if (allLocalMask == 0) {
+        SMAP_LOGGER_ERROR("Invalid local NUMA layout for pid %d.", attr->pid);
+        return -EINVAL;
+    }
+
+    ManagedLocalState state = attr->managedLocalState;
+    state.residentLocalMask = observation->residentValid ? observation->residentLocalMask & allLocalMask : 0;
+    if (observation->affinitySampled) {
+        state.affinityRefreshElapsedMs = 0;
+        state.affinitySampled = true;
+    }
+    if (observation->affinityValid) {
+        state.affinityLocalMask = observation->affinityLocalMask & allLocalMask;
+        state.affinityValid = true;
+    }
+    state.observedLocalMask = (state.affinityValid ? state.affinityLocalMask : 0) | state.residentLocalMask;
+    if (state.observedLocalMask == 0) {
+        state.observedLocalMask = allLocalMask;
+    }
+
+    uint32_t allAccountLocalMask = 0;
+    for (int remoteIndex = 0; remoteIndex < REMOTE_NUMA_NUM; remoteIndex++) {
+        state.accountLocalMask[remoteIndex] = BuildAccountLocalMask(attr, remoteIndex);
+        allAccountLocalMask |= state.accountLocalMask[remoteIndex];
+    }
+
+    uint32_t managedLocalMask = state.observedLocalMask | allAccountLocalMask;
+    if (!fullReplacement) {
+        managedLocalMask |= attr->managedLocalState.managedLocalMask;
+    }
+    state.managedLocalMask = managedLocalMask & allLocalMask;
+    attr->managedLocalState = state;
+
+    SMAP_LOGGER_DEBUG("Refresh pid %d local state: managed=%#x observed=%#x "
+                      "resident=%#x account=%#x full=%d.",
+                      attr->pid, state.managedLocalMask, state.observedLocalMask, state.residentLocalMask,
+                      allAccountLocalMask, fullReplacement);
+    return 0;
+}
+
+static uint32_t GetManagedLocalRefreshPeriodMs(void)
+{
+    if (g_processManager.migPeriod != 0) {
+        return g_processManager.migPeriod;
+    }
+    return DEFAULT_MIGRATE_PERIOD;
+}
+
+static void AdvanceManagedLocalAffinityRefresh(ProcessAttr *attr)
+{
+    uint32_t elapsed = attr->managedLocalState.affinityRefreshElapsedMs;
+    uint32_t period = GetManagedLocalRefreshPeriodMs();
+    if (elapsed >= MANAGED_LOCAL_AFFINITY_REFRESH_INTERVAL_MS ||
+        period >= MANAGED_LOCAL_AFFINITY_REFRESH_INTERVAL_MS - elapsed) {
+        attr->managedLocalState.affinityRefreshElapsedMs = MANAGED_LOCAL_AFFINITY_REFRESH_INTERVAL_MS;
+        return;
+    }
+    attr->managedLocalState.affinityRefreshElapsedMs = elapsed + period;
+}
+
+int RefreshManagedLocalState(ProcessAttr *attr, bool fullReplacement)
+{
+    if (!attr) {
+        return -EINVAL;
+    }
+
+    ManagedLocalObservation observation = {
+        .residentLocalMask = BuildResidentLocalMask(attr),
+        /*
+         * RefreshManagedLocalState is called only after a page snapshot has
+         * been filled. An empty resident mask is therefore a valid
+         * observation, not an unavailable data source.
+         */
+        .residentValid = true,
+    };
+
+    if (!fullReplacement) {
+        AdvanceManagedLocalAffinityRefresh(attr);
+    }
+    bool refreshAffinity = fullReplacement || !attr->managedLocalState.affinitySampled ||
+                           attr->managedLocalState.affinityRefreshElapsedMs >=
+                               MANAGED_LOCAL_AFFINITY_REFRESH_INTERVAL_MS;
+    if (refreshAffinity) {
+        int ret = SetLocalNumaByCpu(attr->pid, &observation.affinityLocalMask);
+        observation.affinitySampled = true;
+        /*
+         * Reset the elapsed time on both success and failure. A failed
+         * sample keeps the last valid affinity mask and is retried after
+         * the normal interval instead of on every migration cycle.
+         */
+        if (ret) {
+            SMAP_LOGGER_WARNING("Refresh pid %d affinity local NUMA failed: %d.", attr->pid, ret);
+        } else {
+            observation.affinityValid = true;
+        }
+    } else if (attr->managedLocalState.affinityValid) {
+        observation.affinityLocalMask = attr->managedLocalState.affinityLocalMask;
+        observation.affinityValid = true;
+    }
+
+    return ApplyManagedLocalObservation(attr, &observation, fullReplacement);
+}
+
+uint32_t BuildManagedTrackingNodes(const ProcessAttr *attr)
+{
+    if (!attr) {
+        return 0;
+    }
+
+    uint32_t allLocalMask = BuildAllLocalNumaMask();
+    if (allLocalMask == 0) {
+        return 0;
+    }
+
+    /*
+     * Rebuild the remote tracking scope from the current target and resident
+     * page state. An omitted remote must remain tracked while it still owns
+     * pages, but stale bits must not survive after reconciliation reaches zero.
+     */
+    uint32_t localBitmapMask = (1U << LOCAL_NUMA_BITS) - 1U;
+    /* A zero total-page count means no fresh pagemap snapshot is available. */
+    bool pageSnapshotValid = attr->walkPage.nrPage != 0;
+    uint32_t numaNodes = pageSnapshotValid ? 0 : (attr->numaAttr.numaNodes & ~localBitmapMask);
+    numaNodes |= attr->managedLocalState.managedLocalMask & allLocalMask;
+
+    uint32_t targetCount = attr->targetConfig.count;
+    if (targetCount > REMOTE_NUMA_NUM) {
+        SMAP_LOGGER_WARNING("Pid %d target count %u exceeds limit.", attr->pid, targetCount);
+        targetCount = REMOTE_NUMA_NUM;
+    }
+    for (uint32_t i = 0; i < targetCount; i++) {
+        int remoteIndex;
+        int remoteNid = attr->targetConfig.targets[i].remoteNid;
+        if (RemoteNidToIndex(remoteNid, GetNrLocalNuma(), &remoteIndex) == 0) {
+            AddL2ByNid(&numaNodes, remoteNid);
+        }
+    }
+    for (int remoteIndex = 0; remoteIndex < REMOTE_NUMA_NUM; remoteIndex++) {
+        int remoteNid = GetNrLocalNuma() + remoteIndex;
+        bool hasResidentPages = remoteNid < MAX_NODES && attr->walkPage.nrPages[remoteNid] != 0;
+        bool hasAccount = attr->managedLocalState.accountLocalMask[remoteIndex] != 0;
+        if (!hasResidentPages && !hasAccount) {
+            continue;
+        }
+        AddL2ByNid(&numaNodes, remoteNid);
+    }
+    return numaNodes;
 }
 
 /*
@@ -271,6 +360,10 @@ int ProcessManagerInit(uint32_t pageType)
     g_pageSizeNormal = size;
     g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.tracking.pageSize = (pageType == PAGETYPE_NORMAL) ? g_pageSizeNormal : g_pageSizeHuge;
+    g_processManager.migPeriod = IsHugeMode() ? LIGHT_STABLE_MIGRATE_CYCLE : PROCESS_LIGHT_STABLE_MIGRATE_CYCLE;
+    if (GetFileConfSwitchConfig()) {
+        g_processManager.migPeriod = GetMigratePeriodConfig();
+    }
 
     for (i = 0; i < MAX_NODES; i++) {
         g_processManager.fds.nodes[i] = DEFAULT_FD;
@@ -278,14 +371,12 @@ int ProcessManagerInit(uint32_t pageType)
     g_processManager.fds.migrate = DEFAULT_FD;
     g_processManager.fds.access = DEFAULT_FD;
     g_processManager.fds.lock = DEFAULT_FD;
-    for (i = 0; i < MAX_THREADS; i++) {
-        g_processManager.threadCtx[i] = NULL;
-    }
-    g_processManager.processes = NULL;
+    g_processManager.ubBwMonitor.ubBwThreshold = GetUbBwThresholdConfig();
+    g_processManager.ubBwMonitor.currentFluxRet = -ENODATA;
     RemoteNumaInfoInit();
-    EnvMutexInit(&g_processManager.lock);
+    PidSlotInit(&g_processManager);
     EnvMutexInit(&g_processManager.threadLock);
-    InitSceneInfo(&g_processManager.sceneInfo, pageType == PAGETYPE_HUGE);
+    InitSceneInfo(&g_processManager.sceneInfo, (PageType)pageType);
     g_runMode = WATERLINE_MODE;
     return 0;
 }
@@ -310,7 +401,7 @@ bool PidIsValid(pid_t pid)
     return access(path, F_OK) == 0;
 }
 
-int IsQemuTask(pid_t pid)
+int GetPidTypeFromComm(pid_t pid)
 {
     char comm[BUFFER_SIZE];
     char cmdBuf[BUFFER_SIZE];
@@ -326,39 +417,56 @@ int IsQemuTask(pid_t pid)
         SMAP_LOGGER_ERROR("Failed to open file, errno is %d.", errno);
         return -EINVAL;
     }
-    if (fgets(comm, sizeof(comm), file)) {
-        SMAP_LOGGER_DEBUG("Skip the first line of comm file.");
-    }
-    if (fgets(comm, sizeof(comm), file)) {
-        SMAP_LOGGER_INFO("After fgets comm file");
-        pclose(file);
+    bool foundLine = false;
+    while (fgets(comm, sizeof(comm), file) != NULL) {
+        foundLine = true;
         if ((strncmp(comm, VM_NAME_STR, PID_NAME_LEN) == 0) ||
             (strncmp(comm, VM_KVM_NAME_STR, PID_KVM_NAME_LEN) == 0)) {
-            ret = VM_TYPE;
-        } else {
-            ret = PROCESS_TYPE;
+            pclose(file);
+            return VM_TYPE;
         }
-        return ret;
     }
     SMAP_LOGGER_ERROR("Error occur in fgets comm file");
-
     (void)pclose(file);
+    if (foundLine) {
+        return PROCESS_TYPE;
+    }
     return -1;
 }
 
-void LinkedListAdd(ProcessAttr **head, ProcessAttr **add)
+static int AtomicIncrease(EnvAtomic *a, int v)
 {
-    (*add)->next = *head;
-    *head = *add;
+    int oldv;
+    int newv;
+    do {
+        oldv = EnvAtomicRead(a);
+        newv = oldv + v;
+    } while (EnvAtomicCmpAndSwap(oldv, newv, a) != oldv);
+    return oldv;
 }
 
-static void ResetActcData(ActcData *actcData[], int len)
+static int AtomicDecrease(EnvAtomic *a, int v)
 {
+    int oldv;
+    int newv;
+    do {
+        oldv = EnvAtomicRead(a);
+        newv = oldv - v;
+    } while (EnvAtomicCmpAndSwap(oldv, newv, a) != oldv);
+    return oldv;
+}
+
+void ResetActcData(ActcData *actcData[], int len)
+{
+    /* actcData[nid]按偏移指向同一连续缓冲区，第一个非空指针即缓冲区起始，仅释放一次 */
     for (int i = 0; i < len; i++) {
-        if (actcData[i]) {
+        if (actcData[i] != NULL) {
             free(actcData[i]);
-            actcData[i] = NULL;
+            break;
         }
+    }
+    for (int i = 0; i < len; i++) {
+        actcData[i] = NULL;
     }
 }
 
@@ -373,30 +481,149 @@ static void FreeProceccesAttr(ProcessAttr *attr)
     free(attr);
 }
 
-void LinkedListRemove(ProcessAttr **remove, ProcessAttr **head)
+void PidSlotInit(struct ProcessManager *manager)
 {
-    if (*head == NULL || *remove == NULL) {
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        EnvAtomicSet(&manager->slots[i].state, PID_SLOT_FREE);
+        manager->slots[i].pid = 0;
+        manager->slots[i].attr = NULL;
+        EnvAtomicSet(&manager->slots[i].refs, 0);
+        EnvMutexInit(&manager->slots[i].attrLock);
+    }
+}
+
+void PidSlotDestroy(struct ProcessManager *manager)
+{
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        EnvMutexDestroy(&manager->slots[i].attrLock);
+    }
+}
+
+/* 引用归零后唯一清理者：释放 attr 并把槽位恢复为 FREE */
+static void PidSlotTryReclaim(struct ProcessManager *manager, int i)
+{
+    struct PidSlot *s = &manager->slots[i];
+    if (EnvAtomicRead(&s->refs) != 0) {
         return;
     }
-
-    ProcessAttr *toRemove = *remove;
-
-    if (*head == toRemove) {
-        *head = toRemove->next;
-        toRemove->next = NULL;
-        FreeProceccesAttr(toRemove);
+    if (EnvAtomicCmpAndSwap(PID_SLOT_REMOVING, PID_SLOT_RESERVED, &s->state) != PID_SLOT_REMOVING) {
         return;
     }
+    FreeProceccesAttr(s->attr);
+    s->attr = NULL;
+    s->pid = 0;
+    EnvAtomicSet(&s->state, PID_SLOT_FREE);
+}
 
-    ProcessAttr *prev = *head;
-    while (prev->next != NULL && prev->next != toRemove) {
-        prev = prev->next;
+int PidSlotAdd(struct ProcessManager *manager, ProcessAttr *attr)
+{
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        struct PidSlot *s = &manager->slots[i];
+        if (EnvAtomicCmpAndSwap(PID_SLOT_FREE, PID_SLOT_RESERVED, &s->state) != PID_SLOT_FREE) {
+            continue;
+        }
+        s->pid = attr->pid;
+        s->attr = attr;
+        EnvAtomicSet(&s->refs, 1);
+        EnvAtomicSet(&s->state, PID_SLOT_INUSE);
+        return i;
     }
-    if (prev->next == toRemove) {
-        prev->next = toRemove->next;
-        toRemove->next = NULL;
-        FreeProceccesAttr(toRemove);
-        *remove = NULL;
+    return -1;
+}
+
+void PidSlotRemove(struct ProcessManager *manager, pid_t pid)
+{
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        struct PidSlot *s = &manager->slots[i];
+        if (s->pid != pid) {
+            continue;
+        }
+        if (EnvAtomicCmpAndSwap(PID_SLOT_INUSE, PID_SLOT_REMOVING, &s->state) != PID_SLOT_INUSE) {
+            return;
+        }
+        if (AtomicDecrease(&s->refs, 1) == 1) {
+            PidSlotTryReclaim(manager, i);
+        }
+        return;
+    }
+}
+
+bool PidSlotEmpty(struct ProcessManager *manager)
+{
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        if (EnvAtomicRead(&manager->slots[i].state) == PID_SLOT_INUSE) {
+            return false;
+        }
+    }
+    return true;
+}
+
+struct PidSlot *PidSlotGetRef(pid_t pid)
+{
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        struct PidSlot *s = &g_processManager.slots[i];
+        if (EnvAtomicRead(&s->state) != PID_SLOT_INUSE || s->pid != pid) {
+            continue;
+        }
+        AtomicIncrease(&s->refs, 1);
+        if (EnvAtomicRead(&s->state) != PID_SLOT_INUSE) {
+            if (AtomicDecrease(&s->refs, 1) == 1) {
+                PidSlotTryReclaim(&g_processManager, i);
+            }
+            continue;
+        }
+        return s;
+    }
+    return NULL;
+}
+
+size_t PidSlotCollectRefs(struct ProcessManager *manager, struct PidSlot *arr[], size_t cap)
+{
+    size_t count = 0;
+    for (int i = 0; i < MAX_PID_SLOTS && count < cap; i++) {
+        struct PidSlot *s = &manager->slots[i];
+        if (EnvAtomicRead(&s->state) != PID_SLOT_INUSE) {
+            continue;
+        }
+        AtomicIncrease(&s->refs, 1);
+        if (EnvAtomicRead(&s->state) != PID_SLOT_INUSE) {
+            if (AtomicDecrease(&s->refs, 1) == 1) {
+                PidSlotTryReclaim(manager, i);
+            }
+            continue;
+        }
+        arr[count++] = s;
+    }
+    return count;
+}
+
+void PidSlotReleaseRefs(struct PidSlot *arr[], size_t n)
+{
+    for (size_t k = 0; k < n; k++) {
+        struct PidSlot *s = arr[k];
+        if (s == NULL) {
+            continue;
+        }
+        if (AtomicDecrease(&s->refs, 1) == 1) {
+            PidSlotTryReclaim(&g_processManager, (int)(s - g_processManager.slots));
+        }
+    }
+}
+
+void PutProcessAttr(ProcessAttr *attr)
+{
+    if (attr == NULL) {
+        return;
+    }
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        struct PidSlot *s = &g_processManager.slots[i];
+        if (s->attr != attr) {
+            continue;
+        }
+        if (AtomicDecrease(&s->refs, 1) == 1) {
+            PidSlotTryReclaim(&g_processManager, i);
+        }
+        return;
     }
 }
 
@@ -508,118 +735,123 @@ int IsHugePageRange(const char *line)
     return strstr(line, "hugepage") != NULL;
 }
 
-static int CheckPid(pid_t pid)
+/*
+ * 校验 pid 有效并返回其身份(VM_TYPE/PROCESS_TYPE)，失败返回 -ESRCH/-EINVAL。
+ * 身份由 GetPidTypeFromComm 自动判别，不再由 caller 声明——公共 API 仅传 pageType(页大小)。
+ */
+int DetectPidType(pid_t pid)
 {
-    PidType type = GetPidType(&g_processManager);
-    int ret;
     if (!PidIsValid(pid)) {
         SMAP_LOGGER_ERROR("Input pid %d is invalid.", pid);
         return -ESRCH;
     }
-    ret = IsQemuTask(pid);
-    if (ret != type) {
-        SMAP_LOGGER_ERROR("Pid %d type(%d) conflict with current pid type(%d).", pid, ret, type);
+    int ret = GetPidTypeFromComm(pid);
+    if (ret != VM_TYPE && ret != PROCESS_TYPE) {
+        SMAP_LOGGER_ERROR("Pid %d type detect failed: %d.", pid, ret);
         return -EINVAL;
+    }
+    return ret;
+}
+
+/* 取引用：返回 attr（持 1 引用）；用完须 PutProcessAttr 释放。未找到返回 NULL */
+ProcessAttr *GetProcessAttr(pid_t pid)
+{
+    struct PidSlot *s = PidSlotGetRef(pid);
+    return PidSlotAttr(s);
+}
+
+int ReadCmdlineByPid(pid_t pid, char *buf, int len)
+{
+    char cmdBuf[BUFFER_SIZE];
+    char skip[BUFFER_SIZE];
+    int ret = snprintf_s(cmdBuf, sizeof(cmdBuf), sizeof(cmdBuf) - 1, "%s %d cmdline %s", CAT_SCRIPT_CAT_PATH, pid,
+                         CAT_SCRIPT_TAIL);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("Make pid %d cmdline cmd error.", pid);
+        return -EINVAL;
+    }
+    FILE *file = popen(cmdBuf, "r");
+    if (file == NULL) {
+        SMAP_LOGGER_ERROR("Open pid %d cmdline error: %d.", pid, errno);
+        return -errno;
+    }
+    if (fgets(skip, sizeof(skip), file) == NULL) {
+        (void)pclose(file);
+        SMAP_LOGGER_ERROR("Read pid %d cmdline skip-line failed.", pid);
+        return -EIO;
+    }
+    if (fgets(buf, len, file) == NULL) {
+        (void)pclose(file);
+        SMAP_LOGGER_ERROR("Read pid %d cmdline content failed.", pid);
+        return -EIO;
+    }
+    (void)pclose(file);
+    /* /proc/<pid>/cmdline 不受 4096 字节限制: 大虚机参数可能更长。缓冲填满说明被截断,
+     * share 标志可能落在窗口外导致误判 PRIVATE。保守返回错误, 由 ParseMmapType 置 SHARED。 */
+    if (strlen(buf) >= (size_t)len - 1) {
+        SMAP_LOGGER_ERROR("Pid %d cmdline exceeds %d bytes, may be truncated, default mmap_shared.", pid, len);
+        return -E2BIG;
     }
     return 0;
 }
 
-ProcessAttr *GetProcessAttr(pid_t pid)
+/*
+ * libvirt 生成的 QEMU cmdline 旧式为 -object memory-backend-file,...,share=on，
+ * 新式为 JSON -object {"qom-type":"memory-backend-file",...,"share":true}；两者都匹配。
+ * 与 libvirt domain XML 的 memAccess='shared'
+ */
+static int CmdlineHasSharedMem(const char *cmdline, int len)
 {
-    ProcessAttr *current = g_processManager.processes;
-    EnvMutexLock(&g_processManager.lock);
-    while (current && current->pid != pid) {
-        current = current->next;
+    const char *tmp = cmdline;
+    while (tmp != NULL && *tmp != '\0') {
+        if (strstr(tmp, "\"share\":true") != NULL || strstr(tmp, "share=on") != NULL) {
+            return 1;
+        }
+        tmp = strchr(tmp, '\0');
+        if (tmp == NULL || tmp >= cmdline + len) {
+            break;
+        }
+        tmp++;
     }
-    EnvMutexUnlock(&g_processManager.lock);
-    return current;
+    return 0;
 }
 
-/* 调用前必须持有锁g_processManager.lock */
-ProcessAttr *GetProcessAttrLocked(pid_t pid)
+/*
+ * 判定虚机内存映射 SHARED/PRIVATE，替代原 libvirt domain XML 路径。
+ * 读 cmdline 失败时保守置 SHARED(与旧 libvirt no-xml 语义一致：失败倾向单线程迁出)。
+ */
+int ParseMmapType(pid_t pid, MmapType *mmapType)
 {
-    ProcessAttr *current = g_processManager.processes;
-    while (current && current->pid != pid) {
-        current = current->next;
-    }
-    return current;
-}
-
-static int ParseMmapType(int domainId, MmapType *mmapType)
-{
-    int err;
-    char *xml;
-    int retry = 10;
-
-    do {
-        xml = GetXMLByDomainId(domainId);
-    } while (retry-- && !xml);
-    if (!xml) {
+    char cmdline[CMDLINE_LEN] = { 0 };
+    int ret = ReadCmdlineByPid(pid, cmdline, sizeof(cmdline));
+    if (ret) {
         *mmapType = MMAP_SHARED;
+        SMAP_LOGGER_ERROR("Read cmdline of pid %d failed: %d, default mmap_shared.", pid, ret);
         return -EINVAL;
     }
-    if (strstr(xml, MMAP_TYPE_SHARED_SEG1) || strstr(xml, MMAP_TYPE_SHARED_SEG2)) {
+    if (CmdlineHasSharedMem(cmdline, sizeof(cmdline))) {
         *mmapType = MMAP_SHARED;
+    } else {
+        *mmapType = MMAP_PARIVATE;
     }
-    free(xml);
+    SMAP_LOGGER_INFO("Read Mmap type of pid %d: %s.", pid, g_mmapTypeName[*mmapType]);
     return 0;
 }
 
 int VMPreprocess(pid_t pid, ProcessAttr *attr)
 {
-    int ret;
-
-    if (GetPidType(&g_processManager) == VM_TYPE) {
-        ret = ReadDomainIdByPid(pid, &attr->vmPidAttr.domainId);
-        if (ret) {
-            SMAP_LOGGER_ERROR("Read domain id of pid %d error: %d.", pid, ret);
-            return -EINVAL;
-        }
-        SMAP_LOGGER_INFO("Read domain id of pid %d: %d.", pid, attr->vmPidAttr.domainId);
-        ret = ParseMmapType(attr->vmPidAttr.domainId, &attr->vmPidAttr.mmapType);
+    if (attr->type == VM_TYPE) {
+        int ret = ParseMmapType(pid, &attr->vmPidAttr.mmapType);
         if (ret) {
             SMAP_LOGGER_ERROR("Parse mmap type of pid %d failed.", pid);
             return 0;
         }
-        SMAP_LOGGER_INFO("Read Mmap type of pid %d: %s.", pid, g_mmapTypeName[attr->vmPidAttr.mmapType]);
     }
     return 0;
 }
 
-static int BuildProcessTargetConfigFromParam(const ProcessParam *param, ProcessTargetConfig *config)
-{
-    if (!param || !config || param->count < 0 || param->count > REMOTE_NUMA_NUM) {
-        return -EINVAL;
-    }
-
-    if (param->targetConfigValid) {
-        if (ValidateProcessTargetConfig(&param->targetConfig)) {
-            return -EINVAL;
-        }
-        return CopyProcessTargetConfig(config, &param->targetConfig);
-    }
-
-    InitProcessTargetConfig(config);
-    if (param->count == 0 || (param->count == 1 && param->numaParam[0].nid == DEFAULT_L2_NODE)) {
-        return 0;
-    }
-
-    config->migrateMode = param->numaParam[0].migrateMode;
-    for (int i = 0; i < param->count; i++) {
-        if (param->numaParam[i].migrateMode != config->migrateMode ||
-            FindProcessRemoteTarget(config, param->numaParam[i].nid)) {
-            return -EINVAL;
-        }
-        ProcessRemoteTarget *target = &config->targets[config->count++];
-        target->remoteNid = param->numaParam[i].nid;
-        target->ratio = param->numaParam[i].ratio;
-        target->memSizeKB = param->numaParam[i].memSize;
-    }
-    return ValidateProcessTargetConfig(config);
-}
-
 /* Set process attributes that are independent of its migration target. */
-static void SetBasicProcessConfig(ProcessAttr *attr, ProcessParam *param)
+void SetBasicProcessConfig(ProcessAttr *attr, ProcessParam *param)
 {
     attr->pid = param->pid;
     attr->duration = param->duration;
@@ -636,8 +868,7 @@ static void SetBasicProcessConfig(ProcessAttr *attr, ProcessParam *param)
     SMAP_LOGGER_INFO("Pid: %d local numa cnt: %d, remote numa cnt: %d.", attr->pid, localNumaCnt, attr->remoteNumaCnt);
 }
 
-/* Handle multi-NUMA VM scenario: VM with multiple local or remote NUMAs */
-static void SetMultiNumaVmConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
+void SetMultiNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
 {
     for (int i = 0; i < param->count; i++) {
         int remoteNid = param->numaParam[i].nid;
@@ -645,492 +876,22 @@ static void SetMultiNumaVmConfig(ProcessAttr *attr, ProcessParam *param, int nrL
 
         attr->migrateParam[i].nid = remoteNid;
         attr->migrateParam[i].memSize = param->numaParam[i].memSize;
-        SMAP_LOGGER_INFO("Multi-NUMA VM destNid: %d, memSize: %lu", remoteNid, attr->migrateParam[i].memSize);
+        SMAP_LOGGER_INFO("Multi-NUMA config destNid: %d, memSize: %lu", remoteNid, attr->migrateParam[i].memSize);
 
         /* Set the same ratio for all local NUMAs */
         for (int j = 0; j < nrLocalNuma && j < LOCAL_NUMA_NUM; j++) {
             attr->strategyAttr.initRemoteMemRatio[j][l2Index] = param->numaParam[i].ratio;
-            SMAP_LOGGER_INFO("Multi-NUMA VM destNid: %d, ratio: %d", remoteNid, param->numaParam[i].ratio);
+            SMAP_LOGGER_INFO("Multi-NUMA config destNid: %d, ratio: %d", remoteNid, param->numaParam[i].ratio);
         }
         AddAttrL2(attr, remoteNid);
-    }
-}
-
-/* Migrate additional pages to remote NUMA in forward order (NUMA0 -> NUMA1 -> ...) */
-static void MigratePagesToRemote(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES], uint64_t pages)
-{
-    uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
-    int nrLocalNuma = GetNrLocalNuma();
-    uint64_t pagesToMigrate = pages;
-
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM && pagesToMigrate > 0; i++) {
-        if (InAttrL1(attr, i)) {
-            uint64_t allocPages = MIN(pagesPerNuma[i], pagesToMigrate);
-            attr->strategyAttr.memSize[i][l2Index] += allocPages * (pageSize / KIB);
-            pagesToMigrate -= allocPages;
-        }
-    }
-}
-
-static void ClearSingleRemoteTarget(ProcessAttr *attr, int l2Index, int nrLocalNuma)
-{
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-        attr->strategyAttr.memSize[i][l2Index] = 0;
-        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] = 0;
-    }
-}
-
-static void AccountExistingRemotePagesByOldAccount(ProcessAttr *attr, int l2Index, uint64_t remotePages,
-                                                   uint64_t oldTotal, int nrLocalNuma)
-{
-    uint64_t nrLeft = remotePages;
-
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-        if (!InAttrL1(attr, i)) {
-            continue;
-        }
-
-        uint64_t oldPages = attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index];
-        uint64_t nrPages = oldTotal == 0 ? 0 : remotePages * oldPages / oldTotal;
-        if (nrPages > nrLeft) {
-            nrPages = nrLeft;
-        }
-        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] = nrPages;
-        nrLeft -= nrPages;
-    }
-
-    for (int i = nrLocalNuma - 1; i >= 0 && nrLeft > 0; i--) {
-        if (!InAttrL1(attr, i)) {
-            continue;
-        }
-        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] += nrLeft;
-        break;
-    }
-}
-
-static void AccountExistingRemotePagesByLocalPages(ProcessAttr *attr, int l2Index,
-                                                   const uint64_t pagesPerNuma[MAX_NODES], uint64_t remotePages,
-                                                   int nrLocalNuma)
-{
-    uint64_t localTotal = 0;
-    uint64_t nrLeft = remotePages;
-
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-        if (InAttrL1(attr, i)) {
-            localTotal += pagesPerNuma[i];
-        }
-    }
-
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-        if (!InAttrL1(attr, i)) {
-            continue;
-        }
-
-        uint64_t nrPages = 0;
-        if (localTotal > 0) {
-            nrPages = remotePages * pagesPerNuma[i] / localTotal;
-        }
-        if (nrPages > nrLeft) {
-            nrPages = nrLeft;
-        }
-        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] = nrPages;
-        nrLeft -= nrPages;
-    }
-
-    for (int i = nrLocalNuma - 1; i >= 0 && nrLeft > 0; i--) {
-        if (!InAttrL1(attr, i)) {
-            continue;
-        }
-        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] += nrLeft;
-        break;
-    }
-}
-
-static void AccountExistingRemotePages(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES],
-                                       uint64_t remotePages, int nrLocalNuma)
-{
-    uint64_t oldTotal = 0;
-
-    if (remotePages == 0) {
-        return;
-    }
-
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-        if (InAttrL1(attr, i)) {
-            oldTotal += attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index];
-        }
-    }
-
-    if (oldTotal > 0) {
-        AccountExistingRemotePagesByOldAccount(attr, l2Index, remotePages, oldTotal, nrLocalNuma);
-    } else {
-        AccountExistingRemotePagesByLocalPages(attr, l2Index, pagesPerNuma, remotePages, nrLocalNuma);
-    }
-}
-
-static void SetSingleRemoteTargetPages(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES],
-                                       uint64_t targetPages, int nrLocalNuma)
-{
-    uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
-    uint64_t nrLeft = targetPages;
-    int lastLocal = NUMA_NO_NODE;
-
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM && nrLeft > 0; i++) {
-        if (!InAttrL1(attr, i)) {
-            continue;
-        }
-
-        uint64_t accounted = attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index];
-        uint64_t capacity = accounted + pagesPerNuma[i];
-        uint64_t nrPages = MIN(capacity, nrLeft);
-        attr->strategyAttr.memSize[i][l2Index] = nrPages * (pageSize / KIB);
-        nrLeft -= nrPages;
-        lastLocal = i;
-    }
-
-    if (nrLeft > 0 && lastLocal != NUMA_NO_NODE) {
-        attr->strategyAttr.memSize[lastLocal][l2Index] += nrLeft * (pageSize / KIB);
-    }
-}
-
-/* Recall pages from remote NUMA in reverse order (NUMA(n-1) -> ... -> NUMA1 -> NUMA0) */
-static void RecallPagesFromRemote(ProcessAttr *attr, int l2Index, uint64_t pages)
-{
-    uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
-    int nrLocalNuma = GetNrLocalNuma();
-    uint64_t pagesToRecall = pages;
-
-    for (int i = nrLocalNuma - 1; i >= 0 && pagesToRecall > 0; i--) {
-        if (InAttrL1(attr, i)) {
-            uint64_t existingMemSizePages = attr->strategyAttr.memSize[i][l2Index] / (pageSize / KIB);
-            uint64_t recallPages = MIN(existingMemSizePages, pagesToRecall);
-            attr->strategyAttr.memSize[i][l2Index] -= recallPages * (pageSize / KIB);
-            pagesToRecall -= recallPages;
-        }
-    }
-}
-
-/* Handle single remote NUMA scenario: single local+single remote, or multi-local+single remote */
-static int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
-{
-    int remoteNid = param->numaParam[0].nid;
-
-    /* Validate remote NUMA node */
-    if (remoteNid < nrLocalNuma || remoteNid >= nrLocalNuma + REMOTE_NUMA_NUM) {
-        SMAP_LOGGER_WARNING("Invalid remote numa %d for pid %d, nrLocalNuma: %d.", remoteNid, attr->pid, nrLocalNuma);
-        return -EINVAL;
-    }
-
-    int l2Index = remoteNid - nrLocalNuma;
-
-    /* Get page distribution across NUMA nodes */
-    uint64_t pagesPerNuma[MAX_NODES] = { 0 };
-    int ret = GetPidNumaPagesFromNumaMaps(attr->pid, pagesPerNuma, false);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Failed to get page count for process %d, ret: %d.", attr->pid, ret);
-        return ret;
-    }
-
-    /* Calculate target pages and pages already on remote NUMA */
-    uint64_t targetPages = IsHugeMode() ? KBToHugePage(param->numaParam[0].memSize) :
-                                          KBToNormalPage(param->numaParam[0].memSize);
-    uint64_t remoteExistingPages = pagesPerNuma[remoteNid];
-
-    /* Set ratio for all local NUMAs */
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-        attr->strategyAttr.initRemoteMemRatio[i][l2Index] = param->numaParam[0].ratio;
-    }
-
-    ClearSingleRemoteTarget(attr, l2Index, nrLocalNuma);
-    AccountExistingRemotePages(attr, l2Index, pagesPerNuma, remoteExistingPages, nrLocalNuma);
-    SetSingleRemoteTargetPages(attr, l2Index, pagesPerNuma, targetPages, nrLocalNuma);
-
-    attr->migrateParam[0].memSize = param->numaParam[0].memSize;
-    attr->migrateParam[0].nid = remoteNid;
-    /*
-     * Keep omitted remotes in the scan scope until their existing pages have
-     * converged to the new full-replacement target of zero.
-     */
-    AddAttrL2(attr, remoteNid);
-    return 0;
-}
-
-static void ClearCompatibleProcessTargets(ProcessAttr *attr)
-{
-    for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
-        attr->migrateParam[i].nid = DEFAULT_L2_NODE;
-        attr->migrateParam[i].memSize = 0;
-        for (int j = 0; j < LOCAL_NUMA_NUM; j++) {
-            attr->strategyAttr.initRemoteMemRatio[j][i] = 0;
-            attr->strategyAttr.memSize[j][i] = 0;
-            attr->strategyAttr.allocRemoteNrPages[j][i] = 0;
-            attr->strategyAttr.l2RemoteMemRatio[j][i] = 0;
-            attr->strategyAttr.l3RemoteMemRatio[j][i] = 0;
-        }
-    }
-    for (int i = 0; i < MAX_NODES; i++) {
-        for (int j = 0; j < MAX_NODES; j++) {
-            attr->strategyAttr.nrMigratePages[i][j] = 0;
-        }
-    }
-}
-
-static void TargetConfigToProcessParam(const ProcessAttr *attr, const ProcessTargetConfig *config, ProcessParam *param)
-{
-    *param = (ProcessParam){
-        .pid = attr->pid,
-        .scanType = attr->scanType,
-        .count = config->count,
-    };
-    for (uint32_t i = 0; i < config->count; i++) {
-        param->numaParam[i].nid = config->targets[i].remoteNid;
-        param->numaParam[i].ratio = config->targets[i].ratio;
-        param->numaParam[i].memSize = config->targets[i].memSizeKB;
-        param->numaParam[i].migrateMode = config->migrateMode;
-    }
-}
-
-/* Generate compatibility runtime fields from the requested target. */
-static int UpdateProcessMigrateConfig(ProcessAttr *attr, const ProcessTargetConfig *config)
-{
-    int nrLocalNuma = GetNrLocalNuma();
-    int localNumaCnt = GetL1Count(attr->numaAttr.numaNodes);
-    bool isVm = GetPidType(&g_processManager) == VM_TYPE;
-    ProcessParam param;
-
-    attr->migrateMode = config->migrateMode;
-    attr->remoteNumaCnt = config->count;
-    int localRatio = HUNDRED;
-    if (config->migrateMode == MIG_RATIO_MODE) {
-        for (uint32_t i = 0; i < config->count; i++) {
-            localRatio -= config->targets[i].ratio;
-        }
-    }
-    attr->initLocalMemRatio = localRatio;
-    ClearCompatibleProcessTargets(attr);
-    if (config->count == 0) {
-        return 0;
-    }
-
-    TargetConfigToProcessParam(attr, config, &param);
-    if (isVm && (config->count > 1 || localNumaCnt > 1)) {
-        SetMultiNumaVmConfig(attr, &param, nrLocalNuma);
-        return 0;
-    }
-    return SetSingleRemoteNumaConfig(attr, &param, nrLocalNuma);
-}
-
-static bool IsZeroProcessTargetConfig(const ProcessTargetConfig *config)
-{
-    if (!config) {
-        return false;
-    }
-    if (config->count == 0) {
-        return true;
-    }
-
-    for (uint32_t i = 0; i < config->count; i++) {
-        if (config->migrateMode == MIG_MEMSIZE_MODE) {
-            if (config->targets[i].memSizeKB != 0) {
-                return false;
-            }
-            continue;
-        }
-        if (config->targets[i].ratio != 0) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static void UpdateAutoRemoveRemoteEmptyFlag(ProcessAttr *attr, const ProcessTargetConfig *config)
-{
-    if (!attr || attr->groupPolicy.enabled) {
-        return;
-    }
-    if (attr->scanType != NORMAL_SCAN) {
-        attr->autoRemoveWhenRemoteEmpty = false;
-        return;
-    }
-
-    attr->autoRemoveWhenRemoteEmpty = IsZeroProcessTargetConfig(config);
-    if (attr->autoRemoveWhenRemoteEmpty) {
-        SMAP_LOGGER_INFO("Pid %d will be auto removed after all remote pages migrate back.", attr->pid);
-    }
-}
-
-static int PrepareProcessTargetCandidate(ProcessAttr *candidate, const ProcessTargetConfig *config)
-{
-    ProcessTargetConfig targetConfig;
-    int ret = CopyProcessTargetConfig(&targetConfig, config);
-    if (ret) {
-        return ret;
-    }
-
-    candidate->targetConfig = targetConfig;
-    ret = UpdateProcessMigrateConfig(candidate, &targetConfig);
-    if (ret) {
-        return ret;
-    }
-    UpdateAutoRemoveRemoteEmptyFlag(candidate, &targetConfig);
-    return 0;
-}
-
-static void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *candidate)
-{
-    attr->targetConfig = candidate->targetConfig;
-    attr->migrateMode = candidate->migrateMode;
-    attr->remoteNumaCnt = candidate->remoteNumaCnt;
-    attr->initLocalMemRatio = candidate->initLocalMemRatio;
-    attr->autoRemoveWhenRemoteEmpty = candidate->autoRemoveWhenRemoteEmpty;
-    attr->numaAttr = candidate->numaAttr;
-    attr->strategyAttr = candidate->strategyAttr;
-    for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
-        attr->migrateParam[i] = candidate->migrateParam[i];
-    }
-}
-
-static int ApplyProcessTargetConfig(ProcessAttr *attr, const ProcessTargetConfig *config)
-{
-    ProcessAttr candidate = *attr;
-    int ret = PrepareProcessTargetCandidate(&candidate, config);
-    if (ret) {
-        return ret;
-    }
-    PublishProcessTargetCandidate(attr, &candidate);
-    return 0;
-}
-
-int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config)
-{
-    ProcessTargetConfig targetConfig;
-    if (!attr || ValidateProcessTargetConfig(config) || CopyProcessTargetConfig(&targetConfig, config)) {
-        return -EINVAL;
-    }
-
-    if (attr->state == PROC_MIGRATE) {
-        attr->pendingTargetConfig = targetConfig;
-        attr->pendingTargetConfigValid = true;
-        attr->pendingTargetNumaNodes = attr->numaAttr.numaNodes;
-        for (uint32_t i = 0; i < targetConfig.count; i++) {
-            AddL2ByNid(&attr->pendingTargetNumaNodes, targetConfig.targets[i].remoteNid);
-        }
-        SMAP_LOGGER_INFO("Save pending migration target for pid %d.", attr->pid);
-        return 0;
-    }
-
-    return ApplyProcessTargetConfig(attr, &targetConfig);
-}
-
-int ApplyPendingMigrationTargets(ProcessAttr *attr)
-{
-    if (!attr || !attr->pendingTargetConfigValid) {
-        return 0;
-    }
-
-    ProcessTargetConfig config = attr->pendingTargetConfig;
-    ProcessAttr candidate = *attr;
-    candidate.numaAttr.numaNodes = attr->pendingTargetNumaNodes;
-    int ret = PrepareProcessTargetCandidate(&candidate, &config);
-    if (ret) {
-        return ret;
-    }
-
-    struct AccessAddPidPayload payload = {
-        .type = NORMAL_SCAN,
-        .pid = attr->pid,
-        .scanTime = attr->scanTime,
-        .duration = attr->duration,
-        .numaNodes = attr->pendingTargetNumaNodes,
-    };
-    ret = AccessIoctlAddPid(1, &payload);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Update pending pid %d tracking failed: %d.", attr->pid, ret);
-        return ret;
-    }
-
-    PublishProcessTargetCandidate(attr, &candidate);
-
-    ClearProcessTargetConfig(&attr->pendingTargetConfig);
-    attr->pendingTargetConfigValid = false;
-    attr->pendingTargetNumaNodes = 0;
-    ret = SyncAllProcessConfig();
-    if (ret) {
-        SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", attr->pid, ret);
-    }
-    SMAP_LOGGER_INFO("Apply pending migration target for pid %d.", attr->pid);
-    return 0;
-}
-
-static bool IsZeroRemoteTargetConfig(ProcessParam *param)
-{
-    ProcessTargetConfig config;
-    if (BuildProcessTargetConfigFromParam(param, &config)) {
-        return false;
-    }
-    return IsZeroProcessTargetConfig(&config);
-}
-
-static int SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
-{
-    ProcessTargetConfig config;
-    int ret = BuildProcessTargetConfigFromParam(param, &config);
-    if (ret) {
-        return ret;
-    }
-
-    SetBasicProcessConfig(attr, param);
-    return ConfigureMigrationTargets(attr, &config);
-}
-
-static void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeBitmap,
-                                    const GroupMigrationPolicy *policy)
-{
-    attr->pid = pid;
-    attr->scanTime = SCAN_TIME_2M;
-    attr->duration = 0;
-    attr->scanType = NORMAL_SCAN;
-    attr->type = VM_TYPE;
-    attr->migrateMode = MIG_MEMSIZE_MODE;
-    attr->remoteNumaCnt = GetL2Count(nodeBitmap);
-    attr->enableSwap = true;
-    attr->initLocalMemRatio = HUNDRED;
-    attr->numaAttr.numaNodes = nodeBitmap;
-    attr->groupPolicy = *policy;
-    attr->groupSwapLastTotalPages = 0;
-    attr->groupSwapStableTotalRounds = 0;
-    attr->groupSwapTotalPagesValid = false;
-    attr->groupSwapFrozen = false;
-    attr->pendingGroupPolicy.valid = false;
-    attr->autoRemoveWhenRemoteEmpty = false;
-    attr->syncWaitRemoteEmpty = false;
-    if (time(&attr->scanStart) == (time_t)-1) {
-        SMAP_LOGGER_ERROR("get time error");
-    }
-}
-
-static void ResetGroupedPolicyRuntime(GroupMigrationPolicy *policy)
-{
-    if (!policy) {
-        return;
-    }
-    /*
-     * Pending policy is copied from a new user request. Rebuild runtime counters
-     * from current numa_maps before it replaces the active policy.
-     */
-    for (int i = 0; i < policy->groupCount; i++) {
-        MigrationGroupAttr *group = &policy->groups[i];
-        group->swapCandidateRounds = 0;
-        for (int j = 0; j < group->targetCount; j++) {
-            group->targets[j].usedPages = 0;
-        }
     }
 }
 
 int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
 {
     int ret;
-    if (g_processManager.nr[type] >= GetCurrentMaxNrPid()) {
+    (void)nodeBitmap;
+    if (g_processManager.nr[VM_TYPE] + g_processManager.nr[PROCESS_TYPE] >= GetCurrentMaxNrPid()) {
         SMAP_LOGGER_ERROR("nr of pid is out of limit.");
         return -EINVAL;
     }
@@ -1141,13 +902,7 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
         return -ENOMEM;
     }
     InitProcessMigrationTargetState(attr);
-
-    ret = SetProcessLocalNuma(param->pid, &attr->numaAttr.numaNodes, type == VM_TYPE);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Query pid %d memory usage failed: %d.", param->pid, ret);
-        free(attr);
-        return ret;
-    }
+    attr->type = type;
 
     if (param->scanType == NORMAL_SCAN) {
         ret = VMPreprocess(param->pid, attr);
@@ -1161,7 +916,6 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
         SMAP_LOGGER_INFO("Set pid %d state to %d.", param->pid, PROC_MOVE);
     }
 
-    attr->type = type;
     ret = SetProcessConfig(attr, param);
     if (ret) {
         SMAP_LOGGER_ERROR("Set process %d config failed: %d.", param->pid, ret);
@@ -1169,7 +923,7 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
         return ret;
     }
     attr->scanTime = DEFAULT_SCAN_PERIOD;
-    LinkedListAdd(&g_processManager.processes, &attr);
+    PidSlotAdd(&g_processManager, attr);
     SMAP_LOGGER_INFO("Set pid %d scan cycle to %ums.", attr->pid, attr->scanTime);
     g_processManager.nr[type]++;
 
@@ -1181,6 +935,150 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
                      attr->migrateMode);
 
     return 0;
+}
+
+void DiscardProcessManageCandidate(ProcessManageCandidate *candidate)
+{
+    if (!candidate) {
+        return;
+    }
+
+    free(candidate->prepared);
+    *candidate = (ProcessManageCandidate){ 0 };
+}
+
+/* Sum the configured migrate memSize (KB) of an already-managed pid. */
+static uint64_t SumAttrMigrateMemSize(const ProcessAttr *attr)
+{
+    uint64_t total = 0;
+    for (int i = 0; i < attr->remoteNumaCnt; i++) {
+        total += attr->migrateParam[i].memSize;
+    }
+    return total;
+}
+
+int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate)
+{
+    if (!param || !candidate) {
+        return -EINVAL;
+    }
+    *candidate = (ProcessManageCandidate){ 0 };
+
+    ProcessTargetConfig config;
+    int ret = BuildProcessTargetConfigFromParam(param, &config);
+    if (ret) {
+        return ret;
+    }
+    ret = DetectPidType(param->pid);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ProcessAttr *active = GetProcessAttr(param->pid);
+    ProcessAttr *prepared = NULL;
+    if (active) {
+        prepared = malloc(sizeof(ProcessAttr));
+        if (!prepared) {
+            PutProcessAttr(active);
+            return -ENOMEM;
+        }
+        *prepared = *active;
+    } else {
+        if (g_processManager.nr[VM_TYPE] + g_processManager.nr[PROCESS_TYPE] >= GetCurrentMaxNrPid()) {
+            SMAP_LOGGER_ERROR("nr of pid is out of limit.");
+            return -EINVAL;
+        }
+        prepared = calloc(1, sizeof(ProcessAttr));
+        if (!prepared) {
+            return -ENOMEM;
+        }
+        InitProcessMigrationTargetState(prepared);
+        prepared->pid = param->pid;
+        prepared->type = type;
+        if (param->scanType == NORMAL_SCAN) {
+            ret = VMPreprocess(param->pid, prepared);
+            if (ret) {
+                free(prepared);
+                return ret;
+            }
+        } else if (param->scanType == HAM_SCAN || param->scanType == STATISTIC_SCAN) {
+            prepared->state = PROC_MOVE;
+        }
+        SetBasicProcessConfig(prepared, param);
+    }
+
+    candidate->active = active;
+    candidate->prepared = prepared;
+    candidate->isNew = active == NULL;
+    candidate->isPending = active && active->state == PROC_MIGRATE;
+    /* memSize 增大时重置 isFirstScan，使下一轮高频扫描快速迁移新增需求 */
+    uint64_t oldMemSize = active ? SumAttrMigrateMemSize(active) : 0;
+    ret = ConfigureMigrationTargetsWithCapacityPolicy(prepared, &config, param->ignoreRemoteCapacity);
+    if (ret) {
+        PutProcessAttr(candidate->active);
+        DiscardProcessManageCandidate(candidate);
+        return ret;
+    }
+    if (active && !IsHugeMode()) {
+        uint64_t newMemSize = SumAttrMigrateMemSize(prepared);
+        if (newMemSize > oldMemSize) {
+            /* memSize 增大时直接设置扫描周期为 DEFAULT_SCAN_PERIOD 立即生效，
+             * 同时置 isFirstScan 防止正常扫描周期更新逻辑立即重置。
+             * 设到 prepared 上，由 TrackMigrateOutCandidates 读取
+             * prepared->scanTime 下发内核态，再由 PublishProcessTargetCandidate
+             * 传播到 active。
+             * 仅 4K 场景生效：2M 虚机场景扫描周期由内核态管理，无需用户态重置。
+             */
+            prepared->isFirstScan = true;
+            prepared->scanTime = DEFAULT_SCAN_PERIOD;
+            SMAP_LOGGER_INFO("pid %d memSize increased %lu->%lu, reset scan period to %ums.", prepared->pid, oldMemSize,
+                             newMemSize, DEFAULT_SCAN_PERIOD);
+        }
+    }
+    if (candidate->isNew) {
+        prepared->scanTime = DEFAULT_SCAN_PERIOD;
+    }
+    return 0;
+}
+
+void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
+{
+    if (!candidate || !candidate->prepared) {
+        return;
+    }
+
+    ProcessAttr *prepared = candidate->prepared;
+    if (candidate->isPending) {
+        candidate->active->pendingTargetConfig = prepared->pendingTargetConfig;
+        candidate->active->pendingTargetConfigValid = prepared->pendingTargetConfigValid;
+        candidate->active->pendingIgnoreRemoteCapacity = prepared->pendingIgnoreRemoteCapacity;
+        candidate->active->pendingTargetNumaNodes = prepared->pendingTargetNumaNodes;
+        int ret = SyncAllProcessConfig();
+        if (ret) {
+            SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", prepared->pid, ret);
+        }
+        SMAP_LOGGER_INFO("Stage pid %d migration target update.", prepared->pid);
+        PutProcessAttr(candidate->active);
+        DiscardProcessManageCandidate(candidate);
+        return;
+    }
+
+    if (candidate->isNew) {
+        PidSlotAdd(&g_processManager, prepared);
+        g_processManager.nr[prepared->type]++;
+        candidate->prepared = NULL;
+        SMAP_LOGGER_INFO("Add pid %d to list done.", prepared->pid);
+    } else {
+        PublishProcessTargetCandidate(candidate->active, prepared);
+        SMAP_LOGGER_INFO("Update pid %d migrate config.", prepared->pid);
+    }
+
+    int ret = SyncAllProcessConfig();
+    if (ret) {
+        SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", prepared->pid, ret);
+    }
+    PutProcessAttr(candidate->active);
+    DiscardProcessManageCandidate(candidate);
 }
 
 int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap)
@@ -1284,108 +1182,24 @@ int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool o
     return ret;
 }
 
-static int CollectGroupedTargetEntries(GroupMigrationPolicy *policy, int targetNid,
-                                       int groupIdx[MAX_GROUP_TARGET_ENTRY], int targetIdx[MAX_GROUP_TARGET_ENTRY])
+bool IsPidUsingHugePages(pid_t pid)
 {
-    int count = 0;
-    for (int i = 0; i < policy->groupCount; i++) {
-        MigrationGroupAttr *group = &policy->groups[i];
-        for (int j = 0; j < group->targetCount; j++) {
-            if (group->targets[j].nid != targetNid) {
-                continue;
-            }
-            if (count >= MAX_GROUP_TARGET_ENTRY) {
-                SMAP_LOGGER_ERROR("Grouped target entry count exceeds limit.");
-                return -EINVAL;
-            }
-            groupIdx[count] = i;
-            targetIdx[count] = j;
-            count++;
+    char line[MAX_LINE_LENGTH];
+    FILE *fp = OpenNumaMaps(pid);
+    if (!fp) {
+        SMAP_LOGGER_ERROR("Open pid %d numa maps failed when probing page type.", pid);
+        return false;
+    }
+    while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
+        if (IsNumaMapLineHuge(line)) {
+            (void)pclose(fp);
+            return true;
         }
     }
-    return count;
-}
-
-static int InitGroupedTargetUsedPages(pid_t pid, GroupMigrationPolicy *policy, int targetNid, uint64_t residentPages)
-{
-    int groupIdx[MAX_GROUP_TARGET_ENTRY] = { 0 };
-    int targetIdx[MAX_GROUP_TARGET_ENTRY] = { 0 };
-    int entryCount = CollectGroupedTargetEntries(policy, targetNid, groupIdx, targetIdx);
-    if (entryCount <= 0) {
-        SMAP_LOGGER_ERROR("pid %d has unmanaged remote node %d resident pages %llu.", pid, targetNid, residentPages);
-        return -EINVAL;
+    if (pclose(fp)) {
+        SMAP_LOGGER_WARNING("Close numa maps failed when probing page type, pid=%d.", pid);
     }
-
-    uint64_t quotaSum = 0;
-    for (int i = 0; i < entryCount; i++) {
-        GroupTargetAttr *target = &policy->groups[groupIdx[i]].targets[targetIdx[i]];
-        if (UINT64_MAX - quotaSum < target->quotaPages) {
-            SMAP_LOGGER_ERROR("pid %d remote node %d quota sum overflow.", pid, targetNid);
-            return -EINVAL;
-        }
-        quotaSum += target->quotaPages;
-    }
-    if (quotaSum == 0) {
-        SMAP_LOGGER_ERROR("pid %d remote node %d quota sum is zero.", pid, targetNid);
-        return -EINVAL;
-    }
-    if (residentPages > quotaSum) {
-        SMAP_LOGGER_ERROR("pid %d remote node %d resident pages %llu exceed quota sum %llu.", pid, targetNid,
-                          residentPages, quotaSum);
-        return -EINVAL;
-    }
-
-    uint64_t assignedPages = 0;
-    for (int i = 0; i < entryCount; i++) {
-        GroupTargetAttr *target = &policy->groups[groupIdx[i]].targets[targetIdx[i]];
-        target->usedPages = (__uint128_t)residentPages * target->quotaPages / quotaSum;
-        assignedPages += target->usedPages;
-    }
-
-    uint64_t remainingPages = residentPages - assignedPages;
-    while (remainingPages > 0) {
-        bool progressed = false;
-        for (int i = 0; i < entryCount && remainingPages > 0; i++) {
-            GroupTargetAttr *target = &policy->groups[groupIdx[i]].targets[targetIdx[i]];
-            if (target->usedPages >= target->quotaPages) {
-                continue;
-            }
-            target->usedPages++;
-            remainingPages--;
-            progressed = true;
-        }
-        if (!progressed) {
-            SMAP_LOGGER_ERROR("pid %d remote node %d used pages cannot fit quota.", pid, targetNid);
-            return -EINVAL;
-        }
-    }
-
-    for (int i = 0; i < entryCount; i++) {
-        GroupTargetAttr *target = &policy->groups[groupIdx[i]].targets[targetIdx[i]];
-        if (target->usedPages > target->quotaPages) {
-            SMAP_LOGGER_ERROR("pid %d remote node %d used pages %llu exceed quota %llu.", pid, targetNid,
-                              target->usedPages, target->quotaPages);
-            return -EINVAL;
-        }
-        SMAP_LOGGER_INFO("pid %d remote node %d group %d target used pages %llu.", pid, targetNid, groupIdx[i],
-                         target->usedPages);
-    }
-    return 0;
-}
-
-int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[MAX_NODES])
-{
-    int nrLocalNuma = GetNrLocalNuma();
-    for (int nid = nrLocalNuma; nid < MAX_NODES; nid++) {
-        if (numaPages[nid] == 0) {
-            continue;
-        }
-        int ret = InitGroupedTargetUsedPages(pid, policy, nid, numaPages[nid]);
-        if (ret) {
-            return ret;
-        }
-    }
-    return 0;
+    return false;
 }
 
 static void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag)
@@ -1393,6 +1207,7 @@ static void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag)
     int i;
     int nrLocalNuma = GetNrLocalNuma();
     char *substr = NULL;
+    char pattern[NUMA_MAPS_MAX_PATTERN_LEN];
 
     /*
      * It's possible that there are multiple Nx= in one line,
@@ -1402,100 +1217,158 @@ static void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag)
         if (hugeFlag && !IsNumaMapLineHuge(line)) {
             continue;
         }
-        substr = strstr(line, g_nodePattern[i]);
+        int ret = snprintf_s(pattern, sizeof(pattern), sizeof(pattern) - 1, " N%d=", i);
+        if (ret < 0) {
+            SMAP_LOGGER_ERROR("Set local numa pattern failed, nid %d.", i);
+            continue;
+        }
+        substr = strstr(line, pattern);
         if (substr) {
             AddL1(nodeBitmap, i);
         }
     }
 }
 
-static int SetLocalNumaByNumaMaps(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag)
+int GetProcessNumaMapsObservation(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask, uint64_t numaPages[MAX_NODES])
 {
-    FILE *fp;
-    char line[MAX_LINE_LENGTH];
-
-    SMAP_LOGGER_INFO("Before open numa_maps");
-    fp = OpenNumaMaps(pid);
-    if (!fp) {
-        SMAP_LOGGER_ERROR("SetLocalNumaByNumaMaps open numa maps failed.");
+    if (!residentLocalMask || !numaPages) {
         return -EINVAL;
     }
 
-    while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
-        SetLocalByNumaMaps(line, nodeBitmap, hugeFlag);
+    FILE *fp = OpenNumaMaps(pid);
+    if (!fp) {
+        return -EINVAL;
     }
-    SMAP_LOGGER_INFO("After fgets numa_maps");
 
+    char line[MAX_LINE_LENGTH];
+    int ret = 0;
+    while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
+        ret = AddNumaPagesFromLine(line, numaPages);
+        if (ret) {
+            break;
+        }
+        SetLocalByNumaMaps(line, residentLocalMask, hugeFlag);
+    }
     if (pclose(fp)) {
-        SMAP_LOGGER_ERROR("SetLocalNumaByNumaMaps close numa maps failed.");
+        SMAP_LOGGER_WARNING("Close numa maps failed, pid=%d.", pid);
+    }
+    return ret;
+}
+
+int CollectProcessCandidateObservation(pid_t pid, bool hugeFlag, ManagedLocalObservation *observation)
+{
+    if (!observation) {
+        return -EINVAL;
+    }
+
+    *observation = (ManagedLocalObservation){ 0 };
+    int affinityRet = SetLocalNumaByCpu(pid, &observation->affinityLocalMask);
+    observation->affinitySampled = true;
+    if (affinityRet) {
+        SMAP_LOGGER_WARNING("Set pid %d local numa by cpu failed: %d.", pid, affinityRet);
+    } else {
+        observation->affinityValid = true;
+    }
+
+    int residentRet =
+        GetProcessNumaMapsObservation(pid, hugeFlag, &observation->residentLocalMask, observation->numaPages);
+    if (residentRet) {
+        SMAP_LOGGER_WARNING("Observe pid %d numa maps failed: %d.", pid, residentRet);
+    } else {
+        observation->residentValid = true;
+    }
+
+    if (!observation->affinityValid && !observation->residentValid) {
+        return affinityRet ? affinityRet : residentRet;
     }
     return 0;
 }
 
 int SetProcessLocalNuma(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag)
 {
-    int ret1, ret2;
-
-    ret1 = SetLocalNumaByCpu(pid, nodeBitmap);
-    if (ret1) {
-        SMAP_LOGGER_WARNING("Set pid %d local numa by cpu failed: %d.", pid, ret1);
-    }
-    SMAP_LOGGER_INFO("pid %d node bitmap after set local numa by cpu: %#x.", pid, *nodeBitmap);
-    if (hugeFlag) {
-        ret2 = SetLocalNumaByNumaMaps(pid, nodeBitmap, hugeFlag);
-        if (ret2) {
-            SMAP_LOGGER_WARNING("Set pid %d local numa by numa maps failed: %d.", pid, ret2);
-        }
-        SMAP_LOGGER_INFO("pid %d node bitmap after set local numa by numa maps: %#x.", pid, *nodeBitmap);
-    } else {
-        return ret1;
+    if (!nodeBitmap) {
+        return -EINVAL;
     }
 
-    return ret1 & ret2;
+    ManagedLocalObservation observation;
+    int ret = CollectProcessCandidateObservation(pid, hugeFlag, &observation);
+    if (ret) {
+        return ret;
+    }
+
+    uint32_t allLocalMask = BuildAllLocalNumaMask();
+    if (allLocalMask == 0) {
+        return -EINVAL;
+    }
+    uint32_t observedLocalMask = (observation.affinityValid ? observation.affinityLocalMask : 0) |
+                                 (observation.residentValid ? observation.residentLocalMask : 0);
+    observedLocalMask &= allLocalMask;
+    if (observedLocalMask == 0) {
+        observedLocalMask = allLocalMask;
+    }
+    *nodeBitmap |= observedLocalMask;
+    return 0;
+}
+
+/* Sum the migrate memSize (KB) carried by a new migrate-out request. */
+static uint64_t SumParamMigrateMemSize(const ProcessParam *param)
+{
+    uint64_t total = 0;
+    for (int i = 0; i < param->count; i++) {
+        total += param->numaParam[i].memSize;
+    }
+    return total;
 }
 
 int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
 {
-    ProcessAttr *current = g_processManager.processes;
-    PidType type = GetPidType(&g_processManager);
+    int ret;
     ProcessTargetConfig config;
-    int ret = BuildProcessTargetConfigFromParam(param, &config);
+    ret = BuildProcessTargetConfigFromParam(param, &config);
     if (ret) {
         SMAP_LOGGER_ERROR("pid %d target config invalid: %d.", param ? param->pid : -1, ret);
         return ret;
     }
 
-    ret = CheckPid(param->pid);
-    if (ret) {
-        SMAP_LOGGER_ERROR("pid %d check failed: %d.", param->pid, ret);
-        return ret;
+    int pidType = DetectPidType(param->pid);
+    if (pidType < 0) {
+        SMAP_LOGGER_ERROR("pid %d check failed: %d.", param->pid, pidType);
+        return pidType;
     }
-    current = GetProcessAttrLocked(param->pid);
+    ProcessAttr *current = GetProcessAttr(param->pid);
     if (current) {
         ret = ConfigureMigrationTargets(current, &config);
         if (ret) {
             SMAP_LOGGER_ERROR("Configure pid %d target failed: %d.", current->pid, ret);
+            PutProcessAttr(current);
             return ret;
         }
-        if (current->pendingTargetConfigValid) {
-            if (nodeBitmap) {
-                current->pendingTargetNumaNodes = *nodeBitmap;
-            }
-            SMAP_LOGGER_INFO("Stage pid %d migration target update.", current->pid);
-            return 0;
+        bool pending = current->pendingTargetConfigValid;
+        if (pending && nodeBitmap) {
+            current->pendingTargetNumaNodes = *nodeBitmap;
         }
         SMAP_LOGGER_INFO("Update pid %d migrate config, migrateMode: %d, remoteNumaCnt: %d.", current->pid,
                          current->migrateMode, current->remoteNumaCnt);
-        ret = SyncAllProcessConfig();
-        if (ret) {
-            SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", param->pid, ret);
-        }
         for (int i = 0; i < param->count; i++) {
             SMAP_LOGGER_INFO("Update pid:%d success! migrateMode: %d, destnid: %d, memSize: %llu.", current->pid,
                              current->migrateMode, current->migrateParam[i].nid, current->migrateParam[i].memSize);
         }
+        if (pending) {
+            ret = SyncAllProcessConfig();
+            if (ret) {
+                SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", current->pid, ret);
+            }
+            SMAP_LOGGER_INFO("Stage pid %d migration target update.", current->pid);
+            PutProcessAttr(current);
+            return 0;
+        }
+        ret = SyncAllProcessConfig();
+        if (ret) {
+            SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", current->pid, ret);
+        }
+        PutProcessAttr(current);
     } else {
-        ret = AddProcess(param, type, nodeBitmap);
+        ret = AddProcess(param, pidType, nodeBitmap);
         if (ret) {
             SMAP_LOGGER_ERROR("Add pid %d to list failed: %d.", param->pid, ret);
             return ret;
@@ -1506,174 +1379,33 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
     return 0;
 }
 
-int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy)
+int UpdateManagedProcessTrackingMode(ProcessAttr *attr, ScanType scanType, uint32_t scanTime, uint32_t duration)
 {
-    int ret = CheckPid(pid);
-    if (ret) {
-        SMAP_LOGGER_ERROR("grouped pid %d check failed: %d.", pid, ret);
-        return ret;
-    }
-    if (!policy || !policy->enabled) {
-        SMAP_LOGGER_ERROR("grouped policy of pid %d is invalid.", pid);
+    if (!attr || scanType < HAM_SCAN || scanType >= SCAN_TYPE_MAX) {
         return -EINVAL;
     }
-
-    ProcessAttr *current = GetProcessAttrLocked(pid);
-    if (current) {
-        SetGroupedProcessConfig(current, pid, nodeBitmap, policy);
-        SMAP_LOGGER_INFO("Update grouped pid %d success, group count %d.", pid, policy->groupCount);
-        ret = SyncAllProcessConfig();
-        if (ret) {
-            SMAP_LOGGER_WARNING("Synchronize grouped pid %d config maybe failed: %d.", pid, ret);
-        }
-        return 0;
+    if (attr->state != PROC_MOVE) {
+        return -EBUSY;
     }
 
-    if (g_processManager.nr[VM_TYPE] >= GetCurrentMaxNrPid()) {
-        SMAP_LOGGER_ERROR("nr of grouped vm pid is out of limit.");
-        return -EINVAL;
-    }
-
-    ProcessAttr *attr = calloc(1, sizeof(ProcessAttr));
-    if (!attr) {
-        SMAP_LOGGER_ERROR("Alloc memory for grouped process failed.");
-        return -ENOMEM;
-    }
-    InitProcessMigrationTargetState(attr);
-    attr->numaAttr.numaNodes = nodeBitmap;
-    ret = VMPreprocess(pid, attr);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Preprocess grouped VM process %d failed: %d.", pid, ret);
-        free(attr);
-        return ret;
-    }
-    SetGroupedProcessConfig(attr, pid, nodeBitmap, policy);
-    LinkedListAdd(&g_processManager.processes, &attr);
-    g_processManager.nr[VM_TYPE]++;
-    SMAP_LOGGER_INFO("Add grouped pid %d success, group count %d.", pid, policy->groupCount);
-    ret = SyncAllProcessConfig();
-    if (ret) {
-        SMAP_LOGGER_WARNING("Synchronize grouped pid %d config maybe failed: %d.", pid, ret);
-    }
+    attr->scanType = scanType;
+    attr->scanTime = scanTime;
+    attr->duration = duration;
+    attr->isFirstScan = true;
+    /* Tracking mode changes are only valid for PROC_MOVE processes. */
+    attr->state = PROC_MOVE;
     return 0;
-}
-
-int ProcessSetPendingGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy)
-{
-    if (!policy || !policy->enabled) {
-        SMAP_LOGGER_ERROR("pending grouped policy of pid %d is invalid.", pid);
-        return -EINVAL;
-    }
-
-    ProcessAttr *current = GetProcessAttrLocked(pid);
-    if (!current || !current->groupPolicy.enabled || current->state != PROC_MIGRATE) {
-        SMAP_LOGGER_ERROR("pid %d cannot save pending grouped policy.", pid);
-        return -EINVAL;
-    }
-
-    /* Only an already-managed grouped PID in PROC_MIGRATE can defer refresh. */
-    current->pendingGroupPolicy.valid = true;
-    current->pendingGroupPolicy.nodeBitmap = nodeBitmap;
-    current->pendingGroupPolicy.policy = *policy;
-    SMAP_LOGGER_INFO("Save pending grouped policy for pid %d, group count %d.", pid, policy->groupCount);
-    return 0;
-}
-
-int ApplyPendingGroupedPolicy(ProcessAttr *attr)
-{
-    if (!attr || !attr->pendingGroupPolicy.valid) {
-        return 0;
-    }
-
-    GroupMigrationPolicy policy = attr->pendingGroupPolicy.policy;
-    uint32_t nodeBitmap = attr->pendingGroupPolicy.nodeBitmap;
-    uint64_t numaPages[MAX_NODES] = { 0 };
-
-    /* Apply is atomic at manager level: initialize the new policy first. */
-    ResetGroupedPolicyRuntime(&policy);
-    int ret = GetPidNumaPagesFromNumaMaps(attr->pid, numaPages, true);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Get pending grouped pid %d numa pages failed: %d.", attr->pid, ret);
-        attr->pendingGroupPolicy.valid = false;
-        return ret;
-    }
-
-    ret = InitGroupedUsedPages(attr->pid, &policy, numaPages);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Init pending grouped pid %d used pages failed: %d.", attr->pid, ret);
-        attr->pendingGroupPolicy.valid = false;
-        return ret;
-    }
-
-    struct AccessAddPidPayload payload = {
-        .type = NORMAL_SCAN,
-        .pid = attr->pid,
-        .scanTime = SCAN_TIME_2M,
-        .numaNodes = nodeBitmap,
-    };
-    ret = AccessIoctlAddPid(1, &payload);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Update pending grouped pid %d tracking failed: %d.", attr->pid, ret);
-        return ret;
-    }
-
-    /* Tracking has accepted the new node scope; publish policy to manager. */
-    SetGroupedProcessConfig(attr, attr->pid, nodeBitmap, &policy);
-    attr->pendingGroupPolicy.valid = false;
-    ret = SyncAllProcessConfig();
-    if (ret) {
-        SMAP_LOGGER_WARNING("Synchronize pending grouped pid %d config maybe failed: %d.", attr->pid, ret);
-    }
-    SMAP_LOGGER_INFO("Apply pending grouped policy for pid %d success.", attr->pid);
-    return 0;
-}
-
-static void ClearRemoteMemUsed(void)
-{
-    for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-        g_processManager.remoteNumaInfo.usedInfo[j].used = 0;
-        g_processManager.remoteNumaInfo.usedInfo[j].ifUsedFreshed = true;
-        for (int i = 0; i < LOCAL_NUMA_NUM; i++) {
-            g_processManager.remoteNumaInfo.privateUsedInfo[i][j].used = 0;
-            g_processManager.remoteNumaInfo.privateUsedInfo[i][j].ifUsedFreshed = true;
-        }
-    }
-    SMAP_LOGGER_DEBUG("Smap clear remote mem used end.");
-}
-
-static void CalRemoteMemUsed(void)
-{
-    ProcessAttr *attr = g_processManager.processes;
-    struct RemoteNumaInfo *remoteNumaInfo = &g_processManager.remoteNumaInfo;
-    int i, j;
-
-    int nrLocal = g_processManager.nrLocalNuma;
-    // 计算每个本地远端对应按照ratio可迁出的最大量
-    while (attr) {
-        for (j = 0; j < REMOTE_NUMA_NUM; j++) {
-            remoteNumaInfo->usedInfo[j].used += attr->walkPage.nrPages[j + nrLocal];
-            SMAP_LOGGER_DEBUG("usedInfo[%d].used: %llu, nrPages[%d+%d]: %u.", j, remoteNumaInfo->usedInfo[j].used, j,
-                              nrLocal, attr->walkPage.nrPages[j + nrLocal]);
-            for (i = 0; i < LOCAL_NUMA_NUM; i++) {
-                remoteNumaInfo->privateUsedInfo[i][j].used += attr->strategyAttr.allocRemoteNrPages[i][j];
-                SMAP_LOGGER_DEBUG("privateUsedInfo[%d][%d].used: %llu, allocRemoteNrPages[%d][%d]: %u.", i, j,
-                                  remoteNumaInfo->privateUsedInfo[i][j].used, i, j,
-                                  attr->strategyAttr.allocRemoteNrPages[i][j]);
-            }
-        }
-        attr = attr->next;
-    }
 }
 
 void CheckAndRemoveInvalidProcess(void)
 {
     struct RemoteNumaInfo *numaInfo;
-    PidType type = GetPidType(&g_processManager);
+    struct PidSlot *all[MAX_PID_SLOTS];
 
-    EnvMutexLock(&g_processManager.lock);
-    for (ProcessAttr *attr = g_processManager.processes; attr;) {
+    size_t n = PidSlotCollectRefs(&g_processManager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         pid_t pid = attr->pid;
-        ProcessAttr *next = attr->next;
         SMAP_LOGGER_INFO("check if pid %d is valid.", pid);
         if (!PidIsValid(pid)) {
             // send ioctl to remove pid
@@ -1683,46 +1415,42 @@ void CheckAndRemoveInvalidProcess(void)
                 SMAP_LOGGER_ERROR("access ioctl remove pid %d error: %d.", pid, ret);
             }
 
-            LinkedListRemove(&attr, &g_processManager.processes);
-            g_processManager.nr[type]--;
+            PidSlotRemove(&g_processManager, attr->pid);
+            g_processManager.nr[attr->type]--;
             ret = SyncAllProcessConfig();
             if (ret) {
                 SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", pid, ret);
             }
             SMAP_LOGGER_INFO("remove pid %d from managed process.", pid);
         }
-        attr = next;
     }
-    if (!g_processManager.processes) {
+    if (PidSlotEmpty(&g_processManager)) {
         numaInfo = &g_processManager.remoteNumaInfo;
         EnvMutexLock(&numaInfo->lock);
         ClearRemoteMemUsed();
         SMAP_LOGGER_DEBUG("Remote memory usage cleared.");
         EnvMutexUnlock(&numaInfo->lock);
     }
-    EnvMutexUnlock(&g_processManager.lock);
+    PidSlotReleaseRefs(all, n);
 }
 
 void RemoveManagedProcess(int nr, pid_t *pidArr)
 {
     int ret;
-    PidType type = GetPidType(&g_processManager);
     for (int i = 0; i < nr; i++) {
-        ProcessAttr *attr = g_processManager.processes;
-        while (attr && attr->pid != pidArr[i]) {
-            attr = attr->next;
-        }
+        ProcessAttr *attr = GetProcessAttr(pidArr[i]);
         if (!attr) {
             SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", pidArr[i]);
             continue;
         }
-        LinkedListRemove(&attr, &g_processManager.processes);
+        PidSlotRemove(&g_processManager, attr->pid);
         SMAP_LOGGER_INFO("Remove pid: %d, from managed process.", pidArr[i]);
-        g_processManager.nr[type]--;
+        g_processManager.nr[attr->type]--;
         ret = SyncAllProcessConfig();
         if (ret) {
             SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", pidArr[i], ret);
         }
+        PutProcessAttr(attr);
     }
 }
 
@@ -1732,1549 +1460,27 @@ void RemoveAllManagedProcess(void)
     if (ret) {
         SMAP_LOGGER_ERROR("access ioctl remove all pid error: %d.", ret);
     }
-    EnvMutexLock(&g_processManager.lock);
-    ProcessAttr *attr = g_processManager.processes;
-    while (attr) {
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(&g_processManager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
         SMAP_LOGGER_INFO("During destruction remove pid: %d, from managed process.", attr->pid);
-        LinkedListRemove(&attr, &g_processManager.processes);
-        attr = g_processManager.processes;
+        PidSlotRemove(&g_processManager, attr->pid);
     }
-    EnvMutexUnlock(&g_processManager.lock);
-    g_processManager.processes = NULL;
+    PidSlotReleaseRefs(all, n);
     g_processManager.nr[VM_TYPE] = g_processManager.nr[PROCESS_TYPE] = 0;
 }
 
 int DestroyProcessManager(void)
 {
     RemoveAllManagedProcess();
-    EnvMutexDestroy(&g_processManager.lock);
+    PidSlotDestroy(&g_processManager);
     EnvMutexDestroy(&g_processManager.threadLock);
     (void)memset_s(&g_processManager, sizeof(struct ProcessManager), 0, sizeof(struct ProcessManager));
     return 0;
 }
 
-static void SetPidNrPages(ProcessAttr *attr, size_t *nrPages, int len)
-{
-    attr->walkPage.nrPage = 0;
-    for (int i = 0; i < len; i++) {
-        attr->walkPage.nrPages[i] = nrPages[i];
-        attr->walkPage.nrPage += nrPages[i];
-    }
-    SMAP_LOGGER_INFO("Pid %d nrPage %llu.", attr->pid, attr->walkPage.nrPage);
-}
-
-#define FREQ_FILE_PATH_LEN 50
-
-/**
- * CalcActcStats - 从actc_data数组计算统计数据
- * @attr: ProcessAttr结构体指针
- *
- * 遍历actc_data数组，计算freqMax、freqMin、freqNum、freqSum等统计数据。
- */
-static void CalcActcStats(ProcessAttr *attr)
-{
-    uint16_t remoteHotThreshold = GetRemoteHotThreshold();
-    int nrLocalNuma = GetNrLocalNuma();
-
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        uint64_t actcLen = attr->scanAttr.actcLen[nid];
-        ActcData *actc = attr->scanAttr.actcData[nid];
-        ActCount *count = &attr->scanAttr.actCount[nid];
-
-        memset(count->freqBuckets, 0, sizeof(count->freqBuckets));
-        memset(attr->scanAttr.selectedBuckets[nid], 0, sizeof(attr->scanAttr.selectedBuckets[nid]));
-
-        if (actcLen == 0 || !actc) {
-            memset(count, 0, sizeof(*count));
-            continue;
-        }
-
-        count->freqMax = 0;
-        count->freqMin = UINT16_MAX;
-        count->freqNum = 0;
-        count->freqSum = 0;
-        count->remoteHotNum = 0;
-        count->whiteNum = 0;
-        count->pageNum = actcLen;
-        count->freqZero = 0;
-
-        for (uint64_t i = 0; i < actcLen; i++) {
-            actc_t freq = actc[i].freq;
-            uint16_t bucketIdx = MIN(freq, FREQ_BUCKETS_SIZE - 1);
-            if (nid >= nrLocalNuma || !actc[i].isWhiteListPage) {
-                count->freqBuckets[bucketIdx]++;
-            }
-            if (freq != 0) {
-                count->freqNum++;
-                count->freqSum += freq;
-            } else {
-                count->freqZero++;
-            }
-            if (freq >= remoteHotThreshold) {
-                count->remoteHotNum++;
-            }
-            if (actc[i].isWhiteListPage) {
-                count->whiteNum++;
-            }
-            count->freqMax = MAX(count->freqMax, freq);
-            count->freqMin = MIN(count->freqMin, freq);
-        }
-
-        SMAP_LOGGER_INFO("[pid_stats] pid=%d node=%d actcLen=%llu freqMax=%u freqMin=%u freqNum=%llu freqSum=%llu "
-                         "remoteHotNum=%llu whiteNum=%llu",
-                         attr->pid, nid, actcLen, count->freqMax, count->freqMin, count->freqNum, count->freqSum,
-                         count->remoteHotNum, count->whiteNum);
-
-        /* 打印各频次桶的页面数（仅本地NUMA，跳过页面数为零的） */
-        if (nid < nrLocalNuma) {
-            for (int f = 0; f < FREQ_BUCKETS_SIZE; f++) {
-                if (count->freqBuckets[f] > 0) {
-                    SMAP_LOGGER_DEBUG("Node%d freq=%d pages=%u", nid, f, count->freqBuckets[f]);
-                }
-            }
-        }
-    }
-}
-
-/**
- * CalibrateMigratePages - 根据最新统计的远端页面数量校准迁移量
- */
-static void CalibrateMigratePages(ProcessAttr *attr)
-{
-    StrategyAttribute *sa = &attr->strategyAttr;
-    WalkPage *wp = &attr->walkPage;
-    int nrLocalNuma = GetNrLocalNuma();
-
-    for (int l2Index = 0; l2Index < REMOTE_NUMA_NUM; l2Index++) {
-        uint64_t remotePages = 0;
-        uint32_t arr[LOCAL_NUMA_NUM] = { 0 };
-        int arrLen = 0;
-        int local;
-        int remote = l2Index + nrLocalNuma;
-
-        for (local = 0; local < LOCAL_NUMA_NUM; local++) {
-            uint32_t nrMig = sa->remoteNrPagesAfterMigrate[local][l2Index];
-            if (nrMig) {
-                remotePages += nrMig;
-                arr[arrLen++] = local;
-                SMAP_LOGGER_INFO("[nr_mig] pid=%d local=%d remote=%d pages=%u", attr->pid, local, remote, nrMig);
-            }
-        }
-
-        if (remotePages == wp->nrPages[remote]) {
-            continue;
-        }
-
-        double ratio;
-        uint32_t nrLeft = wp->nrPages[remote];
-        uint32_t nrChunk;
-
-        for (int i = 0; i < arrLen; i++) {
-            local = arr[i];
-            if (i == arrLen - 1) {
-                sa->remoteNrPagesAfterMigrate[local][l2Index] = nrLeft;
-                SMAP_LOGGER_INFO("[cali_mig] pid=%d local=%d remote=%d pages=%u", attr->pid, local, remote, nrLeft);
-            } else {
-                ratio = (double)sa->remoteNrPagesAfterMigrate[local][l2Index] / remotePages;
-                nrChunk = wp->nrPages[remote] * ratio;
-                sa->remoteNrPagesAfterMigrate[local][l2Index] = nrChunk;
-                nrLeft -= nrChunk;
-                SMAP_LOGGER_INFO("[cali_mig] pid=%d local=%d remote=%d pages=%u", attr->pid, local, remote, nrChunk);
-            }
-        }
-    }
-}
-
-/**
- * DistributeActcData - 将读取的数据分配到各node的actcData
- * @attr: ProcessAttr结构体指针
- * @pmb: ProcessMemBitmap结构体指针
- * @buf: 读取的数据缓冲区
- *
- * 返回: 成功返回0，失败返回负错误码
- */
-static int DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf)
-{
-    size_t actc_offset = 0;
-
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        if (attr->scanAttr.actcData[nid]) {
-            free(attr->scanAttr.actcData[nid]);
-            attr->scanAttr.actcData[nid] = NULL;
-        }
-        attr->scanAttr.actcLen[nid] = pmb->nrPages[nid];
-        if (pmb->nrPages[nid] == 0) {
-            attr->scanAttr.actcData[nid] = NULL;
-            continue;
-        }
-        attr->scanAttr.actcData[nid] = malloc(pmb->nrPages[nid] * sizeof(ActcData));
-        if (!attr->scanAttr.actcData[nid]) {
-            SMAP_LOGGER_ERROR("malloc actcData[%d] failed for pid %d", nid, attr->pid);
-            for (int i = 0; i < nid; i++) {
-                free(attr->scanAttr.actcData[i]);
-                attr->scanAttr.actcData[i] = NULL;
-            }
-            return -ENOMEM;
-        }
-        memcpy(attr->scanAttr.actcData[nid], buf + actc_offset, pmb->nrPages[nid] * sizeof(ActcData));
-        actc_offset += pmb->nrPages[nid];
-    }
-    return 0;
-}
-
-/**
- * ReadPidActcData - 从内核态read完整的actc_data数组
- * @attr: ProcessAttr结构体指针
- * @pmb: ProcessMemBitmap结构体指针（包含nrPages信息）
- *
- * read连续的actc_data数组，按nrPages分段分配到actcData[nid]。
- */
-static int ReadPidActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
-{
-    char path[FREQ_FILE_PATH_LEN];
-    int fd, ret;
-    size_t total_actc = 0;
-    size_t shm_size;
-    ActcData *buf;
-    ssize_t read_len;
-
-    snprintf(path, sizeof(path), "/proc/smap/%d/mem_freq", attr->pid);
-
-    fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        SMAP_LOGGER_ERROR("open mem_freq file failed for pid %d: %d", attr->pid, errno);
-        return -ENODEV;
-    }
-
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        total_actc += pmb->nrPages[nid];
-    }
-
-    if (total_actc == 0) {
-        SMAP_LOGGER_INFO("pid %d has no pages, skip read", attr->pid);
-        close(fd);
-        return 0;
-    }
-
-    shm_size = total_actc * sizeof(ActcData);
-    buf = malloc(shm_size);
-    if (!buf) {
-        SMAP_LOGGER_ERROR("malloc failed for pid %d, size %zu", attr->pid, shm_size);
-        close(fd);
-        return -ENOMEM;
-    }
-
-    read_len = read(fd, buf, shm_size);
-    close(fd);
-
-    if (read_len < 0 || read_len != shm_size) {
-        SMAP_LOGGER_ERROR("read failed for pid %d, expected %zu, got %zd", attr->pid, shm_size, read_len);
-        free(buf);
-        return -EIO;
-    }
-
-    ret = DistributeActcData(attr, pmb, buf);
-    free(buf);
-
-    if (ret) {
-        return ret;
-    }
-
-    SMAP_LOGGER_INFO("read pid %d success, total_actc %zu", attr->pid, total_actc);
-    return 0;
-}
-
-static int FillPidData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
-{
-    int ret;
-
-    ret = ReadPidActcData(attr, pmb);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Read pid %d actc data failed: %d", attr->pid, ret);
-        return ret;
-    }
-
-    CalcActcStats(attr);
-
-    if (GetRunMode() == WATERLINE_MODE) {
-        CalibrateMigratePages(attr);
-    }
-
-    return 0;
-}
-
-static int BuildBitmapBuf(size_t *len, char **buf)
-{
-    char *tmpBuf;
-    size_t tmpLen;
-    int ret = AccessIoctlWalkPagemap(&tmpLen);
-    if (ret) {
-        SMAP_LOGGER_ERROR("access ioctl walk pagemap error: %d.", ret);
-        return ret;
-    }
-    SMAP_LOGGER_INFO("AccessIoctlWalkPagemap bufLen %zu.", tmpLen);
-    if (tmpLen == 0) {
-        SMAP_LOGGER_ERROR("Access ioctl walk pagemap len invalid: %zu.", tmpLen);
-        return -EINVAL;
-    }
-
-    tmpBuf = malloc(tmpLen);
-    if (!tmpBuf) {
-        tmpLen = 0;
-        return -ENOMEM;
-    }
-
-    *len = tmpLen;
-    *buf = tmpBuf;
-
-    return 0;
-}
-
-static int ParseBitmapPid(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
-{
-    int ret;
-    size_t pidSize = sizeof(pmb->pid);
-
-    ret = memcpy_s(&pmb->pid, pidSize, buf, pidSize);
-    if (ret) {
-        return -ret;
-    }
-    *offset += pidSize;
-    return 0;
-}
-
-static int ParseBitmapNrPages(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
-{
-    int ret;
-    size_t pageNumSize = sizeof(pmb->nrPages[0]);
-    size_t tmpOffset = 0;
-
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        ret = memcpy_s(&pmb->nrPages[nid], pageNumSize, buf + tmpOffset, pageNumSize);
-        if (ret) {
-            return -ret;
-        }
-        tmpOffset += pageNumSize;
-    }
-    *offset += tmpOffset;
-    return 0;
-}
-
-static int ParseBitmap(size_t bufLen, char *buf, size_t *offset, struct ProcessMemBitmap *pmb)
-{
-    size_t newOffset = *offset;
-
-    int ret = ParseBitmapPid(pmb, buf + newOffset, &newOffset);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ParseBitmapPid err: %d.", ret);
-        return ret;
-    }
-
-    ret = ParseBitmapNrPages(pmb, buf + newOffset, &newOffset);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ParseBitmapNrPages err: %d.", ret);
-        return ret;
-    }
-
-    SMAP_LOGGER_INFO("read continue %zu %zu.", newOffset, bufLen);
-
-    *offset = newOffset;
-    return 0;
-}
-
-static void NoAccountAlloc(int remoteNid, ProcessAttr *attr)
-{
-    int i;
-    int nrLocalNuma = GetNrLocalNuma();
-    int l1Nid[nrLocalNuma];
-    int l1Len = 0;
-
-    for (i = 0; i < nrLocalNuma; i++) {
-        if (InAttrL1(attr, i)) {
-            l1Nid[l1Len++] = i;
-        }
-    }
-    if (l1Len == 0) {
-        SMAP_LOGGER_WARNING("Aborted alloc account rebuild for pid %d due to missing L1 node", attr->pid);
-        return;
-    }
-
-    StrategyAttribute *sa = &attr->strategyAttr;
-    uint32_t nrLeft = attr->walkPage.nrPages[remoteNid];
-    uint32_t nrChunk = nrLeft / l1Len;
-
-    SMAP_LOGGER_INFO("Rebuilding alloc account for pid %d", attr->pid);
-    for (i = 0; i < l1Len; i++) {
-        int l1Index = l1Nid[i];
-        int l2Index = remoteNid - nrLocalNuma;
-
-        if (i == l1Len - 1) {
-            sa->allocRemoteNrPages[l1Index][l2Index] = nrLeft;
-            SMAP_LOGGER_DEBUG("[alloc_remote*] pid=%d local=%d remote=%d pages=%u", attr->pid, i, remoteNid, nrLeft);
-        } else {
-            sa->allocRemoteNrPages[l1Index][l2Index] = nrChunk;
-            nrLeft -= nrChunk;
-            SMAP_LOGGER_DEBUG("[alloc_remote*] pid=%d local=%d remote=%d pages=%u", attr->pid, i, remoteNid, nrLeft);
-        }
-    }
-    SMAP_LOGGER_INFO("Rebuild alloc account complete for pid %d", attr->pid);
-}
-
-static void ClearNormalPidAccount(ProcessAttr *attr, int remoteNode, int nrLocalNuma)
-{
-    if (attr->state != PROC_MOVE) {
-        for (int i = 0; i < nrLocalNuma; i++) {
-            attr->strategyAttr.remoteNrPagesAfterMigrate[i][remoteNode] = 0;
-        }
-    }
-}
-
-// returnFlag为true表示该NUMA处理完成，无需后续处理
-static void CheckAccountAndNrPage(ProcessAttr *attr, bool returnFlag[REMOTE_NUMA_NUM])
-{
-    int i, j;
-    int nrLocalNuma = GetNrLocalNuma();
-    /**
-     * 每个远端numa的账本，和nrPage进行对比
-     * 1、远端numa有账本，但是nrPage没有，对账本进行清零
-     * 2、nrPage有但是远端numa没有账本，
-     *   1）检查L1的分布情况，平均分
-     *   2）L1没有分布情况，按照CPU绑定情况，平均分
-     */
-    for (j = 0; j < REMOTE_NUMA_NUM; j++) {
-        int remoteNid = nrLocalNuma + j;
-        uint32_t tmpTotal = 0;
-        double ratio;
-        if (NotInAttrL2(attr, remoteNid)) {
-            continue;
-        }
-        if (attr->walkPage.nrPages[remoteNid] == 0) {
-            ClearNormalPidAccount(attr, j, nrLocalNuma);
-            continue;
-        }
-        for (i = 0; i < nrLocalNuma; i++) {
-            tmpTotal += attr->strategyAttr.remoteNrPagesAfterMigrate[i][j];
-        }
-        // nrPage有但是远端numa没有账本
-        if (tmpTotal == 0) {
-            NoAccountAlloc(remoteNid, attr);
-            continue;
-        }
-        returnFlag[j] = false;
-    }
-}
-
-static void CalNrPagesPerLocalNuma(ProcessAttr *attr)
-{
-    StrategyAttribute *sa = &attr->strategyAttr;
-
-    for (int i = 0; i < GetNrLocalNuma(); i++) {
-        uint64_t whiteNum = attr->scanAttr.actCount[i].whiteNum;
-        /* 饱和减法：扫描失败或总页数为0时旧 whiteNum 可能残留，防止下溢成数十亿可迁页 */
-        uint32_t nrLocal = attr->walkPage.nrPages[i] > whiteNum ? (uint32_t)(attr->walkPage.nrPages[i] - whiteNum) : 0;
-        uint32_t nrRemote = 0;
-
-        for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-            nrRemote += sa->allocRemoteNrPages[i][j];
-        }
-        sa->nrPagesPerLocalNuma[i] = nrLocal + nrRemote;
-
-        SMAP_LOGGER_DEBUG(
-            "[cal_local_total] pid=%d, local_node=%d total_pages=%u local_pages=%u white=%llu remote_pages=%u",
-            attr->pid, i, sa->nrPagesPerLocalNuma[i], nrLocal, whiteNum, nrRemote);
-    }
-}
-
-/**
- * CalRemoteAllocRatio - 根据历史贡献度计算各本地NUMA迁往某远端NUMA的比例
- *
- * @param attr:    进程结构体指针
- * @param l2Index: L2索引
- * @param ratio:   比例数组
- * @param len:     比例数组长度
- */
-static void CalRemoteAllocRatio(ProcessAttr *attr, int l2Index, double *ratio, int *len)
-{
-    int i;
-    int nrLocalNuma = GetNrLocalNuma();
-    int l2Nid = l2Index + nrLocalNuma;
-    StrategyAttribute *sa = &attr->strategyAttr;
-    uint32_t acctTotal = 0;
-
-    for (i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-        acctTotal += sa->remoteNrPagesAfterMigrate[i][l2Index];
-    }
-
-    if (acctTotal == 0) {
-        *len = 0;
-    } else {
-        for (i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-            ratio[i] = (double)sa->remoteNrPagesAfterMigrate[i][l2Index] / acctTotal;
-            SMAP_LOGGER_DEBUG("[alloc_remote_ratio] pid=%d local=%d remote=%d pages=%u/%u remote_ratio=%.2lf",
-                              attr->pid, i, l2Nid, sa->remoteNrPagesAfterMigrate[i][l2Index], acctTotal, ratio[i]);
-        }
-        *len = i;
-    }
-}
-
-/**
- * CalRemoteAllocPages - 根据比例计算各本地NUMA的迁移页数
- *
- * @param attr:    进程结构体指针
- * @param l2Index: L2索引
- * @param ratio:   比例数组
- * @param len:     比例数组长度
- */
-static void CalRemoteAllocPages(ProcessAttr *attr, int l2Index, double *ratio, int ratioLen)
-{
-    int l2Nid = l2Index + GetNrLocalNuma();
-    StrategyAttribute *sa = &attr->strategyAttr;
-    uint32_t nrTotal = attr->walkPage.nrPages[l2Nid];
-    uint32_t nrLeft = nrTotal;
-
-    for (int i = 0; i < ratioLen; i++) {
-        if (ratio[i] == 0) {
-            continue;
-        }
-
-        if (i == ratioLen - 1) {
-            sa->allocRemoteNrPages[i][l2Index] = nrLeft;
-            SMAP_LOGGER_DEBUG("[alloc_remote] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrLeft);
-        } else {
-            uint32_t nrTmp = nrTotal * ratio[i];
-            sa->allocRemoteNrPages[i][l2Index] = nrTmp;
-            nrLeft -= nrTmp;
-            SMAP_LOGGER_DEBUG("[alloc_remote] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrTmp);
-        }
-    }
-}
-
-static void CalRemotePerLocalWithAccount(int l2Index, ProcessAttr *attr)
-{
-    double ratioArr[LOCAL_NUMA_NUM];
-    int ratioLen = 0;
-
-    // 1. 根据 remoteNrPagesAfterMigrate 账本计算分配比例
-    CalRemoteAllocRatio(attr, l2Index, ratioArr, &ratioLen);
-    if (ratioLen == 0) {
-        return;
-    }
-    // 2. 根据分配比例计算分配的页面数量
-    CalRemoteAllocPages(attr, l2Index, ratioArr, ratioLen);
-}
-
-static void CalRemotePerLocal(ProcessAttr *attr)
-{
-    int i, j;
-    bool returnFlag[REMOTE_NUMA_NUM];
-
-    for (i = 0; i < REMOTE_NUMA_NUM; i++) {
-        returnFlag[i] = true;
-    }
-
-    // 检查账本和当前内存页分布情况，处理有远端内存，但是没有账本的情况
-    CheckAccountAndNrPage(attr, returnFlag);
-    int nrLocalNuma = GetNrLocalNuma();
-
-    for (j = 0; j < REMOTE_NUMA_NUM; j++) {
-        // 1、Pid本地单一numa占比：pid->本地numa/sum(所有本地numa总迁出量)
-        if (NotInAttrL2(attr, nrLocalNuma + j)) {
-            continue;
-        }
-        if (returnFlag[j]) {
-            continue;
-        }
-        // 有账本，并且nrPage[remoteNid] != 0，计算allocRemoteNrPages
-        CalRemotePerLocalWithAccount(j, attr);
-    }
-}
-
-static void CalNrPagesLocalTotalPerPid(ProcessAttr *attr)
-{
-    // 计算每个本地numa，对应可迁出到远端每个numa的内存量
-    CalRemotePerLocal(attr);
-
-    // pid本地numa总使用量：Pid本地numa数量+Pid远端使用量
-    CalNrPagesPerLocalNuma(attr);
-}
-
-static void CalNrPagesLocalTotal(void)
-{
-    ProcessAttr *attr = g_processManager.processes;
-    int ret;
-
-    while (attr) {
-        if (IsMultiNumaVm(attr) && GetRunMode() == MEM_POOL_MODE) {
-            attr = attr->next;
-            continue;
-        }
-        SMAP_LOGGER_DEBUG("CalNrPagesLocalTotal pid: %d.", attr->pid);
-        CalNrPagesLocalTotalPerPid(attr);
-        attr = attr->next;
-    }
-}
-
-// 计算远端内存分配tmpNrPagesToUse下，不同pid应该迁出多少内存，结果叠加在l2RemoteMemRatio中
-static void CalRemoteNumaAllocPerPid(int i, int j, uint32_t tmpNrPagesToUse,
-                                     uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM])
-{
-    ProcessAttr *attr = g_processManager.processes;
-
-    PidType type = GetPidType(&g_processManager);
-    if (g_processManager.nr[type] == 0) {
-        return;
-    }
-    double tmpRatioPerPid;
-
-    // 再按比例分配tmpNrPagesToUse
-    if (tmpMaxAllocNrPages[i][j] == 0) {
-        return;
-    }
-    // 根据比例计算每个PID的迁出比例，更新迁出的比例到l2RemoteMemRatio
-    while (attr) {
-        // 1）每个PID最大迁出量/总最大迁出量 = 最大迁出量比例
-        tmpRatioPerPid =
-            (double)attr->strategyAttr.nrPagesPerLocalNuma[i] *
-            ((attr->strategyAttr.initRemoteMemRatio[i][j] - attr->strategyAttr.l2RemoteMemRatio[i][j]) / HUNDRED) /
-            tmpMaxAllocNrPages[i][j];
-        SMAP_LOGGER_DEBUG("CalRemoteNumaAllocPerPid 1: %u [%d][%d]: %.2lf %u.", tmpNrPagesToUse, i, j, tmpRatioPerPid,
-                          attr->strategyAttr.nrPagesPerLocalNuma[i]);
-
-        // 2）最大迁出量比例 * numa可用量 = 每个PID可用的量（即numa迁出的ratio ）
-        attr->strategyAttr.l2RemoteMemRatio[i][j] +=
-            ((double)tmpNrPagesToUse * tmpRatioPerPid / attr->strategyAttr.nrPagesPerLocalNuma[i]) * HUNDRED;
-        SMAP_LOGGER_DEBUG("CalRemoteNumaAllocPerPid 2: %.2lf.", attr->strategyAttr.l2RemoteMemRatio[i][j]);
-
-        attr = attr->next;
-    }
-}
-
-static void CalAvailBorrowPage(uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                               uint32_t availSharedPages[REMOTE_NUMA_NUM])
-{
-    struct RemoteNumaInfo *rmi = &g_processManager.remoteNumaInfo;
-
-    for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-        if (rmi->sharedSize[j] > 0) {
-            availSharedPages[j] = MBToPage(rmi->sharedSize[j]);
-            SMAP_LOGGER_DEBUG("availSharedPages[%d] %llu", j, availSharedPages[j]);
-        }
-        for (int i = 0; i < GetNrLocalNuma() && i < LOCAL_NUMA_NUM; i++) {
-            if (rmi->privateSize[i][j] > 0) {
-                availPrivatePages[i][j] = MBToPage(rmi->privateSize[i][j]);
-                SMAP_LOGGER_DEBUG("availPrivatePages[%d][%d] %llu", i, j, availPrivatePages[i][j]);
-            }
-        }
-    }
-}
-
-static void AllocPrivatePage(uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                             uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM])
-{
-    for (int i = 0; i < GetNrLocalNuma(); i++) {
-        for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-            if (tmpMaxAllocNrPages[i][j] == 0) {
-                continue;
-            }
-            SMAP_LOGGER_DEBUG("tmpMaxAllocNrPages[%d][%d]=%u.", i, j, tmpMaxAllocNrPages[i][j]);
-            SMAP_LOGGER_DEBUG("availPrivatePages 2 %llu.", availPrivatePages[i][j]);
-            if (availPrivatePages[i][j] == 0) {
-                continue;
-            }
-
-            uint32_t tmpNrPagesToUse;
-            // If 每个numa最大迁出量 > 专属numa：
-            if (tmpMaxAllocNrPages[i][j] > availPrivatePages[i][j]) {
-                tmpNrPagesToUse = availPrivatePages[i][j];
-                CalRemoteNumaAllocPerPid(i, j, tmpNrPagesToUse, tmpMaxAllocNrPages);
-                tmpMaxAllocNrPages[i][j] -= availPrivatePages[i][j];
-            } else {
-                // If 专属numa  > 每个numa最大迁出量：直接迁（迁出的ratio + remote_numa ID）
-                tmpNrPagesToUse = tmpMaxAllocNrPages[i][j];
-                CalRemoteNumaAllocPerPid(i, j, tmpNrPagesToUse, tmpMaxAllocNrPages);
-                tmpMaxAllocNrPages[i][j] = 0;
-            }
-        }
-    }
-}
-
-static void AllocBorrowPage(uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                            uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                            uint32_t availSharedPages[REMOTE_NUMA_NUM])
-{
-    int i, j;
-    // 优先使用专属的远端内存
-    AllocPrivatePage(tmpMaxAllocNrPages, availPrivatePages);
-    double tmpRatioPerLocalNuma[LOCAL_NUMA_NUM];
-    // 再使用共享远端内存
-    for (j = 0; j < REMOTE_NUMA_NUM; j++) {
-        uint32_t tmpNrPagesCanMigOut = 0;
-        if (availSharedPages[j] == 0) {
-            continue;
-        }
-        for (i = 0; i < GetNrLocalNuma(); i++) {
-            tmpRatioPerLocalNuma[i] = 0;
-            tmpNrPagesCanMigOut += tmpMaxAllocNrPages[i][j];
-        }
-        if (tmpNrPagesCanMigOut == 0) {
-            continue;
-        }
-        for (i = 0; i < GetNrLocalNuma(); i++) {
-            tmpRatioPerLocalNuma[i] = (double)tmpMaxAllocNrPages[i][j] / tmpNrPagesCanMigOut;
-            // 将共享远端内存，分给每个本地numa去迁出，按照各本地numa可迁出的比例分配
-            uint32_t canUsePage = tmpRatioPerLocalNuma[i] * availSharedPages[j];
-            SMAP_LOGGER_INFO("tmpRatioPerLocalNuma[%d] %.2lf, tmpNrPagesCanMigOut: %u, SharedBorrow[%d]: %u.", i,
-                             tmpRatioPerLocalNuma[i], tmpNrPagesCanMigOut, j, availSharedPages[j]);
-            if (canUsePage > tmpMaxAllocNrPages[i][j]) {
-                CalRemoteNumaAllocPerPid(i, j, tmpMaxAllocNrPages[i][j], tmpMaxAllocNrPages);
-            } else {
-                CalRemoteNumaAllocPerPid(i, j, canUsePage, tmpMaxAllocNrPages);
-            }
-        }
-    }
-}
-
-static void AllocBorrowPagesForMemsize(ProcessAttr *attr, uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                       uint32_t availSharedPages[REMOTE_NUMA_NUM])
-{
-    int l2Nid = attr->migrateParam[0].nid;
-    int l2Index = l2Nid - GetNrLocalNuma();
-    if (l2Index < 0 || l2Index >= REMOTE_NUMA_NUM) {
-        return;
-    }
-
-    StrategyAttribute *sa = &attr->strategyAttr;
-    uint32_t nrTarget = KBToPage(attr->migrateParam[0].memSize);
-
-    for (int i = 0; i < GetNrLocalNuma() && i < LOCAL_NUMA_NUM; i++) {
-        if (!InAttrL1(attr, i)) {
-            sa->memSize[i][l2Index] = 0;
-            SMAP_LOGGER_INFO("[memsize_clear] pid=%d local=%d remote=%d pages=0", attr->pid, i, l2Nid);
-            continue;
-        }
-
-        // 先使用私有借用内存
-        uint32_t nrTotal = sa->nrPagesPerLocalNuma[i];
-        uint32_t nrAvail = MIN(nrTotal, availPrivatePages[i][l2Index]);
-        SMAP_LOGGER_INFO("[memsize_private] pid=%d local=%d remote=%d nrTarget=%u nrTotal=%u nrAvail=%u", attr->pid, i,
-                         l2Nid, nrTarget, nrTotal, nrAvail);
-
-        if (nrTarget >= nrAvail) {
-            nrTarget -= nrAvail;
-            nrTotal -= nrAvail;
-            availPrivatePages[i][l2Index] -= nrAvail;
-            sa->memSize[i][l2Index] = PageToKB(nrAvail);
-            SMAP_LOGGER_INFO("[memsize_private] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrAvail);
-        } else {
-            availPrivatePages[i][l2Index] -= nrTarget;
-            sa->memSize[i][l2Index] = PageToKB(nrTarget);
-            SMAP_LOGGER_INFO("[memsize_private*] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrTarget);
-            break;
-        }
-
-        if (nrTotal == 0) {
-            continue;
-        }
-
-        // 再使用共享借用内存
-        nrAvail = MIN(nrTotal, availSharedPages[l2Index]);
-        SMAP_LOGGER_INFO("[memsize_shared] pid=%d local=%d remote=%d nrTarget=%u nrTotal=%u nrAvail=%u", attr->pid, i,
-                         l2Nid, nrTarget, nrTotal, nrAvail);
-
-        if (nrTarget >= nrAvail) {
-            nrTarget -= nrAvail;
-            availSharedPages[l2Index] -= nrAvail;
-            sa->memSize[i][l2Index] += PageToKB(nrAvail);
-            SMAP_LOGGER_INFO("[memsize_shared] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrAvail);
-        } else {
-            availSharedPages[l2Index] -= nrTarget;
-            sa->memSize[i][l2Index] += PageToKB(nrTarget);
-            SMAP_LOGGER_INFO("[memsize_shared*] pid=%d local=%d remote=%d pages=%u", attr->pid, i, l2Nid, nrTarget);
-            break;
-        }
-    }
-}
-
-static void CalRemoteNumaSizeAllocPerNuma(void)
-{
-    ProcessAttr *attr;
-    struct RemoteNumaInfo remoteNumaInfo = g_processManager.remoteNumaInfo;
-    uint32_t tmpMaxAllocNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    int i, j;
-
-    uint32_t availPrivatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    uint32_t availSharedPages[REMOTE_NUMA_NUM] = { 0 };
-    CalAvailBorrowPage(availPrivatePages, availSharedPages);
-
-    // 先满足迁移模式为 MIG_MEMSIZE_MODE 的进程
-    for (attr = g_processManager.processes; attr; attr = attr->next) {
-        if (attr->migrateMode == MIG_MEMSIZE_MODE) {
-            AllocBorrowPagesForMemsize(attr, availPrivatePages, availSharedPages);
-        }
-    }
-
-    // 计算所有进程**想要**从各本地NUMA迁移到各远端NUMA的总页面数量
-    for (attr = g_processManager.processes; attr; attr = attr->next) {
-        if (attr->migrateMode == MIG_MEMSIZE_MODE) {
-            continue;
-        }
-
-        StrategyAttribute *sa = &attr->strategyAttr;
-        for (i = 0; i < GetNrLocalNuma(); i++) {
-            for (j = 0; j < REMOTE_NUMA_NUM; j++) {
-                tmpMaxAllocNrPages[i][j] += sa->nrPagesPerLocalNuma[i] * sa->initRemoteMemRatio[i][j] / HUNDRED;
-                SMAP_LOGGER_DEBUG("tmpMaxAllocNrPages[%d][%d]=%u, initRemoteMemRatio=%.2lf.", i, j,
-                                  tmpMaxAllocNrPages[i][j], sa->initRemoteMemRatio[i][j]);
-
-                sa->l2RemoteMemRatio[i][j] = 0;
-            }
-        }
-    }
-
-    // 用远端借用的内存计算每个pid，每个numa可迁出的比例
-    AllocBorrowPage(tmpMaxAllocNrPages, availPrivatePages, availSharedPages);
-}
-
-static void CalcMigrateNrPagesPerPIDMuiltNuma(void)
-{
-    struct RemoteNumaInfo *numaInfo = &g_processManager.remoteNumaInfo;
-    PidType type = GetPidType(&g_processManager);
-    if (g_processManager.nr[type] == 0) {
-        return;
-    }
-    // 根据账本信息，计算每个PID各本地numa可支配的内存；
-    CalNrPagesLocalTotal();
-
-    if (g_runMode == MEM_POOL_MODE) {
-        return;
-    }
-    EnvMutexLock(&numaInfo->lock);
-    ClearRemoteMemUsed();
-    CalRemoteMemUsed();
-    // 按照远端numa的粒度，和上一步计算的迁移量，计算每个本地numa相对于1个远端numa的比例
-    CalRemoteNumaSizeAllocPerNuma();
-    EnvMutexUnlock(&numaInfo->lock);
-}
-
-static int BuildAndFillBitmapBuf(size_t *len, char **buf)
-{
-    int ret;
-    ret = BuildBitmapBuf(len, buf);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Access ioctl walk pagemap error: %d.", ret);
-        return ret;
-    }
-    SMAP_LOGGER_INFO("Build bitmap buffer done.");
-    ret = AccessRead(*len, *buf);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Access read pagemap error: %d.", ret);
-        free(*buf);
-        return ret;
-    }
-    return 0;
-}
-
-int BuildAllPidData(void)
-{
-    int ret, failedCount = 0;
-    char *buf;
-    size_t bufLen;
-    EnvMutexLock(&g_processManager.lock);
-    ret = BuildAndFillBitmapBuf(&bufLen, &buf);
-    if (ret) {
-        SMAP_LOGGER_ERROR("BuildAllPidData: build and fill BitmapBuf error: %d.", ret);
-        EnvMutexUnlock(&g_processManager.lock);
-        return ret;
-    }
-    for (size_t offset = 0; offset < bufLen;) {
-        struct ProcessMemBitmap pmb = { 0 };
-        SMAP_LOGGER_INFO("Parse bitmap from %zu.", offset);
-        ret = ParseBitmap(bufLen, buf, &offset, &pmb);
-        if (ret < 0) {
-            SMAP_LOGGER_ERROR("parse bitmap failed.");
-            failedCount++;
-            break;
-        }
-        ProcessAttr *current = GetProcessAttrLocked(pmb.pid);
-        if (current && current->scanType == NORMAL_SCAN) {
-            SMAP_LOGGER_INFO("Pid %d, numaNodes %#x, nrLocalNuma %u.", current->pid, current->numaAttr.numaNodes,
-                             g_processManager.nrLocalNuma);
-            SetPidNrPages(current, pmb.nrPages, MAX_NODES);
-            ret = FillPidData(current, &pmb);
-            if (ret) {
-                SMAP_LOGGER_ERROR("Fill pid %d actc data failed.", current->pid);
-                failedCount++;
-            }
-        }
-    }
-    CalcMigrateNrPagesPerPIDMuiltNuma();
-    free(buf);
-    EnvMutexUnlock(&g_processManager.lock);
-    return failedCount;
-}
-
 struct ProcessManager *GetProcessManager(void)
 {
     return &g_processManager;
-}
-
-int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size)
-{
-    int ret;
-    int column = destNid - g_processManager.nrLocalNuma;
-    struct RemoteNumaInfo *numaInfo = &g_processManager.remoteNumaInfo;
-    EnvMutexLock(&numaInfo->lock);
-    ret = SyncOneNumaConfig(srcNid, destNid, size);
-    if (ret) {
-        SMAP_LOGGER_ERROR("SyncOneNumaConfig %d-%d to %llu failed: %d.", srcNid, destNid, size, ret);
-        EnvMutexUnlock(&numaInfo->lock);
-        return -EBADF;
-    }
-    SMAP_LOGGER_INFO("SetRemoteNumaInfo %d-%d to %llu.", srcNid, destNid, size);
-    if (srcNid == NUMA_NO_NODE) {
-        numaInfo->sharedSize[column] = size;
-    } else {
-        numaInfo->privateSize[srcNid][column] = size;
-    }
-    for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-        int l2Nid = j + g_processManager.nrLocalNuma;
-        numaInfo->usedInfo[j].ifUsedFreshed = false;
-        numaInfo->usedInfo[j].size = MBToPage(numaInfo->sharedSize[j]);
-        if (numaInfo->usedInfo[j].size) {
-            SMAP_LOGGER_INFO("Node%d shared pages: %llu.", l2Nid, numaInfo->usedInfo[j].size);
-        }
-        for (int i = 0; i < g_processManager.nrLocalNuma; i++) {
-            numaInfo->usedInfo[j].size += MBToPage(numaInfo->privateSize[i][j]);
-            numaInfo->privateUsedInfo[i][j].ifUsedFreshed = false;
-            numaInfo->privateUsedInfo[i][j].size = MBToPage(numaInfo->privateSize[i][j]);
-            if (numaInfo->privateUsedInfo[i][j].size) {
-                SMAP_LOGGER_INFO("local %d borrow remote %d private pages: %llu.", i, l2Nid,
-                                 numaInfo->privateUsedInfo[i][j].size);
-            }
-        }
-        if (numaInfo->usedInfo[j].size) {
-            SMAP_LOGGER_INFO("Node%d total borrow pages: %llu.", l2Nid, numaInfo->usedInfo[j].size);
-        }
-    }
-    EnvMutexUnlock(&numaInfo->lock);
-    return 0;
-}
-
-static bool CheckPrivateBorrowUsed(int destNid)
-{
-    int nrLocalNuma = GetNrLocalNuma();
-    int column = destNid - nrLocalNuma;
-    struct RemoteNumaInfo *numaInfo = &g_processManager.remoteNumaInfo;
-
-    for (int count = 0; count < MAX_FRESH_USED_TIME; count++) {
-        EnvMutexLock(&numaInfo->lock);
-        for (int i = 0; i < nrLocalNuma; i++) {
-            struct RemoteNumaUsedInfo *usedInfo = &numaInfo->privateUsedInfo[i][column];
-            SMAP_LOGGER_INFO("[private_borrow] local=%d remote=%d used_pages=%llu total_pages=%llu fresh=%d", i,
-                             destNid, usedInfo->used, usedInfo->size, usedInfo->ifUsedFreshed);
-
-            if (!usedInfo->ifUsedFreshed) {
-                EnvMutexUnlock(&numaInfo->lock);
-                EnvMsleep(WAIT_FRESH_USED_PERIOD);
-                break;
-            }
-
-            if (usedInfo->used > usedInfo->size) {
-                EnvMutexUnlock(&numaInfo->lock);
-                return false;
-            }
-
-            // 走到这里表明所有本地NUMA的远端内存用量都少于总量
-            if (i == nrLocalNuma - 1) {
-                EnvMutexUnlock(&numaInfo->lock);
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-static bool CheckBorrowUsed(int destNid)
-{
-    int column = destNid - g_processManager.nrLocalNuma;
-    struct RemoteNumaInfo *numaInfo = &g_processManager.remoteNumaInfo;
-
-    for (int count = 0; count < MAX_FRESH_USED_TIME; count++) {
-        EnvMutexLock(&numaInfo->lock);
-        struct RemoteNumaUsedInfo *usedInfo = &numaInfo->usedInfo[column];
-        SMAP_LOGGER_INFO("[total_borrow] remote=%d used_pages=%llu total_pages=%llu freshed=%d", destNid,
-                         usedInfo->used, usedInfo->size, usedInfo->ifUsedFreshed);
-
-        if (!usedInfo->ifUsedFreshed) {
-            EnvMutexUnlock(&numaInfo->lock);
-            EnvMsleep(WAIT_FRESH_USED_PERIOD);
-            continue;
-        }
-        if (usedInfo->used > usedInfo->size) {
-            EnvMutexUnlock(&numaInfo->lock);
-            return false;
-        }
-        EnvMutexUnlock(&numaInfo->lock);
-        return true;
-    }
-    return false;
-}
-
-bool CheckReadyMigrateBack(int destNid)
-{
-    // 如果已经没有管理中的虚机，则默认可以执行迁回
-    EnvMutexLock(&g_processManager.lock);
-    if (!g_processManager.processes) {
-        SMAP_LOGGER_INFO("CheckReadyMigrateBack no process, destNid %d.", destNid);
-        EnvMutexUnlock(&g_processManager.lock);
-        return true;
-    }
-    EnvMutexUnlock(&g_processManager.lock);
-    struct RemoteNumaInfo *numaInfo = &g_processManager.remoteNumaInfo;
-    int column = destNid - g_processManager.nrLocalNuma;
-
-    int nrWait = 0;
-    while (nrWait < MAX_MIGRATE_BACK_WAIT_TIME) {
-        SMAP_LOGGER_INFO("Wait until ready to migrate back, destNid: %d, nrWait: %d.", destNid, nrWait);
-        EnvMutexLock(&numaInfo->lock);
-        bool flag = numaInfo->sharedSize[column] > 0;
-        EnvMutexUnlock(&numaInfo->lock);
-        if (flag) {
-            if (CheckBorrowUsed(destNid)) {
-                return true;
-            }
-        } else {
-            if (CheckPrivateBorrowUsed(destNid)) {
-                return true;
-            }
-        }
-        EnvMsleep(MIGRATE_BACK_CHECK_PERIOD);
-        nrWait++;
-    }
-    SMAP_LOGGER_WARNING("destNid %d not ready to migrate back after %d times.", destNid, MAX_MIGRATE_BACK_WAIT_TIME);
-    return false;
-}
-
-/*
- * 检查pidArr是否都符合状态切换的要求，会跳过未纳管的pid，不会返回错误
- *
- * 返回值：0-否，1-是，其它-异常
- */
-int IsPidArrayStateChangeReady(pid_t *pidArr, int len, int enable)
-{
-    if (!pidArr) {
-        SMAP_LOGGER_ERROR("IsPidArrReadyForChangeStat pidArr is null.");
-        return -EINVAL;
-    }
-    for (int i = 0; i < len; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(pidArr[i]);
-        if (!attr) {
-            SMAP_LOGGER_INFO("pid %d is not in smap list.", pidArr[i]);
-            continue;
-        }
-        SMAP_LOGGER_DEBUG("pid %d actual state %d.", pidArr[i], attr->state);
-        if (enable == DISABLE_PROCESS_MIGRATE && (attr->state != PROC_IDLE && attr->state != PROC_MOVE)) {
-            return 0;
-        }
-        if (enable == ENABLE_PROCESS_MIGRATE && attr->state == PROC_BACK) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
-/*
- * 检查pidArr是否都处于state，会跳过未纳管的pid，不会返回错误
- *
- * 返回值：0-否，1-是，其它-异常
- */
-int IsPidArrInState(pid_t *pidArr, int len, enum ProcessState state)
-{
-    if (!pidArr) {
-        SMAP_LOGGER_ERROR("IsPidArrInState pidArr is null.");
-        return -EINVAL;
-    }
-    for (int i = 0; i < len; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(pidArr[i]);
-        if (!attr) {
-            SMAP_LOGGER_INFO("pid %d is not in smap list.", pidArr[i]);
-            continue;
-        }
-        SMAP_LOGGER_DEBUG("pid %d actual state %d, expected state %d.", pidArr[i], attr->state, state);
-        if (attr->state != state) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
-static void SetPidArrState(pid_t *pidArr, int len, enum ProcessState state, int enable)
-{
-    for (int i = 0; i < len; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(pidArr[i]);
-        if (!attr) {
-            continue;
-        }
-        /* enable == 1时，迁移状态的pid也视为合理状态，不需要设置为空闲态 */
-        if (enable == ENABLE_PROCESS_MIGRATE && attr->state == PROC_MIGRATE) {
-            SMAP_LOGGER_DEBUG("pid %d is in PROC_MIGRATE state.", attr->pid);
-            continue;
-        }
-        attr->state = state;
-    }
-}
-
-/*
- * 检查使用指定l2Node的所有pid是否都处于state态
- *
- * 返回值：false-否，true-是
- */
-bool IsAllL2NodePidInState(enum ProcessState state, int l2Node)
-{
-    EnvMutexLock(&g_processManager.lock);
-    for (ProcessAttr *attr = g_processManager.processes; attr; attr = attr->next) {
-        if (NotEqualToAttrL2(attr, l2Node)) {
-            continue;
-        }
-        if (attr->state != state) {
-            EnvMutexUnlock(&g_processManager.lock);
-            return false;
-        }
-    }
-    EnvMutexUnlock(&g_processManager.lock);
-    return true;
-}
-
-static void SetChangePidRemoteMsgPayload(int srcNid, int destNid, int *i, int maxProcessCnt,
-                                         struct AccessAddPidPayload *payload)
-{
-    for (ProcessAttr *attr = g_processManager.processes; attr && *i < maxProcessCnt; attr = attr->next) {
-        if (NotEqualToAttrL2(attr, srcNid)) {
-            continue;
-        }
-        SMAP_LOGGER_INFO("ready to change pid %d L2 from %d to %d.", attr->pid, srcNid, destNid);
-        payload[*i].pid = attr->pid;
-        payload[*i].numaNodes = attr->numaAttr.numaNodes;
-        SetL2ByNid(&payload[*i].numaNodes, destNid);
-        payload[*i].scanTime = attr->scanTime;
-        payload[*i].duration = attr->duration;
-        payload[*i].type = attr->scanType;
-        (*i)++;
-    }
-}
-
-static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destNodeIndex, uint64_t memSize, int ratio)
-{
-    int nrLocalNuma = GetNrLocalNuma();
-    int l1node;
-    if (GetRunMode() == WATERLINE_MODE) {
-        l1node = GetAttrL1(attr);
-        if (attr->migrateMode == MIG_MEMSIZE_MODE) {
-            ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
-            attr->migrateParam[0].nid = destNodeIndex + nrLocalNuma;
-        } else {
-            if (ratio >= attr->strategyAttr.initRemoteMemRatio[l1node][srcNodeIndex]) {
-                ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
-            }
-        }
-        for (int i = 0; i < g_processManager.nrLocalNuma; i++) {
-            attr->strategyAttr.initRemoteMemRatio[i][destNodeIndex] += ratio;
-            attr->strategyAttr.initRemoteMemRatio[i][srcNodeIndex] -= ratio;
-            attr->strategyAttr.memSize[i][destNodeIndex] = attr->strategyAttr.memSize[i][srcNodeIndex];
-            attr->strategyAttr.memSize[i][srcNodeIndex] = 0;
-
-            SMAP_LOGGER_INFO("[change_remote] pid=%d local=%d old_remote=%d new_remote=%d old_sz=%llu new_sz=%llu",
-                             attr->pid, i, srcNodeIndex, destNodeIndex, attr->strategyAttr.memSize[i][srcNodeIndex],
-                             attr->strategyAttr.memSize[i][destNodeIndex]);
-        }
-    } else if (GetRunMode() == MEM_POOL_MODE) {
-        uint64_t srcMemSize = 0;
-        int remoteNidIndex;
-        for (int i = 0; i < attr->remoteNumaCnt; i++) {
-            int srcNid = srcNodeIndex + nrLocalNuma;
-            if (srcNid == attr->migrateParam[i].nid) {
-                srcMemSize = attr->migrateParam[i].memSize;
-                remoteNidIndex = i;
-                break;
-            }
-        }
-        if (memSize >= srcMemSize) {
-            ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
-            attr->migrateParam[remoteNidIndex].nid = 0;
-            attr->migrateParam[remoteNidIndex].memSize = 0;
-        } else {
-            attr->migrateParam[remoteNidIndex].memSize -= memSize;
-        }
-
-        for (int i = 0; i < g_processManager.nrLocalNuma; i++) {
-            attr->strategyAttr.memSize[i][destNodeIndex] += memSize;
-            attr->strategyAttr.memSize[i][srcNodeIndex] -= memSize;
-        }
-    }
-
-    AddAttrL2(attr, destNodeIndex + nrLocalNuma);
-
-    if (GetRunMode() == WATERLINE_MODE && attr->migrateMode == MIG_MEMSIZE_MODE) {
-        return;
-    }
-
-    attr->remoteNumaCnt = GetL2Count(attr->numaAttr.numaNodes);
-    SMAP_LOGGER_INFO("========= remoteNumaCnt %d", attr->remoteNumaCnt);
-    int targetIdx = -1;
-    int zeroIdx = -1;
-
-    for (int i = 0; i < attr->remoteNumaCnt; i++) {
-        if (attr->migrateParam[i].nid == (destNodeIndex + nrLocalNuma)) {
-            targetIdx = i;
-            break;
-        }
-        if (zeroIdx == -1 && attr->migrateParam[i].nid == 0) {
-            zeroIdx = i;
-        }
-    }
-
-    if (targetIdx != -1) {
-        attr->migrateParam[targetIdx].memSize += memSize;
-    } else if (zeroIdx != -1) {
-        attr->migrateParam[zeroIdx].nid = destNodeIndex + nrLocalNuma;
-        attr->migrateParam[zeroIdx].memSize = memSize;
-    }
-}
-
-static void ChangePidRemoteMemoryByNuma(ProcessAttr *attr, int srcNode, int destNode)
-{
-    if (GetRunMode() == WATERLINE_MODE) {
-        for (int i = 0; i < g_processManager.nrLocalNuma; i++) {
-            attr->strategyAttr.initRemoteMemRatio[i][destNode] = attr->strategyAttr.initRemoteMemRatio[i][srcNode];
-            attr->strategyAttr.initRemoteMemRatio[i][srcNode] = 0;
-        }
-    } else if (GetRunMode() == MEM_POOL_MODE) {
-        for (int i = 0; i < g_processManager.nrLocalNuma; i++) {
-            attr->strategyAttr.memSize[i][destNode] = attr->strategyAttr.memSize[i][srcNode];
-            attr->strategyAttr.memSize[i][srcNode] = 0;
-        }
-    }
-}
-
-int ChangePidRemoteByNuma(int srcNid, int destNid)
-{
-    int i = 0;
-    int maxProcessCnt = GetCurrentMaxNrPid();
-    int srcNode = srcNid - g_processManager.nrLocalNuma;
-    int destNode = destNid - g_processManager.nrLocalNuma;
-    ProcessAttr *attr;
-    struct AccessAddPidPayload *payload = malloc(sizeof(struct AccessAddPidPayload) * maxProcessCnt);
-    if (!payload) {
-        SMAP_LOGGER_ERROR("ChangePidRemoteByNuma malloc payload failed.");
-        return -ENOMEM;
-    }
-
-    EnvMutexLock(&g_processManager.lock);
-    SetChangePidRemoteMsgPayload(srcNid, destNid, &i, maxProcessCnt, payload);
-    if (i == 0) {
-        SMAP_LOGGER_INFO("ChangePidRemoteByNuma len: %d, no need to change.", i);
-        EnvMutexUnlock(&g_processManager.lock);
-        free(payload);
-        return 0;
-    }
-    SMAP_LOGGER_INFO("ChangePidRemoteByNuma ioctl begin, len: %d.", i);
-    int ret = AccessIoctlAddPid(i, payload);
-    free(payload);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ChangePidRemoteByNuma ioctl failed: %d.", ret);
-        EnvMutexUnlock(&g_processManager.lock);
-        return ret;
-    }
-    for (attr = g_processManager.processes; attr; attr = attr->next) {
-        if (NotEqualToAttrL2(attr, srcNid)) {
-            continue;
-        }
-        SMAP_LOGGER_INFO("change pid %d L2 from %d to %d.", attr->pid, srcNid, destNid);
-        for (int j = 0; j < g_processManager.nrLocalNuma; j++) {
-            attr->strategyAttr.remoteNrPagesAfterMigrate[j][destNode] +=
-                attr->strategyAttr.remoteNrPagesAfterMigrate[j][srcNode];
-            attr->strategyAttr.remoteNrPagesAfterMigrate[j][srcNode] = 0;
-        }
-        ChangePidRemoteMemoryByNuma(attr, srcNode, destNode);
-        SetAttrL2(attr, destNid);
-    }
-    ret = SyncAllProcessConfig();
-    if (ret) {
-        SMAP_LOGGER_WARNING("Synchronize pid after change remote maybe failed: %d.", ret);
-    }
-    EnvMutexUnlock(&g_processManager.lock);
-    return 0;
-}
-
-int EnableProcessMigrate(pid_t *pidArr, int len, int enable)
-{
-    int retry = WAIT_PROC_STATE_MAX_RETRY;
-    enum ProcessState newState;
-    newState = enable == ENABLE_PROCESS_MIGRATE ? PROC_IDLE : PROC_MOVE;
-
-    SMAP_LOGGER_DEBUG("enter EnableProcessMigrate.");
-    while (true) {
-        EnvMutexLock(&g_processManager.lock);
-        int ret = IsPidArrayStateChangeReady(pidArr, len, enable);
-        if (ret == 1) {
-            if (enable == ENABLE_PROCESS_MIGRATE) {
-                SMAP_LOGGER_INFO("set pids state to migrate state: %d or %d succeed.", PROC_IDLE, PROC_MIGRATE);
-            } else {
-                SMAP_LOGGER_INFO("set pids state from %d to %d succeed.", PROC_IDLE, PROC_MOVE);
-            }
-            SetPidArrState(pidArr, len, newState, enable);
-            ret = SyncAllProcessConfig();
-            if (ret) {
-                SMAP_LOGGER_WARNING("Synchronize pid state maybe failed: %d.", ret);
-            }
-            EnvMutexUnlock(&g_processManager.lock);
-            return 0;
-        }
-        EnvMutexUnlock(&g_processManager.lock);
-        if (ret < 0) {
-            SMAP_LOGGER_ERROR("check pid state err: %d.", ret);
-            return ret;
-        }
-        if (--retry < 0) {
-            SMAP_LOGGER_INFO("wait for pid state to change timed out, enable: %d.", enable);
-            return -ETIMEDOUT;
-        }
-        SMAP_LOGGER_INFO("wait for pid state to change, %d more times left.", retry);
-        EnvMsleep(WAIT_PROC_STATE_PERIOD);
-    }
-}
-
-/*
- * 检查远端NUMA上的内存是否可被迁回
- *
- * 传入的nid必须是远端NUMA，如果有使用该NUMA的进程是PROC_MOVE状态，则不可执行迁回
- * 返回值：0-否，1-是，其它-异常
- */
-int IsRemoteNumaMigrateBackAllowed(int nid)
-{
-    if (nid < g_processManager.nrLocalNuma) {
-        return -EINVAL;
-    }
-    EnvMutexLock(&g_processManager.lock);
-    for (ProcessAttr *attr = g_processManager.processes; attr; attr = attr->next) {
-        if (NotEqualToAttrL2(attr, nid)) {
-            continue;
-        }
-        SMAP_LOGGER_DEBUG("pid %d state: %d.", attr->pid, attr->state);
-        if (attr->state == PROC_MOVE) {
-            SMAP_LOGGER_INFO("pid %d state %d == PROC_MOVE.", attr->pid, attr->state);
-            EnvMutexUnlock(&g_processManager.lock);
-            return 0;
-        }
-    }
-    EnvMutexUnlock(&g_processManager.lock);
-    return 1;
-}
-
-/*
- * 检查远端NUMA上的内存是否可被搬移
- *
- * 和IsNumaMigrateBackAllowed相反，如果有使用该NUMA的进程不是PROC_MOVE状态，则不可执行搬移
- * 返回值：0-否，1-是，其它-异常
- */
-int IsRemoteNumaMoveAllowed(int nid)
-{
-    if (nid < g_processManager.nrLocalNuma) {
-        return -EINVAL;
-    }
-    EnvMutexLock(&g_processManager.lock);
-    for (ProcessAttr *attr = g_processManager.processes; attr; attr = attr->next) {
-        if (NotEqualToAttrL2(attr, nid)) {
-            continue;
-        }
-        SMAP_LOGGER_DEBUG("pid %d state: %d.", attr->pid, attr->state);
-        if (attr->state != PROC_MOVE) {
-            SMAP_LOGGER_INFO("pid %d state %d != PROC_MOVE.", attr->pid, attr->state);
-            EnvMutexUnlock(&g_processManager.lock);
-            return 0;
-        }
-    }
-    EnvMutexUnlock(&g_processManager.lock);
-    return 1;
-}
-
-static bool IsRemoteTargetMigOutDone(ProcessAttr *attr, int remoteNid, uint64_t targetPages)
-{
-    if (remoteNid < 0 || remoteNid >= MAX_NODES) {
-        SMAP_LOGGER_ERROR("Invalid remote node %d of pid %d.", remoteNid, attr->pid);
-        return false;
-    }
-
-    int remoteIdx = remoteNid - GetNrLocalNuma();
-    uint64_t accountedPages = 0;
-    if (remoteIdx >= 0 && remoteIdx < REMOTE_NUMA_NUM) {
-        for (int local = 0; local < LOCAL_NUMA_NUM; local++) {
-            accountedPages += attr->strategyAttr.remoteNrPagesAfterMigrate[local][remoteIdx];
-        }
-    }
-    uint64_t remotePages = attr->walkPage.nrPages[remoteNid];
-    SMAP_LOGGER_INFO("Pid: %d, remote node: %d, target pages: %llu, accounted pages: %llu, current remote pages: %llu.",
-                     attr->pid, remoteNid, targetPages, accountedPages, remotePages);
-
-    if (targetPages > 0 && accountedPages == targetPages) {
-        return true;
-    }
-    return remotePages == targetPages;
-}
-
-static bool GetRemoteTargetPages(ProcessAttr *attr, int remoteNid, uint64_t *targetPages)
-{
-    for (int i = 0; i < attr->remoteNumaCnt; i++) {
-        if (attr->migrateParam[i].nid != remoteNid) {
-            continue;
-        }
-        *targetPages = KBToHugePage(attr->migrateParam[i].memSize);
-        return true;
-    }
-
-    return false;
-}
-
-bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid)
-{
-    bool ret = false;
-    uint64_t remoteNum;
-    pid_t pid = attr->pid;
-
-    attr->enableSwap = false;
-    if (IsMultiNumaVm(attr)) {
-        *isMultiNumaPid = true;
-        for (int i = 0; i < attr->remoteNumaCnt; i++) {
-            int l2node = attr->migrateParam[i].nid;
-            remoteNum = KBToHugePage(attr->migrateParam[i].memSize);
-            if (!IsRemoteTargetMigOutDone(attr, l2node, remoteNum)) {
-                return false;
-            }
-        }
-        attr->enableSwap = true;
-        ret = true;
-    } else {
-        int l2Node = GetAttrL2(attr);
-        if (l2Node < g_processManager.nrLocalNuma || l2Node >= MAX_NODES) {
-            SMAP_LOGGER_ERROR("Invalid l2Node %d of pid %d.", l2Node, pid);
-            return false;
-        }
-        if (!GetRemoteTargetPages(attr, l2Node, &remoteNum)) {
-            SMAP_LOGGER_ERROR("Pid %d has no migrate target for remote node %d.", pid, l2Node);
-            return false;
-        }
-        if (remoteNum > attr->walkPage.nrPage) {
-            SMAP_LOGGER_WARNING("Pid %d mig memSize is larger than nrPage.", attr->pid);
-        }
-        if (attr->walkPage.nrPage && IsRemoteTargetMigOutDone(attr, l2Node, remoteNum)) {
-            attr->enableSwap = true;
-            ret = true;
-        }
-    }
-
-    return ret;
-}
-
-static void SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRemoteNumaIoctlMsg *msg, int len)
-{
-    int runMode = GetRunMode();
-    uint64_t srcMemSize;
-    int l1node;
-    int l2node;
-    int nrLocalNuma = GetNrLocalNuma();
-    for (int i = 0; i < len; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(msg->payloads[i].pid);
-        if (!attr) {
-            SMAP_LOGGER_ERROR("GetProcessAttrLocked pid %d null.", msg->payloads[i].pid);
-            continue;
-        }
-        payload[i].pid = attr->pid;
-        payload[i].numaNodes = attr->numaAttr.numaNodes;
-        l1node = GetAttrL1(attr);
-        l2node = msg->payloads[i].srcNid;
-        // 远端单numa->远端多numa，使用AddL2ByNid
-        if (runMode == WATERLINE_MODE) {
-            if (msg->payloads[i].ratio >= attr->strategyAttr.initRemoteMemRatio[l1node][l2node - nrLocalNuma]) {
-                ClearNodeBit(&payload[i].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
-            }
-        } else { // MEM_POOL_MODE
-            if (msg->payloads[i].memSize >= attr->strategyAttr.memSize[l1node][l2node - nrLocalNuma]) {
-                ClearNodeBit(&payload[i].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
-            }
-        }
-
-        AddL2ByNid(&payload[i].numaNodes, msg->payloads[i].destNid);
-        payload[i].scanTime = attr->scanTime;
-        payload[i].duration = attr->duration;
-        payload[i].type = attr->scanType;
-    }
-}
-
-int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg)
-{
-    int maxProcessCnt = GetCurrentMaxNrPid();
-    if (!msg || !msg->payloads || !msg->migResArray || msg->pidCnt <= 0 || msg->pidCnt > maxProcessCnt) {
-        SMAP_LOGGER_ERROR("ChangePidRemoteByPid msg invalid.");
-        return -EINVAL;
-    }
-
-    struct AccessAddPidPayload *payload = malloc(sizeof(struct AccessAddPidPayload) * maxProcessCnt);
-    if (!payload) {
-        SMAP_LOGGER_ERROR("ChangePidRemoteByPid malloc payload failed.");
-        return -ENOMEM;
-    }
-
-    EnvMutexLock(&g_processManager.lock);
-    SetPayloadValue(payload, msg, msg->pidCnt);
-    SMAP_LOGGER_INFO("ChangePidRemoteByPid ioctl begin, len: %d.", msg->pidCnt);
-    int ret = AccessIoctlAddPid(msg->pidCnt, payload);
-    free(payload);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ChangePidRemoteByNuma ioctl failed: %d.", ret);
-        EnvMutexUnlock(&g_processManager.lock);
-        return ret;
-    }
-    SMAP_LOGGER_INFO("ChangePidRemoteByNuma ioctl done.");
-    for (int i = 0; i < msg->pidCnt; i++) {
-        ProcessAttr *attr = GetProcessAttrLocked(msg->payloads[i].pid);
-        if (!attr) {
-            continue;
-        }
-        int srcNode = msg->payloads[i].srcNid - g_processManager.nrLocalNuma;
-        int destNode = msg->payloads[i].destNid - g_processManager.nrLocalNuma;
-        SMAP_LOGGER_INFO("change pid %d L2 from %d to %d.", attr->pid, msg->payloads[i].srcNid,
-                         msg->payloads[i].destNid);
-        if (GetL1Count(attr->numaAttr.numaNodes) > 1) { // 容器本地多numa
-            for (int j = 0; j < g_processManager.nrLocalNuma; j++) {
-                attr->strategyAttr.remoteNrPagesAfterMigrate[j][destNode] +=
-                    attr->strategyAttr.remoteNrPagesAfterMigrate[j][srcNode];
-                attr->strategyAttr.remoteNrPagesAfterMigrate[j][srcNode] = 0;
-            }
-        } else {
-            int l1node = GetAttrL1(attr);
-            attr->strategyAttr.remoteNrPagesAfterMigrate[l1node][destNode] += msg->payloads[i].successCnt;
-            attr->strategyAttr.remoteNrPagesAfterMigrate[l1node][srcNode] -= msg->payloads[i].successCnt;
-        }
-
-        ChangePidRemoteMemory(attr, srcNode, destNode, msg->payloads[i].memSize, msg->payloads[i].ratio);
-    }
-    ret = SyncAllProcessConfig();
-    if (ret) {
-        SMAP_LOGGER_WARNING("Synchronize pid after change remote maybe failed: %d.", ret);
-    }
-    EnvMutexUnlock(&g_processManager.lock);
-    return 0;
-}
-
-bool IsMemoryLow(pid_t pid)
-{
-    bool isLow = false;
-    EnvMutexLock(&g_processManager.lock);
-    ProcessAttr *process = GetProcessAttrLocked(pid);
-    if (process && process->isLowMem) {
-        SMAP_LOGGER_INFO("Pid %d dest nid memory is low.", pid);
-        isLow = true;
-    }
-    EnvMutexUnlock(&g_processManager.lock);
-    return isLow;
 }

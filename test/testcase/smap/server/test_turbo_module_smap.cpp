@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  */
 #include <dlfcn.h>
 #include <gtest/gtest.h>
@@ -45,11 +44,11 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutHandlerTest)
     msg.payload[0].inner[0].destNid = 4;
     msg.payload[0].pid = 1;
     msg.payload[0].inner[0].ratio = 25;
-    int pidType = 1;
+    int pageType = 1;
 
     StubSmapPtr();
     SmapMigrateOutCodec codec;
-    codec.EncodeRequest(inputBuffer, &msg, pidType);
+    codec.EncodeRequest(inputBuffer, &msg, pageType);
     RetCode result = SmapMigrateOutHandler(inputBuffer, outputBuffer);
     EXPECT_EQ(result, TURBO_OK);
 
@@ -68,10 +67,10 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutHandlerEncodeResponseFailed)
     msg.payload[0].inner[0].destNid = 4;
     msg.payload[0].pid = 1;
     msg.payload[0].inner[0].ratio = 25;
-    int pidType = 1;
+    int pageType = 1;
 
     MOCKER_CPP(&SmapMigrateOutCodec::DecodeRequest,
-               int (*)(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pidType))
+               int (*)(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pageType))
         .stubs()
         .will(returnValue(0))
         .then(returnValue(1));
@@ -101,11 +100,11 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutGroupedHandlerTest)
     msg.payload[0].groups[0].targetCount = 1;
     msg.payload[0].groups[0].targets[0].nid = 4;
     msg.payload[0].groups[0].targets[0].size = 4096;
-    int pidType = 1;
+    int pageType = 1;
 
     StubSmapPtr();
     SmapMigrateOutGroupedCodec codec;
-    codec.EncodeRequest(inputBuffer, &msg, pidType);
+    codec.EncodeRequest(inputBuffer, &msg, pageType);
     RetCode result = SmapMigrateOutGroupedHandler(inputBuffer, outputBuffer);
     EXPECT_EQ(result, TURBO_OK);
 
@@ -121,7 +120,7 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutGroupedHandlerEncodeResponseFailed)
 
     StubSmapPtr();
     MOCKER_CPP(&SmapMigrateOutGroupedCodec::DecodeRequest,
-               int (*)(const TurboByteBuffer &buffer, GroupedMigrateOutMsg &msg, int &pidType))
+               int (*)(const TurboByteBuffer &buffer, GroupedMigrateOutMsg &msg, int &pageType))
         .stubs()
         .will(returnValue(0))
         .then(returnValue(1));
@@ -188,11 +187,11 @@ TEST_F(TestTurboModuleSmap, SmapRemoveHandlerTest)
     TurboByteBuffer outputBuffer;
     RemoveMsg msg = {0};
     msg.count = 1;
-    int pidType = 1;
+    int pageType = 1;
 
     StubSmapPtr();
     SmapRemoveCodec codec;
-    codec.EncodeRequest(inputBuffer, &msg, pidType);
+    codec.EncodeRequest(inputBuffer, &msg, pageType);
     RetCode result = SmapRemoveHandler(inputBuffer, outputBuffer);
     EXPECT_EQ(result, TURBO_OK);
 
@@ -207,9 +206,9 @@ TEST_F(TestTurboModuleSmap, SmapRemoveHandEncodeResponseFailed)
     TurboByteBuffer outputBuffer;
     RemoveMsg msg = {0};
     msg.count = 1;
-    int pidType = 1;
+    int pageType = 1;
 
-    MOCKER_CPP(&SmapRemoveCodec::DecodeRequest, int (*)(const TurboByteBuffer &buffer, RemoveMsg &msg, int &pidType))
+    MOCKER_CPP(&SmapRemoveCodec::DecodeRequest, int (*)(const TurboByteBuffer &buffer, RemoveMsg &msg, int &pageType))
         .stubs()
         .will(returnValue(0))
         .then(returnValue(1));
@@ -696,12 +695,12 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutSyncHandlerTest)
     msg.payload[0].inner[0].destNid = 4;
     msg.payload[0].pid = 1;
     msg.payload[0].inner[0].ratio = 25;
-    int pidType = 1;
+    int pageType = 1;
     uint64_t maxWaitTime = 1000;
 
     StubSmapPtr();
     SmapMigrateOutSyncCodec codec;
-    codec.EncodeRequest(inputBuffer, &msg, pidType, maxWaitTime);
+    codec.EncodeRequest(inputBuffer, &msg, pageType, maxWaitTime);
     RetCode result = SmapMigrateOutSyncHandler(inputBuffer, outputBuffer);
     EXPECT_EQ(result, TURBO_OK);
 
@@ -716,7 +715,7 @@ TEST_F(TestTurboModuleSmap, SmapMigrateOutSyncHandlerFailed)
 
     StubSmapPtr();
     MOCKER_CPP(&SmapMigrateOutSyncCodec::DecodeRequest,
-               int (*)(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pidType, uint64_t &maxWaitTime))
+               int (*)(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pageType, uint64_t &maxWaitTime))
         .stubs()
         .will(returnValue(-EINVAL))
         .then(returnValue(0));

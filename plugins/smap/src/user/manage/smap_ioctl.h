@@ -1,6 +1,5 @@
+
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -13,6 +12,10 @@
 #ifndef __SMAP_IOCTL_H__
 #define __SMAP_IOCTL_H__
 
+#include <sys/ioctl.h>
+#include <stdint.h>
+#include "numa_nodes.h"
+
 /*
  * cmd 0->Tracking able config:
  * arg 0->Tracking disable
@@ -23,13 +26,30 @@
 
 #define SMAP_IOCTL_TRACKING_CMD _IOW('N', 0, unsigned long)
 
-#define SMAP_IOCTL_MODE_SET_CMD _IOW('N', 1, unsigned long)
-
 #define SMAP_IOCTL_MAP_MODE_CMD _IOW('N', 2, unsigned long)
 
 #define SMAP_IOCTL_GET_SIZE_CMD _IOR('N', 3, unsigned long)
 
 #define SMAP_IOCTL_PAGE_SIZE_SET_CMD _IOW('N', 4, unsigned long)
+
+struct NumaUbFluxMb {
+    int numaId;
+    uint32_t readMb;
+    uint32_t writeMb;
+};
+
+struct UbFluxMbStatistic {
+    int len;
+    struct NumaUbFluxMb flux[REMOTE_NUMA_NUM];
+};
+
+#define SMAP_IOCTL_UB_WATCH_CMD _IOR('N', 5, struct UbFluxMbStatistic)
+
+struct UbWatchConfig {
+    uint32_t durationMs;
+};
+
+#define SMAP_IOCTL_UB_WATCH_CONFIG_CMD _IOW('N', 6, struct UbWatchConfig)
 
 #define SMAP_MIG_MAGIC 0xB9
 #define SMAP_MIG_MIGRATE _IOW(SMAP_MIG_MAGIC, 0, struct MigrateMsg)

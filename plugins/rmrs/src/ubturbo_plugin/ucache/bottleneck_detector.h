@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  */
 #ifndef BOTTLENECK_DETECTOR_H
 #define BOTTLENECK_DETECTOR_H

@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2024. All rights reserved.
  * Description: SMAP remote iomem module
  */
 
@@ -32,9 +31,12 @@ struct memid_range {
 };
 
 int iterate_obmm_dev(void);
-void release_remote_ram(void);
-int refresh_remote_ram(void);
-int calc_acidx_paddr_iomem(u64 index, int nid, u64 *paddr);
+void free_obmm_dev(void);
 int find_range_by_memid(u64 memid, u64 *start, u64 *end);
+
+static inline bool is_numa_remote(int nid)
+{
+	return nid >= nr_local_numa && nid < SMAP_MAX_NUMNODES;
+}
 
 #endif /* _SRC_TIERING_IOMEM_H */

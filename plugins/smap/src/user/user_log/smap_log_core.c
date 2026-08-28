@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -21,7 +19,7 @@
 #include "smap_log_core.h"
 
 static SmapLogFile g_smapLogFile;
-static int g_minLogLevel = SMAP_LOG_CORE_DEBUG;
+static int g_minLogLevel = SMAP_LOG_CORE_INFO;
 static int g_initialized = 0;
 
 static const char *LogLevelToString(int level)
@@ -81,11 +79,7 @@ static size_t GetFileSize(const char *filePath)
 
 static void WriteLogHeader(FILE *fp)
 {
-#ifndef RELEASE
-    (void)fprintf(fp, "Log started at [DEBUG] level\n");
-#else
-    (void)fprintf(fp, "Log started at [INFO] level\n");
-#endif
+    (void)fprintf(fp, "Log started at [%s] level\n", LogLevelToString(g_minLogLevel));
     (void)fprintf(fp, "Log default format: yyyy-mm-dd hh:mm:ss.uuuuuu threadid loglevel msg\n");
 }
 
@@ -192,6 +186,7 @@ void SmapLogCoreExit(void)
     pthread_mutex_unlock(&g_smapLogFile.lock);
     pthread_mutex_destroy(&g_smapLogFile.lock);
     g_initialized = 0;
+    g_minLogLevel = SMAP_LOG_CORE_INFO;
 }
 
 int SmapLogCoreWrite(int level, const char *prefix, const char *message)
@@ -260,4 +255,11 @@ int SmapLogCoreWrite(int level, const char *prefix, const char *message)
 int SmapLogCoreGetMinLogLevel(void)
 {
     return g_minLogLevel;
+}
+
+void SmapLogCoreSetMinLogLevel(int level)
+{
+    if (level >= SMAP_LOG_CORE_TRACE && level < SMAP_LOG_CORE_BUTT) {
+        g_minLogLevel = level;
+    }
 }

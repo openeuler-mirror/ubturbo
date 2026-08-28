@@ -33,4 +33,6 @@ static inline int cpu_online(int cpu)
     return cpu >= 0 && cpu < (int)num_online_cpus();
 }
 
+#define cpumask_pr_args(maskp) NR_CPUS, (maskp)->bits
+
 #endif /* __LINUX_CPUMASK_H */

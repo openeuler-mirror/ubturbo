@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: smap5.0 user scene ut code
  */
  
@@ -222,31 +221,31 @@ TEST_F(SceneTest, TestCalcMemInfo)
     EXPECT_EQ(8, process.sceneInfo.pageInfo[0].nrPages);
 }
 
-extern "C" int GetProcessSceneAttr(Scene scene, SceneInfo *info, PidType type);
+extern "C" int GetProcessSceneAttr(Scene scene, SceneInfo *info, PageType pageType);
 TEST_F(SceneTest, TestGetProcessSceneAttr)
 {
     SceneInfo info = { 0 };
     Scene scene = UNSTABLE_SCENE;
-    GetProcessSceneAttr(scene, &info, VM_TYPE);
+    GetProcessSceneAttr(scene, &info, PAGETYPE_HUGE);
     EXPECT_EQ(VM_UNSTABLE_SCAN_CYCLE, info.cycles.scanCycle);
     EXPECT_EQ(UNSTABLE_MIGRATE_CYCLE, info.cycles.migCycle);
 
     scene = HEAVY_STABLE_SCENE;
-    GetProcessSceneAttr(scene, &info, VM_TYPE);
+    GetProcessSceneAttr(scene, &info, PAGETYPE_HUGE);
     EXPECT_EQ(VM_HEAVY_STABLE_SCAN_CYCLE, info.cycles.scanCycle);
     EXPECT_EQ(HEAVY_STABLE_MIGRATE_CYCLE, info.cycles.migCycle);
 
     scene = LIGHT_STABLE_SCENE;
-    GetProcessSceneAttr(scene, &info, VM_TYPE);
+    GetProcessSceneAttr(scene, &info, PAGETYPE_HUGE);
     EXPECT_EQ(VM_LIGHT_STABLE_SCAN_CYCLE, info.cycles.scanCycle);
     EXPECT_EQ(LIGHT_STABLE_MIGRATE_CYCLE, info.cycles.migCycle);
 }
 
-extern "C" int InitSceneInfo(SceneInfo *info, PidType type);
+extern "C" int InitSceneInfo(SceneInfo *info, PageType pageType);
 TEST_F(SceneTest, TestInitSceneInfo)
 {
     SceneInfo info = { 0 };
-    int ret = InitSceneInfo(&info, VM_TYPE);
+    int ret = InitSceneInfo(&info, PAGETYPE_HUGE);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(VM_LIGHT_STABLE_SCAN_CYCLE, info.cycles.scanCycle);
     EXPECT_EQ(LIGHT_STABLE_MIGRATE_CYCLE, info.cycles.migCycle);
@@ -418,7 +417,7 @@ TEST_F(SceneTest, TestAdjustVmMemRatio)
     struct ProcessManager manager;
     ProcessAttr current;
     current.next = NULL;
-    manager.processes = &current;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
     manager.nr[1] = 1;
     arr[0] = 1;
     arr[1] = 2;
@@ -479,7 +478,7 @@ TEST_F(SceneTest, TestConfigMultiVmRatio)
 
     manager.nr[VM_TYPE] = 1;
     ProcessAttr current;
-    manager.processes = &current;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
     current.next = NULL;
     MOCKER(IsReadyForAdapt).stubs().will(returnValue(true));
     current.sceneInfo.pageInfoIndex = 0;
@@ -496,8 +495,8 @@ TEST_F(SceneTest, TestGetMaxNuma)
 {
     ProcessAttr attr = {};
     attr.numaAttr.numaNodes = 0b10011001;
-    struct ProcessManager manager = {};
-    manager.processes = &attr;
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
     int maxL1node = 0;
     int maxL2node = 0;
 
@@ -514,7 +513,7 @@ TEST_F(SceneTest, TestConfigMultiVmRatioInGroups)
     ProcessAttr current;
     current.next = nullptr;
     current.numaAttr.numaNodes = 31;
-    manager->processes = &current;
+    memset(&manager->slots, 0, sizeof(manager->slots)); PidSlotAdd(manager, &current);
     MOCKER(ConfigMultiVmRatio).stubs();
     ConfigMultiVmRatioInGroups(manager);
     EXPECT_EQ(false, current.adaptMem.enableAdaptMem);
@@ -527,7 +526,7 @@ TEST_F(SceneTest, TestConfigMultiVmRatioInGroupsTwo)
     current.next = nullptr;
     current.scanType = NORMAL_SCAN;
     current.numaAttr.numaNodes = 0b00010001;
-    manager->processes = &current;
+    memset(&manager->slots, 0, sizeof(manager->slots)); PidSlotAdd(manager, &current);
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(ConfigMultiVmRatio).stubs();
     EXPECT_EQ(false, current.adaptMem.enableAdaptMem);
@@ -536,9 +535,9 @@ TEST_F(SceneTest, TestConfigMultiVmRatioInGroupsTwo)
 extern "C" void SkipMultiProcessRatio(struct ProcessManager *manager);
 TEST_F(SceneTest, TestSkipMultiProcessRatio)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    manager.processes = &current;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
     current.next = NULL;
     current.scanType = NORMAL_SCAN;
     current.strategyAttr.l2RemoteMemRatio[0][0] = 30;
@@ -549,33 +548,32 @@ TEST_F(SceneTest, TestSkipMultiProcessRatio)
 }
 
 extern "C" void ConfigRatios(struct ProcessManager *manager);
-extern "C" PidType GetPidType(struct ProcessManager *manager);
 extern "C" void ConfigMultiVmRatioInGroups(struct ProcessManager *manager);
 TEST_F(SceneTest, TestConfigRatiosProcessType)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    manager.processes = &current;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
     manager.tracking.pageSize = PAGESIZE_4K;
+    manager.nr[VM_TYPE] = 0; /* 无 VM → 走 SkipMultiProcessRatio */
     current.next = NULL;
     current.scanType = NORMAL_SCAN;
     current.strategyAttr.l2RemoteMemRatio[0][0] = 30;
     current.strategyAttr.l3RemoteMemRatio[0][0] = 10;
 
-    MOCKER(GetPidType).stubs().will(returnValue(PROCESS_TYPE));
     MOCKER(SkipMultiProcessRatio).expects(once());
     ConfigRatios(&manager);
 }
 
 TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemTrue)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    manager.processes = &current;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
     manager.tracking.pageSize = PAGESIZE_4K;
+    manager.nr[VM_TYPE] = 1; /* 存在 VM + 开自适应 → 走 ConfigMultiVmRatioInGroups */
     current.next = NULL;
 
-    MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     MOCKER(GetAdaptMem).stubs().will(returnValue(true));
     MOCKER(ConfigMultiVmRatioInGroups).expects(once());
     ConfigRatios(&manager);
@@ -583,15 +581,15 @@ TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemTrue)
 
 TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemFalse)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    manager.processes = &current;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
     manager.tracking.pageSize = PAGESIZE_4K;
+    manager.nr[VM_TYPE] = 1; /* 存在 VM 但关自适应 → 回落 SkipMultiProcessRatio */
     current.next = NULL;
     current.strategyAttr.l2RemoteMemRatio[0][0] = 30;
     current.strategyAttr.l3RemoteMemRatio[0][0] = 10;
 
-    MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     MOCKER(GetAdaptMem).stubs().will(returnValue(false));
     MOCKER(SkipMultiProcessRatio).expects(once());
     ConfigRatios(&manager);

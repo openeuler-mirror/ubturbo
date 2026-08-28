@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
  * Description: UBDMA 驱动模块打桩文件
  */
 #ifndef __STUB_STRUCT_H

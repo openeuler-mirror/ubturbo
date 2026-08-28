@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  * Description: SMAP : ub_hist
  */
 
@@ -42,20 +41,39 @@ static ub_hist_smap_type g_ub_hist_smap_type = UB_HIST_SMAP_TYPE_N6;
 
 static struct ub_hist_ba_device *ub_hist_find_dev_by_tag(uint64_t ba_tag)
 {
-	unsigned long flags;
 	struct ub_hist_ba_device *ba_dev;
 
-	spin_lock_irqsave(&ub_hist_ba_list_lock, flags);
+	spin_lock(&ub_hist_ba_list_lock);
 	list_for_each_entry(ba_dev, &ub_hist_ba_list, list) {
 		if (ba_dev->info.ba_tag == ba_tag) {
-			spin_unlock_irqrestore(&ub_hist_ba_list_lock, flags);
+			spin_unlock(&ub_hist_ba_list_lock);
 			return ba_dev;
 		}
 	}
 	pr_err("failed to find BA device by BA tag\n");
 	ba_dev = NULL;
-	spin_unlock_irqrestore(&ub_hist_ba_list_lock, flags);
+	spin_unlock(&ub_hist_ba_list_lock);
 	return ba_dev;
+}
+
+static int ub_hist_find_ba_tag_by_addr(uint64_t addr, uint64_t *ba_tag)
+{
+	struct ub_hist_ba_device *ba_dev;
+
+	spin_lock(&ub_hist_ba_list_lock);
+	list_for_each_entry(ba_dev, &ub_hist_ba_list, list) {
+		if ((ba_dev->info.cc_range.start <= addr &&
+		     ba_dev->info.cc_range.end > addr) ||
+		    (ba_dev->info.nc_range.start <= addr &&
+		     ba_dev->info.nc_range.end > addr)) {
+			*ba_tag = ba_dev->info.ba_tag;
+			spin_unlock(&ub_hist_ba_list_lock);
+			return 0;
+		}
+	}
+	pr_err("failed to find BA tag by BA addr\n");
+	spin_unlock(&ub_hist_ba_list_lock);
+	return -ENODEV;
 }
 
 static inline u32 ub_hist_read_reg(struct ub_hist_ba_device *ba_dev, u32 off)
@@ -291,6 +309,144 @@ int ub_hist_get_statistic_result(struct ub_hist_ba_result *result)
 }
 EXPORT_SYMBOL(ub_hist_get_statistic_result);
 
+static inline u32 ub_hist_readl(void __iomem *reg)
+{
+	u32 out = readl(reg);
+	return le32_to_cpu(*(__le32 *)&out);
+}
+
+static inline void ub_hist_writel(void __iomem *reg, u32 val)
+{
+	__le32 val_le = cpu_to_le32(val);
+	writel(*(u32 *)&val_le, reg);
+}
+
+#define MAR_CFG_PERF_OFFSET 0x0
+#define MAR_FLUX_WR_OFFSET 0x4
+#define MAR_FLUX_RD_OFFSET 0x8
+#define MAR_CFG_MEM_LEN 0xc
+#define ADDR_MASK 0xFFFFF00000
+static uint64_t ub_hist_mar_cfg_pa[MAR_CFG_REG_CNT] = {
+	0x33030d0300, 0x33060d0300, 0x33080d0300, 0x330a0d0300,
+	0x73030d0300, 0x73060d0300, 0x73080d0300, 0x730a0d0300
+};
+void __iomem *ub_hist_mar_cfg_base_addr[MAR_CFG_REG_CNT] = { NULL };
+static u32 ub_hist_mar_perf_expected_val;
+static void ub_hist_mar_cfg_unmap(void)
+{
+	int i;
+	for (i = 0; i < MAR_CFG_REG_CNT; i++) {
+		if (ub_hist_mar_cfg_base_addr[i]) {
+			iounmap(ub_hist_mar_cfg_base_addr[i]);
+			ub_hist_mar_cfg_base_addr[i] = NULL;
+		}
+	}
+}
+static int ub_hist_mar_cfg_ioremap(void)
+{
+	int i;
+	for (i = 0; i < MAR_CFG_REG_CNT; i++) {
+		ub_hist_mar_cfg_base_addr[i] =
+			ioremap(ub_hist_mar_cfg_pa[i], MAR_CFG_MEM_LEN);
+		if (!ub_hist_mar_cfg_base_addr[i]) {
+			pr_err("failed to remap register base address\n");
+			ub_hist_mar_cfg_unmap();
+			return -ENOMEM;
+		}
+		pr_info("pa: %#llx -> va: %pK\n", ub_hist_mar_cfg_pa[i],
+			ub_hist_mar_cfg_base_addr[i]);
+	}
+	return 0;
+}
+void ub_hist_mar_perf_en(uint32_t perf_prd_ms)
+{
+	int i;
+	union hi_upa_mar_cfg_perf mar_cfg_perf;
+	mar_cfg_perf.mar_perf_prd = (perf_prd_ms * 1000000 >> 4);
+	mar_cfg_perf.mar_perf_mode = 0x1;
+	mar_cfg_perf.mar_perf_en = 0x1;
+	ub_hist_mar_perf_expected_val = mar_cfg_perf.val;
+
+	for (i = 0; i < MAR_CFG_REG_CNT; i++) {
+		void __iomem *reg =
+			ub_hist_mar_cfg_base_addr[i] + MAR_CFG_PERF_OFFSET;
+		ub_hist_writel(reg, 0);
+		pr_debug("before write, va: %pK, pa: %#llx, value: %#x\n", reg,
+			 ub_hist_mar_cfg_pa[i], mar_cfg_perf.val);
+		ub_hist_writel(reg, mar_cfg_perf.val);
+		u32 value = ub_hist_readl(reg);
+		pr_debug("after write, va: %pK, pa: %#llx, value: %#x\n", reg,
+			 ub_hist_mar_cfg_pa[i], value);
+	}
+}
+EXPORT_SYMBOL(ub_hist_mar_perf_en);
+
+bool ub_hist_mar_perf_check(void)
+{
+	int i;
+
+	for (i = 0; i < MAR_CFG_REG_CNT; i++) {
+		void __iomem *reg =
+			ub_hist_mar_cfg_base_addr[i] + MAR_CFG_PERF_OFFSET;
+		u32 val = ub_hist_readl(reg);
+		if (val != ub_hist_mar_perf_expected_val) {
+			pr_err("mar perf register %d reset during statistics: expected %#x, got %#x\n",
+			       i, ub_hist_mar_perf_expected_val, val);
+			return false;
+		}
+	}
+	return true;
+}
+EXPORT_SYMBOL(ub_hist_mar_perf_check);
+
+void ub_hist_get_access_count(uint32_t *flux_wr, uint32_t *flux_rd)
+{
+	u64 read_cnt_toatl = 0;
+	u64 write_cnt_toatl = 0;
+	int i;
+
+	if (!flux_rd || !flux_wr)
+		return;
+
+	for (i = 0; i < MAR_CFG_REG_CNT; i++) {
+		void __iomem *reg =
+			ub_hist_mar_cfg_base_addr[i] + MAR_FLUX_WR_OFFSET;
+		flux_wr[i] = ub_hist_readl(reg);
+		pr_debug("pa: %#llx, va: %pK, value: %u\n",
+			 ub_hist_mar_cfg_pa[i] + MAR_FLUX_WR_OFFSET, reg,
+			 flux_wr[i]);
+		reg = ub_hist_mar_cfg_base_addr[i] + MAR_FLUX_RD_OFFSET;
+		flux_rd[i] = ub_hist_readl(reg);
+		pr_debug("pa: %#llx, va: %pK, value: %u\n",
+			 ub_hist_mar_cfg_pa[i] + MAR_FLUX_RD_OFFSET, reg,
+			 flux_rd[i]);
+		write_cnt_toatl += flux_wr[i];
+		read_cnt_toatl += flux_rd[i];
+	}
+	pr_debug("write_cnt_toatl: %llu, read_cnt_total: %llu\n",
+		 write_cnt_toatl, read_cnt_toatl);
+}
+EXPORT_SYMBOL(ub_hist_get_access_count);
+
+int get_path_idx_by_addr(uint64_t addr, int *idx)
+{
+	int i;
+	uint64_t ba_tag;
+	int ret = ub_hist_find_ba_tag_by_addr(addr, &ba_tag);
+	if (!idx || ret)
+		return -EINVAL;
+
+	for (i = 0; i < MAR_CFG_REG_CNT; i++) {
+		if ((ba_tag & ADDR_MASK) ==
+		    (ub_hist_mar_cfg_pa[i] & ADDR_MASK)) {
+			*idx = i;
+			return 0;
+		}
+	}
+	return -ENODEV;
+}
+EXPORT_SYMBOL(get_path_idx_by_addr);
+
 static int ub_hist_get_ba_resource(struct platform_device *pdev,
 				   struct ub_hist_ba_device *ba_dev)
 {
@@ -356,7 +512,6 @@ static int ub_hist_get_ba_resource(struct platform_device *pdev,
 static int ub_hist_probe(struct platform_device *pdev)
 {
 	int ret;
-	unsigned long flags;
 	struct ub_hist_ba_device *ba_dev;
 	struct resource *r;
 
@@ -379,9 +534,9 @@ static int ub_hist_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_rd_clr;
 
-	spin_lock_irqsave(&ub_hist_ba_list_lock, flags);
+	spin_lock(&ub_hist_ba_list_lock);
 	list_add_tail(&ba_dev->list, &ub_hist_ba_list);
-	spin_unlock_irqrestore(&ub_hist_ba_list_lock, flags);
+	spin_unlock(&ub_hist_ba_list_lock);
 	pr_debug("ub_hist_probe success\n");
 	return 0;
 
@@ -394,11 +549,10 @@ err_ba_init:
 static int ub_hist_remove(struct platform_device *pdev)
 {
 	struct ub_hist_ba_device *ba_dev, *tmp;
-	unsigned long flags;
 	void __iomem *base_addr_to_unmap = NULL;
 	struct ub_hist_ba_device *device_to_remove = NULL;
 
-	spin_lock_irqsave(&ub_hist_ba_list_lock, flags);
+	spin_lock(&ub_hist_ba_list_lock);
 	list_for_each_entry_safe(ba_dev, tmp, &ub_hist_ba_list, list) {
 		if (ba_dev->dev == &pdev->dev) {
 			device_to_remove = ba_dev;
@@ -407,7 +561,7 @@ static int ub_hist_remove(struct platform_device *pdev)
 			break;
 		}
 	}
-	spin_unlock_irqrestore(&ub_hist_ba_list_lock, flags);
+	spin_unlock(&ub_hist_ba_list_lock);
 
 	if (device_to_remove) {
 		if (base_addr_to_unmap) {
@@ -477,6 +631,12 @@ int ub_hist_init(void)
 		return ret;
 	}
 
+	ret = ub_hist_mar_cfg_ioremap();
+	if (ret) {
+		platform_driver_unregister(&ub_hist_platform_driver);
+		return ret;
+	}
+
 	pr_debug("UB histogram init successfully\n");
 	return ret;
 }
@@ -485,6 +645,7 @@ EXPORT_SYMBOL(ub_hist_init);
 void ub_hist_exit(void)
 {
 	platform_driver_unregister(&ub_hist_platform_driver);
+	ub_hist_mar_cfg_unmap();
 	pr_info("UB histogram exit successfully\n");
 }
 EXPORT_SYMBOL(ub_hist_exit);
@@ -501,7 +662,7 @@ static void __exit histogram_module_exit(void)
 }
 
 MODULE_DESCRIPTION("SMAP hist driver");
-MODULE_AUTHOR("Huawei Tech. Co., Ltd.");
+MODULE_AUTHOR("openEuler");
 MODULE_LICENSE("GPL v2");
 module_init(histogram_module_init);
 module_exit(histogram_module_exit);

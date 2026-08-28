@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -48,15 +46,10 @@ void SMAP_Ulog(int logLevel, const char *funcName, int funcLine, const char *fil
 #define SMAP_LOGGER_ERROR(fmt, ...)
 #else
 
-#ifndef RELEASE
 #define SMAP_LOGGER_DEBUG(fmt, ...)                                                      \
     do {                                                                                 \
         SMAP_Ulog(SMAP_LOG_DEBUG, __FUNCTION__, __LINE__, FILENAME, fmt, ##__VA_ARGS__); \
     } while (0)
-#else
-
-#define SMAP_LOGGER_DEBUG(fmt, ...)
-#endif
 
 #define SMAP_LOGGER_INFO(fmt, ...)                                                      \
     do {                                                                                \

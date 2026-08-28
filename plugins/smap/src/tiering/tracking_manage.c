@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2024. All rights reserved.
  * Description: SMAP Tiering Memory Solution: SMAP TRACKING_MANAGE
  */
 
@@ -24,15 +23,12 @@
 #include "migrate_task.h"
 #include "smap_migrate_wrapper.h"
 #include "dump_info.h"
-#include "acpi_mem.h"
 #include "iomem.h"
 #ifdef HAM_ENABLED
 #include "ham_migration.h"
 #endif
 #include "pid_ioctl.h"
-#ifdef CRITICAL_OFF
 #include "critical.h"
-#endif
 #include "tracking_manage.h"
 
 #define SMAP_WATCH_NAME "smap_migrate_result"
@@ -58,8 +54,7 @@ EXPORT_SYMBOL(is_smap_pg_huge);
 static void resource(void)
 {
 	cancel_delayed_work_sync(&migrate_back_work);
-	release_remote_ram();
-	reset_acpi_mem();
+	free_obmm_dev();
 	destroy_workqueue(migrate_back_wq);
 	exit_migrate();
 	smap_dev_exit();
@@ -143,12 +138,16 @@ static int __init tracking_init(void)
 		pr_err("smap process symbols failed\n");
 		return ret;
 	}
-	ret = init_acpi_mem();
-	if (ret < 0) {
-		pr_err("failed to init ACPI memory, ret: %d\n", ret);
-		return ret;
-	}
-	(void)refresh_remote_ram();
+	/*
+	 * obmm is optional for SMAP init: iterate_obmm_dev() may fail
+	 * (e.g. -ENOENT when no obmm device is present), which is an
+	 * expected condition on systems without obmm. Do not abort
+	 * tracking_init; migrate_back retries periodically.
+	 */
+	ret = iterate_obmm_dev();
+	if (ret)
+		pr_warn("failed to iterate obmm_dev, ret: %d, obmm is optional, continue init\n",
+			ret);
 	migrate_back_wq = create_workqueue("smap_migrate_back_wq");
 	if (!migrate_back_wq) {
 		pr_err("failed to create migrate back workqueue\n");
@@ -194,8 +193,7 @@ out_workqueue:
 	if (migrate_back_wq)
 		destroy_workqueue(migrate_back_wq);
 out_smap_node_sysfs:
-	release_remote_ram();
-	reset_acpi_mem();
+	free_obmm_dev();
 	return ret;
 }
 
@@ -205,7 +203,7 @@ static void __exit tracking_exit(void)
 	pr_info("SMAP exit successfully\n");
 }
 
-MODULE_AUTHOR("Huawei Tech. Co., Ltd.");
+MODULE_AUTHOR("openEuler");
 MODULE_LICENSE("GPL v2");
 module_init(tracking_init);
 module_exit(tracking_exit);

@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -65,6 +63,13 @@ struct OldProcessPayload {
     uint64_t memSize;
 };
 
+struct PersistRemoteTarget {
+    int nid;
+    uint8_t ratio; // remote ratio set by upstream component
+    uint64_t memSize;
+};
+
+/* V1 persist format.  migrateParam records every active Pair target. */
 struct ProcessPayload {
     pid_t pid;
     uint8_t scanType;
@@ -75,11 +80,7 @@ struct ProcessPayload {
     uint32_t scanTime;
     uint32_t duration;
     int count;
-    struct {
-        int nid;
-        uint8_t ratio; // remote ratio set by upstream component
-        uint64_t memSize;
-    } migrateParam[REMOTE_NUMA_NUM];
+    struct PersistRemoteTarget migrateParam[REMOTE_NUMA_NUM];
 };
 
 int RecoverFromConfig(void);

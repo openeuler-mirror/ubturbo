@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: kvm_pgtable functions
  */
 
@@ -368,4 +367,68 @@ bool smap_kvm_pgtable_stage2_mkold(struct kvm_pgtable *pgt, u64 addr)
 bool smap_kvm_pgtable_stage2_is_young(struct kvm_pgtable *pgt, u64 addr)
 {
 	return smap_kvm_pgtable_stage2_test_clear_young(pgt, addr, false);
+}
+
+static int smap_stage2_range_walker(const struct kvm_pgtable_visit_ctx *ctx,
+				    enum kvm_pgtable_walk_flags visit)
+{
+	kvm_pte_t pte = ctx->old;
+	kvm_pte_t new = ctx->old & ~KVM_PTE_LEAF_ATTR_LO_S2_AF;
+	struct smap_stage2_range_mkold_data *data = ctx->arg;
+	struct kvm_pgtable_mm_ops *mm_ops = ctx->mm_ops;
+	bool pte_valid;
+	bool is_young;
+
+#ifdef KERNEL_VELINUX
+	if (ctx->level < KVM_PGTABLE_LAST_LEVEL - 1) {
+#else
+	if (ctx->level < KVM_PGTABLE_MAX_LEVELS - 2) {
+#endif
+		u64 hole_end = ctx->addr + kvm_granule_size(ctx->level);
+		data->on_hole(ctx->addr, hole_end, data);
+		return 0;
+	}
+
+	pte_valid = kvm_pte_valid(ctx->old);
+	is_young = (new != ctx->old);
+	data->on_pte_young(ctx->addr, is_young, pte_valid, data);
+
+	if (!is_young || !pte_valid)
+		return 0;
+	data->pte = pte;
+	pte &= ~data->attr_clr;
+	pte |= data->attr_set;
+
+	if (data->pte != pte) {
+		if (mm_ops->icache_inval_pou && stage2_pte_executable(pte) &&
+		    !stage2_pte_executable(ctx->old)) {
+			mm_ops->icache_inval_pou(kvm_pte_follow(pte, mm_ops),
+						 kvm_granule_size(ctx->level));
+		}
+
+		if (!stage2_try_set_pte(ctx, pte))
+			return -EAGAIN;
+	}
+
+	return 0;
+}
+
+int smap_kvm_pgtable_stage2_mkold_range(
+	struct kvm_pgtable *pgt, u64 addr, u64 size,
+	struct smap_stage2_range_mkold_data *data)
+{
+	data->attr_set = 0;
+	data->attr_clr = KVM_PTE_LEAF_ATTR_LO_S2_AF &
+			 (KVM_PTE_LEAF_ATTR_LO | KVM_PTE_LEAF_ATTR_HI);
+	struct kvm_pgtable_walker walker = {
+		.cb = smap_stage2_range_walker,
+		.arg = data,
+		.flags = KVM_PGTABLE_WALK_HANDLE_FAULT |
+			 KVM_PGTABLE_WALK_SHARED | KVM_PGTABLE_WALK_LEAF,
+	};
+
+	int ret = kvm_pgtable_walk(pgt, addr, size, &walker);
+	if (!ret)
+		dsb(ishst);
+	return ret;
 }

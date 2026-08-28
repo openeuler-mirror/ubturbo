@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.‘
  */
 #include <gmock/gmock.h>
 #include <cstring>
@@ -887,7 +886,7 @@ TEST_F(TestRmrsMigrateModule, ISPresetMemorySufficient2)
 {
     int remoteUsedMem = 102400;
     pid_t pid = 2;
-    uint64_t memMigrateTotalSize;
+    uint64_t memMigrateTotalSize = 0;
     std::map<pid_t, VmNumaInfo> vmNumaInfoMap;
     std::vector<rmrs::serialization::VMPresetParam> vmPresetParam;
     rmrs::serialization::VMPresetParam vm;

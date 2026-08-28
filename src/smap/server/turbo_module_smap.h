@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -29,10 +27,10 @@ enum class LoggerLevel : uint32_t
     LOGGER_ERROR_LEVEL = 3
 };
 
-using SmapMigrateOutFunc = int (*)(struct MigrateOutMsg *msg, int pidType);
-using SmapMigrateOutGroupedFunc = int (*)(struct GroupedMigrateOutMsg *msg, int pidType);
+using SmapMigrateOutFunc = int (*)(struct MigrateOutMsg *msg, int pageType);
+using SmapMigrateOutGroupedFunc = int (*)(struct GroupedMigrateOutMsg *msg, int pageType);
 using SmapMigrateBackFunc = int (*)(struct MigrateBackMsg *msg);
-using SmapRemoveFunc = int (*)(struct RemoveMsg *msg, int pidType);
+using SmapRemoveFunc = int (*)(struct RemoveMsg *msg, int pageType);
 using SmapEnableNodeFunc = int (*)(struct EnableNodeMsg *msg);
 using SmapInitFunc = int (*)(uint32_t pageType, Logfunc extlog);
 using SmapStopFunc = int (*)(void);
@@ -41,7 +39,7 @@ using SetSmapRemoteNumaInfoFunc = int (*)(struct SetRemoteNumaInfoMsg *msg);
 using SmapQueryFreqFunc = int (*)(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource);
 using SetSmapRunModeFunc = int (*)(int runMode);
 using SmapIsRunningFunc = bool (*)(void);
-using SmapMigrateOutSyncFunc = int (*)(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime);
+using SmapMigrateOutSyncFunc = int (*)(struct MigrateOutMsg *msg, int pageType, uint64_t maxWaitTime);
 using SmapAddProcessTrackingFunc = int (*)(pid_t *pidArr, uint32_t *scanTime, uint32_t *duration, int len,
                                            int scanType);
 using SmapRemoveProcessTrackingFunc = int (*)(pid_t *pidArr, int len, int flag);

@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023. All rights reserved.
  * Description: SMAP3.0 Tiering Memory Solution: Self-check common configuration
  */
 
@@ -26,7 +25,11 @@
 #define MIN(a, b) ((a) <= (b) ? (a) : (b))
 #endif
 
+#ifndef USE_DT
+#define SMAP_MAX_LOCAL_NUMNODES 8
+#else
 #define SMAP_MAX_LOCAL_NUMNODES 4
+#endif
 #define SMAP_MAX_REMOTE_NUMNODES 18
 #define SMAP_MAX_NUMNODES (SMAP_MAX_LOCAL_NUMNODES + SMAP_MAX_REMOTE_NUMNODES)
 

@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -187,7 +185,7 @@ void RackLoggerFilter::PrintLogInfo(LogFilterInfo &info)
     }
     std::stringstream timeStream;
     timeStream << std::put_time(timeinfo, "%F %T");
-    if (info.rackLoggerEntry.GetFile() == nullptr) {
+    if (info.rackLoggerEntry.GetFile() == nullptr || info.rackLoggerEntry.GetFile()[0] == '\0') {
         std::cerr << "File not exit" << std::endl;
         return;
     }

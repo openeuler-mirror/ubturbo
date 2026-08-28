@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: smap5.0 user oom migrate ut code (方案B: move_pages + numa_maps 段级本地过滤)
  * Create: 2024-10-25
  */
@@ -143,9 +142,9 @@ extern "C" struct ProcessManager *GetProcessManager(void);
 /* size < pageSize：budget=0，直接返回，不调 OpenNumaMaps */
 TEST_F(OomMigrateTest, TestFindPidMigrateSize_SizeTooSmall)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     manager.tracking.pageSize = PAGESIZE_4K;
-    EnvMutexInit(&manager.lock);
+    EnvMutexInit(&manager.threadLock);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(OpenNumaMaps).expects(never());
     FindPidMigrateSize(1); /* 1 < 4096 */
@@ -168,16 +167,17 @@ TEST_F(OomMigrateTest, TestFindPidMigrateSize_IdleNotSkippedLogic)
 /* PROC_MIGRATE 状态被跳过：OpenNumaMaps 不应被调 */
 TEST_F(OomMigrateTest, TestFindPidMigrateSize_SkipMigrating)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     manager.tracking.pageSize = PAGESIZE_4K;
     manager.nrLocalNuma = 2;
-    EnvMutexInit(&manager.lock);
+    EnvMutexInit(&manager.threadLock);
     ProcessAttr attr = {};
     attr.pid = 123;
     attr.state = PROC_MIGRATE; /* 扫描线程正迁 */
     SetAttrL2(&attr, 2);
     attr.next = nullptr;
-    manager.processes = &attr;
+    attr.pid = 123;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(OpenNumaMaps).expects(never());
     FindPidMigrateSize(8192);
@@ -186,16 +186,16 @@ TEST_F(OomMigrateTest, TestFindPidMigrateSize_SkipMigrating)
 /* PROC_MOVE 逃生态被跳过 */
 TEST_F(OomMigrateTest, TestFindPidMigrateSize_SkipMove)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     manager.tracking.pageSize = PAGESIZE_4K;
     manager.nrLocalNuma = 2;
-    EnvMutexInit(&manager.lock);
+    EnvMutexInit(&manager.threadLock);
     ProcessAttr attr = {};
-    attr.pid = 123;
     attr.state = PROC_MOVE; /* 逃生态 */
     SetAttrL2(&attr, 2);
     attr.next = nullptr;
-    manager.processes = &attr;
+    attr.pid = 123;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(OpenNumaMaps).expects(never());
     FindPidMigrateSize(8192);
@@ -204,17 +204,16 @@ TEST_F(OomMigrateTest, TestFindPidMigrateSize_SkipMove)
 /* 远端(L2)已有页：跳过紧急腾挪，不重复介入 */
 TEST_F(OomMigrateTest, TestFindPidMigrateSize_RemoteHasPages)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     manager.tracking.pageSize = PAGESIZE_4K;
     manager.nrLocalNuma = 2;
-    EnvMutexInit(&manager.lock);
+    EnvMutexInit(&manager.threadLock);
     ProcessAttr attr = {};
-    attr.pid = 123;
     attr.state = PROC_IDLE;
     SetAttrL2(&attr, 2);
     attr.scanAttr.actcLen[2] = 100; /* L2 节点 2 上已有页 */
     attr.next = nullptr;
-    manager.processes = &attr;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(OpenNumaMaps).expects(never());
     FindPidMigrateSize(8192);
@@ -231,9 +230,9 @@ TEST_F(OomMigrateTest, TestFindPidMigrateSize_NullManager)
 /* pageSize 为 0：直接返回，不迁移 */
 TEST_F(OomMigrateTest, TestFindPidMigrateSize_ZeroPageSize)
 {
-    struct ProcessManager manager = {};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
     manager.tracking.pageSize = 0; /* 未初始化 */
-    EnvMutexInit(&manager.lock);
+    EnvMutexInit(&manager.threadLock);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(OpenNumaMaps).expects(never());
     FindPidMigrateSize(8192);

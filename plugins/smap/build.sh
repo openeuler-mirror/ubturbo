@@ -1,6 +1,5 @@
 #!/bin/bash
 # ***********************************************************************
-# Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.
 # ***********************************************************************
 
 usage() {
@@ -51,13 +50,10 @@ if [ "$BUILD_TYPE" == "CLEAN" ]; then
 fi
 
 LIB_BOUNDS_CHECK_FILE=/usr/lib64/libboundscheck.so
-if [[ ! -f "$LIB_BOUNDS_CHECK_FILE " ]]
+if [[ ! -f "$LIB_BOUNDS_CHECK_FILE" ]]
 then
-    git submodule update --init --recursive
-    cd ${PROJ_DIR}/3rdparty/secure/libboundscheck
-    make CC=gcc
-    cp -f lib/libboundscheck.so /usr/lib64/
-    cd -
+    echo "libboundscheck.so not found. Please install via: sudo yum install libboundscheck"
+    exit 1
 fi
 
 BUILD_DIR=$PROJ_DIR/build

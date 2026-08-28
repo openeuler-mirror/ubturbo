@@ -18,12 +18,42 @@ add_subdirectory(3rdparty)
 
 set(3RDPARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../3rdparty)
 
+# 查找系统 libboundscheck 头文件 (securec.h)
+find_path(SECUREC_INCLUDE_DIR securec.h)
+if(NOT SECUREC_INCLUDE_DIR)
+    message(FATAL_ERROR "securec.h not found. Install: sudo yum install libboundscheck")
+endif()
+
+# 查找系统 rapidjson 头文件；未安装时从 src-openeuler 自动下载
+find_path(RAPIDJSON_INCLUDE_DIR rapidjson/document.h)
+if(NOT RAPIDJSON_INCLUDE_DIR)
+    set(RAPIDJSON_VERSION "1.1.0")
+    set(RAPIDJSON_TARBALL_NAME "rapidjson-${RAPIDJSON_VERSION}.tar.gz")
+    set(RAPIDJSON_TARBALL_SHA256 "bf7ced29704a1e696fbccf2a2b4ea068e7774fa37f6d7dd4039d0787f8bed98e")
+    set(RAPIDJSON_DOWNLOAD_DIR ${CMAKE_BINARY_DIR}/3rdparty/rapidjson-download)
+    set(RAPIDJSON_OPENEULER_RAW_URL "https://gitcode.com/api/v5/repos/src-openeuler/rapidjson/raw/${RAPIDJSON_TARBALL_NAME}?ref=master")
+    set(RAPIDJSON_INCLUDE_DIR ${RAPIDJSON_DOWNLOAD_DIR}/rapidjson-${RAPIDJSON_VERSION}/include)
+    if(NOT EXISTS ${RAPIDJSON_INCLUDE_DIR})
+        message(STATUS "rapidjson: fetch from src-openeuler ${RAPIDJSON_TARBALL_NAME}")
+        file(DOWNLOAD ${RAPIDJSON_OPENEULER_RAW_URL} ${RAPIDJSON_DOWNLOAD_DIR}/${RAPIDJSON_TARBALL_NAME}
+            SHOW_PROGRESS TIMEOUT 120)
+        file(SHA256 ${RAPIDJSON_DOWNLOAD_DIR}/${RAPIDJSON_TARBALL_NAME} RAPIDJSON_ACTUAL_SHA256)
+        if(NOT RAPIDJSON_ACTUAL_SHA256 STREQUAL RAPIDJSON_TARBALL_SHA256)
+            message(FATAL_ERROR "rapidjson SHA256 mismatch: expected ${RAPIDJSON_TARBALL_SHA256}, got ${RAPIDJSON_ACTUAL_SHA256}")
+        endif()
+        execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory ${RAPIDJSON_DOWNLOAD_DIR})
+        execute_process(COMMAND ${CMAKE_COMMAND} -E chdir ${RAPIDJSON_DOWNLOAD_DIR}
+            ${CMAKE_COMMAND} -E tar xzf ${RAPIDJSON_DOWNLOAD_DIR}/${RAPIDJSON_TARBALL_NAME})
+    endif()
+    message(STATUS "rapidjson: using downloaded source ${RAPIDJSON_INCLUDE_DIR}")
+endif()
+
 # 全局作用域的头文件定义，不依赖具体模块
 include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/include              # 内部共享头文件
         ${CMAKE_BINARY_DIR}/include     # 自动生成头文件
-        ${3RDPARTY_DIR}/libboundscheck/include
-        ${3RDPARTY_DIR}/rapidjson/include
+        ${SECUREC_INCLUDE_DIR}
+        ${RAPIDJSON_INCLUDE_DIR}
 )
 
 # 添加测试cpp文件，这里按照模块划分

@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: SMAP5.0 内存地址模块测试代码
  */
 
@@ -596,4 +595,208 @@ TEST_F(KvmPgTableTest, Stage2TrySetPteNonSharedPath)
     /* kvm_pgtable_walk_shared(ctx) = ctx.flags & 3 = 0 (false) -> non-shared */
     bool ret = stage2_try_set_pte(&ctx, new_pte);
     EXPECT_EQ(true, ret);
+}
+
+extern "C" int smap_stage2_range_walker(const struct kvm_pgtable_visit_ctx *ctx,
+    enum kvm_pgtable_walk_flags visit);
+
+static void stub_on_pte_young(u64 gpa, bool is_young, bool pte_valid, void *arg)
+{
+}
+
+static void stub_on_hole(u64 gpa_start, u64 gpa_end, void *arg)
+{
+}
+
+TEST_F(KvmPgTableTest, RangeWalkerHoleLevel)
+{
+    /* level < KVM_PGTABLE_MAX_LEVELS - 2 => hole callback */
+    kvm_pte_t ptep_val = 0;
+    struct kvm_pgtable_visit_ctx ctx = {};
+    ctx.ptep = &ptep_val;
+    ctx.old = 0;
+    ctx.addr = 0x1000;
+    ctx.level = 0;
+    ctx.flags = KVM_PGTABLE_WALK_LEAF;
+
+    struct smap_stage2_range_mkold_data data = {};
+    data.on_pte_young = stub_on_pte_young;
+    data.on_hole = stub_on_hole;
+    ctx.arg = &data;
+
+    struct kvm_pgtable_mm_ops mm_ops = {};
+    ctx.mm_ops = &mm_ops;
+
+    int ret = smap_stage2_range_walker(&ctx, KVM_PGTABLE_WALK_LEAF);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(KvmPgTableTest, RangeWalkerHoleLevelOne)
+{
+    /* level=1 < KVM_PGTABLE_MAX_LEVELS-2=2 => hole callback */
+    kvm_pte_t ptep_val = 0;
+    struct kvm_pgtable_visit_ctx ctx = {};
+    ctx.ptep = &ptep_val;
+    ctx.old = 0;
+    ctx.addr = 0x1000;
+    ctx.level = 1;
+    ctx.flags = KVM_PGTABLE_WALK_LEAF;
+
+    struct smap_stage2_range_mkold_data data = {};
+    data.on_pte_young = stub_on_pte_young;
+    data.on_hole = stub_on_hole;
+    ctx.arg = &data;
+
+    struct kvm_pgtable_mm_ops mm_ops = {};
+    ctx.mm_ops = &mm_ops;
+
+    int ret = smap_stage2_range_walker(&ctx, KVM_PGTABLE_WALK_LEAF);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(KvmPgTableTest, RangeWalkerLeafNotYoung)
+{
+    /* level >= 2, pte has AF bit set, is_young computed */
+    /* In DT: KVM_PTE_LEAF_ATTR_LO_S2_AF = BIT(10) = 10 */
+    /* ctx.old = 0x400 (BIT(10) set), new = ctx.old & ~10 = 0x400 & ~10 = 0x400 */
+    /* In DT: kvm_pte_valid(0x400) = 0x400 & 0 = 0 (false) */
+    /* is_young = (new != ctx.old) => (0x400 != 0x400) => false */
+    kvm_pte_t ptep_val = 0;
+    struct kvm_pgtable_visit_ctx ctx = {};
+    ctx.ptep = &ptep_val;
+    ctx.old = 0x400;
+    ctx.addr = 0x1000;
+    ctx.level = 2;
+    ctx.flags = KVM_PGTABLE_WALK_LEAF;
+
+    struct smap_stage2_range_mkold_data data = {};
+    data.on_pte_young = stub_on_pte_young;
+    data.on_hole = stub_on_hole;
+    ctx.arg = &data;
+
+    struct kvm_pgtable_mm_ops mm_ops = {};
+    ctx.mm_ops = &mm_ops;
+
+    int ret = smap_stage2_range_walker(&ctx, KVM_PGTABLE_WALK_LEAF);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(KvmPgTableTest, RangeWalkerLeafNotYoungZeroPte)
+{
+    /* level >= 2, pte = 0 => not young, not valid */
+    kvm_pte_t ptep_val = 0;
+    struct kvm_pgtable_visit_ctx ctx = {};
+    ctx.ptep = &ptep_val;
+    ctx.old = 0;
+    ctx.addr = 0x1000;
+    ctx.level = 2;
+    ctx.flags = KVM_PGTABLE_WALK_LEAF;
+
+    struct smap_stage2_range_mkold_data data = {};
+    data.on_pte_young = stub_on_pte_young;
+    data.on_hole = stub_on_hole;
+    ctx.arg = &data;
+
+    struct kvm_pgtable_mm_ops mm_ops = {};
+    ctx.mm_ops = &mm_ops;
+
+    int ret = smap_stage2_range_walker(&ctx, KVM_PGTABLE_WALK_LEAF);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(KvmPgTableTest, RangeWalkerLeafYoungPteValidAttrChange)
+{
+    /* In DT: BIT(10) = 10, kvm_pte_valid uses BIT(0) = 0 */
+    /* ctx.old = 10 (AF bit), new = ctx.old & ~10 = 0 */
+    /* is_young = (0 != 10) = true, pte_valid = kvm_pte_valid(10) = 10 & 0 = false */
+    /* !is_young || !pte_valid => !false || !false => true => early return 0 */
+    kvm_pte_t ptep_val = 10;
+    struct kvm_pgtable_visit_ctx ctx = {};
+    ctx.ptep = &ptep_val;
+    ctx.old = 10;
+    ctx.addr = 0x1000;
+    ctx.level = 2;
+    ctx.flags = KVM_PGTABLE_WALK_LEAF;
+
+    struct smap_stage2_range_mkold_data data = {};
+    data.on_pte_young = stub_on_pte_young;
+    data.on_hole = stub_on_hole;
+    ctx.arg = &data;
+
+    struct kvm_pgtable_mm_ops mm_ops = {};
+    ctx.mm_ops = &mm_ops;
+
+    int ret = smap_stage2_range_walker(&ctx, KVM_PGTABLE_WALK_LEAF);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(KvmPgTableTest, RangeWalkerLeafYoungPteValidSetPteFail)
+{
+    /* In DT: pte_valid = kvm_pte_valid(ctx->old) = ctx->old & 0 = false */
+    /* is_young = true, !pte_valid = true => early return 0 */
+    kvm_pte_t ptep_val = 10;
+    struct kvm_pgtable_visit_ctx ctx = {};
+    ctx.ptep = &ptep_val;
+    ctx.old = 10;
+    ctx.addr = 0x1000;
+    ctx.level = 2;
+    ctx.flags = KVM_PGTABLE_WALK_LEAF;
+
+    struct smap_stage2_range_mkold_data data = {};
+    data.on_pte_young = stub_on_pte_young;
+    data.on_hole = stub_on_hole;
+    ctx.arg = &data;
+
+    struct kvm_pgtable_mm_ops mm_ops = {};
+    ctx.mm_ops = &mm_ops;
+
+    int ret = smap_stage2_range_walker(&ctx, KVM_PGTABLE_WALK_LEAF);
+    EXPECT_EQ(0, ret);
+}
+
+extern "C" int smap_kvm_pgtable_stage2_mkold_range(
+    struct kvm_pgtable *pgt, u64 addr, u64 size,
+    struct smap_stage2_range_mkold_data *data);
+
+TEST_F(KvmPgTableTest, MkoldRangeWalkSuccess)
+{
+    struct kvm_pgtable pgt = {};
+    struct smap_stage2_range_mkold_data data = {};
+    data.on_pte_young = stub_on_pte_young;
+    data.on_hole = stub_on_hole;
+
+    MOCKER(kvm_pgtable_walk).stubs().will(returnValue(0));
+    int ret = smap_kvm_pgtable_stage2_mkold_range(&pgt, 0, 0x1000, &data);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(KvmPgTableTest, MkoldRangeWalkFail)
+{
+    struct kvm_pgtable pgt = {};
+    struct smap_stage2_range_mkold_data data = {};
+    data.on_pte_young = stub_on_pte_young;
+    data.on_hole = stub_on_hole;
+
+    MOCKER(kvm_pgtable_walk).stubs().will(returnValue(-EINVAL));
+    int ret = smap_kvm_pgtable_stage2_mkold_range(&pgt, 0, 0x1000, &data);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(KvmPgTableTest, MkoldRangeAttrClrSet)
+{
+    /* Verify attr_clr is set correctly */
+    /* KVM_PTE_LEAF_ATTR_LO_S2_AF = BIT(10) = 10 */
+    /* KVM_PTE_LEAF_ATTR_LO = GENMASK(11,2) = 2|11 = 11 */
+    /* KVM_PTE_LEAF_ATTR_HI = GENMASK(63,50) = 50|63 = 63 */
+    /* attr_clr = 10 & (11 | 63) = 10 & 127 = 10 (since BIT(10)=10, 10 & 0x7F = 10) */
+    struct kvm_pgtable pgt = {};
+    struct smap_stage2_range_mkold_data data = {};
+    data.on_pte_young = stub_on_pte_young;
+    data.on_hole = stub_on_hole;
+
+    MOCKER(kvm_pgtable_walk).stubs().will(returnValue(0));
+    int ret = smap_kvm_pgtable_stage2_mkold_range(&pgt, 0, 0x1000, &data);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(0, data.attr_set);
+    EXPECT_NE(0, (int)data.attr_clr);
 }

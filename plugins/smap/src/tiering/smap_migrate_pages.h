@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2024. All rights reserved.
  * Description: SMAP Tiering Memory Solution: SMAP MIGRATE PAGES
  */
 
@@ -10,7 +9,6 @@
 #include "smap_msg.h"
 #include "migrate_task.h"
 
-#define MAX_NR_MIGRATE_THREADS 32
 #define MAX_MIG_LIST_NR (1 << 28)
 
 extern int nr_local_numa;

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: SMAP : hist_ops
  */
 #include <asm/types.h>
@@ -11,12 +10,12 @@
 #include <linux/delay.h>
 #include <linux/string.h>
 #include <linux/kthread.h>
+#include <linux/workqueue.h>
 #include <linux/hrtimer.h>
 #include <linux/vmalloc.h>
 #include <linux/mmzone.h>
 #include <linux/pfn.h>
 #include <linux/sort.h>
-#include <linux/kthread.h>
 #include <linux/minmax.h>
 #include <linux/cpumask.h>
 #include <linux/topology.h>
@@ -144,6 +143,88 @@ static int hist_scan_duration_per_win_set(const char *val,
 
 	return 0;
 }
+
+static unsigned int ub_watch_perf_prd_ms = 200;
+static unsigned int ub_watch_sample_interval_ms = 1000;
+
+/**
+ * ub_watch_perf_prd_ms_set - Callback for setting ub_watch perf period parameter
+ * @val: String containing the new perf period value (in ms)
+ * @kp: Pointer to kernel_param structure
+ *
+ * Validates that 0 < new value <= ub_watch_sample_interval_ms before updating.
+ */
+static int ub_watch_perf_prd_ms_set(const char *val,
+				    const struct kernel_param *kp)
+{
+	unsigned int new_val;
+	int ret;
+
+	ret = kstrtouint(val, 10, &new_val);
+	if (ret)
+		return ret;
+
+	if (new_val == 0 || new_val > ub_watch_sample_interval_ms) {
+		pr_err("ub_watch_perf_prd_ms must be in (0, %u]\n",
+		       ub_watch_sample_interval_ms);
+		return -EINVAL;
+	}
+
+	*(unsigned int *)kp->arg = new_val;
+	pr_info("ub_watch_perf_prd_ms changed to %u\n", new_val);
+	return 0;
+}
+
+static const struct kernel_param_ops ub_watch_perf_prd_ms_ops = {
+	.set = ub_watch_perf_prd_ms_set,
+	.get = param_get_uint,
+};
+
+module_param_cb(ub_watch_perf_prd_ms, &ub_watch_perf_prd_ms_ops,
+		&ub_watch_perf_prd_ms, 0644);
+MODULE_PARM_DESC(
+	ub_watch_perf_prd_ms,
+	"ub_watch performance period in ms (default 200, must be 0 < value <= ub_watch_sample_interval_ms)");
+
+/**
+ * ub_watch_sample_interval_ms_set - Callback for setting ub_watch sample interval parameter
+ * @val: String containing the new sample interval value (in ms)
+ * @kp: Pointer to kernel_param structure
+ *
+ * Validates that new value >= ub_watch_perf_prd_ms (i.e. 0 < perf <= interval)
+ * before updating.
+ */
+static int ub_watch_sample_interval_ms_set(const char *val,
+					   const struct kernel_param *kp)
+{
+	unsigned int new_val;
+	int ret;
+
+	ret = kstrtouint(val, 10, &new_val);
+	if (ret)
+		return ret;
+
+	if (new_val == 0 || new_val < ub_watch_perf_prd_ms) {
+		pr_err("ub_watch_sample_interval_ms must be in [%u, +inf)\n",
+		       ub_watch_perf_prd_ms);
+		return -EINVAL;
+	}
+
+	*(unsigned int *)kp->arg = new_val;
+	pr_info("ub_watch_sample_interval_ms changed to %u\n", new_val);
+	return 0;
+}
+
+static const struct kernel_param_ops ub_watch_sample_interval_ms_ops = {
+	.set = ub_watch_sample_interval_ms_set,
+	.get = param_get_uint,
+};
+
+module_param_cb(ub_watch_sample_interval_ms, &ub_watch_sample_interval_ms_ops,
+		&ub_watch_sample_interval_ms, 0644);
+MODULE_PARM_DESC(
+	ub_watch_sample_interval_ms,
+	"ub_watch sample interval in ms (default 1000, must be >= ub_watch_perf_prd_ms)");
 
 static inline u64 align_addr(u64 addr, u32 low_bit_len)
 {
@@ -340,7 +421,7 @@ static inline bool is_intersect(struct addr_seg *seg1, struct addr_seg *seg2,
 	return true;
 }
 
-static void calc_4k_scan_hot_wins(struct segs_info *info, actc_t *buf,
+static void calc_4k_scan_hot_wins(struct segs_info *info, u16 *buf,
 				  struct segs_info *win_info)
 {
 	u32 seg_pages = 0, win_cnt = 0;
@@ -354,9 +435,9 @@ static void calc_4k_scan_hot_wins(struct segs_info *info, actc_t *buf,
 			u64 max_val = 0, nr = shift / SIZE_2M;
 			u64 offset = (start - info->segs[i].start) >>
 				     HIST_ADDR_SHIFT_2M;
-			actc_t *buf_ptr = &buf[seg_pages + offset];
+			u16 *buf_ptr = &buf[seg_pages + offset];
 			while (nr--) {
-				max_val = max_t(actc_t, max_val, *buf_ptr++);
+				max_val = max_t(u16, max_val, *buf_ptr++);
 			}
 			if (win_cnt >= win_info->cnt) {
 				pr_err("out-of-bounds when calc wins.[nr_wins:%u]\n",
@@ -509,8 +590,7 @@ static int filter_4k_scan_hot_wins(struct segs_info *win_info,
 }
 
 static int generate_aligned_4k_scan_wins_info(struct segs_info *win_info,
-					      struct segs_info *info,
-					      actc_t *buf)
+					      struct segs_info *info, u16 *buf)
 {
 	struct addr_seg *wins_4k;
 	struct smap_hist_dev *dev = &g_smap_hist_dev;
@@ -581,10 +661,10 @@ static void do_actc_update(struct access_tracking_dev *hdev, u64 seg_offset,
 	down_read(&hdev->buffer_lock);
 	for (j = 0; j < inter_pages; j++) {
 		u32 idx = seg_offset + j;
-		u32 sum =
-			hdev->access_bit_actc_data[idx] + freq[hist_offset + j];
-		hdev->access_bit_actc_data[idx] = (sum < U16_MAX) ? sum
-								  : U16_MAX;
+		/* 硬件扫描: u16 频次开根号压缩成 u8 后累加进 access_bit_actc_data(actc_t) */
+		u32 sum = hdev->access_bit_actc_data[idx] +
+			  compress_freq(freq[hist_offset + j]);
+		hdev->access_bit_actc_data[idx] = (sum < U8_MAX) ? sum : U8_MAX;
 	}
 	up_read(&hdev->buffer_lock);
 }
@@ -666,14 +746,14 @@ static void update_actc_direct(struct segs_info *rmem_info,
 }
 
 static void copy_actc_to_buf(struct segs_info *info, struct addr_seg *seg,
-			     actc_t *dst_buf, u16 *freq, u32 buf_len,
+			     u16 *dst_buf, u16 *freq, u32 buf_len,
 			     enum ub_hist_sts_size sts_size)
 {
 	u32 shift = (sts_size == STS_SIZE_2M) ? HIST_ADDR_SHIFT_2M
 					      : HIST_ADDR_SHIFT_4K;
 	u64 inter_start, inter_end, inter_pages, j;
 	u64 seg_offset, hist_offset, seg_pages = 0;
-	actc_t *dst;
+	u16 *dst;
 	unsigned int i;
 	for (i = 0; i < info->cnt; i++) {
 		if (is_intersect(&info->segs[i], seg, &inter_start,
@@ -814,7 +894,7 @@ static int get_hist_results(uint64_t ba_tag,
 
 static int smap_hist_read_paral(struct segs_info *win_info,
 				struct segs_info *rmem_info,
-				enum ub_hist_sts_size sts_size, actc_t *buf,
+				enum ub_hist_sts_size sts_size, u16 *buf,
 				u32 scan_time, u32 buf_len, bool direct_update)
 {
 	int ret = 0, i, ba_cnt;
@@ -940,7 +1020,7 @@ static u32 get_2m_scan_wins_per_ba(struct segs_info *win_info)
 }
 
 static int do_hist_scan_sliding(struct segs_info *info, bool do_multi_gran,
-				actc_t *buf, u32 buf_len,
+				u16 *buf, u32 buf_len,
 				enum ub_hist_sts_size sts_size,
 				bool direct_update)
 {
@@ -996,7 +1076,7 @@ static int hist_scan_sliding(struct segs_info *info, u32 scan_time_total,
 			      dev->scan_mode == HIST_4K_SCAN_MULTI_GRAN);
 	bool do_4k_seq_loop =
 		(pgsize == SIZE_4K && dev->scan_mode == HIST_4K_SCAN_SEQ_LOOP);
-	actc_t *tmpbuffer = NULL;
+	u16 *tmpbuffer = NULL;
 
 	if (!addr_seg_is_valid(info)) {
 		pr_err("invalid address segment passed to sliding scan\n");
@@ -1009,7 +1089,7 @@ static int hist_scan_sliding(struct segs_info *info, u32 scan_time_total,
 
 	if (do_multi_gran) {
 		/* 4K mode: allocate tmpbuffer for 2M scan results */
-		tmpbuffer = vzalloc(dev->pgcount * sizeof(actc_t));
+		tmpbuffer = vzalloc(dev->pgcount * sizeof(u16));
 		if (!tmpbuffer)
 			return -ENOMEM;
 	}
@@ -1089,6 +1169,47 @@ void hist_thread_pause(void)
 	struct smap_hist_dev *dev = &g_smap_hist_dev;
 	dev->thread_enable = false;
 	dev->abort_flag = true;
+}
+
+#define MAR_FLUX_UNIT_BYTES 64 /* each MAR counter unit stands for 64 bytes */
+#define MAR_FLUX_BYTES_PER_MB 1048576 /* 1 MB in bytes */
+
+/* Convert a MAR flux counter (64-byte units) to MB/s over perf_prd_ms. */
+static inline uint32_t flux_to_mb_per_sec(uint32_t flux, uint32_t perf_prd_ms)
+{
+	if (perf_prd_ms == 0)
+		return 0;
+	return (uint32_t)(((uint64_t)flux * MAR_FLUX_UNIT_BYTES * 1000) /
+			  ((uint64_t)MAR_FLUX_BYTES_PER_MB * perf_prd_ms));
+}
+
+int ub_watch_config(uint32_t duration_ms)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+
+	if (duration_ms == 0) {
+		pr_err("ub_watch_config: duration_ms must be greater than 0\n");
+		return -EINVAL;
+	}
+
+	/* Notify the in-flight measurement loop to exit at the next window checkpoint */
+	dev->measure_state = MEASURE_NOT_STARTED;
+	/* Synchronously wait for the running dwork func to exit (up to one
+	 * sample_interval_ms) so that no concurrent execution happens
+	 * before the new round of work is queued.
+	 */
+	cancel_delayed_work_sync(&dev->ub_watch_dwork);
+
+	dev->ub_watch_duration_ms = duration_ms;
+	dev->ub_watch_perf_prd_ms = MIN(ub_watch_perf_prd_ms, duration_ms);
+	dev->ub_watch_sample_interval_ms =
+		MIN(ub_watch_sample_interval_ms, duration_ms);
+	pr_debug(
+		"ub_watch_config, ub_watch_duration_ms: %ums, ub_watch_perf_prd_ms: %ums\n",
+		dev->ub_watch_duration_ms, dev->ub_watch_perf_prd_ms);
+
+	queue_delayed_work(dev->ub_watch_wq, &dev->ub_watch_dwork, 0);
+	return 0;
 }
 
 static inline unsigned int get_remote_ram_segs_locked(void)
@@ -1266,6 +1387,114 @@ static void scan_thread_deinit(struct smap_hist_dev *dev)
 	}
 }
 
+static void ub_watch_dwork_func(struct work_struct *work)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	int i;
+	int window_cnt =
+		dev->ub_watch_duration_ms / dev->ub_watch_sample_interval_ms;
+	int valid_cnt = 0;
+	uint32_t flux_wr[MAR_CFG_REG_CNT] = { 0 };
+	uint32_t flux_rd[MAR_CFG_REG_CNT] = { 0 };
+
+	memset(dev->ub_watch_acc_flux_rd, 0, sizeof(dev->ub_watch_acc_flux_rd));
+	memset(dev->ub_watch_acc_flux_wr, 0, sizeof(dev->ub_watch_acc_flux_wr));
+	memset(dev->ub_watch_avg_flux_rd, 0, sizeof(dev->ub_watch_avg_flux_rd));
+	memset(dev->ub_watch_avg_flux_wr, 0, sizeof(dev->ub_watch_avg_flux_wr));
+	dev->measure_state = MEASURE_IN_PROGRESS;
+
+	for (i = 0; i < window_cnt; i++) {
+		ub_hist_mar_perf_en(dev->ub_watch_perf_prd_ms);
+		msleep(dev->ub_watch_sample_interval_ms);
+		if (dev->measure_state != MEASURE_IN_PROGRESS) {
+			pr_info("ub_watch: measurement interrupted at window %d/%d, stopping\n",
+				i, window_cnt);
+			return;
+		}
+		if (!ub_hist_mar_perf_check()) {
+			pr_warn("ub_watch: perf register reset during window %d/%d, skipping\n",
+				i, window_cnt);
+			continue;
+		}
+		ub_hist_get_access_count(flux_wr, flux_rd);
+		for (int j = 0; j < MAR_CFG_REG_CNT; j++) {
+			uint32_t rd_mb = flux_to_mb_per_sec(
+				flux_rd[j], dev->ub_watch_perf_prd_ms);
+			uint32_t wr_mb = flux_to_mb_per_sec(
+				flux_wr[j], dev->ub_watch_perf_prd_ms);
+			pr_debug(
+				"ub_watch: window %d/%d, index %d, prd_ms %u, flux_rd %u MB/s, flux_wr %u MB/s\n",
+				i, window_cnt, j, dev->ub_watch_perf_prd_ms,
+				rd_mb, wr_mb);
+			dev->ub_watch_acc_flux_rd[j] += flux_rd[j];
+			dev->ub_watch_acc_flux_wr[j] += flux_wr[j];
+		}
+		valid_cnt++;
+		for (int j = 0; j < MAR_CFG_REG_CNT; j++) {
+			dev->ub_watch_avg_flux_rd[j] =
+				(uint32_t)(dev->ub_watch_acc_flux_rd[j] /
+					   valid_cnt);
+			dev->ub_watch_avg_flux_wr[j] =
+				(uint32_t)(dev->ub_watch_acc_flux_wr[j] /
+					   valid_cnt);
+		}
+	}
+
+	if (valid_cnt == 0) {
+		pr_warn("ub_watch: all %d windows invalidated by perf reset\n",
+			window_cnt);
+		memset(dev->ub_watch_avg_flux_rd, 0,
+		       sizeof(dev->ub_watch_avg_flux_rd));
+		memset(dev->ub_watch_avg_flux_wr, 0,
+		       sizeof(dev->ub_watch_avg_flux_wr));
+	}
+
+	dev->measure_state = MEASURE_COMPLETED;
+}
+
+int ub_watch(struct ub_flux_mb *result)
+{
+	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	if (!result)
+		return -EINVAL;
+
+	if (dev->measure_state == MEASURE_NOT_STARTED)
+		return -ENODATA;
+
+	for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+		result->read[i] =
+			flux_to_mb_per_sec(dev->ub_watch_avg_flux_rd[i],
+					   dev->ub_watch_perf_prd_ms);
+		result->write[i] =
+			flux_to_mb_per_sec(dev->ub_watch_avg_flux_wr[i],
+					   dev->ub_watch_perf_prd_ms);
+	}
+	return 0;
+}
+
+static int ub_watch_work_init(struct smap_hist_dev *dev)
+{
+	dev->ub_watch_wq = alloc_workqueue("ub_watch", WQ_UNBOUND, 1);
+	if (!dev->ub_watch_wq) {
+		pr_err("failed to create ub watch workqueue\n");
+		return -ENOMEM;
+	}
+
+	INIT_DELAYED_WORK(&dev->ub_watch_dwork, ub_watch_dwork_func);
+	dev->measure_state = MEASURE_NOT_STARTED;
+
+	return 0;
+}
+
+static void ub_watch_work_deinit(struct smap_hist_dev *dev)
+{
+	if (dev->ub_watch_wq) {
+		cancel_delayed_work_sync(&dev->ub_watch_dwork);
+		destroy_workqueue(dev->ub_watch_wq);
+		dev->ub_watch_wq = NULL;
+	}
+}
+
 struct smap_hist_dev *get_hist_dev(void)
 {
 	return &g_smap_hist_dev;
@@ -1311,6 +1540,7 @@ static int query_hist_ba_info(void)
 void hist_deinit(void)
 {
 	struct smap_hist_dev *dev = &g_smap_hist_dev;
+	ub_watch_work_deinit(dev);
 	scan_thread_deinit(dev);
 	addr_segs_deinit(dev);
 	kfree(dev->ba_info);
@@ -1354,9 +1584,15 @@ int hist_init(u32 pgsize)
 	if (ret)
 		goto free_segs;
 
+	ret = ub_watch_work_init(dev);
+	if (ret)
+		goto deinit_thread;
+
 	pr_info("histogram tracking device init successfully\n");
 	return 0;
 
+deinit_thread:
+	scan_thread_deinit(dev);
 free_segs:
 	addr_segs_deinit(dev);
 free_hist:

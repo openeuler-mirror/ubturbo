@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.
  */
 #ifndef TURBO_LOGGER_H
 #define TURBO_LOGGER_H
@@ -119,7 +118,7 @@ public:
     void FormatSyslog(std::ostream &os);
 
     TurboLogLevel GetLogLevel();
-    const char *GetSyslogAsString();
+    std::string GetSyslogAsString();
     const char *GetModuleName();
     const char *GetFile();
     uint32_t GetLine();

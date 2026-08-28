@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -16,6 +14,7 @@
 #include "manage/manage.h"
 #include "advanced-strategy/scene.h"
 #include "smap_user_log.h"
+#include "smap_log_core.h"
 
 int SmapEnableAdaptMem(int flag)
 {
@@ -46,20 +45,21 @@ int SmapQueryVmMemRatio(struct VmRatioMsg *vrMsg)
     }
     vrMsg->nrVm = 0;
     struct ProcessManager *manager = GetProcessManager();
-    EnvMutexLock(&manager->lock);
-    ProcessAttr *current = manager->processes;
-    while (current) {
+    int nrLocalNuma = GetNrLocalNuma();
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *current = all[k]->attr;
         int l1Node = GetAttrL1(current);
         int l2Node = GetAttrL2(current);
-        int nrLocalNuma = GetNrLocalNuma();
 
         if (l1Node < 0) {
             SMAP_LOGGER_ERROR("SmapQueryVmMemRatio pid %d L1 is invalid.", current->pid);
             ret = -EINVAL;
+            PidSlotReleaseRefs(all, n);
             break;
         }
         if (current->type != VM_TYPE) {
-            current = current->next;
             continue;
         }
         vrMsg->vr[vrMsg->nrVm].pid = current->pid;
@@ -68,10 +68,23 @@ int SmapQueryVmMemRatio(struct VmRatioMsg *vrMsg)
             vrMsg->vr[vrMsg->nrVm].ratio -= current->strategyAttr.l3RemoteMemRatio[l1Node][l2Node - nrLocalNuma];
         }
         vrMsg->nrVm++;
-        current = current->next;
     }
 
-    EnvMutexUnlock(&manager->lock);
+    if (ret == 0) {
+        PidSlotReleaseRefs(all, n);
+    }
 
     return ret;
+}
+
+int SmapSetLogLevel(int level)
+{
+    if (level < SMAP_LOG_CORE_TRACE || level >= SMAP_LOG_CORE_BUTT) {
+        SMAP_LOGGER_ERROR("Invalid log level %d, valid range: %d-%d.", level, SMAP_LOG_CORE_TRACE,
+                          SMAP_LOG_CORE_CRITICAL);
+        return -EINVAL;
+    }
+    SmapLogCoreSetMinLogLevel(level);
+    SMAP_LOGGER_INFO("Log level set to %s.", SmapLogCoreGetMinLogLevel() == level ? "success" : "failed");
+    return 0;
 }

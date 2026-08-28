@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -13,6 +11,7 @@
 #define RMRS_LIBVIRT_MODULE_H
 
 #include <libvirt/libvirt.h>
+#include <atomic>
 #include <cstdint>
 #include "rmrs_error.h"
 
@@ -39,6 +38,8 @@ using VirConnectDomainEventDeRegisterFunc = int (*)(void *, VirConnectDomainEven
 class LibvirtModule {
 public:
     static RmrsResult Init();
+
+    static bool IsAvailable();
 
     static VirConnectOpenFunc VirConnectOpen();
 
@@ -71,6 +72,8 @@ public:
     static VirConnectDomainEventDeRegisterFunc VirConnectDomainEventDeRegister();
 
 private:
+    // 原子变量: EnsureLibvirtReady双检锁的锁外读依赖其与Init中release写配对, 避免弱内存序平台数据竞争
+    static std::atomic<bool> available;
     static void *libvirtHandle;
     static VirConnectOpenFunc virConnectOpenFunc;
     static VirConnectCloseFunc virConnectCloseFunc;

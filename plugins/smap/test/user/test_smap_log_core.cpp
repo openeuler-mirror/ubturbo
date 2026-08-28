@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  * Description: smap_log_core ut code
  */
 #include <sys/stat.h>
@@ -155,6 +154,141 @@ TEST_F(SmapLogCoreTest, TestGetMinLogLevel)
 
     int level = SmapLogCoreGetMinLogLevel();
     EXPECT_EQ(SMAP_LOG_CORE_WARN, level);
+
+    SmapLogCoreExit();
+}
+
+/* --- SmapLogCoreSetMinLogLevel tests --- */
+
+TEST_F(SmapLogCoreTest, TestSetMinLogLevelValidTrace)
+{
+    SmapLogConfig config;
+    strncpy(config.filePath, testLogFile.c_str(), SMAP_LOG_MAX_PATH_LEN - 1);
+    config.maxFileSize = 1024 * 1024;
+    config.maxFileCount = 5;
+    config.minLogLevel = SMAP_LOG_CORE_INFO;
+
+    int ret = SmapLogCoreInit(&config);
+    EXPECT_EQ(0, ret);
+
+    SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_TRACE);
+    EXPECT_EQ(SMAP_LOG_CORE_TRACE, SmapLogCoreGetMinLogLevel());
+
+    SmapLogCoreExit();
+}
+
+TEST_F(SmapLogCoreTest, TestSetMinLogLevelValidDebug)
+{
+    SmapLogConfig config;
+    strncpy(config.filePath, testLogFile.c_str(), SMAP_LOG_MAX_PATH_LEN - 1);
+    config.maxFileSize = 1024 * 1024;
+    config.maxFileCount = 5;
+    config.minLogLevel = SMAP_LOG_CORE_INFO;
+
+    int ret = SmapLogCoreInit(&config);
+    EXPECT_EQ(0, ret);
+
+    SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_DEBUG);
+    EXPECT_EQ(SMAP_LOG_CORE_DEBUG, SmapLogCoreGetMinLogLevel());
+
+    SmapLogCoreExit();
+}
+
+TEST_F(SmapLogCoreTest, TestSetMinLogLevelInvalidNegative)
+{
+    SmapLogConfig config;
+    strncpy(config.filePath, testLogFile.c_str(), SMAP_LOG_MAX_PATH_LEN - 1);
+    config.maxFileSize = 1024 * 1024;
+    config.maxFileCount = 5;
+    config.minLogLevel = SMAP_LOG_CORE_INFO;
+
+    int ret = SmapLogCoreInit(&config);
+    EXPECT_EQ(0, ret);
+    int prevLevel = SmapLogCoreGetMinLogLevel();
+
+    /* Invalid level < TRACE should be ignored */
+    SmapLogCoreSetMinLogLevel(-1);
+    EXPECT_EQ(prevLevel, SmapLogCoreGetMinLogLevel());
+
+    SmapLogCoreExit();
+}
+
+TEST_F(SmapLogCoreTest, TestSetMinLogLevelInvalidButt)
+{
+    SmapLogConfig config;
+    strncpy(config.filePath, testLogFile.c_str(), SMAP_LOG_MAX_PATH_LEN - 1);
+    config.maxFileSize = 1024 * 1024;
+    config.maxFileCount = 5;
+    config.minLogLevel = SMAP_LOG_CORE_INFO;
+
+    int ret = SmapLogCoreInit(&config);
+    EXPECT_EQ(0, ret);
+    int prevLevel = SmapLogCoreGetMinLogLevel();
+
+    /* Invalid level >= BUTT should be ignored */
+    SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_BUTT);
+    EXPECT_EQ(prevLevel, SmapLogCoreGetMinLogLevel());
+
+    SmapLogCoreExit();
+}
+
+TEST_F(SmapLogCoreTest, TestSetMinLogLevelRevertDebugToInfo)
+{
+    SmapLogConfig config;
+    strncpy(config.filePath, testLogFile.c_str(), SMAP_LOG_MAX_PATH_LEN - 1);
+    config.maxFileSize = 1024 * 1024;
+    config.maxFileCount = 5;
+    config.minLogLevel = SMAP_LOG_CORE_INFO;
+
+    int ret = SmapLogCoreInit(&config);
+    EXPECT_EQ(0, ret);
+
+    SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_DEBUG);
+    EXPECT_EQ(SMAP_LOG_CORE_DEBUG, SmapLogCoreGetMinLogLevel());
+
+    /* Revert to INFO */
+    SmapLogCoreSetMinLogLevel(SMAP_LOG_CORE_INFO);
+    EXPECT_EQ(SMAP_LOG_CORE_INFO, SmapLogCoreGetMinLogLevel());
+
+    SmapLogCoreExit();
+}
+
+TEST_F(SmapLogCoreTest, TestExitResetsMinLogLevel)
+{
+    SmapLogConfig config;
+    strncpy(config.filePath, testLogFile.c_str(), SMAP_LOG_MAX_PATH_LEN - 1);
+    config.maxFileSize = 1024 * 1024;
+    config.maxFileCount = 5;
+    config.minLogLevel = SMAP_LOG_CORE_WARN;
+
+    int ret = SmapLogCoreInit(&config);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(SMAP_LOG_CORE_WARN, SmapLogCoreGetMinLogLevel());
+
+    SmapLogCoreExit();
+    /* After Exit, minLogLevel should reset to default INFO */
+    EXPECT_EQ(SMAP_LOG_CORE_INFO, SmapLogCoreGetMinLogLevel());
+}
+
+TEST_F(SmapLogCoreTest, TestWriteFilteredByLevel)
+{
+    SmapLogConfig config;
+    strncpy(config.filePath, testLogFile.c_str(), SMAP_LOG_MAX_PATH_LEN - 1);
+    config.maxFileSize = 1024 * 1024;
+    config.maxFileCount = 5;
+    config.minLogLevel = SMAP_LOG_CORE_WARN;
+
+    int ret = SmapLogCoreInit(&config);
+    EXPECT_EQ(0, ret);
+
+    /* INFO (2) < WARN (3) should be filtered */
+    ret = SmapLogCoreWrite(SMAP_LOG_CORE_INFO, "prefix", "filtered message");
+    EXPECT_EQ(0, ret);
+
+    /* WARN (3) >= WARN (3) should pass */
+    MOCKER(GetTimestamp).stubs().will(returnValue(0));
+    ret = SmapLogCoreWrite(SMAP_LOG_CORE_WARN, "prefix", "pass message");
+    EXPECT_EQ(0, ret);
 
     SmapLogCoreExit();
 }
