@@ -1374,13 +1374,14 @@ bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid)
     return ret;
 }
 
-static void SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRemoteNumaIoctlMsg *msg, int len)
+static int SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRemoteNumaIoctlMsg *msg, int len)
 {
     int runMode = GetRunMode();
-    uint64_t srcMemSize;
     int l1node;
     int l2node;
     int nrLocalNuma = GetNrLocalNuma();
+    int outCnt = 0;
+
     for (int i = 0; i < len; i++) {
         ProcessAttr *attr = GetProcessAttr(msg->payloads[i].pid);
         if (!attr) {
@@ -1388,28 +1389,37 @@ static void SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRe
             PutProcessAttr(attr);
             continue;
         }
-        payload[i].pid = attr->pid;
-        payload[i].numaNodes = attr->numaAttr.numaNodes;
-        l1node = GetAttrL1(attr);
-        l2node = msg->payloads[i].srcNid;
-        // 远端单numa->远端多numa，使用AddL2ByNid
-        if (runMode == WATERLINE_MODE) {
-            if (msg->payloads[i].ratio >= attr->strategyAttr.initRemoteMemRatio[l1node][l2node - nrLocalNuma]) {
-                ClearNodeBit(&payload[i].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
-            }
-        } else { // MEM_POOL_MODE
-            if (msg->payloads[i].memSize >= attr->strategyAttr.memSize[l1node][l2node - nrLocalNuma]) {
-                ClearNodeBit(&payload[i].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
+        int found = -1;
+        for (int j = 0; j < outCnt; j++) {
+            if (payload[j].pid == attr->pid) {
+                found = j;
+                break;
             }
         }
-
-        AddL2ByNid(&payload[i].numaNodes, msg->payloads[i].destNid);
-        payload[i].scanTime = attr->scanTime;
-        payload[i].duration = attr->duration;
-        payload[i].type = attr->scanType;
-        payload[i].pidType = attr->type;
+        if (found < 0) {
+            found = outCnt++;
+            payload[found].pid = attr->pid;
+            payload[found].numaNodes = attr->numaAttr.numaNodes;
+            payload[found].scanTime = attr->scanTime;
+            payload[found].duration = attr->duration;
+            payload[found].type = attr->scanType;
+            payload[found].pidType = attr->type;
+        }
+        l1node = GetAttrL1(attr);
+        l2node = msg->payloads[i].srcNid;
+        if (runMode == WATERLINE_MODE) {
+            if (msg->payloads[i].ratio >= attr->strategyAttr.initRemoteMemRatio[l1node][l2node - nrLocalNuma]) {
+                ClearNodeBit(&payload[found].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
+            }
+        } else {
+            if (msg->payloads[i].memSize >= attr->strategyAttr.memSize[l1node][l2node - nrLocalNuma]) {
+                ClearNodeBit(&payload[found].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
+            }
+        }
+        AddL2ByNid(&payload[found].numaNodes, msg->payloads[i].destNid);
         PutProcessAttr(attr);
     }
+    return outCnt;
 }
 
 int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg)
@@ -1426,9 +1436,14 @@ int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg)
         return -ENOMEM;
     }
 
-    SetPayloadValue(payload, msg, msg->pidCnt);
-    SMAP_LOGGER_INFO("ChangePidRemoteByPid ioctl begin, len: %d.", msg->pidCnt);
-    int ret = AccessIoctlAddPid(msg->pidCnt, payload);
+    int payloadCnt = SetPayloadValue(payload, msg, msg->pidCnt);
+    if (payloadCnt == 0) {
+        free(payload);
+        SMAP_LOGGER_INFO("ChangePidRemoteByPid no valid payload.");
+        return 0;
+    }
+    SMAP_LOGGER_INFO("ChangePidRemoteByPid ioctl begin, len: %d.", payloadCnt);
+    int ret = AccessIoctlAddPid(payloadCnt, payload);
     free(payload);
     if (ret) {
         SMAP_LOGGER_ERROR("ChangePidRemoteByNuma ioctl failed: %d.", ret);
