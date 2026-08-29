@@ -1063,6 +1063,15 @@ struct folio *alloc_demote_page(struct folio *folio, unsigned long node)
 		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_THISNODE,
 		.nid = node,
 	};
+
+	/*
+	 * 目标节点为远端节点(node >= nr_local_numa, 即远端内存 tier)时,
+	 * 允许跳过水线检测, 保证内存压力下换出仍能成功; 本地节点分配则
+	 * 走正常水线回收逻辑。
+	 */
+	if (node >= nr_local_numa)
+		mtc.gfp_mask |= __GFP_MEMALLOC;
+
 	return __folio_alloc(mtc.gfp_mask, order, mtc.nid, mtc.nmask);
 }
 
