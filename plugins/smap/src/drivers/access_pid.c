@@ -33,11 +33,207 @@
 #define DEFAULT_PERIOD_MS 50
 
 struct access_pid_struct ap_data = {
-	.list = LIST_HEAD_INIT(ap_data.list),
-	.lock = __RWSEM_INITIALIZER(ap_data.lock),
+	.slots = { [0 ... AP_MAX_SLOTS - 1] = {
+		.state = ATOMIC_INIT(AP_SLOT_FREE),
+	} },
 	.state_lock = __SPIN_LOCK_UNLOCKED(ap_data.state_lock),
 	.state_flag = AP_STATE_WALK,
 };
+
+/*
+ * Slot-table reference-count implementation. Replaces the global
+ * ap_data.lock rw_semaphore with a fixed-length (AP_MAX_SLOTS) table of
+ * ap_slot, each carrying its own refcount and ap_lock. Readers are lock-free
+ * (atomic state read + refcount_inc_not_zero + double-check state); the last
+ * releaser reclaims the access_pid. See 内核态ap_data锁保护设计.md.
+ *
+ * Reclaim mirrors the user-space PidSlotTryReclaim scheme (!364): the last
+ * releaser only decrements refs and, on transition to 0, hands off to
+ * ap_slot_try_reclaim. Reclaim CASes REMOVING->RESERVED so that ap_slot_add
+ * (which only claims FREE) cannot grab a slot whose access_pid is still being
+ * torn down; only after free + nulling does it publish FREE. This avoids the
+ * teardown race where setting FREE before freeing let a concurrent add claim
+ * the slot and overwrite s->ap mid-destroy.
+ */
+
+/* 引用归零后唯一清理者：释放 ap 并把槽位恢复为 FREE */
+static void ap_slot_try_reclaim(int i)
+{
+	struct ap_slot *s = &ap_data.slots[i];
+
+	if (refcount_read(&s->refs) != 0)
+		return;
+	/* CAS REMOVING->RESERVED claims the slot for teardown; ap_slot_add can
+	 * only claim FREE, so the half-torn-down slot stays invisible to new
+	 * adders until we finish freeing and publish FREE.
+	 */
+	if (atomic_cmpxchg(&s->state, AP_SLOT_REMOVING, AP_SLOT_RESERVED) !=
+	    AP_SLOT_REMOVING)
+		return;
+	destroy_access_pid(s->ap);
+	s->ap = NULL;
+	s->pid = 0;
+	atomic_set(&s->state, AP_SLOT_FREE);
+}
+
+static inline void ap_slot_release(struct ap_slot *s)
+{
+	/* drop one reference; the last releaser reclaims the access_pid */
+	if (!s)
+		return;
+	if (refcount_dec_and_test(&s->refs))
+		ap_slot_try_reclaim((int)(s - ap_data.slots));
+}
+
+void ap_put_slot(struct ap_slot *s)
+{
+	ap_slot_release(s);
+}
+
+struct ap_slot *ap_get_slot(pid_t pid)
+{
+	int i;
+
+	for (i = 0; i < AP_MAX_SLOTS; i++) {
+		struct ap_slot *s = &ap_data.slots[i];
+
+		if (atomic_read(&s->state) != AP_SLOT_INUSE || s->pid != pid)
+			continue;
+		if (!refcount_inc_not_zero(&s->refs))
+			continue; /* being reclaimed */
+		/* double-check: removal raced between read and inc */
+		if (atomic_read(&s->state) != AP_SLOT_INUSE || s->pid != pid) {
+			ap_slot_release(s);
+			continue;
+		}
+		return s;
+	}
+	return NULL;
+}
+
+/* Index-based variant: grab a reference to whichever slot is INUSE at index i,
+ * or NULL. Used by config/ioctl paths that iterate the table without needing a
+ * consistent snapshot (avoids a large on-stack pointer array).
+ */
+struct ap_slot *ap_get_slot_at(int i)
+{
+	struct ap_slot *s;
+
+	if (i < 0 || i >= AP_MAX_SLOTS)
+		return NULL;
+	s = &ap_data.slots[i];
+	if (atomic_read(&s->state) != AP_SLOT_INUSE)
+		return NULL;
+	if (!refcount_inc_not_zero(&s->refs))
+		return NULL;
+	if (atomic_read(&s->state) != AP_SLOT_INUSE) {
+		ap_slot_release(s);
+		return NULL;
+	}
+	return s;
+}
+
+struct access_pid *ap_get_ref(pid_t pid)
+{
+	struct ap_slot *s = ap_get_slot(pid);
+
+	return s ? s->ap : NULL;
+}
+
+size_t ap_collect_refs(struct ap_slot *arr[], size_t cap)
+{
+	size_t n = 0;
+	int i;
+
+	for (i = 0; i < AP_MAX_SLOTS && n < cap; i++) {
+		struct ap_slot *s = &ap_data.slots[i];
+
+		if (atomic_read(&s->state) != AP_SLOT_INUSE)
+			continue;
+		if (!refcount_inc_not_zero(&s->refs))
+			continue;
+		if (atomic_read(&s->state) != AP_SLOT_INUSE) {
+			ap_slot_release(s);
+			continue;
+		}
+		arr[n++] = s;
+	}
+	return n;
+}
+
+void ap_release_refs(struct ap_slot *arr[], size_t n)
+{
+	size_t i;
+
+	for (i = 0; i < n; i++)
+		ap_slot_release(arr[i]);
+}
+
+int ap_slot_add(struct access_pid *ap)
+{
+	int i;
+
+	for (i = 0; i < AP_MAX_SLOTS; i++) {
+		struct ap_slot *s = &ap_data.slots[i];
+
+		if (atomic_cmpxchg(&s->state, AP_SLOT_FREE, AP_SLOT_RESERVED) !=
+		    AP_SLOT_FREE)
+			continue;
+		s->pid = ap->pid;
+		s->ap = ap;
+		ap->slot = s;
+		init_rwsem(&s->ap_lock);
+		refcount_set(&s->refs, 1); /* initial reference */
+		atomic_set(&s->state, AP_SLOT_INUSE); /* publish */
+		return i;
+	}
+	return -1; /* table full */
+}
+
+void ap_slot_remove(pid_t pid)
+{
+	struct ap_slot *s = NULL;
+	int i;
+
+	for (i = 0; i < AP_MAX_SLOTS; i++) {
+		if (ap_data.slots[i].pid == pid &&
+		    atomic_read(&ap_data.slots[i].state) == AP_SLOT_INUSE) {
+			s = &ap_data.slots[i];
+			break;
+		}
+	}
+	if (!s)
+		return;
+	/* CAS INUSE->REMOVING blocks new references */
+	if (atomic_cmpxchg(&s->state, AP_SLOT_INUSE, AP_SLOT_REMOVING) !=
+	    AP_SLOT_INUSE)
+		return;
+	s->pid = 0;
+	/* drop the initial reference held by ap_slot_add */
+	ap_slot_release(s);
+}
+
+bool ap_slot_empty(void)
+{
+	int i;
+
+	for (i = 0; i < AP_MAX_SLOTS; i++) {
+		if (atomic_read(&ap_data.slots[i].state) == AP_SLOT_INUSE)
+			return false;
+	}
+	return true;
+}
+
+int ap_slot_used_count(void)
+{
+	int i, cnt = 0;
+
+	for (i = 0; i < AP_MAX_SLOTS; i++) {
+		if (atomic_read(&ap_data.slots[i].state) == AP_SLOT_INUSE)
+			cnt++;
+	}
+	return cnt;
+}
 
 void destroy_access_pid(struct access_pid *elem)
 {
@@ -46,7 +242,8 @@ void destroy_access_pid(struct access_pid *elem)
 		return;
 	}
 	elem->numa_nodes = 0;
-	proc_remove(elem->proc_root);
+	if (elem->proc_root)
+		proc_remove(elem->proc_root);
 	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
 		vfree(elem->paddr_bm[i]);
 		elem->paddr_bm[i] = NULL;
@@ -349,6 +546,7 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 {
 	struct actc_data *actc;
 	struct access_pid *ap = file->private_data;
+	struct ap_slot *slot;
 	ssize_t len;
 	size_t total_len;
 	u32 actc_len[SMAP_MAX_NUMNODES];
@@ -359,12 +557,20 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 		goto out;
 	}
 
-	down_read(&ap_data.lock);
+	slot = ap_get_slot(ap->pid);
+	if (!slot) {
+		len = -EAGAIN;
+		goto out;
+	}
+	ap = slot->ap;
+
+	down_read(&slot->ap_lock);
 	total_len = calc_process_page_number(ap) * sizeof(struct actc_data);
 	actc = kvmalloc(total_len, GFP_KERNEL);
 	if (!actc) {
 		len = -ENOMEM;
-		up_read(&ap_data.lock);
+		up_read(&slot->ap_lock);
+		ap_put_slot(slot);
 		goto out;
 	}
 
@@ -392,7 +598,8 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 		*ppos += len;
 out_free:
 	kvfree(actc);
-	up_read(&ap_data.lock);
+	up_read(&slot->ap_lock);
+	ap_put_slot(slot);
 out:
 	if (len < 0) {
 		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ |
@@ -529,17 +736,20 @@ int init_access_pid(struct access_add_pid_payload *payload,
 
 void print_access_pid_list(void)
 {
-	struct access_pid *ap;
+	struct ap_slot *s;
+	int i;
 
 	pr_debug("access pid list:\n");
-	down_read(&ap_data.lock);
-	list_for_each_entry(ap, &ap_data.list, node) {
+	for (i = 0; i < AP_MAX_SLOTS; i++) {
+		s = ap_get_slot_at(i);
+		if (!s)
+			continue;
 		pr_debug(
 			"pid %d, pid_type %d, numa_nodes %x, scan_time %d, type %d\n",
-			ap->pid, ap->pid_type, ap->numa_nodes, ap->scan_time,
-			ap->type);
+			s->ap->pid, s->ap->pid_type, s->ap->numa_nodes,
+			s->ap->scan_time, s->ap->type);
+		ap_put_slot(s);
 	}
-	up_read(&ap_data.lock);
 	pr_debug("---------------------\n");
 }
 
@@ -946,44 +1156,50 @@ int access_add_statistic_pid(int len, struct access_add_pid_payload *payload,
 
 static void move_to_ap_data_list(struct list_head *tmp_head)
 {
-	struct access_pid *ap, *tmp, *tmp2;
+	struct access_pid *ap, *tmp;
 	LIST_HEAD(dup_head);
 
-	down_write(&ap_data.lock);
-	/* check if pids to be added already exists in ap_data.list */
 	list_for_each_entry_safe(ap, tmp, tmp_head, node) {
-		list_for_each_entry(tmp2, &ap_data.list, node) {
-			if (ap->pid == tmp2->pid) {
-				pr_info("set pid: %d NUMA mask from %#x to %#x\n",
-					ap->pid, tmp2->numa_nodes,
-					ap->numa_nodes);
-				tmp2->numa_nodes = ap->numa_nodes;
-				tmp2->scan_time = ap->scan_time;
-				tmp2->ntimes = ap->ntimes;
-				tmp2->type = ap->type;
-				tmp2->pid_type = ap->pid_type;
-				list_move_tail(&ap->node, &dup_head);
-				break;
-			}
+		struct ap_slot *existing = ap_get_slot(ap->pid);
+
+		if (existing) {
+			/* duplicate pid: update existing config under its ap_lock */
+			u32 old_nodes;
+
+			down_write(&existing->ap_lock);
+			old_nodes = existing->ap->numa_nodes;
+			existing->ap->numa_nodes = ap->numa_nodes;
+			existing->ap->scan_time = ap->scan_time;
+			existing->ap->ntimes = ap->ntimes;
+			existing->ap->type = ap->type;
+			existing->ap->pid_type = ap->pid_type;
+			up_write(&existing->ap_lock);
+			pr_info("set pid: %d NUMA mask from %#x to %#x\n",
+				ap->pid, old_nodes, ap->numa_nodes);
+			ap_put_slot(existing);
+			list_move_tail(&ap->node, &dup_head);
+			continue;
 		}
-	}
-	/* move all new pids to ap_data.list */
-	list_for_each_entry_safe(ap, tmp, tmp_head, node) {
+		/* new pid: claim a slot (visible to readers once INUSE) */
 		ap->cur_times = 0;
+		if (ap_slot_add(ap) < 0) {
+			pr_err("ap_slot table full, pid %d rejected\n",
+			       ap->pid);
+			list_move_tail(&ap->node, &dup_head);
+			continue;
+		}
 		if (access_scan_enabled()) {
 			submit_one_work(ap);
 		} else {
 			/* Disable/migrate 窗口内新加的 pid 不提交扫描，留在
-			 * ap_data.list 等下次 enable 由 submit_scan_works 拉起，
+			 * 槽位中等下次 enable 由 submit_scan_works 拉起，
 			 * 避免扫描与 migrate 的 paddr_bm 重分配竞态。
 			 * 同时 complete(work_done) 使 completion_done() 返回
 			 * true，避免 disable 误判 -EBUSY。
 			 */
 			complete(&ap->work_done);
 		}
-		list_move_tail(&ap->node, &ap_data.list);
 	}
-	up_write(&ap_data.lock);
 	list_for_each_entry_safe(ap, tmp, &dup_head, node) {
 		list_del(&ap->node);
 		destroy_access_pid(ap);
@@ -993,28 +1209,38 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 int access_add_pid(int len, struct access_add_pid_payload *payload)
 {
 	int i, ret;
-	struct access_pid *ap, *tmp, *existing;
+	struct access_pid *ap, *tmp;
 	LIST_HEAD(tmp_head);
 
-	/* Pre-check: mark completely duplicate pids */
-	down_read(&ap_data.lock);
-	for (i = 0; i < len; i++) {
-		if (payload[i].pid < 0)
+	/* Pre-check: mark completely duplicate pids (snapshot the table) */
+	for (i = 0; i < AP_MAX_SLOTS; i++) {
+		struct ap_slot *s = ap_get_slot_at(i);
+		struct access_pid *e;
+		int j;
+
+		if (!s)
 			continue;
-		list_for_each_entry(existing, &ap_data.list, node) {
-			if (payload[i].pid == existing->pid &&
-			    payload[i].numa_nodes == existing->numa_nodes &&
-			    payload[i].scan_time == existing->scan_time &&
-			    payload[i].type == existing->type &&
-			    payload[i].ntimes == existing->ntimes) {
+		e = s->ap;
+		for (j = 0; j < len; j++) {
+			bool match;
+
+			if (payload[j].pid < 0)
+				continue;
+			down_read(&s->ap_lock);
+			match = (payload[j].pid == e->pid &&
+				 payload[j].numa_nodes == e->numa_nodes &&
+				 payload[j].scan_time == e->scan_time &&
+				 payload[j].type == e->type &&
+				 payload[j].ntimes == e->ntimes);
+			up_read(&s->ap_lock);
+			if (match) {
 				pr_info("pid %d is completely duplicate, skip processing\n",
-					payload[i].pid);
-				payload[i].pid = DUPLICATE_PID;
-				break;
+					payload[j].pid);
+				payload[j].pid = DUPLICATE_PID;
 			}
 		}
+		ap_put_slot(s);
 	}
-	up_read(&ap_data.lock);
 
 	for (i = 0; i < len; i++) {
 		if (payload[i].pid < 0)
@@ -1093,49 +1319,49 @@ void access_remove_statistic_pid(int len,
 void access_remove_pid(int len, struct access_remove_pid_payload *payload)
 {
 	int i;
-	struct access_pid *ap, *tmp;
-	bool found;
 
 	for (i = 0; i < len; i++) {
-		found = false;
-		down_write(&ap_data.lock);
-		list_for_each_entry_safe(ap, tmp, &ap_data.list, node) {
-			if (ap->pid == payload[i].pid) {
-				list_del(&ap->node);
-				found = true;
-				break;
-			}
-		}
-		up_write(&ap_data.lock);
-		if (found) {
-			cancel_ap_scan_work(ap);
-			destroy_access_pid(ap);
-		}
+		struct ap_slot *slot;
+
+		slot = ap_get_slot(payload[i].pid);
+		if (!slot)
+			continue;
+		/* cancel any pending/running scan work (drops work-ref if
+		 * it deactivates a pending timer); the running instance, if
+		 * any, will observe REMOVING and drop its own work-ref.
+		 */
+		cancel_ap_scan_work(slot->ap);
+		ap_slot_remove(payload[i].pid);
+		ap_put_slot(slot); /* drop the ref taken by ap_get_slot */
 	}
 }
 
 void access_remove_all_pid(void)
 {
-	struct access_pid *ap;
 	struct ham_tracking_info *ap_ham, *tmp_ham;
 	struct statistics_tracking_info *ap_statistic, *tmp_statistic;
 	char path[MAX_PATH_LENGTH];
+	int i, ret;
 
 	pr_info("remove all pid\n");
-	while (true) {
-		down_write(&ap_data.lock);
-		if (list_empty(&ap_data.list)) {
-			up_write(&ap_data.lock);
-			break;
-		}
-		ap = list_first_entry(&ap_data.list, struct access_pid, node);
-		list_del(&ap->node);
-		up_write(&ap_data.lock);
-		cancel_ap_scan_work(ap);
-		destroy_access_pid(ap);
+	/* Iterate the slot table and remove each INUSE pid. ap_slot_remove
+	 * sets REMOVING and drops the initial ref; the slot is skipped by
+	 * subsequent iterations (state != INUSE), so inline iteration is safe.
+	 * Grab a transient ref per slot so the ap stays alive across
+	 * cancel_ap_scan_work + ap_slot_remove.
+	 */
+	for (i = 0; i < AP_MAX_SLOTS; i++) {
+		struct ap_slot *s = ap_get_slot_at(i);
+		pid_t pid;
+
+		if (!s)
+			continue;
+		pid = s->pid;
+		cancel_ap_scan_work(s->ap);
+		ap_slot_remove(pid);
+		ap_put_slot(s); /* drop the transient ref */
 	}
 
-	int ret;
 	spin_lock(&ham_lock);
 	list_for_each_entry_safe(ap_ham, tmp_ham, &ham_pid_list, node) {
 		ret = scnprintf(path, sizeof(path), "%d_t", ap_ham->pid);
@@ -1219,17 +1445,15 @@ int init_ap_bm_white_list(int node_len, u64 *node_page_count,
 
 void change_ap_type(pid_t pid)
 {
-	struct access_pid *tmp;
-	down_write(&ap_data.lock);
-	list_for_each_entry(tmp, &ap_data.list, node) {
-		if (tmp->pid == pid) {
-			tmp->type = NO_SCAN;
-			pr_info("change scan type of pid: %d successfully\n",
-				pid);
-			break;
-		}
-	}
-	up_write(&ap_data.lock);
+	struct ap_slot *slot = ap_get_slot(pid);
+
+	if (!slot)
+		return;
+	down_write(&slot->ap_lock);
+	slot->ap->type = NO_SCAN;
+	up_write(&slot->ap_lock);
+	pr_info("change scan type of pid: %d successfully\n", pid);
+	ap_put_slot(slot);
 }
 
 void clean_last_ap_data(struct access_pid *ap)
@@ -1278,20 +1502,6 @@ int access_walk_pagemap_prepare(struct access_pid *ap)
 		return ret;
 	}
 	return 0;
-}
-
-struct access_pid *find_access_pid(pid_t pid)
-{
-	struct access_pid *ap;
-	down_read(&ap_data.lock);
-	list_for_each_entry(ap, &ap_data.list, node) {
-		if (ap->pid == pid) {
-			up_read(&ap_data.lock);
-			return ap;
-		}
-	}
-	up_read(&ap_data.lock);
-	return NULL;
 }
 
 struct absolute_pos {
@@ -1390,44 +1600,39 @@ static void convert_single_address(struct access_pid *ap, int nid,
 int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr)
 {
 	u64 i;
-	int ret;
-	bool found = false;
+	struct ap_slot *slot;
 	struct access_pid *ap;
 	struct absolute_pos abs_pos = { .last_pos = INITIAL_POS,
 					.pos = INVALID_PADDR,
 					.last_index = INITIAL_POS_INDEX,
 					.index = INITIAL_POS_INDEX };
 	int page_size = is_access_hugepage() ? g_pagesize_huge : PAGE_SIZE;
-	ret = check_parameters_and_state(len, addr);
+	int ret = check_parameters_and_state(len, addr);
+
 	if (ret) {
 		return ret;
 	}
 
-	down_read(&ap_data.lock);
-	list_for_each_entry(ap, &ap_data.list, node) {
-		if (ap->pid == pid) {
-			found = true;
-			break;
-		}
-	}
-
-	if (!found) {
+	slot = ap_get_slot(pid);
+	if (!slot) {
 		pr_err("invalid pid: %d passed to convert position to PA\n",
 		       pid);
 		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ |
 						     AP_STATE_FREQ |
 						     AP_STATE_MIG);
-		up_read(&ap_data.lock);
 		return -EINVAL;
 	}
+	ap = slot->ap;
 
+	down_read(&slot->ap_lock);
 	pr_debug("%llu addresses of pid: %d on node%d has been converted\n",
 		 len, pid, nid);
 	for (i = 0; i < len; i++) {
 		convert_single_address(ap, nid, page_size, &addr[i], &abs_pos);
 	}
+	up_read(&slot->ap_lock);
 
-	up_read(&ap_data.lock);
+	ap_put_slot(slot);
 	set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ |
 					     AP_STATE_FREQ | AP_STATE_MIG);
 	return 0;

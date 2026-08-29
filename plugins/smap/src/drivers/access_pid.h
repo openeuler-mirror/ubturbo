@@ -8,6 +8,9 @@
 #define _SRC_ACCESS_PID_H
 
 #include <linux/bitops.h>
+#include <linux/cache.h>
+#include <linux/refcount.h>
+#include <linux/mutex.h>
 
 #include "check.h"
 #include "access_ioctl.h"
@@ -21,6 +24,11 @@
 #define DUPLICATE_PID (-2) /* completely duplicate, skip processing */
 extern int nr_local_numa;
 
+/* Upper bound of tracked pids, inherits MAX_4K_PROCESSES_CNT. */
+#ifndef AP_MAX_SLOTS
+#define AP_MAX_SLOTS MAX_4K_PROCESSES_CNT
+#endif
+
 enum ap_state {
 	AP_STATE_WALK = (1UL << 0),
 	AP_STATE_READ = (1UL << 1),
@@ -28,10 +36,40 @@ enum ap_state {
 	AP_STATE_MIG = (1UL << 3),
 };
 
+/*
+ * Slot lifecycle: FREE -> RESERVED -> INUSE -> REMOVING -> FREE.
+ * - FREE:     idle, can be CAS-claimed by ap_slot_add.
+ * - RESERVED: ap_slot_add in-progress, invisible to readers.
+ * - INUSE:    visible, the only state external readers accept.
+ * - REMOVING: ap_slot_remove set, waiting for refs to drop to 0 to reclaim.
+ */
+enum ap_slot_state {
+	AP_SLOT_FREE = 0,
+	AP_SLOT_RESERVED = 1,
+	AP_SLOT_INUSE = 2,
+	AP_SLOT_REMOVING = 3,
+};
+
+/*
+ * Per-pid slot: replaces the ap_data.list node. Carries the access_pid plus a
+ * refcount and a fine-grained rw_semaphore (ap_lock) that protects the bitmaps
+ * (paddr_bm/white_list_bm/bm_len/info). Readers take a reference via
+ * ap_get_slot()/ap_collect_refs() and drop it with ap_put_slot(); the last
+ * releaser reclaims the access_pid. ap_lock is a rw_semaphore (not spinlock)
+ * because the scan path walks page tables and may sleep, and read-side
+ * concurrency (scan + migration) is desired.
+ */
+struct ap_slot {
+	atomic_t state; /* FREE/RESERVED/INUSE/REMOVING */
+	pid_t pid;
+	struct access_pid *ap;
+	refcount_t refs;
+	struct rw_semaphore ap_lock;
+} ____cacheline_aligned_in_smp;
+
 struct access_pid_struct {
-	struct list_head list;
-	struct rw_semaphore lock;
-	spinlock_t state_lock;
+	struct ap_slot slots[AP_MAX_SLOTS]; /* replaces ap_data.list */
+	spinlock_t state_lock; /* protects global scan-phase state_flag */
 	unsigned long state_flag;
 };
 extern struct access_pid_struct ap_data;
@@ -71,12 +109,15 @@ struct access_pid {
 	size_t bm_len[SMAP_MAX_NUMNODES];
 	unsigned long *paddr_bm[SMAP_MAX_NUMNODES];
 	unsigned long *white_list_bm[SMAP_MAX_NUMNODES];
-	struct list_head node;
+	struct list_head
+		node; /* used only for staging lists during add, not for ap_data */
 	struct vm_mapping_info info;
 	ktime_t last_scan_end;
 	unsigned long last_scan_delay_ms;
 	struct proc_dir_entry *proc_root;
 	struct proc_dir_entry *proc_freq;
+	struct ap_slot
+		*slot; /* back-pointer to owning slot, set by ap_slot_add */
 };
 
 typedef struct {
@@ -121,17 +162,40 @@ void access_remove_pid(int len, struct access_remove_pid_payload *payload);
 void access_remove_all_pid(void);
 void change_ap_type(pid_t pid);
 void clean_last_ap_data(struct access_pid *ap);
-struct access_pid *find_access_pid(pid_t pid);
 int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr);
 int init_ap_bm_white_list(int node_len, u64 *node_page_count,
 			  struct access_pid *ap);
 int init_vm_mapping(struct vm_mapping_info *info);
 int access_walk_pagemap_prepare(struct access_pid *ap);
 
+/*
+ * Slot-table + reference-count API (replaces global ap_data.lock).
+ * Contract: every ap_get_slot/ap_get_ref/ap_collect_refs success must be paired
+ * with ap_put_slot/ap_release_refs on ALL return paths (incl. early-return).
+ */
+int ap_slot_add(struct access_pid *ap);
+void ap_slot_remove(pid_t pid);
+struct ap_slot *ap_get_slot(pid_t pid);
+struct ap_slot *ap_get_slot_at(int i);
+struct access_pid *ap_get_ref(pid_t pid);
+size_t ap_collect_refs(struct ap_slot *arr[], size_t cap);
+void ap_release_refs(struct ap_slot *arr[], size_t n);
+void ap_put_slot(struct ap_slot *s);
+bool ap_slot_empty(void);
+int ap_slot_used_count(void);
+
 static inline bool access_pid_is_scanning(pid_t pid)
 {
-	struct access_pid *ap = find_access_pid(pid);
-	return ap && ap->type != NO_SCAN;
+	struct ap_slot *slot = ap_get_slot(pid);
+	bool scanning;
+
+	if (!slot)
+		return false;
+	down_read(&slot->ap_lock);
+	scanning = slot->ap->type != NO_SCAN;
+	up_read(&slot->ap_lock);
+	ap_put_slot(slot);
+	return scanning;
 }
 
 static inline bool access_pid_cur_last_scanning(struct access_pid *ap)

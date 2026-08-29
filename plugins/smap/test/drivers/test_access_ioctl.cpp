@@ -24,6 +24,22 @@
 
 using namespace std;
 
+extern "C" struct access_pid_struct ap_data;
+
+/* Reset the slot table to all-FREE (replaces INIT_LIST_HEAD(&ap_data.list)). */
+static void ap_test_reset_slots(void)
+{
+    int i;
+
+    for (i = 0; i < AP_MAX_SLOTS; i++) {
+        atomic_set(&ap_data.slots[i].state, AP_SLOT_FREE);
+        ap_data.slots[i].pid = 0;
+        ap_data.slots[i].ap = nullptr;
+        refcount_set(&ap_data.slots[i].refs, 0);
+    }
+    ap_data.state_flag = AP_STATE_WALK;
+}
+
 class AccessIoctlTestKernel : public ::testing::Test {
 public:
     static struct access_add_pid_msg m_msg;
@@ -38,7 +54,7 @@ protected:
     void TearDown() override
     {
         cout << "[Phase TearDown Begin]" << endl;
-        INIT_LIST_HEAD(&ap_data.list);
+        ap_test_reset_slots();
         GlobalMockObject::verify();
         cout << "[Phase TearDown End]" << endl;
     }
