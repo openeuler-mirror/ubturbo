@@ -92,4 +92,7 @@ int scan_hva_info(pid_t pid_nr, u64 *l1_page_num, u64 *l2_page_num,
 		  u64 **l1_vaddr, u64 **l2_vaddr);
 int scan_hva_info_4k(pid_t pid, u64 *l1_page_num, u64 *l2_page_num,
 		     u64 **l1_vaddr, u64 **l2_vaddr);
+int smap_cold_threshold_sysfs_init(void);
+void smap_cold_threshold_sysfs_exit(void);
+struct kobject *smap_get_kobject(void);
 #endif /* _SRC_ACCESSED_BIT_H */

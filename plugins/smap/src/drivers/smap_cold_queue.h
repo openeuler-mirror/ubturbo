@@ -42,12 +42,22 @@ struct smap_cold_queue {
  */
 extern struct smap_cold_queue smap_cold_numa_queue[SMAP_MAX_NUMNODES];
 
+/*
+ * Runtime swap-out switch (0 = off, 1 = on, default on), backed by
+ * /sys/kernel/smap/swap_enable.  Defined in smap_cold_queue.c.
+ */
+extern unsigned int swap_out_enable;
+
 void smap_cold_queue_free(void);
 int smap_cold_queue_init(void);
+int smap_swap_enable_sysfs_init(void);
+void smap_swap_enable_sysfs_exit(void);
 
 /*
- * Enqueue a PFN for swap-out. Returns 0 on success, -1 if queue is full.
- * Must be called only during the scan phase (producers only).
+ * Enqueue a PFN for swap-out. Returns 0 on success, -1 if the queue is
+ * full or swap-out is disabled via swap_enable; the caller then records
+ * the page in the bitmap (normal migration path) instead. Must be called
+ * only during the scan phase (producers only).
  */
 int smap_cold_queue_enqueue(int nid, u64 pfn);
 

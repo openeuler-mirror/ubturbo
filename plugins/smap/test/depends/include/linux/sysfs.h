@@ -65,6 +65,8 @@ void sysfs_remove_file(struct kobject *kobj, const struct attribute *attr);
 
 int sysfs_create_file(struct kobject *kobj, const struct attribute *attr);
 
+ssize_t sysfs_emit(char *buf, const char *fmt, ...);
+
 static inline int sysfs_create_link(struct kobject *kobj,
 				    struct kobject *target, const char *name)
 {

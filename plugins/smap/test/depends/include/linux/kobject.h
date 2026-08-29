@@ -26,6 +26,7 @@ struct kobj_type {
 };
 
 extern struct kobject *mm_kobj;
+extern struct kobject *kernel_kobj;
 
 struct kobj_attribute {
 	struct attribute attr;  /* kobj_attribute */
@@ -41,6 +42,9 @@ extern void kobject_put(struct kobject *kobj);
 
 extern int kobject_init_and_add(struct kobject *kobj, const struct kobj_type *ktype,
 	struct kobject *parent, const char *fmt, ...);
+
+extern struct kobject *kobject_create_and_add(const char *name,
+	struct kobject *parent);
 
 #ifdef __cplusplus
 }
