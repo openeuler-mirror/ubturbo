@@ -1,7 +1,9 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.‘
  */
 #include <gmock/gmock.h>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
@@ -73,6 +75,68 @@ TEST_F(TestTurboRmrsPlugin, TurboPluginConfigInitSucceed)
 {
     auto ret = RmrsConfig::Instance().Init(0);
     EXPECT_EQ(ret, RMRS_OK);
+}
+
+static const char *const PAGE_TYPE_FILE_FOR_TEST = "/dev/shm/ubturbo_page_type.dat";
+
+static void WritePageTypeFile(uint32_t pageType)
+{
+    std::ofstream outFile(PAGE_TYPE_FILE_FOR_TEST, std::ios::binary | std::ios::trunc);
+    outFile.write(reinterpret_cast<const char *>(&pageType), sizeof(pageType));
+    outFile.close();
+}
+
+TEST_F(TestTurboRmrsPlugin, LoadSceneFromPageTypeFileVm)
+{
+    // pageType=1(2MB页)判定为虚机场景
+    WritePageTypeFile(1);
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::UNKNOWN);
+    RmrsConfig::Instance().LoadRmrsScene();
+    EXPECT_EQ(RmrsConfig::Instance().GetRmrsScene(), RmrsScene::VM);
+    std::filesystem::remove(PAGE_TYPE_FILE_FOR_TEST);
+}
+
+TEST_F(TestTurboRmrsPlugin, LoadSceneFromPageTypeFileContainer)
+{
+    // pageType=0(4KB页)判定为容器场景
+    WritePageTypeFile(0);
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::VM);
+    RmrsConfig::Instance().LoadRmrsScene();
+    EXPECT_EQ(RmrsConfig::Instance().GetRmrsScene(), RmrsScene::CONTAINER);
+    std::filesystem::remove(PAGE_TYPE_FILE_FOR_TEST);
+}
+
+TEST_F(TestTurboRmrsPlugin, LoadSceneUnknownWhenFileMissing)
+{
+    // pageType文件缺失(首次启动/系统重启)保持未知场景, 等待业务惰性初始化
+    std::filesystem::remove(PAGE_TYPE_FILE_FOR_TEST);
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::VM);
+    RmrsConfig::Instance().LoadRmrsScene();
+    EXPECT_EQ(RmrsConfig::Instance().GetRmrsScene(), RmrsScene::UNKNOWN);
+}
+
+TEST_F(TestTurboRmrsPlugin, LoadSceneUnknownWhenFileInvalid)
+{
+    // pageType文件内容不足4字节时保持未知场景
+    {
+        std::ofstream outFile(PAGE_TYPE_FILE_FOR_TEST, std::ios::binary | std::ios::trunc);
+        outFile << "1";
+        outFile.close();
+    }
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::VM);
+    RmrsConfig::Instance().LoadRmrsScene();
+    EXPECT_EQ(RmrsConfig::Instance().GetRmrsScene(), RmrsScene::UNKNOWN);
+    std::filesystem::remove(PAGE_TYPE_FILE_FOR_TEST);
+}
+
+TEST_F(TestTurboRmrsPlugin, LoadSceneUnknownWhenPageTypeOutOfRange)
+{
+    // pageType为越界值(非0/1)时不做枚举cast, 按未知场景兜底等待业务惰性判定
+    WritePageTypeFile(2);
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::VM);
+    RmrsConfig::Instance().LoadRmrsScene();
+    EXPECT_EQ(RmrsConfig::Instance().GetRmrsScene(), RmrsScene::UNKNOWN);
+    std::filesystem::remove(PAGE_TYPE_FILE_FOR_TEST);
 }
 
 TEST_F(TestTurboRmrsPlugin, RmrsRebootFailed1)

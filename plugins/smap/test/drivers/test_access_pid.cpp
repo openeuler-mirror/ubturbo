@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
  * Description: SMAP3.0 access_pid模块测试代码
  */
 
@@ -460,6 +459,89 @@ TEST_F(DriversAccessPidTest, AccessAddPid)
     EXPECT_EQ(0, ret);
 }
 
+/* 扫描模块未 enable（disable/migrate 期间）时，add_pid 不应立即提交扫描任务，
+ * pid 仅入 ap_data.list 等下次 enable 由 submit_scan_works 拉起。 */
+int ap_data_len();
+TEST_F(DriversAccessPidTest, AccessAddPidScanDisabledNoSubmit)
+{
+    int ret;
+    struct access_pid ap;
+    struct access_pid *tmp;
+    struct access_tracking_dev adev = {};
+    struct access_add_pid_payload payload = {0};
+
+    ap.pid = 1;
+    tmp = &ap;
+
+    INIT_LIST_HEAD(&ap_data.list);
+    INIT_LIST_HEAD(&access_dev);
+    adev.enable_on = false;
+    list_add(&adev.list, &access_dev);
+
+    MOCKER(init_access_pid).stubs().with(&payload, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
+    MOCKER(submit_one_work).expects(never());
+    ret = access_add_pid(1, &payload);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, ap_data_len());
+
+    GlobalMockObject::verify();
+    list_del(&adev.list);
+    list_del(&ap.node);
+}
+
+/* disable 时，disable 期新加的 pid 因 complete(work_done) 使
+ * completion_done() 返回 true，不会误判 -EBUSY，disable 成功。 */
+extern "C" int access_tracking_disable(struct device *ldev);
+TEST_F(DriversAccessPidTest, AccessDisableSkipsUnsubmittedPid)
+{
+    int ret;
+    struct access_tracking_dev adev = {};
+    struct access_pid ap = {};
+
+    INIT_LIST_HEAD(&ap_data.list);
+    INIT_LIST_HEAD(&access_dev);
+    list_add(&adev.list, &access_dev);
+    adev.enable_on = true;
+
+    ap.pid = 1;
+    init_completion(&ap.work_done);
+    ap.work_done.done = 1; /* 模拟 disable 期新加 pid 的 complete */
+    list_add(&ap.node, &ap_data.list);
+
+    ret = access_tracking_disable(&adev.ldev);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(false, adev.enable_on);
+
+    list_del(&ap.node);
+    list_del(&adev.list);
+}
+
+/* 扫描模块已 enable 时，add_pid 立即提交扫描任务。 */
+TEST_F(DriversAccessPidTest, AccessAddPidScanEnabledSubmits)
+{
+    int ret;
+    struct access_pid ap;
+    struct access_pid *tmp;
+    struct access_tracking_dev adev = {};
+    struct access_add_pid_payload payload = {0};
+
+    ap.pid = 1;
+    tmp = &ap;
+
+    INIT_LIST_HEAD(&ap_data.list);
+    INIT_LIST_HEAD(&access_dev);
+    adev.enable_on = true;
+    list_add(&adev.list, &access_dev);
+
+    MOCKER(init_access_pid).stubs().with(&payload, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
+    MOCKER(submit_one_work).expects(once());
+    ret = access_add_pid(1, &payload);
+    EXPECT_EQ(0, ret);
+
+    GlobalMockObject::verify();
+    list_del(&adev.list);
+}
+
 int ap_data_len()
 {
     int cnt = 0;
@@ -700,51 +782,7 @@ TEST_F(DriversAccessPidTest, InitVmMapping)
     GlobalMockObject::verify();
     ret = init_vm_mapping(&info);
     EXPECT_EQ(0, ret);
-    vfree(info.mapping);
-}
-
-TEST_F(DriversAccessPidTest, AccessWalkPagemap)
-{
-    int ret;
-    int len = 1;
-    struct access_pid tmp;
-    struct access_pid *ap;
-    struct access_tracking_dev adev;
-    ap = &tmp;
-    tmp.type = NORMAL_SCAN;
-    adev.node = 0;
-    adev.page_count = 1;
-    list_add(&adev.list, &access_dev);
-    MOCKER(clean_last_ap_data).stubs();
-    MOCKER(init_ap_bm_white_list).stubs().will(returnValue(0));
-    MOCKER(walk_pid_pagemap).stubs().will(ignoreReturnValue());
-    ret = access_walk_pagemap(ap);
-    EXPECT_EQ(0, ret);
-    list_del(&adev.list);
-}
-
-TEST_F(DriversAccessPidTest, AccessWalkPagemapFail)
-{
-    int ret;
-    int len = 1;
-    struct access_pid tmp;
-    struct access_pid *ap;
-    struct access_tracking_dev adev;
-    ap = &tmp;
-    tmp.type = NORMAL_SCAN;
-    adev.node = 0;
-    adev.page_count = 1;
-    list_add(&adev.list, &access_dev);
-    MOCKER(clean_last_ap_data).stubs();
-    MOCKER(init_ap_bm_white_list).stubs().will(returnValue(0)).then(returnValue(-ENOMEM));
-    MOCKER(walk_pid_pagemap).stubs().will(ignoreReturnValue());
-
-    ret = access_walk_pagemap(ap);
-    EXPECT_EQ(0, ret);
-
-    ret = access_walk_pagemap(ap);
-    EXPECT_EQ(-ENOMEM, ret);
-    list_del(&adev.list);
+    vfree(info.priors);
 }
 
 extern "C" int access_walk_pagemap_prepare(struct access_pid *ap);
@@ -756,7 +794,7 @@ TEST_F(DriversAccessPidTest, AccessWalkPagemapPrepareFail)
     struct access_tracking_dev adev;
     ap = &tmp;
     tmp.type = NORMAL_SCAN;
-    tmp.info.mapping = nullptr;
+    tmp.info.priors = nullptr;
     adev.node = 0;
     adev.page_count = 1;
     list_add(&adev.list, &access_dev);
@@ -777,8 +815,8 @@ TEST_F(DriversAccessPidTest, InitAccessPidWalkPagemapPrepareFail)
     struct access_pid ap;
     struct access_pid *tmp;
     struct access_add_pid_payload payload = { 0 };
-    ap.info.mapping = (u32 *)vmalloc(sizeof(u32) * 2);
-    ASSERT_NE(nullptr, ap.info.mapping);
+    ap.info.priors = (u8 *)vmalloc(sizeof(u8) * 2);
+    ASSERT_NE(nullptr, ap.info.priors);
     MOCKER(kmalloc).stubs().will(returnValue((void *)&ap));
     MOCKER(init_vm_mapping_info).stubs().will(returnValue(0));
     MOCKER(access_walk_pagemap_prepare).stubs().will(returnValue(-ENOMEM));
@@ -1271,7 +1309,7 @@ TEST_F(DriversAccessPidTest, FillActcDataByBitmapWithDev)
     ap.paddr_bm[0] = &bitmap;
     ap.bm_len[0] = 1;
     ap.info.vm_size = 0;
-    ap.info.mapping = nullptr;
+    ap.info.priors = nullptr;
     ap.white_list_bm[0] = nullptr;
     adev.node = 0;
     adev.page_count = 64;
@@ -1283,6 +1321,27 @@ TEST_F(DriversAccessPidTest, FillActcDataByBitmapWithDev)
     EXPECT_GT(actc_len, 0u);
     list_del(&adev.list);
     free(adev.access_bit_actc_data);
+}
+
+TEST_F(DriversAccessPidTest, CompressFreqSqrt)
+{
+    /* 边界: 0/1 不变, 完全平方数取 floor sqrt, 65535 -> 255 */
+    EXPECT_EQ((actc_t)0, compress_freq(0));
+    EXPECT_EQ((actc_t)1, compress_freq(1));
+    EXPECT_EQ((actc_t)1, compress_freq(3));
+    EXPECT_EQ((actc_t)2, compress_freq(4));
+    EXPECT_EQ((actc_t)2, compress_freq(8));
+    EXPECT_EQ((actc_t)3, compress_freq(9));
+    EXPECT_EQ((actc_t)3, compress_freq(15));
+    EXPECT_EQ((actc_t)4, compress_freq(16));
+    EXPECT_EQ((actc_t)16, compress_freq(256));
+    EXPECT_EQ((actc_t)25, compress_freq(625));
+    EXPECT_EQ((actc_t)255, compress_freq(65025));
+    EXPECT_EQ((actc_t)255, compress_freq(65535));
+    /* 单调: compress_freq(x) <= compress_freq(x+1) (抽样) */
+    for (u32 x = 0; x < 65535; x += 257) {
+        EXPECT_LE(compress_freq((u16)x), compress_freq((u16)(x + 1)));
+    }
 }
 
 extern "C" ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
@@ -1327,7 +1386,7 @@ TEST_F(DriversAccessPidTest, MemFreqReadSuccess)
     ap.paddr_bm[0] = &bitmap_val;
     ap.bm_len[0] = 1;
     ap.info.vm_size = 0;
-    ap.info.mapping = nullptr;
+    ap.info.priors = nullptr;
     ap.white_list_bm[0] = nullptr;
     filp.private_data = &ap;
     ap_data.state_flag = AP_STATE_FREQ;
@@ -1437,12 +1496,6 @@ TEST_F(DriversAccessPidTest, FreeApBmWhiteListNull)
     free_ap_bm_white_list(nullptr);
 }
 
-TEST_F(DriversAccessPidTest, AccessWalkPagemapNull)
-{
-    int ret = access_walk_pagemap(nullptr);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
 TEST_F(DriversAccessPidTest, AccessWalkPagemapPrepareNull)
 {
     int ret = access_walk_pagemap_prepare(nullptr);
@@ -1521,14 +1574,6 @@ TEST_F(DriversAccessPidTest, InitStatisticWindowSuccess)
     EXPECT_NE(nullptr, sliding_windows);
     for (u64 i = 0; i < windows_num; i++) vfree(sliding_windows[i]);
     vfree(sliding_windows);
-}
-
-TEST_F(DriversAccessPidTest, AccessWalkPagemapNotNormalScan)
-{
-    struct access_pid ap;
-    ap.type = HAM_SCAN;
-    int ret = access_walk_pagemap(&ap);
-    EXPECT_EQ(0, ret);
 }
 
 TEST_F(DriversAccessPidTest, AccessAddStatisticPidDurationExceed)

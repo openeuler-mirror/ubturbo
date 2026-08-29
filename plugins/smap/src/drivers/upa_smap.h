@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  * Description: SMAP : ub_hist
  */
 
@@ -246,6 +245,16 @@ union hi_upa_smap_cfg_smap_rpt1 {
 		uint32_t smap_cnt_page_int_stat : 1;
 		uint32_t smap_cnt_total_int_stat : 1;
 		uint32_t reserved : 29;
+	};
+	uint32_t val;
+};
+
+union hi_upa_mar_cfg_perf {
+	struct {
+		uint32_t mar_perf_prd : 28;
+		uint32_t mar_perf_mode : 2;
+		uint32_t mar_perf_en : 1;
+		uint32_t reserved : 1;
 	};
 	uint32_t val;
 };

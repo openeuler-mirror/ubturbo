@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -23,16 +21,16 @@
 namespace turbo::smap::codec {
 class SmapMigrateOutCodec {
 public:
-    int EncodeRequest(TurboByteBuffer &buffer, MigrateOutMsg *msg, int pidType);
-    int DecodeRequest(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pidType);
+    int EncodeRequest(TurboByteBuffer &buffer, MigrateOutMsg *msg, int pageType);
+    int DecodeRequest(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pageType);
     int EncodeResponse(TurboByteBuffer &buffer, int returnValue);
     int DecodeResponse(TurboByteBuffer &buffer);
 };
 
 class SmapMigrateOutGroupedCodec {
 public:
-    int EncodeRequest(TurboByteBuffer &buffer, GroupedMigrateOutMsg *msg, int pidType);
-    int DecodeRequest(const TurboByteBuffer &buffer, GroupedMigrateOutMsg &msg, int &pidType);
+    int EncodeRequest(TurboByteBuffer &buffer, GroupedMigrateOutMsg *msg, int pageType);
+    int DecodeRequest(const TurboByteBuffer &buffer, GroupedMigrateOutMsg &msg, int &pageType);
     int EncodeResponse(TurboByteBuffer &buffer, int returnValue);
     int DecodeResponse(TurboByteBuffer &buffer);
 };
@@ -47,8 +45,8 @@ public:
 
 class SmapRemoveCodec {
 public:
-    int EncodeRequest(TurboByteBuffer &buffer, RemoveMsg *msg, int pidType);
-    int DecodeRequest(const TurboByteBuffer &buffer, RemoveMsg &msg, int &pidType);
+    int EncodeRequest(TurboByteBuffer &buffer, RemoveMsg *msg, int pageType);
+    int DecodeRequest(const TurboByteBuffer &buffer, RemoveMsg &msg, int &pageType);
     int EncodeResponse(TurboByteBuffer &buffer, int returnValue);
     int DecodeResponse(TurboByteBuffer &buffer);
 };
@@ -145,8 +143,8 @@ public:
 
 class SmapMigrateOutSyncCodec {
 public:
-    int EncodeRequest(TurboByteBuffer &buffer, MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime);
-    int DecodeRequest(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pidType, uint64_t &maxWaitTime);
+    int EncodeRequest(TurboByteBuffer &buffer, MigrateOutMsg *msg, int pageType, uint64_t maxWaitTime);
+    int DecodeRequest(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pageType, uint64_t &maxWaitTime);
     int EncodeResponse(TurboByteBuffer &buffer, int returnValue);
     int DecodeResponse(TurboByteBuffer &buffer);
 };

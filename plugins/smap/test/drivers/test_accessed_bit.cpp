@@ -1,5 +1,4 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
 * Description: SMAP3.0 accessed_bit测试代码
 */
 
@@ -482,7 +481,7 @@ TEST_F(AccessedBitTest, post_scan_kvm_memslots)
 }
 
 extern "C" unsigned long huge_page_size(struct hstate *h);
-extern "C" int drivers_calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
+extern "C" int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
 extern "C" int get_vma_numa_node(struct kvm *kvm, struct vm_area_struct *vma, unsigned long addr);
 TEST_F(AccessedBitTest, GetVmaNUmaNode)
 {
@@ -493,7 +492,7 @@ TEST_F(AccessedBitTest, GetVmaNUmaNode)
     MOCKER(huge_page_size).stubs().will(returnValue(PAGE_SIZE_2M));
     MOCKER(huge_pte_offset).stubs().will(returnValue(&pte));
     MOCKER(smap_huge_ptep_get).stubs().will(returnValue(pte));
-    MOCKER(drivers_calc_paddr_acidx_iomem).stubs().will(returnValue(1));
+    MOCKER(calc_paddr_acidx_iomem).stubs().will(returnValue(1));
     MOCKER(calc_paddr_acidx_acpi).stubs().will(returnValue(1));
     int ret = get_vma_numa_node(&kvm, nullptr, 0);
     EXPECT_EQ(NUMA_NO_NODE, ret);
@@ -701,7 +700,7 @@ TEST_F(AccessedBitTest, take_vma_snapshot)
 }
 
 extern "C" bool IS_ERR(const void *ptr);
-extern "C" struct mm_struct *mock_get_mm_by_pid(pid_t pid);
+extern "C" struct mm_struct *get_mm_by_pid(pid_t pid);
 extern "C" int take_vma_snapshot(struct mm_struct *mm,
                                  struct smap_vma_struct **vma_arr, int *vma_count);
 TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_fail)
@@ -711,7 +710,7 @@ TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_fail)
     ap.pid = 1;
     ap.type = NORMAL_SCAN;
 
-    MOCKER(mock_get_mm_by_pid).stubs().will(returnValue(static_cast<struct mm_struct *>(nullptr)));
+    MOCKER(get_mm_by_pid).stubs().will(returnValue(static_cast<struct mm_struct *>(nullptr)));
     int ret = scan_accessed_bit_forward_mm(&ap, PAGE_SIZE_4K);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -724,7 +723,7 @@ TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_success)
     ap.type = NORMAL_SCAN;
 
     GlobalMockObject::verify();
-    MOCKER(mock_get_mm_by_pid).stubs().will(returnValue(&mm));
+    MOCKER(get_mm_by_pid).stubs().will(returnValue(&mm));
     MOCKER(IS_ERR).stubs().will(returnValue(false));
     MOCKER(take_vma_snapshot).stubs().will(returnValue(0));
     MOCKER(kfree).stubs().will(ignoreReturnValue());
@@ -1040,8 +1039,8 @@ TEST_F(AccessedBitTest, HamActcDataAddSuccess)
     struct ham_tracking_info info;
     u64 paddr1;
     u64 paddr2;
-    actc_t freq1 = 0;
-    actc_t freq2 = 0;
+    u16 freq1 = 0;
+    u16 freq2 = 0;
     info.pid = 1;
     info.l1_node = 0;
     info.l2_node = -1;
@@ -1218,99 +1217,18 @@ TEST_F(AccessedBitTest, FillPteVaIomemFallback)
     pw.nr_page[L2] = 0;
     walk.private_data = &pw;
     MOCKER(calc_paddr_acidx_acpi).stubs().will(returnValue(-1));
-    MOCKER(drivers_calc_paddr_acidx_iomem).stubs().will(returnValue(0));
+    MOCKER(calc_paddr_acidx_iomem).stubs().will(returnValue(0));
     int ret = fill_pte_va(&pte, 0x1000, 0x2000, &walk);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, pw.nr_page[L2]);
-}
-
-// ========== DT supplement: pte_pure_clear ==========
-
-extern "C" int pte_pure_clear(pte_t *pte, unsigned long addr, unsigned long next, struct mm_walk *walk);
-TEST_F(AccessedBitTest, PtePureClearSwapPte)
-{
-    pte_t pte;
-    pte.pte = 0x1;
-    struct mm_walk walk;
-    struct pte_walk pw = { .flag = false };
-    walk.private_data = &pw;
-    int ret = pte_pure_clear(&pte, 0x1000, 0x2000, &walk);
-    EXPECT_EQ(0, ret);
-    EXPECT_FALSE(pw.flag);
-}
-
-TEST_F(AccessedBitTest, PtePureClearYoungPte)
-{
-    /* pte_young is a macro stub returning 0 on aarch64, so pw.flag stays false
-       but the function still runs without error */
-    pte_t pte;
-    pte.pte = 0x1000;
-    struct mm_walk walk;
-    struct pte_walk pw;
-    pw.flag = false;
-    walk.private_data = &pw;
-    int ret = pte_pure_clear(&pte, 0x1000, 0x2000, &walk);
-    EXPECT_EQ(0, ret);
-}
-
-TEST_F(AccessedBitTest, PtePureClearNotYoungPte)
-{
-    pte_t pte;
-    pte.pte = 0x0;
-    struct mm_walk walk;
-    struct pte_walk pw;
-    pw.flag = false;
-    walk.private_data = &pw;
-    int ret = pte_pure_clear(&pte, 0x1000, 0x2000, &walk);
-    EXPECT_EQ(0, ret);
-    EXPECT_FALSE(pw.flag);
-}
-
-// ========== DT supplement: pid_pte_mkold ==========
-
-extern "C" struct mm_struct *mock_get_mm_by_pid(pid_t pid);
-TEST_F(AccessedBitTest, PidPteMkoldBadMm)
-{
-    struct access_pid ap;
-    ap.pid = 1;
-    MOCKER(mock_get_mm_by_pid).stubs().will(returnValue((struct mm_struct*)nullptr));
-    int ret = pid_pte_mkold(&ap);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
-TEST_F(AccessedBitTest, PidPteMkoldMmapLockFail)
-{
-    struct access_pid ap;
-    struct mm_struct mm;
-    ap.pid = 1;
-    MOCKER(mock_get_mm_by_pid).stubs().will(returnValue(&mm));
-    MOCKER(IS_ERR).stubs().will(returnValue(false));
-    MOCKER(mmap_read_lock_killable).stubs().will(returnValue(-EINTR));
-    MOCKER(mmput).stubs().will(ignoreReturnValue());
-    int ret = pid_pte_mkold(&ap);
-    EXPECT_EQ(-EINTR, ret);
-}
-
-TEST_F(AccessedBitTest, PidPteMkoldWalkFail)
-{
-    struct access_pid ap;
-    struct mm_struct mm;
-    ap.pid = 1;
-    MOCKER(mock_get_mm_by_pid).stubs().will(returnValue(&mm));
-    MOCKER(IS_ERR).stubs().will(returnValue(false));
-    MOCKER(mmap_read_lock_killable).stubs().will(returnValue(0));
-    MOCKER(walk_page_range).stubs().will(returnValue(-EINVAL));
-    MOCKER(mmap_read_unlock).stubs().will(ignoreReturnValue());
-    MOCKER(mmput).stubs().will(ignoreReturnValue());
-    int ret = pid_pte_mkold(&ap);
-    EXPECT_EQ(-EINVAL, ret);
 }
 
 // ========== DT supplement: process_scan_results ==========
 
 extern "C" int calc_paddr_acidx_acpi_known_nid(u64 paddr, int nid, u64 *pa_index, int page_size);
 extern "C" int calc_paddr_acidx_iomem_known_nid(u64 paddr, int nid, u64 *pa_index, int page_size);
-extern "C" void add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap);
+extern "C" void add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap,
+                                    struct page *page);
 extern "C" void process_scan_results(struct pte_walk *pte_walk);
 TEST_F(AccessedBitTest, ProcessScanResultsNullPteWalk)
 {
@@ -1507,3 +1425,347 @@ TEST_F(AccessedBitTest, UpdateStatisticScanNumWrapAround)
     EXPECT_EQ(0, info.scan_num);
     list_del(&info.node);
 }
+
+extern "C" int calc_paddr_acidx_acpi(u64 paddr, int *nid, u64 *pa_idx, int page_size);
+extern "C" int calc_paddr_acidx_iomem(u64 paddr, int *nid, u64 *pa_idx, int page_size);
+
+TEST_F(AccessedBitTest, ProcessScanResultsLocalNidFallbackToSearch)
+{
+    struct access_pid ap;
+    struct scan_result_entry entries[1];
+    entries[0].paddr = 0x1000;
+    entries[0].nid = 0;
+    entries[0].hot = true;
+
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+    struct pte_walk pw;
+    pw.ap = &ap;
+    pw.scan_results = entries;
+    pw.scan_result_cnt = 1;
+
+    MOCKER(calc_paddr_acidx_acpi_known_nid).stubs().will(returnValue(-1));
+    MOCKER(calc_paddr_acidx_acpi).stubs().will(returnValue(0));
+    process_scan_results(&pw);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, ProcessScanResultsRemoteNidFallbackToSearch)
+{
+    struct access_pid ap;
+    struct scan_result_entry entries[1];
+    entries[0].paddr = 0x1000;
+    entries[0].nid = nr_local_numa;
+    entries[0].hot = true;
+
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+    struct pte_walk pw;
+    pw.ap = &ap;
+    pw.scan_results = entries;
+    pw.scan_result_cnt = 1;
+
+    MOCKER(calc_paddr_acidx_iomem_known_nid).stubs().will(returnValue(-1));
+    MOCKER(calc_paddr_acidx_iomem).stubs().will(returnValue(0));
+    process_scan_results(&pw);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, ProcessScanResultsBothFallbacksFail)
+{
+    struct access_pid ap;
+    struct scan_result_entry entries[1];
+    entries[0].paddr = 0x1000;
+    entries[0].nid = 0;
+    entries[0].hot = true;
+
+    ap.pid = 1;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+    struct pte_walk pw;
+    pw.ap = &ap;
+    pw.scan_results = entries;
+    pw.scan_result_cnt = 1;
+
+    MOCKER(calc_paddr_acidx_acpi_known_nid).stubs().will(returnValue(-1));
+    MOCKER(calc_paddr_acidx_acpi).stubs().will(returnValue(-1));
+    process_scan_results(&pw);
+    GlobalMockObject::verify();
+}
+
+extern "C" void smap_on_pte_young_cb(u64 gpa, bool is_young, bool pte_valid,
+    void *arg);
+extern "C" void smap_on_hole_cb(u64 gpa_start, u64 gpa_end, void *arg);
+extern "C" int process_memslot_pages(struct kvm *kvm,
+    struct kvm_memory_slot *memslot, struct access_pid *ap, int page_size);
+
+TEST_F(AccessedBitTest, OnPteYoungCbNotYoungNotLastScanning)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct smap_stage2_range_mkold_data data = {};
+    data.ap = (void *)&ap;
+
+    smap_on_pte_young_cb(0x1000, false, false, &data);
+}
+
+TEST_F(AccessedBitTest, OnPteYoungCbNotYoungLastScanning)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct kvm_memory_slot memslot;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0));
+    MOCKER(get_vma_if_huge_page).stubs().will(returnValue((struct vm_area_struct *)nullptr));
+    smap_on_pte_young_cb(0x1000, false, false, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnPteYoungCbYoungNotValidNoHugePage)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct kvm_memory_slot memslot;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(get_vma_if_huge_page).stubs().will(returnValue((struct vm_area_struct *)nullptr));
+    smap_on_pte_young_cb(0x1000, true, false, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnPteYoungCbYoungValidNoHugePage)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct kvm_memory_slot memslot;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(get_vma_if_huge_page).stubs().will(returnValue((struct vm_area_struct *)nullptr));
+    smap_on_pte_young_cb(0x1000, true, true, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnPteYoungCbYoungValidHugePageHvaToHpa)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    struct kvm_memory_slot memslot;
+    struct vm_area_struct vma;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(get_vma_if_huge_page).stubs().will(returnValue(&vma));
+    MOCKER(hva_to_hpa).stubs().will(returnValue(0));
+    smap_on_pte_young_cb(0x1000, true, true, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnPteYoungCbYoungNotValidHugePageLastScanning)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    struct kvm_memory_slot memslot;
+    struct vm_area_struct vma;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(get_vma_if_huge_page).stubs().will(returnValue(&vma));
+    MOCKER(hva_to_hpa).stubs().will(returnValue(0));
+    smap_on_pte_young_cb(0x1000, true, false, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnPteYoungCbNotYoungLastScanningHugePage)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    struct kvm_memory_slot memslot;
+    struct vm_area_struct vma;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(get_vma_if_huge_page).stubs().will(returnValue(&vma));
+    MOCKER(hva_to_hpa).stubs().will(returnValue(0));
+    smap_on_pte_young_cb(0x1000, false, false, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnHoleCbNotLastScanning)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+
+    struct smap_stage2_range_mkold_data data = {};
+    data.ap = (void *)&ap;
+    data.stride = 1;
+
+    smap_on_hole_cb(0x0, 0x3000, &data);
+}
+
+TEST_F(AccessedBitTest, OnHoleCbLastScanning)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    struct kvm_memory_slot memslot;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+    data.stride = 512;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(hva_to_hpa).stubs().will(returnValue(0));
+    smap_on_hole_cb(0x0, 0x3000, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, OnHoleCbLastScanningSmallRange)
+{
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 9;
+    ap.ntimes = 10;
+
+    struct kvm kvm;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    struct kvm_memory_slot memslot;
+    struct smap_stage2_range_mkold_data data = {};
+    data.kvm = &kvm;
+    data.memslot = &memslot;
+    data.ap = (void *)&ap;
+    data.stride = 1;
+
+    MOCKER(gfn_to_hva_memslot).stubs().will(returnValue((unsigned long)0x2000));
+    MOCKER(hva_to_hpa).stubs().will(returnValue(0));
+    smap_on_hole_cb(0x1000, 0x2000, &data);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, ProcessMemslotPages2M)
+{
+    struct kvm kvm;
+    struct kvm_pgtable pgt;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    kvm.arch.mmu.pgt = &pgt;
+    struct kvm_memory_slot memslot;
+    memslot.base_gfn = 0x100;
+    memslot.npages = 0x200;
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
+
+    MOCKER(smap_kvm_pgtable_stage2_mkold_range).stubs().will(returnValue(0));
+    int ret = process_memslot_pages(&kvm, &memslot, &ap, PAGE_SIZE_2M);
+    EXPECT_EQ(0, ret);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, ProcessMemslotPages4K)
+{
+    struct kvm kvm;
+    struct kvm_pgtable pgt;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    kvm.arch.mmu.pgt = &pgt;
+    struct kvm_memory_slot memslot;
+    memslot.base_gfn = 0x100;
+    memslot.npages = 0x200;
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
+
+    MOCKER(smap_kvm_pgtable_stage2_mkold_range).stubs().will(returnValue(0));
+    int ret = process_memslot_pages(&kvm, &memslot, &ap, PAGE_SIZE_4K);
+    EXPECT_EQ(0, ret);
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessedBitTest, ProcessMemslotPagesWalkError)
+{
+    struct kvm kvm;
+    struct kvm_pgtable pgt;
+    struct mm_struct mm;
+    kvm.mm = &mm;
+    kvm.arch.mmu.pgt = &pgt;
+    struct kvm_memory_slot memslot;
+    memslot.base_gfn = 0x100;
+    memslot.npages = 0x200;
+    struct access_pid ap;
+    ap.type = NORMAL_SCAN;
+    ap.pid = 1;
+
+    MOCKER(smap_kvm_pgtable_stage2_mkold_range).stubs().will(returnValue(-EAGAIN));
+    int ret = process_memslot_pages(&kvm, &memslot, &ap, PAGE_SIZE_2M);
+    EXPECT_EQ(-EAGAIN, ret);
+    GlobalMockObject::verify();
+}
+

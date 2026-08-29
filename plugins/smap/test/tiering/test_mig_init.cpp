@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: SMAP 测试代码
  */
 
@@ -170,16 +169,14 @@ extern "C" bool is_migrate_msg_valid(struct migrate_msg *msg);
 extern "C" int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist);
 extern "C" void free_migrate_list_addr(int len, struct mig_list *mlist);
 extern "C" void free_migrate_list(struct mig_list **mlist);
-extern "C" unsigned int smap_pgsize;
+extern "C" unsigned int smap_pgtype;
 extern "C" u32 g_pagesize_huge;
 TEST_F(MigInitTest, isMigrateMsgValidFailed)
 {
-    smap_pgsize = HUGE_PAGE;
+    smap_pgtype = HUGE_PAGE;
     g_pagesize_huge = TWO_MEGA_SIZE;
     struct mig_list migList[1];
-    struct mig_pra migPar = {.page_size = TWO_MEGA_SIZE, .nr_thread = MAX_NR_MIGRATE_THREADS + 1,
-                             .is_mul_thread = false};
-    struct migrate_msg msg = {.cnt = -1, .mul_mig = migPar, .mig_list = migList};
+    struct migrate_msg msg = {.cnt = -1, .page_size = TWO_MEGA_SIZE, .mig_list = migList};
     bool ret = is_migrate_msg_valid(&msg);
     EXPECT_EQ(false, ret);
 
@@ -187,33 +184,22 @@ TEST_F(MigInitTest, isMigrateMsgValidFailed)
     ret = is_migrate_msg_valid(&msg);
     EXPECT_EQ(false, ret);
 
-    msg.mul_mig.page_size = PAGE_SIZE;
-    ret = is_migrate_msg_valid(&msg);
-    EXPECT_EQ(false, ret);
-
-    msg.mul_mig.is_mul_thread = true;
+    msg.page_size = PAGE_SIZE;
     ret = is_migrate_msg_valid(&msg);
     EXPECT_EQ(false, ret);
 }
 
 TEST_F(MigInitTest, isMigrateMsgValidSuccess)
 {
-    smap_pgsize = NORMAL_PAGE;
+    smap_pgtype = NORMAL_PAGE;
     g_pagesize_huge = TWO_MEGA_SIZE;
     struct mig_list migList[1];
-    struct mig_pra migPar = {.page_size = PAGE_SIZE, .nr_thread = 1,
-                             .is_mul_thread = false};
-    struct migrate_msg msg = {.cnt = 1, .mul_mig = migPar, .mig_list = migList};
+    struct migrate_msg msg = {.cnt = 1, .page_size = PAGE_SIZE, .mig_list = migList};
     bool ret = is_migrate_msg_valid(&msg);
     EXPECT_EQ(true, ret);
 
-    msg.mul_mig.is_mul_thread = true;
-    msg.mul_mig.nr_thread = 2;
-    ret = is_migrate_msg_valid(&msg);
-    EXPECT_EQ(true, ret);
-
-    smap_pgsize = HUGE_PAGE;
-    msg.mul_mig.page_size = TWO_MEGA_SIZE;
+    smap_pgtype = HUGE_PAGE;
+    msg.page_size = TWO_MEGA_SIZE;
     ret = is_migrate_msg_valid(&msg);
     EXPECT_EQ(true, ret);
 }
@@ -238,9 +224,6 @@ TEST_F(MigInitTest, convertMigrateListTest)
     // check whether addr sorted
     ret = convert_migrate_list(1, &mlist);
     EXPECT_EQ(0, ret);
-    for (int i = 1; i < len; ++i) {
-        EXPECT_LE(addr[i - 1], addr[i]);
-    }
 }
 
 TEST_F(MigInitTest, __IoctlMigrateMigrateMsgInvalid)
@@ -266,7 +249,6 @@ TEST_F(MigInitTest, __IoctlMigrateDoMigrateError)
     MOCKER(is_migrate_msg_valid).stubs().will(returnValue(true));
     MOCKER(build_migrate_list).stubs().will(returnValue(0));
     MOCKER(do_migrate).stubs().will(returnValue(-EFAULT));
-    MOCKER(filter_4k_migrate_info).stubs().will(returnValue(0UL));
     MOCKER(copy_to_user).stubs().will(returnValue(0UL));
     MOCKER(free_migrate_list_addr).stubs().will(ignoreReturnValue());
     MOCKER(free_migrate_list).stubs().will(ignoreReturnValue());
@@ -280,7 +262,6 @@ TEST_F(MigInitTest, __IoctlMigrateOK)
     MOCKER(is_migrate_msg_valid).stubs().will(returnValue(true));
     MOCKER(build_migrate_list).stubs().will(returnValue(0));
     MOCKER(do_migrate).stubs().will(returnValue(0));
-    MOCKER(filter_4k_migrate_info).stubs().will(returnValue(0UL));
     MOCKER(copy_to_user).stubs().will(returnValue(0UL));
     MOCKER(free_migrate_list_addr).stubs().will(ignoreReturnValue());
     MOCKER(free_migrate_list).stubs().will(ignoreReturnValue());
@@ -356,35 +337,35 @@ TEST_F(MigInitTest, __IoctlMigratePidRemoteNuma)
     EXPECT_EQ(-EINVAL, ret);
 }
 
-extern "C" int __ioctl_check_pagesize(void __user *argp);
-TEST_F(MigInitTest, __IoctlCheckPagesizeNormal)
+extern "C" int __ioctl_set_pagetype(void __user *argp);
+TEST_F(MigInitTest, __IoctlSetPagetypeNormal)
 {
     uint32_t pageType = 1;
     MOCKER(copy_from_user)
         .stubs()
         .with(outBoundP(static_cast<void*>(&pageType), sizeof(uint32_t)))
         .will(returnValue(0UL));
-    int ret = __ioctl_check_pagesize(NULL);
+    int ret = __ioctl_set_pagetype(NULL);
     EXPECT_EQ(0, ret);
 }
 
-TEST_F(MigInitTest, __IoctlCheckPagesizeAbnormalOne)
+TEST_F(MigInitTest, __IoctlSetPagetypeCopyFail)
 {
     MOCKER(copy_from_user)
         .stubs()
         .will(returnValue(1UL));
-    int ret = __ioctl_check_pagesize(NULL);
+    int ret = __ioctl_set_pagetype(NULL);
     EXPECT_EQ(-EFAULT, ret);
 }
 
-TEST_F(MigInitTest, __IoctlCheckPagesizeAbnormalTwo)
+TEST_F(MigInitTest, __IoctlSetPagetypeInvalid)
 {
-    uint32_t pageType = 0;
+    uint32_t pageType = 2;
     MOCKER(copy_from_user)
         .stubs()
         .with(outBoundP(static_cast<void*>(&pageType), sizeof(uint32_t)))
         .will(returnValue(0UL));
-    int ret = __ioctl_check_pagesize(NULL);
+    int ret = __ioctl_set_pagetype(NULL);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -554,7 +535,7 @@ extern "C" int smap_check_huge_page_for_migration(struct page *page, pid_t pid);
 static void IoctlMigrateE2ETestMock(struct migrate_msg *msg, unsigned int pageSize,
     unsigned int mockSuccessMig4KPageNrEachMigList, unsigned int mockCanMig2MPageNrEachMigList)
 {
-    smap_pgsize = pageSize;
+    smap_pgtype = pageSize;
     if (pageSize == HUGE_PAGE) {
         MOCKER(PageHuge).stubs().will(returnValue(1));
         MOCKER(is_filter_4k).stubs().will(returnValue(-1));
@@ -614,8 +595,7 @@ TEST_F(MigInitTest, __IoctlMigrateE2ETest)
     }
     msg.cnt = cnt;
     msg.mig_list = migList;
-    msg.mul_mig.page_size = TWO_MEGA_SIZE;
-    msg.mul_mig.is_mul_thread = false;
+    msg.page_size = TWO_MEGA_SIZE;
 
     // 10 huge page can migrate, all remaining pages processed via goto again
     IoctlMigrateE2ETestMock(&msg, HUGE_PAGE, 5120, 10);

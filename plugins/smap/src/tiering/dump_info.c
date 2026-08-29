@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
  * Description: SMAP dump info module
  */
 
@@ -89,7 +88,7 @@ int rename_file(char *old_name, char *new_name)
 }
 EXPORT_SYMBOL(rename_file);
 
-void filter_4k_migrate_info(void)
+void filter_4k_migrate_info(size_t *nr_abnormal)
 {
 	pr_debug("transhuge %lu, huge %lu, nr_lru %lu, nr_zero_ref %lu\n",
 		 nr_abnormal[PAGE_TYPE_TRANSHUGE], nr_abnormal[PAGE_TYPE_HUGE],

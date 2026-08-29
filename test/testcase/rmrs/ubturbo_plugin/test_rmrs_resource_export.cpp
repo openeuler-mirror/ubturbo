@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.‘
  */
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -96,6 +95,8 @@ TEST_F(TestRmrsResourceExport, InitSucceed)
 
 TEST_F(TestRmrsResourceExport, CollectVmInfoSucceed)
 {
+    libvirt::LibvirtModule::available = true; // 模拟虚机场景libvirt已初始化
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::VM);
     MOCKER_CPP(&rmrs::LibvirtHelper::GetVmBasicInfo, RmrsResult(*)(ResourceExport * vmInfoHandler))
         .stubs()
         .will(returnValue(RMRS_OK))
@@ -109,7 +110,35 @@ TEST_F(TestRmrsResourceExport, CollectVmInfoSucceed)
 
     res = resourceExport.CollectVmInfo();
     EXPECT_EQ(res, RMRS_ERROR);
+    libvirt::LibvirtModule::available = false;
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::UNKNOWN);
     GlobalMockObject::verify();
+}
+
+TEST_F(TestRmrsResourceExport, CollectVmInfoSkipWhenLibvirtUnavailable)
+{
+    // 容器场景(pageType=0)libvirt未初始化, 直接返回成功且不触发libvirt调用
+    libvirt::LibvirtModule::available = false;
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::CONTAINER);
+    ResourceExport resourceExport;
+    RmrsResult res = resourceExport.CollectVmInfo();
+    EXPECT_EQ(res, RMRS_OK);
+    EXPECT_TRUE(resourceExport.GetVmDomainInfos()->empty());
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::UNKNOWN);
+}
+
+TEST_F(TestRmrsResourceExport, CollectVmInfoLazyInitFailedKeepUnknownScene)
+{
+    // 未知场景下惰性初始化libvirt失败: 本次采集跳过, 场景保持UNKNOWN以保留重试机会
+    libvirt::LibvirtModule::available = false;
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::UNKNOWN);
+    MOCKER_CPP(&rmrs::LibvirtHelper::Init, uint32_t(*)()).stubs().will(returnValue(RMRS_ERROR));
+    ResourceExport resourceExport;
+    RmrsResult res = resourceExport.CollectVmInfo();
+    EXPECT_EQ(res, RMRS_OK);
+    EXPECT_TRUE(resourceExport.GetVmDomainInfos()->empty());
+    EXPECT_EQ(RmrsConfig::Instance().GetRmrsScene(), RmrsScene::UNKNOWN);
+    EXPECT_FALSE(libvirt::LibvirtModule::IsAvailable());
 }
 
 TEST_F(TestRmrsResourceExport, UpdateVmDomainInfoSucceed)

@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -58,15 +56,15 @@ static SmapQueryRemoteNumaFreqFunc g_smapQueryRemoteNumaFreq = nullptr;
 
 RetCode SmapMigrateOutHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
 {
-    int pidType;
+    int pageType;
     MigrateOutMsg msg{};
     SmapMigrateOutCodec codec;
-    int ret = codec.DecodeRequest(inputBuffer, msg, pidType);
+    int ret = codec.DecodeRequest(inputBuffer, msg, pageType);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] ubturbo_smap_migrate_out DecodeRequest error " << ret;
         return TURBO_ERROR;
     }
-    int result = g_smapMigrateOut(&msg, pidType);
+    int result = g_smapMigrateOut(&msg, pageType);
     ret = codec.EncodeResponse(outputBuffer, result);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] ubturbo_smap_migrate_out EncodeResponse error " << ret;
@@ -77,16 +75,16 @@ RetCode SmapMigrateOutHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffe
 
 RetCode SmapMigrateOutGroupedHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
 {
-    int pidType;
+    int pageType;
     GroupedMigrateOutMsg msg{};
     SmapMigrateOutGroupedCodec codec;
-    int ret = codec.DecodeRequest(inputBuffer, msg, pidType);
+    int ret = codec.DecodeRequest(inputBuffer, msg, pageType);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
             << "[Smap] ubturbo_smap_migrate_out_grouped DecodeRequest error " << ret;
         return TURBO_ERROR;
     }
-    int result = g_smapMigrateOutGrouped(&msg, pidType);
+    int result = g_smapMigrateOutGrouped(&msg, pageType);
     ret = codec.EncodeResponse(outputBuffer, result);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
@@ -116,15 +114,15 @@ RetCode SmapMigrateBackHandler(const TurboByteBuffer &inputBuffer, TurboByteBuff
 
 RetCode SmapRemoveHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
 {
-    int pidType;
+    int pageType;
     RemoveMsg msg{};
     SmapRemoveCodec codec;
-    int ret = codec.DecodeRequest(inputBuffer, msg, pidType);
+    int ret = codec.DecodeRequest(inputBuffer, msg, pageType);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapRemoveHandler DecodeRequest error " << ret;
         return TURBO_ERROR;
     }
-    int result = g_smapRemove(&msg, pidType);
+    int result = g_smapRemove(&msg, pageType);
     ret = codec.EncodeResponse(outputBuffer, result);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapRemoveHandler EncodeResponse error " << ret;
@@ -154,38 +152,54 @@ RetCode SmapEnableNodeHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffe
 void SmapToTurboLog(int level, const char *str, const char *moduleName)
 {
     LoggerLevel logLevel = static_cast<LoggerLevel>(level);
+    turbo::log::TurboLogLevel turboLevel;
     switch (logLevel) {
         case LoggerLevel::LOGGER_INFO_LEVEL:
-            UBTURBO_LOG_INFO(MODULE_NAME, MODULE_CODE) << "[" << moduleName << "]" << str;
+            turboLevel = turbo::log::TurboLogLevel::INFO;
             break;
         case LoggerLevel::LOGGER_WARNING_LEVEL:
-            UBTURBO_LOG_WARN(MODULE_NAME, MODULE_CODE) << "[" << moduleName << "]" << str;
+            turboLevel = turbo::log::TurboLogLevel::WARN;
             break;
         case LoggerLevel::LOGGER_ERROR_LEVEL:
-            UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[" << moduleName << "]" << str;
+            turboLevel = turbo::log::TurboLogLevel::ERROR;
             break;
         default:
-            UBTURBO_LOG_DEBUG(MODULE_NAME, MODULE_CODE) << "[" << moduleName << "]" << str;
+            turboLevel = turbo::log::TurboLogLevel::DEBUG;
+            break;
     }
+    if (!turbo::log::TurboIsLog(turboLevel)) {
+        return;
+    }
+    turbo::log::TurboLoggerEntry entry(MODULE_NAME, turboLevel, nullptr, nullptr, 0);
+    entry << "[" << moduleName << "]" << str;
+    turbo::log::TurboLog() == entry;
 }
 
 const std::string SMAP_LOG_MODULE = "[Smap]";
 void SmapHandlerMsgToTurboLog(int level, const char *str, const char *moduleName)
 {
     LoggerLevel logLevel = static_cast<LoggerLevel>(level);
+    turbo::log::TurboLogLevel turboLevel;
     switch (logLevel) {
         case LoggerLevel::LOGGER_INFO_LEVEL:
-            UBTURBO_LOG_INFO(MODULE_NAME, MODULE_CODE) << SMAP_LOG_MODULE << str;
+            turboLevel = turbo::log::TurboLogLevel::INFO;
             break;
         case LoggerLevel::LOGGER_WARNING_LEVEL:
-            UBTURBO_LOG_WARN(MODULE_NAME, MODULE_CODE) << SMAP_LOG_MODULE << str;
+            turboLevel = turbo::log::TurboLogLevel::WARN;
             break;
         case LoggerLevel::LOGGER_ERROR_LEVEL:
-            UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << SMAP_LOG_MODULE << str;
+            turboLevel = turbo::log::TurboLogLevel::ERROR;
             break;
         default:
-            UBTURBO_LOG_DEBUG(MODULE_NAME, MODULE_CODE) << SMAP_LOG_MODULE << str;
+            turboLevel = turbo::log::TurboLogLevel::DEBUG;
+            break;
     }
+    if (!turbo::log::TurboIsLog(turboLevel)) {
+        return;
+    }
+    turbo::log::TurboLoggerEntry entry(MODULE_NAME, turboLevel, nullptr, nullptr, 0);
+    entry << SMAP_LOG_MODULE << str;
+    turbo::log::TurboLog() == entry;
 }
 
 RetCode SmapInitHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
@@ -388,16 +402,16 @@ RetCode SmapIsRunningHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer
 
 RetCode SmapMigrateOutSyncHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
 {
-    int pidType;
+    int pageType;
     uint64_t maxWaitTime;
     MigrateOutMsg msg{};
     SmapMigrateOutSyncCodec codec;
-    int ret = codec.DecodeRequest(inputBuffer, msg, pidType, maxWaitTime);
+    int ret = codec.DecodeRequest(inputBuffer, msg, pageType, maxWaitTime);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapMigrateOutSyncHandler DecodeRequest error " << ret;
         return TURBO_ERROR;
     }
-    int result = g_smapMigrateOutSync(&msg, pidType, maxWaitTime);
+    int result = g_smapMigrateOutSync(&msg, pageType, maxWaitTime);
     ret = codec.EncodeResponse(outputBuffer, result);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapMigrateOutSyncHandler EncodeResponse error " << ret;
@@ -499,12 +513,12 @@ RetCode SmapQueryRemoteNumaFreqHandler(const TurboByteBuffer &inputBuffer, Turbo
 }
 
 #ifdef DT_CONFIG
-int StubSmapMigrateOut(struct MigrateOutMsg *msg, int pidType)
+int StubSmapMigrateOut(struct MigrateOutMsg *msg, int pageType)
 {
     return 0; // 模拟成功
 }
 
-int StubSmapMigrateOutGrouped(struct GroupedMigrateOutMsg *msg, int pidType)
+int StubSmapMigrateOutGrouped(struct GroupedMigrateOutMsg *msg, int pageType)
 {
     return 0;
 }
@@ -514,7 +528,7 @@ int StubSmapMigrateBack(struct MigrateBackMsg *msg)
     return 0;
 }
 
-int StubSmapRemove(struct RemoveMsg *msg, int pidType)
+int StubSmapRemove(struct RemoveMsg *msg, int pageType)
 {
     return 0;
 }
@@ -559,7 +573,7 @@ bool StubSmapIsRunning()
     return true;
 }
 
-int StubSmapMigrateOutSync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime)
+int StubSmapMigrateOutSync(struct MigrateOutMsg *msg, int pageType, uint64_t maxWaitTime)
 {
     return 0;
 }

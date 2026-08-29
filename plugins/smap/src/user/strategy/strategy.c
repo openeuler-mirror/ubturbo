@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -110,16 +108,8 @@ int RunStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]
         SMAP_LOGGER_ERROR("Invalid pid %d actc.", process ? process->pid : -1);
         return -EINVAL;
     }
-    if (IsHugeMode()) {
-        if (process->groupPolicy.enabled) {
-            return GroupedMigrationStrategy(process, mlist);
-        }
-        if (IsMultiNumaVm(process)) {
-            return SeparateStrategyMultiNumaVm(process, mlist);
-        } else {
-            return SeparateStrategy(process, mlist);
-        }
-    } else {
-        return SeparateStrategy4K(process, mlist);
+    if (process->groupPolicy.enabled) {
+        return GroupedMigrationStrategy(process, mlist);
     }
+    return PairMigrationStrategy(process, mlist);
 }

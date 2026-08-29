@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: SMAP ioctl module
  */
 
@@ -17,7 +16,6 @@
 
 #define MAX_NR_MIGBACK 50
 
-extern unsigned int smap_mode;
 extern int nr_local_numa;
 
 struct migrate_back_inner_msg {

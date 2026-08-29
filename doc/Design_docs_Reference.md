@@ -15,7 +15,7 @@ UBTurbo是一款开源的节点内资源管理框架, 具备配置读取、插�
 
 # Motivation
 
-UBTurbo是一款Huawei计算产品线自研、开源的节点内资源管理框架, 具备配置读取、插件加载、日志打印和IPC通信能力，集成SMAP能力提供基础的多级内存调度服务。
+UBTurbo是一款openEuler 社区开源的节点内资源管理框架, 具备配置读取、插件加载、日志打印和IPC通信能力，集成SMAP能力提供基础的多级内存调度服务。
 
 ![UBTURBO_ARCHITECTURE](./images/UBTURBO_ARCHITECTURE.png)
 

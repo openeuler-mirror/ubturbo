@@ -1,4 +1,3 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
@@ -47,8 +46,23 @@ TEST_F(BasicTest, KernelNumContigPtes)
 
     size = CONT_PTE_SIZE;
     ret = kernel_num_contig_ptes(size, &pgsize);
-    EXPECT_EQ(CONT_PMDS, ret);
+    EXPECT_EQ(CONT_PTES, ret);
     EXPECT_EQ(PAGE_SIZE, pgsize);
+}
+
+TEST_F(BasicTest, KernelHugePtepGetEarlyReturn)
+{
+    pte_t pte = {};
+    pte_t ret = kernel_huge_ptep_get(&pte);
+    EXPECT_EQ(1UL, ret.pte);
+}
+
+TEST_F(BasicTest, KernelHugePtepGetPresentNotCont)
+{
+    pte_t pte = {};
+    pte.pte = 1UL;
+    pte_t ret = kernel_huge_ptep_get(&pte);
+    EXPECT_EQ(1UL, ret.pte);
 }
 
 TEST_F(BasicTest, FindGetMmByVpid)

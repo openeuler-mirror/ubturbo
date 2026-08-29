@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: smap access mmu module
  */
 
@@ -18,7 +17,8 @@ struct mm_struct *get_mm_by_pid(pid_t pid);
 
 int add_to_bm_hugepage(u64 vaddr, u64 paddr, struct access_pid *ap);
 int add_to_bm_page(u64 paddr, struct access_pid *ap);
-int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap);
+int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap,
+			struct page *page);
 
 static inline struct page *smap_paddr_to_page(phys_addr_t paddr)
 {
@@ -35,6 +35,13 @@ static inline bool is_file_or_shared_page(struct page *page)
 
 	return !folio_test_anon(folio) || folio_test_ksm(folio) ||
 	       page_mapcount(page) > 1 || folio_test_swapcache(folio);
+}
+
+static inline bool is_shared_file_page(struct page *page)
+{
+	struct folio *folio = page_folio(page);
+
+	return !folio_test_anon(folio) && page_mapcount(page) > 1;
 }
 
 static inline void add_to_bm_huge(u64 vaddr, u64 paddr, struct access_pid *ap)

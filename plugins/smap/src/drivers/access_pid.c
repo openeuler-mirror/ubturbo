@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: smap access pid module
  */
 
@@ -56,9 +55,9 @@ void destroy_access_pid(struct access_pid *elem)
 		elem->scan_count[i] = 0;
 		elem->page_num[i] = 0;
 	}
-	if (elem->info.mapping) {
-		vfree(elem->info.mapping);
-		elem->info.mapping = NULL;
+	if (elem->info.priors) {
+		vfree(elem->info.priors);
+		elem->info.priors = NULL;
 	}
 	kfree(elem);
 	return;
@@ -168,15 +167,15 @@ static inline void post_scan_kvm_gfn(struct kvm *kvm, int idx)
 int init_vm_mapping(struct vm_mapping_info *info)
 {
 	if (info->vm_size) {
-		info->mapping = vmalloc(info->vm_size * sizeof(u32));
-		if (!info->mapping) {
+		info->priors = vmalloc(info->vm_size * sizeof(u8));
+		if (!info->priors) {
 			pr_err("unable to allocate memory for VM mapping\n");
 			return -ENOMEM;
 		}
-		clear_vm_mapping(info->mapping, info->vm_size);
+		clear_vm_mapping(info->priors, info->vm_size);
 		return 0;
 	}
-	info->mapping = NULL;
+	info->priors = NULL;
 	return 0;
 }
 
@@ -281,29 +280,28 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 			break;
 		}
 
-		/* 填充addr - 使用相对索引 */
-		actc[len_cnt].addr = len_cnt;
-
+		u8 flags = 0;
 		/* 填充freq */
 		actc[len_cnt].freq = adev->access_bit_actc_data[acidx];
 
-		/* 填充prior - 从mapping获取 */
-		if (ap->info.vm_size && ap->info.mapping &&
-		    (mapping_offset + len_cnt) < ap->info.vm_size) {
-			actc[len_cnt].prior =
-				ap->info.mapping[mapping_offset + len_cnt] &
-				0xff;
+		/* 填充prior - 从priors获取 */
+		if (ap->info.vm_size && ap->info.priors) {
+			if ((mapping_offset + len_cnt) < ap->info.vm_size) {
+				flags |= ACTC_PRIOR_SET(
+					ap->info.priors[mapping_offset +
+							len_cnt]);
+			}
 		} else {
-			actc[len_cnt].prior = 0;
+			flags |= ACTC_PRIOR_SET(0);
 		}
 
 		/* 填充is_white_list */
 		if (ap->white_list_bm[nid] &&
 		    test_bit(acidx, ap->white_list_bm[nid])) {
-			actc[len_cnt].is_white_list = 1;
-		} else {
-			actc[len_cnt].is_white_list = 0;
+			flags |= ACTC_WHITE_LIST_BIT;
 		}
+
+		actc[len_cnt].flags = flags;
 
 		len_cnt++;
 		acidx++;
@@ -491,6 +489,7 @@ int init_access_pid(struct access_add_pid_payload *payload,
 	if (!ap)
 		return -ENOMEM;
 	ap->pid = payload->pid;
+	ap->pid_type = payload->pid_type;
 	ap->numa_nodes = payload->numa_nodes;
 	ap->scan_time = payload->scan_time;
 	ap->ntimes = payload->ntimes;
@@ -503,7 +502,7 @@ int init_access_pid(struct access_add_pid_payload *payload,
 		ap->paddr_bm[i] = NULL;
 		ap->white_list_bm[i] = NULL;
 	}
-	if (is_access_hugepage()) {
+	if (ap->pid_type == SMAP_PID_VM) {
 		if (init_vm_mapping_info(ap->pid, &ap->info)) {
 			kfree(ap);
 			return -EINVAL;
@@ -511,9 +510,9 @@ int init_access_pid(struct access_add_pid_payload *payload,
 	}
 	ret = access_walk_pagemap_prepare(ap);
 	if (ret) {
-		if (ap->info.mapping) {
-			vfree(ap->info.mapping);
-			ap->info.mapping = NULL;
+		if (ap->info.priors) {
+			vfree(ap->info.priors);
+			ap->info.priors = NULL;
 		}
 		kfree(ap);
 		return ret;
@@ -534,8 +533,10 @@ void print_access_pid_list(void)
 	pr_debug("access pid list:\n");
 	down_read(&ap_data.lock);
 	list_for_each_entry(ap, &ap_data.list, node) {
-		pr_debug("pid %d, numa_nodes %x, scan_time %d, type %d\n",
-			 ap->pid, ap->numa_nodes, ap->scan_time, ap->type);
+		pr_debug(
+			"pid %d, pid_type %d, numa_nodes %x, scan_time %d, type %d\n",
+			ap->pid, ap->pid_type, ap->numa_nodes, ap->scan_time,
+			ap->type);
 	}
 	up_read(&ap_data.lock);
 	pr_debug("---------------------\n");
@@ -581,7 +582,7 @@ static int init_ham_pid_memory(struct ham_tracking_info *info,
 		pr_err("unable to allocate memory for HAM access pid physical address array\n");
 		return -ENOMEM;
 	}
-	info->freq[level] = vzalloc(info->len[level] * sizeof(actc_t));
+	info->freq[level] = vzalloc(info->len[level] * sizeof(u16));
 	if (!info->freq[level]) {
 		vfree(info->paddr[level]);
 		pr_err("unable to allocate memory for HAM access pid frequency array\n");
@@ -959,6 +960,7 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 				tmp2->scan_time = ap->scan_time;
 				tmp2->ntimes = ap->ntimes;
 				tmp2->type = ap->type;
+				tmp2->pid_type = ap->pid_type;
 				list_move_tail(&ap->node, &dup_head);
 				break;
 			}
@@ -966,14 +968,18 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 	}
 	/* move all new pids to ap_data.list */
 	list_for_each_entry_safe(ap, tmp, tmp_head, node) {
-		/*
-		 * A new pid may be attached during scan period or migrate period,
-		 * For performance reasons,
-		 * set cur_times to zero directly to ensure a complete scan can be performed.
-		 */
 		ap->cur_times = 0;
-		pid_pte_mkold(ap);
-		submit_one_work(ap);
+		if (access_scan_enabled()) {
+			submit_one_work(ap);
+		} else {
+			/* Disable/migrate 窗口内新加的 pid 不提交扫描，留在
+			 * ap_data.list 等下次 enable 由 submit_scan_works 拉起，
+			 * 避免扫描与 migrate 的 paddr_bm 重分配竞态。
+			 * 同时 complete(work_done) 使 completion_done() 返回
+			 * true，避免 disable 误判 -EBUSY。
+			 */
+			complete(&ap->work_done);
+		}
 		list_move_tail(&ap->node, &ap_data.list);
 	}
 	up_write(&ap_data.lock);
@@ -1236,9 +1242,9 @@ void clean_last_ap_data(struct access_pid *ap)
 		ap->bm_len[i] = 0;
 		ap->page_num[i] = 0;
 	}
-	if (ap->info.mapping) {
-		vfree(ap->info.mapping);
-		ap->info.mapping = NULL;
+	if (ap->info.priors) {
+		vfree(ap->info.priors);
+		ap->info.priors = NULL;
 	}
 }
 
@@ -1270,27 +1276,6 @@ int access_walk_pagemap_prepare(struct access_pid *ap)
 		free_ap_bm_white_list(ap);
 		return ret;
 	}
-	return 0;
-}
-
-int access_walk_pagemap(struct access_pid *ap)
-{
-	int ret;
-	struct pagemapread pm = { 0 };
-	if (!ap) {
-		return -EINVAL;
-	}
-	if (ap->type != NORMAL_SCAN) {
-		return 0;
-	}
-	ret = access_walk_pagemap_prepare(ap);
-	if (ret)
-		return ret;
-	pm.ap = ap;
-	pm.mig_info.pid = ap->pid;
-	pm.mig_type = NORMAL_MIGRATE;
-	walk_pid_pagemap(&pm);
-
 	return 0;
 }
 

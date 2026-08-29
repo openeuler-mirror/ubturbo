@@ -15,7 +15,7 @@ set(CMAKE_SHARED_LINKER_FLAGS " -lgcov --coverage ")
 
 add_subdirectory(3rdparty)
 
-add_compile_definitions(USE_DT)
+add_compile_definitions(USE_DT CONFIG_MIGRATE_PAGES_DMA_OFFLOADING)
 
 # include all source files
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/tiering TEST_SRC)
@@ -74,8 +74,7 @@ list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/smap_debugfs.c)
 
 #tracking_manage
 list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/tracking_manage.c)
-# acpi_mem
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/acpi_mem.c)
+# acpi_helper
 list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/acpi_helper.c)
 
 # pid
@@ -123,13 +122,17 @@ list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/hist_tracking.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/smap_interface.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/smap_inner_interface.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/manage.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/manage_pair.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/manage_numa.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/manage_remote.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/manage_grouped.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/manage_scan.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/thread.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/device.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/user_log/smap_user_log/smap_user_log.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/user_log/smap_log_core.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/access_ioctl.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/oom_migrate.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/virt.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/manage/smap_config.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/strategy_config.c)
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/strategy/migration.c)

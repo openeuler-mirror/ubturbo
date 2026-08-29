@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  * Description: SMAP : ub_hist
  */
 
@@ -10,6 +9,7 @@
 #include <linux/device.h>
 #include <linux/io.h>
 #include "upa_smap.h"
+#include "check.h"
 
 #define BA_STS_VALUE_SIZE 2
 #define BA_STS_VALUE_COUNT 32768
@@ -61,6 +61,24 @@ struct ub_hist_ba_tags {
 	uint64_t ba_tags[0];
 };
 
+#define MAR_CFG_REG_CNT 8
+
+struct ub_flux_mb {
+	uint32_t read[MAR_CFG_REG_CNT];
+	uint32_t write[MAR_CFG_REG_CNT];
+};
+
+struct numa_ub_flux_mb {
+	int numa_id;
+	uint32_t read_mb;
+	uint32_t write_mb;
+};
+
+struct ub_flux_mb_statistic {
+	int len;
+	struct numa_ub_flux_mb flux[SMAP_MAX_REMOTE_NUMNODES];
+};
+
 typedef enum {
 	UB_HIST_SMAP_TYPE_N6 = 0,
 	UB_HIST_SMAP_TYPE_N7
@@ -75,5 +93,9 @@ int ub_hist_query_ba_info(uint64_t ba_tag, struct ub_hist_ba_info *ba_info);
 int ub_hist_set_state(struct ub_hist_ba_config *config, uint64_t ba_tag);
 int ub_hist_get_state(struct ub_hist_ba_config *config, uint64_t ba_tag);
 int ub_hist_get_statistic_result(struct ub_hist_ba_result *result);
+void ub_hist_mar_perf_en(uint32_t perf_prd_ms);
+bool ub_hist_mar_perf_check(void);
+void ub_hist_get_access_count(uint32_t *flux_wr, uint32_t *flux_rd);
+int get_path_idx_by_addr(uint64_t addr, int *idx);
 
 #endif

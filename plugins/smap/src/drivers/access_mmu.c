@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: SMAP access mmu module
  */
 
@@ -46,16 +45,7 @@
 
 #define MAPPING_U32_BITS (32)
 
-#define MAPPING_PRIOR_BIT 8
-#define MAPPING_PAIDX_BIT 20
-#define MAPPING_NODE_BIT 4
-
-#define MAPPING_PRIOR_SHIFT 0
-#define MAPPING_PAIDX_SHIFT (MAPPING_PRIOR_SHIFT + MAPPING_PRIOR_BIT)
-#define MAPPING_NODES_SHIFT (MAPPING_PAIDX_SHIFT + MAPPING_PAIDX_BIT)
-
-#define MAPPING_NODES_MASK \
-	(((1UL << MAPPING_NODE_BIT) - 1) << MAPPING_NODES_SHIFT)
+#define MAPPING_PRIOR_BIT 6
 
 static inline pagemap_entry_t make_pme(u64 frame, u64 flags)
 {
@@ -70,14 +60,13 @@ static int calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
 	return calc_paddr_acidx_iomem(paddr, nid, index, page_size);
 }
 
-static int set_non_anon_bm(struct access_pid *ap, u64 acidx, u64 paddr, int nid)
+static int set_non_anon_bm(struct access_pid *ap, u64 acidx, struct page *page,
+			   int nid)
 {
-	struct page *page = smap_paddr_to_page(paddr);
 	if (!page)
 		return -EINVAL;
-	if (is_file_or_shared_page(page)) {
-		set_bit(acidx, ap->white_list_bm[nid]);
-	}
+	if (is_file_or_shared_page(page))
+		__set_bit(acidx, ap->white_list_bm[nid]);
 	return 0;
 }
 
@@ -98,37 +87,38 @@ int add_to_bm_page(u64 paddr, struct access_pid *ap)
 		return -ERANGE;
 	}
 
-	ret = set_non_anon_bm(ap, acidx, paddr, nid);
+	ret = set_non_anon_bm(ap, acidx, smap_paddr_to_page(paddr), nid);
 	if (ret) {
 		return ret;
 	}
 	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly */
-	if (!test_bit(acidx, ap->paddr_bm[nid])) {
-		set_bit(acidx, ap->paddr_bm[nid]);
+	if (!_test_bit(acidx, ap->paddr_bm[nid])) {
+		__set_bit(acidx, ap->paddr_bm[nid]);
 		ap->page_num[nid]++;
 	}
 	return 0;
 }
 
-int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap)
+int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap,
+			struct page *page)
 {
 	int ret, nid_pos;
 	unsigned long numa_nodes;
 
 	nid_pos = convert_nid_to_pos(nid);
 	numa_nodes = ap->numa_nodes;
-	if (unlikely(!test_bit(nid_pos, &numa_nodes)))
+	if (unlikely(!_test_bit(nid_pos, &numa_nodes)))
 		return -EINVAL;
 
 	if (BIT_WORD(acidx) >= ap->bm_len[nid])
 		return -ERANGE;
 
-	ret = set_non_anon_bm(ap, acidx, paddr, nid);
+	ret = set_non_anon_bm(ap, acidx, page, nid);
 	if (ret)
 		return ret;
 	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly */
-	if (!test_bit(acidx, ap->paddr_bm[nid])) {
-		set_bit(acidx, ap->paddr_bm[nid]);
+	if (!_test_bit(acidx, ap->paddr_bm[nid])) {
+		__set_bit(acidx, ap->paddr_bm[nid]);
 		ap->page_num[nid]++;
 	}
 	return 0;
@@ -152,17 +142,10 @@ static int calc_vaddr_acidx(u64 vaddr, struct vm_mapping_info *info, u64 *acidx)
 	return -ERANGE;
 }
 
-static inline void set_mapping_numa(u32 *map, int nid)
-{
-	*map &= ~MAPPING_NODES_MASK;
-	*map |= ((u32)nid << MAPPING_NODES_SHIFT);
-}
-
-static void set_pa_prior(struct access_pid *ap, u64 vaddr, u64 pa_idx, int nid)
+static void set_pa_prior(struct access_pid *ap, u64 vaddr)
 {
 	u8 prior;
 	int prior_bits;
-	u32 map = 0;
 	u64 va_idx;
 	int shift = __builtin_ctz(g_pagesize_huge);
 	int ret = calc_vaddr_acidx(vaddr, &ap->info, &va_idx);
@@ -174,8 +157,6 @@ static void set_pa_prior(struct access_pid *ap, u64 vaddr, u64 pa_idx, int nid)
 		pr_debug("va_idx is not aligned\n");
 		return;
 	}
-	set_mapping_numa(&map, nid);
-	map |= pa_idx << MAPPING_PRIOR_BIT;
 
 	prior_bits = MAPPING_U32_BITS - __builtin_clz(ap->info.vm_size);
 	if (prior_bits > MAPPING_PRIOR_BIT) {
@@ -183,8 +164,7 @@ static void set_pa_prior(struct access_pid *ap, u64 vaddr, u64 pa_idx, int nid)
 	} else {
 		prior = va_idx;
 	}
-	map |= prior;
-	ap->info.mapping[va_idx] = map;
+	ap->info.priors[va_idx] = prior;
 }
 
 int add_to_bm_hugepage(u64 vaddr, u64 paddr, struct access_pid *ap)
@@ -209,7 +189,7 @@ int add_to_bm_hugepage(u64 vaddr, u64 paddr, struct access_pid *ap)
 		set_bit(acidx, ap->paddr_bm[nid]);
 		ap->page_num[nid]++;
 	}
-	set_pa_prior(ap, vaddr, acidx, nid);
+	set_pa_prior(ap, vaddr);
 	return 0;
 }
 

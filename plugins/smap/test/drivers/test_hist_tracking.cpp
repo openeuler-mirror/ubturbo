@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: SMAP3.0 hist_tracking.c test code
  * Author: z30062841
  * Create: 2024-12-28
@@ -29,7 +28,7 @@
 using namespace std;
 
 extern "C" struct list_head access_dev;
-extern "C" struct list_head drivers_remote_ram_list;
+extern "C" struct list_head remote_ram_list;
 
 class HistTrackingTest : public ::testing::Test {
 protected:
@@ -46,20 +45,19 @@ protected:
     }
 };
 
-extern "C" void drivers_reset_actc_data(struct access_tracking_dev *hdev);
+extern "C" void hist_reset_actc_data(struct access_tracking_dev *hdev);
 TEST_F(HistTrackingTest, reset_actc_data)
 {
     struct access_tracking_dev dev = {
         .page_count = 1
     };
-    dev.access_bit_actc_data = (u16 *)malloc(dev.page_count * sizeof(u16));
-    drivers_reset_actc_data(&dev);
+    dev.access_bit_actc_data = (actc_t *)malloc(dev.page_count * sizeof(actc_t));
+    hist_reset_actc_data(&dev);
     EXPECT_EQ(0, dev.access_bit_actc_data[0]);
 }
 
 extern "C" struct smap_hist_dev g_smap_hist_dev;
 extern "C" void hist_tracking_enable(struct device *ldev);
-extern "C" int drivers_actc_buffer_reinit(struct access_tracking_dev *hdev);
 TEST_F(HistTrackingTest, hist_tracking_enable)
 {
     struct access_tracking_dev hdev = {};
@@ -67,8 +65,6 @@ TEST_F(HistTrackingTest, hist_tracking_enable)
     hdev.is_hist = true;
     hdev.enable_on = false;
     hdev.page_count = 0;
-    g_smap_hist_dev.thread_enable = false;
-    MOCKER(drivers_actc_buffer_reinit).stubs().will(returnValue(0));
     hist_tracking_enable(&hdev.ldev);
     EXPECT_EQ(true, hdev.enable_on);
     EXPECT_EQ(true, g_smap_hist_dev.thread_enable);
@@ -86,14 +82,14 @@ TEST_F(HistTrackingTest, hist_tracking_disable)
     EXPECT_EQ(false, g_smap_hist_dev.thread_enable);
 }
 
-extern "C" void drivers_actc_buffer_deinit(struct access_tracking_dev *hdev);
+extern "C" void hist_actc_buffer_deinit(struct access_tracking_dev *hdev);
 TEST_F(HistTrackingTest, actc_buffer_deinit)
 {
     struct access_tracking_dev dev = {
         .page_count = 1
     };
-    dev.access_bit_actc_data = (u16 *)malloc(dev.page_count * sizeof(u16));
-    drivers_actc_buffer_deinit(&dev);
+    dev.access_bit_actc_data = (actc_t *)malloc(dev.page_count * sizeof(actc_t));
+    hist_actc_buffer_deinit(&dev);
     EXPECT_EQ(0, dev.page_count);
 }
 
@@ -109,8 +105,8 @@ TEST_F(HistTrackingTest, hist_get_page_size)
 }
 
 extern int nr_local_numa;
-extern "C" u64 drivers_calc_access_len(struct access_tracking_dev *hdev);
-TEST_F(HistTrackingTest, calc_access_len)
+extern "C" u64 hist_calc_access_len(struct access_tracking_dev *hdev);
+TEST_F(HistTrackingTest, hist_calc_access_len)
 {
     u64 ret = 0;
     nr_local_numa = 1;
@@ -119,14 +115,14 @@ TEST_F(HistTrackingTest, calc_access_len)
     };
     MOCKER(hist_get_page_size).stubs().will(returnValue(0));
     MOCKER(get_node_page_cnt_iomem).stubs().will(returnValue((u64)1));
-    ret = drivers_calc_access_len(&dev);
+    ret = hist_calc_access_len(&dev);
     EXPECT_EQ(1, ret);
 
     GlobalMockObject::verify();
     nr_local_numa = 3;
     MOCKER(hist_get_page_size).stubs().will(returnValue(0));
     MOCKER(get_node_actc_len).stubs().will(returnValue((u64)2));
-    ret = drivers_calc_access_len(&dev);
+    ret = hist_calc_access_len(&dev);
     EXPECT_EQ(2, ret);
 }
 
@@ -142,6 +138,7 @@ TEST_F(HistTrackingTest, hist_dev_pgsize_update)
     hist_dev_pgsize_update(PAGE_MODE_2M);
 }
 
+extern "C" int hist_actc_buffer_reinit(struct access_tracking_dev *hdev);
 TEST_F(HistTrackingTest, actc_buffer_reinit)
 {
     int ret;
@@ -150,10 +147,10 @@ TEST_F(HistTrackingTest, actc_buffer_reinit)
         .page_count = 1
     };
 
-    MOCKER(drivers_calc_access_len).stubs().will(returnValue((u64)10));
-    MOCKER(drivers_actc_buffer_deinit).stubs().will(ignoreReturnValue());
+    MOCKER(hist_calc_access_len).stubs().will(returnValue((u64)10));
+    MOCKER(hist_actc_buffer_deinit).stubs().will(ignoreReturnValue());
     MOCKER(hist_dev_pgsize_update).stubs().will(ignoreReturnValue());
-    ret = drivers_actc_buffer_reinit(&dev);
+    ret = hist_actc_buffer_reinit(&dev);
     EXPECT_EQ(10, dev.page_count);
 }
 
@@ -165,9 +162,9 @@ TEST_F(HistTrackingTest, actc_buffer_reinit_two)
         .page_count = 0
     };
 
-    MOCKER(drivers_calc_access_len).stubs().will(returnValue((u64)0));
-    MOCKER(drivers_reset_actc_data).stubs().will(ignoreReturnValue());
-    ret = drivers_actc_buffer_reinit(&dev);
+    MOCKER(hist_calc_access_len).stubs().will(returnValue((u64)0));
+    MOCKER(hist_reset_actc_data).stubs().will(ignoreReturnValue());
+    ret = hist_actc_buffer_reinit(&dev);
     EXPECT_EQ(0, ret);
 }
 
@@ -179,9 +176,9 @@ TEST_F(HistTrackingTest, actc_buffer_reinit_three)
         .page_count = 1
     };
 
-    MOCKER(drivers_calc_access_len).stubs().will(returnValue((u64)1));
-    MOCKER(drivers_reset_actc_data).stubs().will(ignoreReturnValue());
-    ret = drivers_actc_buffer_reinit(&dev);
+    MOCKER(hist_calc_access_len).stubs().will(returnValue((u64)1));
+    MOCKER(hist_reset_actc_data).stubs().will(ignoreReturnValue());
+    ret = hist_actc_buffer_reinit(&dev);
     EXPECT_EQ(0, ret);
 }
 
@@ -193,23 +190,23 @@ TEST_F(HistTrackingTest, hist_tracking_set_page_size)
     ret = hist_tracking_set_page_size(&hdev.ldev, 1);
     EXPECT_EQ(-EINVAL, ret);
 
-    MOCKER(drivers_actc_buffer_reinit).stubs().will(returnValue(0));
+    MOCKER(hist_actc_buffer_reinit).stubs().will(returnValue(0));
     ret = hist_tracking_set_page_size(&hdev.ldev, 0);
     EXPECT_EQ(0, ret);
 }
 
-extern "C" int drivers_actc_buffer_init(struct access_tracking_dev *hdev);
+extern "C" int hist_actc_buffer_init(struct access_tracking_dev *hdev);
 TEST_F(HistTrackingTest, actc_buffer_init)
 {
     int ret;
     struct access_tracking_dev dev = {};
-    MOCKER(drivers_calc_access_len).stubs().will(returnValue((u64)0));
-    ret = drivers_actc_buffer_init(&dev);
+    MOCKER(hist_calc_access_len).stubs().will(returnValue((u64)0));
+    ret = hist_actc_buffer_init(&dev);
     EXPECT_EQ(0, ret);
 
     GlobalMockObject::verify();
-    MOCKER(drivers_calc_access_len).stubs().will(returnValue((u64)1));
-    ret = drivers_actc_buffer_init(&dev);
+    MOCKER(hist_calc_access_len).stubs().will(returnValue((u64)1));
+    ret = hist_actc_buffer_init(&dev);
     EXPECT_EQ(1, dev.page_count);
 }
 
@@ -218,9 +215,9 @@ TEST_F(HistTrackingTest, actc_buffer_init_alloc_fail)
     int ret;
     struct access_tracking_dev dev = {};
 
-    MOCKER(drivers_calc_access_len).stubs().will(returnValue((u64)2));
+    MOCKER(hist_calc_access_len).stubs().will(returnValue((u64)2));
     MOCKER(vzalloc).stubs().will(returnValue((void *)nullptr));
-    ret = drivers_actc_buffer_init(&dev);
+    ret = hist_actc_buffer_init(&dev);
     EXPECT_EQ(-ENOMEM, ret);
     EXPECT_EQ(0, dev.page_count);
 }
@@ -236,7 +233,7 @@ TEST_F(HistTrackingTest, hist_tracking_deinit)
     hdev->tracking_dev = (struct tracking_dev *)malloc(sizeof(struct tracking_dev));
     list_add_tail(&hdev->list, &access_dev);
     MOCKER(tracking_dev_remove).stubs().will(ignoreReturnValue());
-    MOCKER(drivers_actc_buffer_deinit).stubs().will(ignoreReturnValue());
+    MOCKER(hist_actc_buffer_deinit).stubs().will(ignoreReturnValue());
     hist_tracking_deinit();
 }
 
@@ -246,7 +243,7 @@ TEST_F(HistTrackingTest, hist_tracking_init)
     int ret;
     struct tracking_dev *trk_dev =  (struct tracking_dev *)malloc(sizeof(struct tracking_dev));
 
-    MOCKER(drivers_actc_buffer_init).stubs().will(returnValue(0));
+    MOCKER(hist_actc_buffer_init).stubs().will(returnValue(0));
     MOCKER(tracking_dev_add).stubs().will(returnValue(trk_dev));
     ret = hist_tracking_init();
     EXPECT_EQ(0, ret);
@@ -257,12 +254,12 @@ TEST_F(HistTrackingTest, hist_tracking_init_two)
     int ret;
 
     INIT_LIST_HEAD(&access_dev);
-    MOCKER(drivers_actc_buffer_init).stubs().will(returnValue(1));
+    MOCKER(hist_actc_buffer_init).stubs().will(returnValue(1));
     ret = hist_tracking_init();
     EXPECT_EQ(-ENODEV, ret);
 
     GlobalMockObject::verify();
-    MOCKER(drivers_actc_buffer_init).stubs().will(returnValue(0));
+    MOCKER(hist_actc_buffer_init).stubs().will(returnValue(0));
     MOCKER(tracking_dev_add).stubs().will(returnValue((struct tracking_dev *)nullptr));
     ret = hist_tracking_init();
     EXPECT_EQ(-ENODEV, ret);
@@ -273,7 +270,7 @@ TEST_F(HistTrackingTest, hist_tracking_init_device_setup_fail)
     int ret;
 
     INIT_LIST_HEAD(&access_dev);
-    MOCKER(drivers_actc_buffer_init).stubs().will(returnValue(0));
+    MOCKER(hist_actc_buffer_init).stubs().will(returnValue(0));
     MOCKER(device_add).stubs().will(returnValue(-1));
     ret = hist_tracking_init();
     EXPECT_EQ(-ENODEV, ret);

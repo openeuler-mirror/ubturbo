@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -45,11 +43,6 @@ static inline uint32_t NrRemotePage(ProcessAttr *process)
         pages += process->walkPage.nrPages[n];
     }
     return pages;
-}
-
-static inline uint32_t NrTotalPages(ProcessAttr *process)
-{
-    return NrLocalPage(process) + NrRemotePage(process);
 }
 
 static inline int CheckActcDataValid(ProcessAttr *process)

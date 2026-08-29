@@ -15,4 +15,24 @@ typedef struct cpumask { unsigned long bits[BITS_TO_LONGS(NR_CPUS)]; } cpumask_t
 
 typedef struct cpumask cpumask_var_t[1];
 
+static inline void cpumask_clear(struct cpumask *dstp)
+{
+    unsigned int i;
+    for (i = 0; i < BITS_TO_LONGS(NR_CPUS); i++)
+        dstp->bits[i] = 0;
+}
+
+static inline void cpumask_set_cpu(unsigned int cpu, struct cpumask *dstp)
+{
+    if (cpu < NR_CPUS)
+        dstp->bits[cpu / BITS_PER_LONG] |= 1UL << (cpu % BITS_PER_LONG);
+}
+
+static inline int cpu_online(int cpu)
+{
+    return cpu >= 0 && cpu < (int)num_online_cpus();
+}
+
+#define cpumask_pr_args(maskp) NR_CPUS, (maskp)->bits
+
 #endif /* __LINUX_CPUMASK_H */

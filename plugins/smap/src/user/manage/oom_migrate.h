@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -12,8 +10,9 @@
 #ifndef __OOM_MIGRATE_H__
 #define __OOM_MIGRATE_H__
 
-#define PAGEMAP_LINE_LEN 256
+#include <stdint.h>
 
+/* 紧急迁出主入口：把 size 字节、落在受管进程 L1 的内存迁到其 L2。 */
 void FindPidMigrateSize(uint64_t size);
 
 #endif /* __OOM_MIGRATE_H__ */

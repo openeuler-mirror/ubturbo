@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2024. All rights reserved.
  * Description: SMAP Tiering Memory Solution: get accessed bit模块
  */
 
@@ -16,8 +15,6 @@
 #define SCAN_PERIOD_UNIT_MS 50
 
 #define MMAPLOCK_BATCH_SIZE (64UL * 1024 * 1024)
-#define SCAN_GROUP_SIZE (64UL * 1024) /* 64KiB分组扫描优化 */
-
 #define SCAN_RESULT_CAPACITY (MMAPLOCK_BATCH_SIZE / PAGE_SIZE)
 
 extern struct list_head remote_ram_list;
@@ -43,7 +40,7 @@ struct ham_tracking_info {
 	struct proc_dir_entry *pde;
 	u64 len[NR_LEVEL];
 	u64 *paddr[NR_LEVEL];
-	actc_t *freq[NR_LEVEL];
+	u16 *freq[NR_LEVEL];
 	struct list_head node;
 };
 
@@ -80,10 +77,9 @@ struct pte_walk {
 
 struct freq_info {
 	u64 hpa;
-	actc_t freq;
+	u16 freq; /* HAM 频次为内核态迁移决策真值, 保留 u16 不压缩, 与 ham_migration.h 对齐 */
 };
 
-int pid_pte_mkold(struct access_pid *ap);
 int smap_create_tracking_info_file(struct ham_tracking_info *info);
 int get_ham_pages_freqs(pid_t pid, struct freq_info **freq_info_array,
 			uint64_t *freq_info_num);

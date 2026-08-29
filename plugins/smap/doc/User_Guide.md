@@ -7,6 +7,12 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 在之后的时间内, SMAP周期性统计内存冷热信息, 保证虚机内应用在使用远端内存时, 性能可控。
 当NUMA内的内存使用率下降到一定水线时, SMAP支持按照借用的内存迁回虚机数据。
 
+> 多 NUMA 迁出说明：
+> * `pageType` 由 `ubturbo_smap_start` 启动时传入，决定本次跟踪的页面类型：4K 普通进程使用 0，2M 虚机使用 1；调用迁出接口时必须与启动页型一致。
+> * 普通 `ubturbo_smap_migrate_out` 支持一个 PID 同时配置多个远端 NUMA。调用方只配置 remote 聚合目标，不指定本地 NUMA；SMAP 会根据 CPU affinity、页面驻留和既有迁移账本自动管理多个 local NUMA。
+> * 每次普通 migrate-out 配置均全量替换该 PID 的远端目标；未包含的 remote 会清零，`payload.count == 0` 表示清空全部普通迁出目标。`srcNid` 仅为 ABI 兼容保留，普通迁出中不生效。
+> * 远端容量由 private/shared 容量在所有 PID 间统一仲裁。容量不足时配置仍会保存，SMAP 在后续周期按可用容量收敛；容量恢复后无需重新下发目标。多个 local 共用 remote 时，若无法可靠判断页面来源，SMAP 会跳过冷热交换，但仍会执行必要的迁出和迁回。
+
 ## SMAP安装&部署
 
 #### 前提条件
@@ -41,7 +47,7 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
      <pre class="screen" id="screen1810215131197"><p class="p" id="p995994814275">insmod smap_histogram_tracking.ko</p></pre>
    * 安装smap_access_tracking.ko。在UB仿真中安装时，如使能SMAP硬件判热功能，则增加enable_hist=1参数。
      
-     <pre class="screen"><p class="p" id="p8959848192712">insmod smap_access_tracking.ko smap_scene=2</p></pre>
+     <pre class="screen"><p class="p" id="p8959848192712">insmod smap_access_tracking.ko</p></pre>
 3. 检查扫描驱动是否载入成功。
    
    <pre class="screen" id="screen1884674894220"><p class="p" id="p9960648142719">lsmod | grep tracking</p></pre>
@@ -56,10 +62,8 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
    
    <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen14933143815411"><p class="p" id="p8962164813273">cd /lib/modules/smap</p></pre>
    
-   * 容器场景
-     <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen10449144916557"><p class="p" id="p4962648122720">insmod smap_tiering.ko smap_pgsize=0</p></pre>
-   * 虚拟化场景
-     <pre class="screen" id="screen10850151716211"><p class="p" id="p1296384811277">insmod smap_tiering.ko smap_scene=2</p></pre>
+   pageType（容器4K=0 / 虚拟化2M=1）由 ubturbo_smap_start(pageType) 下发，insmod 阶段不再通过参数区分场景。
+   <pre class="screen"><p class="p" id="p4962648122720">insmod smap_tiering.ko</p></pre>
 6. 检查迁移驱动是否载入成功，返回smap信息即表示安装成功。
    
    <pre class="screen"><p class="p" id="p20963104815273">lsmod | grep smap</p></pre>

@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  * Description: SMAP : tests for smap_hist_mid
  * Create: 2025-7-2
  */
@@ -203,4 +202,66 @@ TEST_F(DriversUbHistMidTest, UbHistGetBaResourcePropertyReadFail)
     MOCKER(device_property_read_u64).stubs().will(returnValue(-EINVAL));
     int ret = ub_hist_get_ba_resource(&test_pdev, &ba_dev);
     EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" void ub_hist_mar_perf_en(uint32_t perf_prd_ms);
+extern "C" bool ub_hist_mar_perf_check(void);
+extern "C" void ub_hist_get_access_count(uint32_t *flux_wr, uint32_t *flux_rd);
+extern "C" void __iomem *ub_hist_mar_cfg_base_addr[MAR_CFG_REG_CNT];
+extern "C" uint32_t ub_hist_mar_perf_expected_val;
+
+TEST_F(DriversUbHistMidTest, MarPerfEnSetsExpectedVal)
+{
+    /* Setup valid base addrs (writel/readl are macros that operate on the address) */
+    uint32_t perf_bufs[MAR_CFG_REG_CNT] = {0};
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        ub_hist_mar_cfg_base_addr[i] = (void __iomem *)&perf_bufs[i];
+    }
+
+    ub_hist_mar_perf_en(200);
+    /* Verify expected val is set and contains the perf_prd bits */
+    uint32_t expected_prd = (200 * 1000000 >> 4);
+    EXPECT_NE(0u, ub_hist_mar_perf_expected_val);
+    EXPECT_EQ(expected_prd, ub_hist_mar_perf_expected_val & 0x0FFFFFFF);
+
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        ub_hist_mar_cfg_base_addr[i] = nullptr;
+    }
+}
+
+TEST_F(DriversUbHistMidTest, MarPerfCheckNoBaseAddr)
+{
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        ub_hist_mar_cfg_base_addr[i] = nullptr;
+    }
+    ub_hist_mar_perf_expected_val = 0x1234;
+    bool ret = ub_hist_mar_perf_check();
+    EXPECT_EQ(false, ret);
+}
+
+TEST_F(DriversUbHistMidTest, GetAccessCountNullParams)
+{
+    ub_hist_get_access_count(nullptr, nullptr);
+}
+
+TEST_F(DriversUbHistMidTest, GetAccessCountNormalRead)
+{
+    uint32_t flux_wr[MAR_CFG_REG_CNT] = {0};
+    uint32_t flux_rd[MAR_CFG_REG_CNT] = {0};
+
+    /* readl is a macro returning the address itself; use stack buffers as base */
+    uint32_t wr_buf[MAR_CFG_REG_CNT] = {10, 20, 30, 40, 50, 60, 70, 80};
+    uint32_t rd_buf[MAR_CFG_REG_CNT] = {11, 21, 31, 41, 51, 61, 71, 81};
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        ub_hist_mar_cfg_base_addr[i] = (void __iomem *)&wr_buf[i];
+    }
+
+    ub_hist_get_access_count(flux_wr, flux_rd);
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        EXPECT_NE(0, flux_wr[i]);
+    }
+
+    for (int i = 0; i < MAR_CFG_REG_CNT; i++) {
+        ub_hist_mar_cfg_base_addr[i] = nullptr;
+    }
 }

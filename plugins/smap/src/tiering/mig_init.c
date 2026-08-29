@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: SMAP: SMAP MIGRATE
  */
 
@@ -12,26 +11,18 @@
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/ioctl.h>
-#include <linux/sort.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
 
 #include "common.h"
-#include "acpi_mem.h"
 #include "iomem.h"
-#include "ham_migration.h"
 #include "smap_migrate_pages.h"
-#ifdef CRITICAL_OFF
 #include "critical.h"
-#endif
 #include "mig_init.h"
 
 #undef pr_fmt
 #define pr_fmt(fmt) "SMAP_mig: " fmt
 
-#define CMP_LT (-1)
-#define CMP_EQ 0
-#define CMP_GT 1
 #define MAX_MIGRATE_PID_NUMA_RETRY_TIME 100
 
 static dev_t mig_dev = 0;
@@ -130,17 +121,6 @@ out:
 	return ret;
 }
 
-static int cmp_mlist_addr_ascend(const void *a, const void *b)
-{
-	u64 tmp_a = *(u64 *)a;
-	u64 tmp_b = *(u64 *)b;
-
-	if (tmp_a == tmp_b) {
-		return CMP_EQ;
-	}
-	return tmp_a < tmp_b ? CMP_LT : CMP_GT;
-}
-
 static int convert_migrate_list(int len, struct mig_list *mlist)
 {
 	int i, ret;
@@ -152,10 +132,7 @@ static int convert_migrate_list(int len, struct mig_list *mlist)
 	for (i = 0; i < len; i++) {
 		struct mig_list *ml = &mlist[i];
 
-		/* Sort ml->addr to accelerate conversion */
-		sort(ml->addr, ml->nr, sizeof(u64), cmp_mlist_addr_ascend,
-		     NULL);
-
+		/* Input addresses are already in ascending order, no need to sort */
 		ret = convert_pos_to_paddr_sorted(ml->pid, ml->from, ml->nr,
 						  ml->addr);
 		if (ret) {
@@ -198,25 +175,18 @@ static int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist)
 
 static bool is_migrate_msg_valid(struct migrate_msg *msg)
 {
-	int max_cnt = smap_pgsize == HUGE_PAGE ? MAX_2M_MIGMSG_CNT
+	int max_cnt = smap_pgtype == HUGE_PAGE ? MAX_2M_MIGMSG_CNT
 					       : MAX_4K_MIGMSG_CNT;
-	int page_size = smap_pgsize == HUGE_PAGE ? g_pagesize_huge : PAGE_SIZE;
+	int page_size = smap_pgtype == HUGE_PAGE ? g_pagesize_huge : PAGE_SIZE;
 
 	if (msg->cnt <= 0 || msg->cnt > max_cnt) {
 		pr_err("invalid migrate message cnt: %d passed to check\n",
 		       msg->cnt);
 		return false;
 	}
-	if (msg->mul_mig.page_size != page_size) {
+	if (msg->page_size != page_size) {
 		pr_err("invalid page size: %d passed to check\n",
-		       msg->mul_mig.page_size);
-		return false;
-	}
-	if (msg->mul_mig.is_mul_thread &&
-	    (msg->mul_mig.nr_thread <= 1 ||
-	     msg->mul_mig.nr_thread > MAX_NR_MIGRATE_THREADS)) {
-		pr_err("invalid threads number: %d passed to check\n",
-		       msg->mul_mig.nr_thread);
+		       msg->page_size);
 		return false;
 	}
 	return true;
@@ -237,8 +207,8 @@ static int __ioctl_migrate(void __user *argp)
 	if (ret) {
 		return ret;
 	}
+
 	ret = do_migrate(&msg, mig_list);
-	filter_4k_migrate_info();
 	if (copy_to_user(argp, &msg, sizeof(msg)))
 		pr_err("unable to copy migrate message to user space\n");
 	if (copy_to_user(msg.mig_list, mig_list,
@@ -331,7 +301,7 @@ static int check_mig_msg(struct mig_payload *payloads, int len)
 
 static void init_pm_info(struct pagemapread *pm, struct mig_payload *payload)
 {
-	int page_size = smap_pgsize == HUGE_PAGE ? g_pagesize_huge : PAGE_SIZE;
+	int page_size = smap_pgtype == HUGE_PAGE ? g_pagesize_huge : PAGE_SIZE;
 	pm->mig_type = REMOTE_MIGRATE;
 	pm->mig_info.pid = payload->pid;
 	pm->mig_info.folios_len =
@@ -386,13 +356,13 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 					       HUNDRED;
 				mig_cnt = pm.mig_info.mig_cnt - keep_cnt;
 			} else {
-				mig_cnt = smap_pgsize == HUGE_PAGE
+				mig_cnt = smap_pgtype == HUGE_PAGE
 						  ? (payloads[i].mem_size >>
 						     KB_TO_2M)
 						  : (payloads[i].mem_size >>
 						     KB_TO_4K);
 			}
-			if (smap_pgsize != HUGE_PAGE) {
+			if (smap_pgtype != HUGE_PAGE) {
 				for (int j = mig_cnt; j < pm.mig_info.mig_cnt;
 				     j++) {
 					folio_put(pm.mig_info.folios[j]);
@@ -520,13 +490,19 @@ static int __ioctl_migrate_pid_remote_numa(void __user *argp)
 	return ret;
 }
 
-static int __ioctl_check_pagesize(void __user *argp)
+static int __ioctl_set_pagetype(void __user *argp)
 {
 	uint32_t pageType;
 	if (copy_from_user(&pageType, argp, sizeof(uint32_t))) {
 		return -EFAULT;
 	}
-	return pageType == smap_pgsize ? 0 : -EINVAL;
+	if (pageType != HUGE_PAGE && pageType != NORMAL_PAGE) {
+		pr_err("invalid page type: %u passed to set\n", pageType);
+		return -EINVAL;
+	}
+	smap_pgtype = pageType;
+	pr_info("set smap page type to %u\n", smap_pgtype);
+	return 0;
 }
 
 static int __ioctl_set_ub_dma_avail(void __user *argp)
@@ -555,8 +531,8 @@ static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 		rc = __ioctl_migrate(argp);
 		break;
 	}
-	case SMAP_CHECK_PAGESIZE: {
-		rc = __ioctl_check_pagesize(argp);
+	case SMAP_SET_PAGETYPE: {
+		rc = __ioctl_set_pagetype(argp);
 		break;
 	}
 	case SMAP_MIG_MIGRATE_NUMA: {

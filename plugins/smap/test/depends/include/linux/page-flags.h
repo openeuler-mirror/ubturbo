@@ -57,6 +57,10 @@ static inline bool folio_test_swapcache(struct folio *folio)
     return false;
 }
 
+static inline void folio_set_young(struct folio *folio)
+{
+}
+
 #define PF_POISONED_CHECK(page) ({ page; })
 
 #ifdef __cplusplus

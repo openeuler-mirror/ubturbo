@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.‘
  */
 #include <gmock/gmock.h>
 #include <cstring>
@@ -49,11 +48,14 @@ protected:
     void SetUp() override
     {
         cout << "[TestCallBackManager SetUp Begin]" << endl;
+        // 默认虚机场景, 保证libvirt初始化分支被覆盖
+        RmrsConfig::Instance().SetRmrsScene(RmrsScene::VM);
         cout << "[TestCallBackManager SetUp End]" << endl;
     }
     void TearDown() override
     {
         cout << "[TestCallBackManager TearDown Begin]" << endl;
+        RmrsConfig::Instance().SetRmrsScene(RmrsScene::UNKNOWN);
         GlobalMockObject::verify();
         cout << "[TestCallBackManager TearDown End]" << endl;
     }
@@ -80,6 +82,26 @@ TEST_F(TestCallBackManager, InitFailed2)
     MOCKER_CPP(LibvirtHelper::Init, RmrsResult(*)()).stubs().will(returnValue(1));
     auto res = CallbackManager::Init();
     ASSERT_EQ(res, 1);
+}
+
+TEST_F(TestCallBackManager, InitSucceedInContainerScene)
+{
+    // 容器场景(pageType=0)跳过libvirt初始化, 即使LibvirtHelper::Init失败也不影响初始化结果
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::CONTAINER);
+    MOCKER_CPP(ResourceExport::Init, RmrsResult(*)()).stubs().will(returnValue(0));
+    MOCKER_CPP(LibvirtHelper::Init, RmrsResult(*)()).stubs().will(returnValue(1));
+    auto res = CallbackManager::Init();
+    ASSERT_EQ(res, 0);
+}
+
+TEST_F(TestCallBackManager, InitSucceedInUnknownScene)
+{
+    // 未知场景(pageType文件缺失)不阻塞插件加载, 跳过libvirt初始化等待业务惰性触发
+    RmrsConfig::Instance().SetRmrsScene(RmrsScene::UNKNOWN);
+    MOCKER_CPP(ResourceExport::Init, RmrsResult(*)()).stubs().will(returnValue(0));
+    MOCKER_CPP(LibvirtHelper::Init, RmrsResult(*)()).stubs().will(returnValue(1));
+    auto res = CallbackManager::Init();
+    ASSERT_EQ(res, 0);
 }
 
 TEST_F(TestCallBackManager, SetResponseSuccess)

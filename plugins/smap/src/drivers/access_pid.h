@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: smap access pid module
  */
 
@@ -47,7 +46,7 @@ struct vm_mapping_info {
 	u8 nr_segs;
 	u32 vm_size;
 	struct va_segment segs[MAX_NODE_NUM];
-	u32 *mapping;
+	u8 *priors;
 };
 
 typedef enum {
@@ -58,6 +57,7 @@ typedef enum {
 
 struct access_pid {
 	pid_t pid;
+	smap_pid_type pid_type;
 	u32 numa_nodes;
 	scan_type type;
 	u32 scan_time;
@@ -120,7 +120,6 @@ void access_remove_pid(int len, struct access_remove_pid_payload *payload);
 void access_remove_all_pid(void);
 void change_ap_type(pid_t pid);
 void clean_last_ap_data(struct access_pid *ap);
-int access_walk_pagemap(struct access_pid *ap);
 struct access_pid *find_access_pid(pid_t pid);
 int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr);
 int init_ap_bm_white_list(int node_len, u64 *node_page_count,
@@ -139,10 +138,10 @@ static inline bool access_pid_cur_last_scanning(struct access_pid *ap)
 	return ap->type == NORMAL_SCAN && ap->cur_times + 1 >= ap->ntimes;
 }
 
-static inline void clear_vm_mapping(u32 *mapping, u32 len)
+static inline void clear_vm_mapping(u8 *priors, u32 len)
 {
-	if (mapping)
-		memset(mapping, 0xff, len * sizeof(u32));
+	if (priors)
+		memset(priors, 0xff, len * sizeof(u8));
 }
 
 static inline void set_ap_whole_state(struct access_pid_struct *aps,

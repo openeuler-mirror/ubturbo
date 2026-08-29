@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -20,7 +18,7 @@
 #include "securec.h"
 #include "strategy_config.h"
 
-#define STRATEGY_CONFIG_ENTRY 14
+#define STRATEGY_CONFIG_ENTRY 18
 #define STRATEGY_CONFIG_BUFFSIZE 500
 
 #define RETURN_OK 0
@@ -63,9 +61,46 @@
 #define DEFAULT_MIGRATE_MODE 1
 #define MIN_MIGRATE_MODE 0
 
-#define SCAN_MULTIPLE 1UL
+#define DEFAULT_MIGRATE_MODE_ENABLE 0
+
+#define MAX_UB_BW_THRESHOLD 65535
+#define DEFAULT_UB_BW_THRESHOLD 0
 
 #define RADIX_10 10UL
+
+#define SYS_CPU_POSSIBLE "/sys/devices/system/cpu/possible"
+
+/* 从 /sys/devices/system/cpu/possible 读取有效的 CPU 范围 */
+static void GetSystemCpuRange(uint32_t *cpuMin, uint32_t *cpuMax)
+{
+    *cpuMin = 0;
+    *cpuMax = 0;
+
+    FILE *fp = fopen(SYS_CPU_POSSIBLE, "r");
+    if (fp == NULL) {
+        SMAP_LOGGER_ERROR("Open %s failed, use default cpu range 0-0.", SYS_CPU_POSSIBLE);
+        return;
+    }
+
+    char buf[64] = { 0 };
+    if (fgets(buf, sizeof(buf), fp) == NULL) {
+        SMAP_LOGGER_ERROR("Read %s failed, use default cpu range 0-0.", SYS_CPU_POSSIBLE);
+        (void)fclose(fp);
+        return;
+    }
+    (void)fclose(fp);
+
+    /* 解析 "min-max" 格式，例如 "0-127" */
+    uint32_t min = 0, max = 0;
+    if (sscanf_s(buf, "%u-%u", &min, &max) != 2) {
+        SMAP_LOGGER_ERROR("Parse %s failed, content:%s, use default cpu range 0-0.", SYS_CPU_POSSIBLE, buf);
+        return;
+    }
+
+    *cpuMin = min;
+    *cpuMax = max;
+    SMAP_LOGGER_DEBUG("System cpu range: %u-%u.", *cpuMin, *cpuMax);
+}
 
 typedef struct {
     uint32_t scanPeriod;
@@ -80,11 +115,16 @@ typedef struct {
     uint32_t groupSwapLocalWatermarkRatio;
     uint32_t migrateMode;
     bool migrateModeChanged;
+    bool migrateModeEnable;
     bool zeroFreqMigrateEnable;
     bool adaptiveRatioEnable;
     bool fileConfSwitch;
     bool scanPeriodChanged;
     bool migratePeriodChanged;
+    bool scanCpuChanged;
+    uint32_t scanCpuMin;
+    uint32_t scanCpuMax;
+    uint32_t ubBwThreshold;
 } StrategyConfig;
 
 static StrategyConfig g_tmpStrategyConfig;
@@ -154,7 +194,6 @@ uint32_t GetMigrateModeConfig(void)
 {
     return g_strategyConfig.migrateMode;
 }
-
 bool GetMigrateModeChanged(void)
 {
     return g_strategyConfig.migrateModeChanged;
@@ -163,6 +202,31 @@ bool GetMigrateModeChanged(void)
 void SetMigrateModeChanged(bool val)
 {
     g_strategyConfig.migrateModeChanged = val;
+}
+
+bool GetMigrateModeEnableConfig(void)
+{
+    return g_strategyConfig.migrateModeEnable;
+}
+
+uint32_t GetScanCpuMinConfig(void)
+{
+    return g_strategyConfig.scanCpuMin;
+}
+
+uint32_t GetScanCpuMaxConfig(void)
+{
+    return g_strategyConfig.scanCpuMax;
+}
+
+bool GetScanCpuChanged(void)
+{
+    return g_strategyConfig.scanCpuChanged;
+}
+
+void SetScanCpuChanged(bool val)
+{
+    g_strategyConfig.scanCpuChanged = val;
 }
 
 bool GetZeroFreqMigrateEnableConfig(void)
@@ -200,6 +264,11 @@ void SetMigratePeriodChanged(bool val)
     g_strategyConfig.migratePeriodChanged = val;
 }
 
+uint32_t GetUbBwThresholdConfig(void)
+{
+    return g_strategyConfig.ubBwThreshold;
+}
+
 static int32_t ConfigReadValueToInt(char *pvalue, uint32_t *resultvalue)
 {
     uint64_t result = 0;
@@ -230,11 +299,6 @@ static int32_t ConfigScanPeriod(char *substr, char *value)
     if (g_tmpStrategyConfig.scanPeriod < MIN_SCAN_PERIOD || g_tmpStrategyConfig.scanPeriod > MAX_SCAN_PERIOD) {
         SMAP_LOGGER_ERROR("Config scan period(%d) invalid, range(%d-%d), key:%s.", g_tmpStrategyConfig.scanPeriod,
                           MIN_SCAN_PERIOD, MAX_SCAN_PERIOD, substr);
-        return RETURN_ERROR;
-    }
-    if (g_tmpStrategyConfig.scanPeriod % SCAN_MULTIPLE != 0) {
-        SMAP_LOGGER_ERROR("Scan period(%d) must be a multiple of %d, key:%s.", g_tmpStrategyConfig.scanPeriod,
-                          SCAN_MULTIPLE, substr);
         return RETURN_ERROR;
     }
     return RETURN_OK;
@@ -417,6 +481,51 @@ static int32_t ConfigMigrateMode(char *substr, char *value)
     return RETURN_OK;
 }
 
+static int32_t ConfigMigrateModeEnable(char *substr, char *value)
+{
+    SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
+    if (strcmp(value, "true") == 0) {
+        g_tmpStrategyConfig.migrateModeEnable = true;
+    } else if (strcmp(value, "false") == 0) {
+        g_tmpStrategyConfig.migrateModeEnable = false;
+    } else {
+        SMAP_LOGGER_ERROR("Config migrate mode enable(%s) invalid, need true or false, key:%s.", value, substr);
+        return RETURN_ERROR;
+    }
+    return RETURN_OK;
+}
+
+static int32_t ConfigScanCpu(char *substr, char *value)
+{
+    SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
+    char *delim = strchr(value, '-');
+    if (delim == NULL) {
+        SMAP_LOGGER_ERROR("Config scan cpu(%s) invalid, need format min-max, key:%s.", value, substr);
+        return RETURN_ERROR;
+    }
+    *delim = '\0';
+    char *minStr = value;
+    char *maxStr = delim + 1;
+
+    uint32_t scanCpuMin;
+    if (ConfigReadValueToInt(minStr, &scanCpuMin) != RETURN_OK) {
+        SMAP_LOGGER_ERROR("Config scan cpu min parse failed, key:%s.", substr);
+        return RETURN_ERROR;
+    }
+    uint32_t scanCpuMax;
+    if (ConfigReadValueToInt(maxStr, &scanCpuMax) != RETURN_OK) {
+        SMAP_LOGGER_ERROR("Config scan cpu max parse failed, key:%s.", substr);
+        return RETURN_ERROR;
+    }
+    if (scanCpuMin > scanCpuMax) {
+        SMAP_LOGGER_ERROR("Config scan cpu min(%u) > max(%u), key:%s.", scanCpuMin, scanCpuMax, substr);
+        return RETURN_ERROR;
+    }
+    g_tmpStrategyConfig.scanCpuMin = scanCpuMin;
+    g_tmpStrategyConfig.scanCpuMax = scanCpuMax;
+    return RETURN_OK;
+}
+
 static int32_t ConfigZeroFreqMigrateEnable(char *substr, char *value)
 {
     SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
@@ -460,92 +569,124 @@ static int32_t ConfigFileConfSwitch(char *substr, char *value)
     return RETURN_OK;
 }
 
-static StrategyConfigReadElem g_strategyConfigRead[] = {
-    {
-        "smap.scan.period",
-        ConfigScanPeriod,
-        1UL,
-        0UL,
-    },
-    {
-        "smap.migrate.period",
-        ConfigMigratePeriod,
-        1UL,
-        0UL,
-    },
-    {
-        "smap.remote.freq.percentile",
-        ConfigRemoteFreqPercentile,
-        1UL,
-        0UL,
-    },
-    {
-        "smap.slow.threshold",
-        ConfigSlowThreshold,
-        1UL,
-        0UL,
-    },
-    {
-        "smap.freq.wt",
-        ConfigFreqWt,
-        1UL,
-        0UL,
-    },
-    {
-        "smap.remote.hot.threshold",
-        ConfigRemoteHotThreshold,
-        1UL,
-        0UL,
-    },
-    {
-        "smap.group.swap.ratio",
-        ConfigGroupSwapRatio,
-        1UL,
-        0UL,
-    },
-    {
-        "smap.group.swap.min.remote.freq",
-        ConfigGroupSwapMinRemoteFreq,
-        1UL,
-        0UL,
-    },
-    {
-        "smap.group.swap.min.freq.gain",
-        ConfigGroupSwapMinFreqGain,
-        1UL,
-        0UL,
-    },
-    {
-        "smap.group.swap.local.watermark.ratio",
-        ConfigGroupSwapLocalWatermarkRatio,
-        1UL,
-        0UL,
-    },
-    {
-        "smap.migrate.mode",
-        ConfigMigrateMode,
-        1UL,
-        0UL,
-    },
-    {
-        "smap.zero.freq.migrate.enable",
-        ConfigZeroFreqMigrateEnable,
-        1UL,
-        0UL,
-    },
-    {
-        "smap.adaptive.ratio.enable",
-        ConfigAdaptiveRatioEnable,
-        1UL,
-        0UL,
-    },
-    {
-        "smap.period.file.config.switch",
-        ConfigFileConfSwitch,
-        1UL,
-        0UL,
-    },
-};
+static int32_t ConfigUbBwThreshold(char *substr, char *value)
+{
+    SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
+    int32_t ret = ConfigReadValueToInt(value, &g_tmpStrategyConfig.ubBwThreshold);
+    if (ret != RETURN_OK) {
+        SMAP_LOGGER_ERROR("Config ub bw threshold read failed, key:%s.", substr);
+        return ret;
+    }
+    if (g_tmpStrategyConfig.ubBwThreshold > MAX_UB_BW_THRESHOLD) {
+        SMAP_LOGGER_ERROR("Config ub bw threshold(%u) invalid, range(%u-%u), key:%s.",
+                          g_tmpStrategyConfig.ubBwThreshold, 0, MAX_UB_BW_THRESHOLD, substr);
+        return RETURN_ERROR;
+    }
+    return RETURN_OK;
+}
+
+static StrategyConfigReadElem g_strategyConfigRead[] = { {
+                                                             "smap.scan.period",
+                                                             ConfigScanPeriod,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.migrate.period",
+                                                             ConfigMigratePeriod,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.remote.freq.percentile",
+                                                             ConfigRemoteFreqPercentile,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.slow.threshold",
+                                                             ConfigSlowThreshold,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.freq.wt",
+                                                             ConfigFreqWt,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.remote.hot.threshold",
+                                                             ConfigRemoteHotThreshold,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.group.swap.ratio",
+                                                             ConfigGroupSwapRatio,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.group.swap.min.remote.freq",
+                                                             ConfigGroupSwapMinRemoteFreq,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.group.swap.min.freq.gain",
+                                                             ConfigGroupSwapMinFreqGain,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.group.swap.local.watermark.ratio",
+                                                             ConfigGroupSwapLocalWatermarkRatio,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.migrate.mode",
+                                                             ConfigMigrateMode,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.migrate.mode.enable",
+                                                             ConfigMigrateModeEnable,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.zero.freq.migrate.enable",
+                                                             ConfigZeroFreqMigrateEnable,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.adaptive.ratio.enable",
+                                                             ConfigAdaptiveRatioEnable,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.period.file.config.switch",
+                                                             ConfigFileConfSwitch,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.ub.bw.threshold",
+                                                             ConfigUbBwThreshold,
+                                                             0UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.scan.cpu",
+                                                             ConfigScanCpu,
+                                                             1UL,
+                                                             0UL,
+                                                         } };
 
 static void ConfigReadTrim(char *str)
 {
@@ -635,7 +776,6 @@ static int ConfigReadReadFile(const char *filepath)
         }
         ret = ConfigReadByLine(fp, buf, STRATEGY_CONFIG_BUFFSIZE);
         if (ret == STRATEGY_CONFIG_READ_OVER) {
-            SMAP_LOGGER_INFO("Read config over.");
             ret = RETURN_OK;
             break;
         } else if (ret == RETURN_ERROR) {
@@ -696,11 +836,18 @@ static void InitStrategyConfig(void)
     g_strategyConfig.groupSwapLocalWatermarkRatio = DEFAULT_GROUP_SWAP_LOCAL_WATERMARK_RATIO;
     g_strategyConfig.migrateMode = DEFAULT_MIGRATE_MODE;
     g_strategyConfig.migrateModeChanged = false;
+    g_strategyConfig.migrateModeEnable = false;
     g_strategyConfig.zeroFreqMigrateEnable = true;
     g_strategyConfig.adaptiveRatioEnable = true;
     g_strategyConfig.fileConfSwitch = false;
     g_strategyConfig.scanPeriodChanged = false;
     g_strategyConfig.migratePeriodChanged = false;
+    uint32_t sysCpuMin, sysCpuMax;
+    GetSystemCpuRange(&sysCpuMin, &sysCpuMax);
+    g_strategyConfig.scanCpuMin = sysCpuMin;
+    g_strategyConfig.scanCpuMax = sysCpuMax;
+    g_strategyConfig.scanCpuChanged = false;
+    g_strategyConfig.ubBwThreshold = DEFAULT_UB_BW_THRESHOLD;
 }
 
 static int32_t EnsureDirectoryExists(const char *dirPath)
@@ -728,26 +875,22 @@ static int32_t InitStrategyConfigFileBuffer(char strategyDefaultConfig[STRATEGY_
 {
     int32_t ret;
 
-    // 定义配置项的结构体数组
     struct ConfigEntry {
         const char *format;
         int value;
-    } configs[] = {
-        { "smap.scan.period = %d\n", DEFAULT_SCAN_PERIOD },
-        { "smap.migrate.period = %d\n", DEFAULT_MIGRATE_PERIOD },
-        { "smap.remote.freq.percentile = %d\n", DEFAULT_REMOTE_FREQ_PERCENTILE },
-        { "smap.slow.threshold = %d\n", DEFAULT_SLOW_THRESHOLD },
-        { "smap.freq.wt = %d\n", DEFAULT_FREQ_WT },
-        { "smap.remote.hot.threshold = %d\n", DEFAULT_REMOTE_HOT_THRESHOLD },
-        { "smap.group.swap.ratio = %d\n", DEFAULT_GROUP_SWAP_RATIO },
-        { "smap.group.swap.min.remote.freq = %d\n", DEFAULT_GROUP_SWAP_MIN_REMOTE_FREQ },
-        { "smap.group.swap.min.freq.gain = %d\n", DEFAULT_GROUP_SWAP_MIN_FREQ_GAIN },
-        { "smap.group.swap.local.watermark.ratio = %d\n", DEFAULT_GROUP_SWAP_LOCAL_WATERMARK_RATIO },
-        { "smap.migrate.mode = %d\n", DEFAULT_MIGRATE_MODE },
-    };
+    } configs[] = { { "smap.scan.period = %d\n", DEFAULT_SCAN_PERIOD },
+                    { "smap.migrate.period = %d\n", DEFAULT_MIGRATE_PERIOD },
+                    { "smap.remote.freq.percentile = %d\n", DEFAULT_REMOTE_FREQ_PERCENTILE },
+                    { "smap.slow.threshold = %d\n", DEFAULT_SLOW_THRESHOLD },
+                    { "smap.freq.wt = %d\n", DEFAULT_FREQ_WT },
+                    { "smap.remote.hot.threshold = %d\n", DEFAULT_REMOTE_HOT_THRESHOLD },
+                    { "smap.group.swap.ratio = %d\n", DEFAULT_GROUP_SWAP_RATIO },
+                    { "smap.group.swap.min.remote.freq = %d\n", DEFAULT_GROUP_SWAP_MIN_REMOTE_FREQ },
+                    { "smap.group.swap.min.freq.gain = %d\n", DEFAULT_GROUP_SWAP_MIN_FREQ_GAIN },
+                    { "smap.group.swap.local.watermark.ratio = %d\n", DEFAULT_GROUP_SWAP_LOCAL_WATERMARK_RATIO },
+                    { "smap.ub.bw.threshold = %d\n", DEFAULT_UB_BW_THRESHOLD } };
     size_t numConfigs = sizeof(configs) / sizeof(configs[0]);
 
-    // 使用循环处理snprintf_s部分
     for (size_t i = 0; i < numConfigs; i++) {
         ret = snprintf_s(strategyDefaultConfig[i], STRATEGY_CONFIG_BUFFSIZE, STRATEGY_CONFIG_BUFFSIZE - 1,
                          configs[i].format, configs[i].value);
@@ -756,36 +899,60 @@ static int32_t InitStrategyConfigFileBuffer(char strategyDefaultConfig[STRATEGY_
             return RETURN_ERROR;
         }
     }
+
+    size_t idx = numConfigs;
+    errno_t res;
+
     const char *zeroFreqMigrateEnableStr = "smap.zero.freq.migrate.enable = true\n";
-    size_t zeroFreqStrLen = strlen(zeroFreqMigrateEnableStr);
-    errno_t res = strncpy_s(strategyDefaultConfig[numConfigs], STRATEGY_CONFIG_BUFFSIZE, zeroFreqMigrateEnableStr,
-                            zeroFreqStrLen);
+    res = strncpy_s(strategyDefaultConfig[idx++], STRATEGY_CONFIG_BUFFSIZE, zeroFreqMigrateEnableStr,
+                    strlen(zeroFreqMigrateEnableStr));
     if (res != EOK) {
         SMAP_LOGGER_ERROR("Strncpy smap zero freq migrate enable failed.");
         return RETURN_ERROR;
     }
     const char *adaptiveRatioEnableStr = "smap.adaptive.ratio.enable = true\n";
-    size_t adaptiveRatioStrLen = strlen(adaptiveRatioEnableStr);
-    res = strncpy_s(strategyDefaultConfig[numConfigs + 1], STRATEGY_CONFIG_BUFFSIZE, adaptiveRatioEnableStr,
-                    adaptiveRatioStrLen);
+    res = strncpy_s(strategyDefaultConfig[idx++], STRATEGY_CONFIG_BUFFSIZE, adaptiveRatioEnableStr,
+                    strlen(adaptiveRatioEnableStr));
     if (res != EOK) {
         SMAP_LOGGER_ERROR("Strncpy smap adaptive ratio enable failed.");
         return RETURN_ERROR;
     }
     const char *switchConfigStr = "smap.period.file.config.switch = false\n";
-    size_t configStrLen = strlen(switchConfigStr);
-    res = strncpy_s(strategyDefaultConfig[numConfigs + 2], STRATEGY_CONFIG_BUFFSIZE, switchConfigStr, configStrLen);
+    res = strncpy_s(strategyDefaultConfig[idx++], STRATEGY_CONFIG_BUFFSIZE, switchConfigStr, strlen(switchConfigStr));
     if (res != EOK) {
         SMAP_LOGGER_ERROR("Strncpy smap period switch failed.");
         return RETURN_ERROR;
     }
+    const char *migrateModeEnableStr = "smap.migrate.mode.enable = false\n";
+    res = strncpy_s(strategyDefaultConfig[idx++], STRATEGY_CONFIG_BUFFSIZE, migrateModeEnableStr,
+                    strlen(migrateModeEnableStr));
+    if (res != EOK) {
+        SMAP_LOGGER_ERROR("Strncpy smap migrate mode enable failed.");
+        return RETURN_ERROR;
+    }
+    ret = snprintf_s(strategyDefaultConfig[idx++], STRATEGY_CONFIG_BUFFSIZE, STRATEGY_CONFIG_BUFFSIZE - 1,
+                     "smap.migrate.mode = %d\n", DEFAULT_MIGRATE_MODE);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("Snprintf smap migrate mode failed.");
+        return RETURN_ERROR;
+    }
+
+    uint32_t cpuMin, cpuMax;
+    GetSystemCpuRange(&cpuMin, &cpuMax);
+    ret = snprintf_s(strategyDefaultConfig[idx], STRATEGY_CONFIG_BUFFSIZE, STRATEGY_CONFIG_BUFFSIZE - 1,
+                     "smap.scan.cpu = %u-%u\n", cpuMin, cpuMax);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("Snprintf smap scan cpu range failed.");
+        return RETURN_ERROR;
+    }
+
     return RETURN_OK;
 }
 
 int32_t GenerateStrategyConfigFile(const char *configFile)
 {
     InitStrategyConfig();
-    char strategyDefaultConfig[STRATEGY_CONFIG_ENTRY][STRATEGY_CONFIG_BUFFSIZE];
+    char strategyDefaultConfig[STRATEGY_CONFIG_ENTRY][STRATEGY_CONFIG_BUFFSIZE] = { 0 };
     int32_t res = InitStrategyConfigFileBuffer(strategyDefaultConfig);
     if (res != RETURN_OK) {
         return res;
@@ -839,14 +1006,39 @@ int32_t GenerateStrategyConfigFile(const char *configFile)
     return RETURN_OK;
 }
 
+static void UpdateMigrateModeAndScanCpu(void)
+{
+    uint32_t oldMigrateMode = g_strategyConfig.migrateMode;
+    g_strategyConfig.migrateModeEnable = g_tmpStrategyConfig.migrateModeEnable;
+
+    if (g_strategyConfig.migrateModeEnable) {
+        if (oldMigrateMode != g_tmpStrategyConfig.migrateMode) {
+            g_strategyConfig.migrateMode = g_tmpStrategyConfig.migrateMode;
+            g_tmpStrategyConfig.migrateModeChanged = true;
+            g_strategyConfig.migrateModeChanged = true;
+            SMAP_LOGGER_INFO("Update migrate mode from %u to %u.", oldMigrateMode, g_tmpStrategyConfig.migrateMode);
+        }
+    }
+
+    if (g_strategyConfig.scanCpuMin != g_tmpStrategyConfig.scanCpuMin ||
+        g_strategyConfig.scanCpuMax != g_tmpStrategyConfig.scanCpuMax) {
+        g_strategyConfig.scanCpuMin = g_tmpStrategyConfig.scanCpuMin;
+        g_strategyConfig.scanCpuMax = g_tmpStrategyConfig.scanCpuMax;
+        g_strategyConfig.scanCpuChanged = true;
+        g_tmpStrategyConfig.scanCpuChanged = true;
+        SMAP_LOGGER_INFO("Update scan cpu range %u-%u.", g_strategyConfig.scanCpuMin, g_strategyConfig.scanCpuMax);
+    }
+}
+
 static bool UpdateStrategyConfigChanged(void)
 {
     uint32_t oldScanPeriod, oldMigratePeriod, oldRemoteHotThreshold, scanPeriod, migratePeriod, remoteHotThreshold;
     uint32_t oldRemoteFreqPercentile, oldSlowThreshold, remoteFreqPercentile, slowThreshold;
     uint32_t oldGroupSwapRatio, oldGroupSwapMinRemoteFreq, oldGroupSwapMinFreqGain;
     uint32_t oldGroupSwapLocalWatermarkRatio, groupSwapLocalWatermarkRatio;
-    uint32_t oldMigrateMode, groupSwapRatio, groupSwapMinRemoteFreq, groupSwapMinFreqGain, migrateMode;
+    uint32_t groupSwapRatio, groupSwapMinRemoteFreq, groupSwapMinFreqGain;
     uint64_t oldFreqWt, freqWt;
+    uint32_t oldUbBwThreshold, ubBwThreshold;
     bool oldZeroFreqMigrateEnable, zeroFreqMigrateEnable;
     bool oldAdaptiveRatioEnable, adaptiveRatioEnable;
 
@@ -866,9 +1058,9 @@ static bool UpdateStrategyConfigChanged(void)
     oldGroupSwapMinRemoteFreq = g_strategyConfig.groupSwapMinRemoteFreq;
     oldGroupSwapMinFreqGain = g_strategyConfig.groupSwapMinFreqGain;
     oldGroupSwapLocalWatermarkRatio = g_strategyConfig.groupSwapLocalWatermarkRatio;
-    oldMigrateMode = g_strategyConfig.migrateMode;
     oldZeroFreqMigrateEnable = g_strategyConfig.zeroFreqMigrateEnable;
     oldAdaptiveRatioEnable = g_strategyConfig.adaptiveRatioEnable;
+    oldUbBwThreshold = g_strategyConfig.ubBwThreshold;
 
     scanPeriod = g_tmpStrategyConfig.scanPeriod;
     migratePeriod = g_tmpStrategyConfig.migratePeriod;
@@ -880,16 +1072,17 @@ static bool UpdateStrategyConfigChanged(void)
     groupSwapMinRemoteFreq = g_tmpStrategyConfig.groupSwapMinRemoteFreq;
     groupSwapMinFreqGain = g_tmpStrategyConfig.groupSwapMinFreqGain;
     groupSwapLocalWatermarkRatio = g_tmpStrategyConfig.groupSwapLocalWatermarkRatio;
-    migrateMode = g_tmpStrategyConfig.migrateMode;
     zeroFreqMigrateEnable = g_tmpStrategyConfig.zeroFreqMigrateEnable;
     adaptiveRatioEnable = g_tmpStrategyConfig.adaptiveRatioEnable;
+    ubBwThreshold = g_tmpStrategyConfig.ubBwThreshold;
 
     if (oldScanPeriod == scanPeriod && oldMigratePeriod == migratePeriod &&
         oldRemoteHotThreshold == remoteHotThreshold && oldRemoteFreqPercentile == remoteFreqPercentile &&
         oldSlowThreshold == slowThreshold && oldFreqWt == freqWt && oldGroupSwapRatio == groupSwapRatio &&
         oldGroupSwapMinRemoteFreq == groupSwapMinRemoteFreq && oldGroupSwapMinFreqGain == groupSwapMinFreqGain &&
-        oldGroupSwapLocalWatermarkRatio == groupSwapLocalWatermarkRatio && oldMigrateMode == migrateMode &&
-        oldZeroFreqMigrateEnable == zeroFreqMigrateEnable && oldAdaptiveRatioEnable == adaptiveRatioEnable) {
+        oldGroupSwapLocalWatermarkRatio == groupSwapLocalWatermarkRatio &&
+        oldZeroFreqMigrateEnable == zeroFreqMigrateEnable && oldAdaptiveRatioEnable == adaptiveRatioEnable &&
+        oldUbBwThreshold == ubBwThreshold) {
         return false;
     }
 
@@ -934,11 +1127,6 @@ static bool UpdateStrategyConfigChanged(void)
                          groupSwapLocalWatermarkRatio);
     }
 
-    if (oldMigrateMode != migrateMode) {
-        g_tmpStrategyConfig.migrateModeChanged = true;
-        SMAP_LOGGER_INFO("Start update migrate mode from config to %u.", migrateMode);
-    }
-
     if (oldZeroFreqMigrateEnable != zeroFreqMigrateEnable) {
         SMAP_LOGGER_INFO("Start update zero freq migrate enable from config to %s.",
                          zeroFreqMigrateEnable ? "true" : "false");
@@ -947,6 +1135,10 @@ static bool UpdateStrategyConfigChanged(void)
     if (oldAdaptiveRatioEnable != adaptiveRatioEnable) {
         SMAP_LOGGER_INFO("Start update adaptive ratio enable from config to %s.",
                          adaptiveRatioEnable ? "true" : "false");
+    }
+
+    if (oldUbBwThreshold != ubBwThreshold) {
+        SMAP_LOGGER_INFO("Start update ub bandwidth threshold from config to %u.", ubBwThreshold);
     }
 
     return true;
@@ -967,6 +1159,7 @@ void StrategyConfigRead(const char *configFile)
         SMAP_LOGGER_ERROR("Review period config failed, ret(%d).", ret);
         return;
     }
+    UpdateMigrateModeAndScanCpu();
     if (UpdateStrategyConfigChanged()) {
         g_strategyConfig = g_tmpStrategyConfig;
     }

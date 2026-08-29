@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: smap5.0 user migration ut code
  */
 
@@ -51,11 +50,16 @@ typedef struct {
     uint32_t groupSwapLocalWatermarkRatio;
     uint32_t migrateMode;
     bool migrateModeChanged;
+    bool migrateModeEnable;
     bool zeroFreqMigrateEnable;
     bool adaptiveRatioEnable;
     bool fileConfSwitch;
     bool scanPeriodChanged;
     bool migratePeriodChanged;
+    bool scanCpuChanged;
+    uint32_t scanCpuMin;
+    uint32_t scanCpuMax;
+    uint32_t ubBwThreshold;
 } StrategyConfig;
 
 typedef struct {
@@ -177,6 +181,196 @@ TEST_F(PeriodConfigTest, SetMigrateModeChangedTest)
     EXPECT_EQ(false, g_strategyConfig.migrateModeChanged);
     SetMigrateModeChanged(true);
     EXPECT_EQ(true, g_strategyConfig.migrateModeChanged);
+}
+
+extern "C" bool GetMigrateModeEnableConfig(void);
+TEST_F(PeriodConfigTest, GetMigrateModeEnableConfigTest)
+{
+    g_strategyConfig.migrateModeEnable = true;
+    bool ret = GetMigrateModeEnableConfig();
+    EXPECT_EQ(true, ret);
+    g_strategyConfig.migrateModeEnable = false;
+    ret = GetMigrateModeEnableConfig();
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" uint32_t GetScanCpuMinConfig(void);
+TEST_F(PeriodConfigTest, GetScanCpuMinConfigTest)
+{
+    g_strategyConfig.scanCpuMin = 1;
+    uint32_t ret = GetScanCpuMinConfig();
+    EXPECT_EQ(1, ret);
+}
+
+extern "C" uint32_t GetScanCpuMaxConfig(void);
+TEST_F(PeriodConfigTest, GetScanCpuMaxConfigTest)
+{
+    g_strategyConfig.scanCpuMax = 3;
+    uint32_t ret = GetScanCpuMaxConfig();
+    EXPECT_EQ(3, ret);
+}
+
+extern "C" bool GetScanCpuChanged(void);
+TEST_F(PeriodConfigTest, GetScanCpuChangedTest)
+{
+    g_strategyConfig.scanCpuChanged = true;
+    bool ret = GetScanCpuChanged();
+    EXPECT_EQ(true, ret);
+    g_strategyConfig.scanCpuChanged = false;
+    ret = GetScanCpuChanged();
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" void SetScanCpuChanged(bool val);
+TEST_F(PeriodConfigTest, SetScanCpuChangedTest)
+{
+    g_strategyConfig.scanCpuChanged = true;
+    SetScanCpuChanged(false);
+    EXPECT_EQ(false, g_strategyConfig.scanCpuChanged);
+    SetScanCpuChanged(true);
+    EXPECT_EQ(true, g_strategyConfig.scanCpuChanged);
+}
+
+extern "C" int32_t ConfigMigrateModeEnable(char *substr, char *value);
+TEST_F(PeriodConfigTest, ConfigMigrateModeEnableTest)
+{
+    char *substr = "smap.migrate.mode.enable";
+    char *value1 = "true";
+    g_tmpStrategyConfig.migrateModeEnable = false;
+    int32_t ret = ConfigMigrateModeEnable(substr, value1);
+    EXPECT_EQ(true, g_tmpStrategyConfig.migrateModeEnable);
+    EXPECT_EQ(0, ret);
+
+    char *value2 = "false";
+    g_tmpStrategyConfig.migrateModeEnable = true;
+    ret = ConfigMigrateModeEnable(substr, value2);
+    EXPECT_EQ(false, g_tmpStrategyConfig.migrateModeEnable);
+    EXPECT_EQ(0, ret);
+
+    char *value3 = "invalid";
+    ret = ConfigMigrateModeEnable(substr, value3);
+    EXPECT_EQ(-1, ret);
+}
+
+extern "C" int32_t ConfigScanCpu(char *substr, char *value);
+extern "C" int32_t ConfigReadValueToInt(char *pvalue, uint32_t *resultvalue);
+TEST_F(PeriodConfigTest, ConfigScanCpuTestValid)
+{
+    char *substr = "smap.scan.cpu";
+    char value[] = "1-3";
+    g_tmpStrategyConfig.scanCpuMin = 0;
+    g_tmpStrategyConfig.scanCpuMax = 0;
+    int32_t ret = ConfigScanCpu(substr, value);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, g_tmpStrategyConfig.scanCpuMin);
+    EXPECT_EQ(3, g_tmpStrategyConfig.scanCpuMax);
+}
+
+TEST_F(PeriodConfigTest, ConfigScanCpuTestNoDash)
+{
+    char *substr = "smap.scan.cpu";
+    char *value = "123";
+    int32_t ret = ConfigScanCpu(substr, value);
+    EXPECT_EQ(-1, ret);
+}
+
+TEST_F(PeriodConfigTest, ConfigScanCpuTestMinParseFailed)
+{
+    char *substr = "smap.scan.cpu";
+    char value[] = "abc-3";
+    int32_t ret = ConfigScanCpu(substr, value);
+    EXPECT_EQ(-1, ret);
+}
+
+TEST_F(PeriodConfigTest, ConfigScanCpuTestMaxParseFailed)
+{
+    char *substr = "smap.scan.cpu";
+    char value[] = "1-abc";
+    int32_t ret = ConfigScanCpu(substr, value);
+    EXPECT_EQ(-1, ret);
+}
+
+TEST_F(PeriodConfigTest, ConfigScanCpuTestMinGreaterThanMax)
+{
+    char *substr = "smap.scan.cpu";
+    char value[] = "5-3";
+    int32_t ret = ConfigScanCpu(substr, value);
+    EXPECT_EQ(-1, ret);
+}
+
+// UpdateMigrateModeAndScanCpu 只负责"置位"变更标志（消费标志并下发 ioctl 的是
+// migration.c 的 MigrationUpdateMigrateModeAndScanCpu，其用例见 test_migration.cpp）
+extern "C" void UpdateMigrateModeAndScanCpu(void);
+TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuMigrateModeChanged)
+{
+    g_strategyConfig.migrateMode = 1;
+    g_strategyConfig.migrateModeEnable = false;
+    g_strategyConfig.scanCpuMin = 1;
+    g_strategyConfig.scanCpuMax = 3;
+    g_tmpStrategyConfig.migrateMode = 2;
+    g_tmpStrategyConfig.migrateModeEnable = true;
+    g_tmpStrategyConfig.scanCpuMin = 1;
+    g_tmpStrategyConfig.scanCpuMax = 3;
+
+    UpdateMigrateModeAndScanCpu();
+    EXPECT_EQ(2, g_strategyConfig.migrateMode);
+    EXPECT_EQ(true, g_strategyConfig.migrateModeEnable);
+    EXPECT_EQ(true, g_strategyConfig.migrateModeChanged);
+    EXPECT_EQ(true, g_tmpStrategyConfig.migrateModeChanged);
+}
+
+TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuMigrateModeNoChange)
+{
+    g_strategyConfig.migrateMode = 1;
+    g_strategyConfig.migrateModeEnable = false;
+    g_strategyConfig.migrateModeChanged = false;
+    g_strategyConfig.scanCpuMin = 1;
+    g_strategyConfig.scanCpuMax = 3;
+    g_tmpStrategyConfig.migrateMode = 1;
+    g_tmpStrategyConfig.migrateModeEnable = true;
+    g_tmpStrategyConfig.migrateModeChanged = false;
+    g_tmpStrategyConfig.scanCpuMin = 1;
+    g_tmpStrategyConfig.scanCpuMax = 3;
+
+    UpdateMigrateModeAndScanCpu();
+    EXPECT_EQ(1, g_strategyConfig.migrateMode);
+    EXPECT_EQ(true, g_strategyConfig.migrateModeEnable);
+    EXPECT_EQ(false, g_strategyConfig.migrateModeChanged);
+    EXPECT_EQ(false, g_tmpStrategyConfig.migrateModeChanged);
+}
+
+TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuScanCpuChanged)
+{
+    g_strategyConfig.migrateModeEnable = false;
+    g_strategyConfig.migrateModeChanged = false;
+    g_strategyConfig.scanCpuChanged = false;
+    g_strategyConfig.scanCpuMin = 1;
+    g_strategyConfig.scanCpuMax = 3;
+    g_tmpStrategyConfig.migrateModeEnable = false;
+    g_tmpStrategyConfig.scanCpuMin = 5;
+    g_tmpStrategyConfig.scanCpuMax = 7;
+
+    UpdateMigrateModeAndScanCpu();
+    EXPECT_EQ(5, g_strategyConfig.scanCpuMin);
+    EXPECT_EQ(7, g_strategyConfig.scanCpuMax);
+    EXPECT_EQ(true, g_strategyConfig.scanCpuChanged);
+    EXPECT_EQ(true, g_tmpStrategyConfig.scanCpuChanged);
+}
+
+TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuNoChange)
+{
+    g_strategyConfig.migrateModeEnable = false;
+    g_strategyConfig.migrateModeChanged = false;
+    g_strategyConfig.scanCpuChanged = false;
+    g_strategyConfig.scanCpuMin = 1;
+    g_strategyConfig.scanCpuMax = 3;
+    g_tmpStrategyConfig.migrateModeEnable = false;
+    g_tmpStrategyConfig.scanCpuMin = 1;
+    g_tmpStrategyConfig.scanCpuMax = 3;
+
+    UpdateMigrateModeAndScanCpu();
+    EXPECT_EQ(false, g_strategyConfig.migrateModeChanged);
+    EXPECT_EQ(false, g_strategyConfig.scanCpuChanged);
 }
 
 extern "C" int32_t ConfigReadValueToInt(char *pvalue, uint32_t *resultvalue);
@@ -575,7 +769,7 @@ TEST_F(PeriodConfigTest, PeriodConfigReviewTest)
     int32_t ret = StrategyConfigReview();
     EXPECT_EQ(-1, ret);
 
-    uint32_t num = 14;
+    uint32_t num = 18;
     for (int i = 0; i < num; i++) {
         g_strategyConfigRead[i].needCfg = 2UL;
         g_strategyConfigRead[i].realCfg = 2UL;
@@ -626,6 +820,10 @@ TEST_F(PeriodConfigTest, InitPeriodConfigTest)
     EXPECT_EQ(false, g_strategyConfig.fileConfSwitch);
     EXPECT_EQ(false, g_strategyConfig.scanPeriodChanged);
     EXPECT_EQ(false, g_strategyConfig.migratePeriodChanged);
+    EXPECT_EQ(false, g_strategyConfig.migrateModeEnable);
+    EXPECT_EQ(0, g_strategyConfig.scanCpuMin);
+    EXPECT_EQ(0, g_strategyConfig.scanCpuMax);
+    EXPECT_EQ(false, g_strategyConfig.scanCpuChanged);
 }
 
 extern "C" int32_t EnsureDirectoryExists(const char *dirPath);
@@ -729,18 +927,15 @@ TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedMigrateModeChanged)
     g_tmpStrategyConfig.fileConfSwitch = true;
     g_strategyConfig.scanPeriod = 500;
     g_strategyConfig.migratePeriod = 1000;
-    g_strategyConfig.migrateMode = 1;
     g_strategyConfig.zeroFreqMigrateEnable = true;
     g_strategyConfig.adaptiveRatioEnable = true;
     g_tmpStrategyConfig.scanPeriod = 500;
     g_tmpStrategyConfig.migratePeriod = 1000;
-    g_tmpStrategyConfig.migrateMode = 2;
     g_tmpStrategyConfig.zeroFreqMigrateEnable = true;
     g_tmpStrategyConfig.adaptiveRatioEnable = true;
 
     bool ret = UpdateStrategyConfigChanged();
-    EXPECT_EQ(true, ret);
-    EXPECT_EQ(true, g_tmpStrategyConfig.migrateModeChanged);
+    EXPECT_EQ(false, ret);
 }
 
 extern "C" void StrategyConfigRead(const char *configFile);
@@ -772,4 +967,62 @@ TEST_F(PeriodConfigTest, PeriodConfigReadTestSuccess)
     MOCKER(PeriodConifgReset).stubs().will(ignoreReturnValue());
 
     StrategyConfigRead(configFile);
+}
+
+
+extern "C" uint32_t GetUbBwThresholdConfig(void);
+TEST_F(PeriodConfigTest, GetUbBwThresholdConfigTest)
+{
+    g_strategyConfig.ubBwThreshold = 0;
+    uint32_t ret = GetUbBwThresholdConfig();
+    EXPECT_EQ(0, ret);
+
+    g_strategyConfig.ubBwThreshold = 1000;
+    ret = GetUbBwThresholdConfig();
+    EXPECT_EQ(1000, ret);
+
+    g_strategyConfig.ubBwThreshold = 65535;
+    ret = GetUbBwThresholdConfig();
+    EXPECT_EQ(65535, ret);
+}
+
+extern "C" int32_t ConfigUbBwThreshold(char *substr, char *value);
+TEST_F(PeriodConfigTest, ConfigUbBwThresholdReadFail)
+{
+    char *substr = "smap.ub.bw.threshold";
+    char *value = "abc";
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
+    int32_t ret = ConfigUbBwThreshold(substr, value);
+    EXPECT_EQ(-1, ret);
+}
+
+TEST_F(PeriodConfigTest, ConfigUbBwThresholdOutOfRange)
+{
+    char *substr = "smap.ub.bw.threshold";
+    char *value = "99999";
+    g_tmpStrategyConfig.ubBwThreshold = 99999;
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
+    int32_t ret = ConfigUbBwThreshold(substr, value);
+    EXPECT_EQ(RETURN_ERROR, ret);
+}
+
+TEST_F(PeriodConfigTest, ConfigUbBwThresholdSuccess)
+{
+    char *substr = "smap.ub.bw.threshold";
+    char *value = "1000";
+    g_tmpStrategyConfig.ubBwThreshold = 1000;
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
+    int32_t ret = ConfigUbBwThreshold(substr, value);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(PeriodConfigTest, ConfigUbBwThresholdZeroAllowed)
+{
+    char *substr = "smap.ub.bw.threshold";
+    char *value = "0";
+    g_tmpStrategyConfig.ubBwThreshold = 0;
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
+    int32_t ret = ConfigUbBwThreshold(substr, value);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(0, g_tmpStrategyConfig.ubBwThreshold);
 }

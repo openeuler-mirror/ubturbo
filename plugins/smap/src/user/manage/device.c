@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -29,15 +27,12 @@
 
 #define DISABLE_TRACKING_RETRY_DELAY_US 50000
 
+#define SYS_NODE_CRITICAL_ERR_LEN 60
+
 typedef enum {
     PGSIZE_FOUR_KB = 0,
     PGSIZE_TWO_MB = 9,
 } PageSize;
-
-typedef enum {
-    ACCESS_MODE_SUM = 5,
-    MODE_MAX,
-} ScanMode;
 
 static int SendCmdToAllNodes(int fds[], unsigned long cmd, int arg)
 {
@@ -69,7 +64,11 @@ static int FindFdByNode(int fds[], int fdsLength)
 
 int EnableTracking(struct ProcessManager *manager)
 {
-    return SendCmdToAllNodes(manager->fds.nodes, SMAP_IOCTL_TRACKING_CMD, 1);
+    int ret = SendCmdToAllNodes(manager->fds.nodes, SMAP_IOCTL_TRACKING_CMD, 1);
+    if (!ret) {
+        manager->tracking.trackingEnabled = true;
+    }
+    return ret;
 }
 
 static inline int DisableTrackingInternal(struct ProcessManager *manager)
@@ -89,7 +88,38 @@ int DisableTracking(struct ProcessManager *manager)
         SMAP_LOGGER_DEBUG("Scanning still in progress, will retry.");
         usleep(DISABLE_TRACKING_RETRY_DELAY_US);
     }
+    if (!ret) {
+        manager->tracking.trackingEnabled = false;
+    }
     return ret;
+}
+
+bool IsNumaCriticalErr(int nid)
+{
+    char path[SYS_NODE_CRITICAL_ERR_LEN] = { 0 };
+
+    int ret = snprintf_s(path, sizeof(path), sizeof(path) - 1, "%s/node%d/critical_err", SYS_NODE_PATH, nid);
+    if (ret == -1) {
+        SMAP_LOGGER_ERROR("Failed to build node%d critical_err path.", nid);
+        return false;
+    }
+
+    FILE *file = fopen(path, "r");
+    if (!file) {
+        SMAP_LOGGER_DEBUG("Not find node%d critical_err file, assume available.", nid);
+        return false;
+    }
+
+    int c = fgetc(file);
+    if (fclose(file) != 0) {
+        SMAP_LOGGER_WARNING("Failed to close node%d critical_err file: %d.", nid, errno);
+    }
+    if (c == EOF) {
+        SMAP_LOGGER_DEBUG("Node%d critical_err file empty, assume available.", nid);
+        return false;
+    }
+
+    return c == '1';
 }
 
 int RefreshRemoteRam(struct ProcessManager *manager)
@@ -109,9 +139,6 @@ static int ConfigTrackingDev(int *trackingFds, uint32_t pageSize)
 {
     int ret = 0;
     int arg;
-    arg = ACCESS_MODE_SUM;
-    ret |= SendCmdToAllNodes(trackingFds, SMAP_IOCTL_MODE_SET_CMD, arg);
-
     arg = pageSize == PAGESIZE_2M ? PGSIZE_TWO_MB : PGSIZE_FOUR_KB;
     ret |= SendCmdToAllNodes(trackingFds, SMAP_IOCTL_PAGE_SIZE_SET_CMD, arg);
 
@@ -279,4 +306,65 @@ void DeinitTrackingDev(struct ProcessManager *manager)
         close(manager->fds.access);
         manager->fds.access = DEFAULT_FD;
     }
+}
+
+void GetUbFluxMb(void)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    int i, ret = -ENODEV;
+
+    // ubBwThreshold == 0 表示不开启迁移限制：跳过带宽查询与流量统计
+    if (!IsBwMonitorEnabled(manager)) {
+        return;
+    }
+
+    struct UbFluxMbStatistic *result = &(manager->ubBwMonitor.currentFluxMb);
+
+    /* ub_watch only implemented by remote NUMA tracking_nodes */
+    for (i = LOCAL_NUMA_NUM; i < MAX_NODES; i++) {
+        if (manager->fds.nodes[i] >= 0) {
+            ret = ioctl(manager->fds.nodes[i], SMAP_IOCTL_UB_WATCH_CMD, result);
+            if (ret == 0) {
+                break;
+            }
+        }
+    }
+
+    manager->ubBwMonitor.currentFluxRet = ret;
+    if (manager->ubBwMonitor.currentFluxRet) {
+        SMAP_LOGGER_ERROR("ioctl SMAP_IOCTL_UB_WATCH_CMD failed on all remote nodes.");
+        return;
+    }
+
+    for (int i = 0; i < manager->ubBwMonitor.currentFluxMb.len; i++) {
+        uint32_t totalBw =
+            manager->ubBwMonitor.currentFluxMb.flux[i].readMb + manager->ubBwMonitor.currentFluxMb.flux[i].writeMb;
+        SMAP_LOGGER_INFO("UB business flux: numaId: %d, readMb: %uMB/s, writeMb: %uMB/s, total: %uMB/s",
+                         manager->ubBwMonitor.currentFluxMb.flux[i].numaId,
+                         manager->ubBwMonitor.currentFluxMb.flux[i].readMb,
+                         manager->ubBwMonitor.currentFluxMb.flux[i].writeMb, totalBw);
+    }
+}
+
+int ConfigUbWatch(uint32_t durationMs)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    struct UbWatchConfig config = { .durationMs = durationMs };
+    int i;
+
+    if (durationMs == 0) {
+        SMAP_LOGGER_ERROR("ConfigUbWatch: durationMs must be greater than 0");
+        return -EINVAL;
+    }
+
+    /* ub_watch only implemented by remote NUMA tracking_nodes */
+    for (i = LOCAL_NUMA_NUM; i < MAX_NODES; i++) {
+        if (manager->fds.nodes[i] >= 0) {
+            if (ioctl(manager->fds.nodes[i], SMAP_IOCTL_UB_WATCH_CONFIG_CMD, &config) >= 0) {
+                return 0;
+            }
+        }
+    }
+    SMAP_LOGGER_ERROR("ioctl SMAP_IOCTL_UB_WATCH_CONFIG_CMD failed on all remote nodes.");
+    return -ENODEV;
 }

@@ -1,5 +1,4 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
 * Description: SMAP3.0 驱动模块打桩文件
 */
 #include <linux/device.h>
@@ -28,12 +27,6 @@ void stub_tracking_target_node_update(struct device *ldev,
                                       u8 target_node_new)
 {
     ldev->numa_node = 7;
-}
-
-int stub_tracking_mode_set(struct device *ldev, u8 mode)
-{
-    ldev->numa_node = 4;
-    return 1;
 }
 
 int stub_tracking_set_page_size(struct device *ldev, u8 page_size)

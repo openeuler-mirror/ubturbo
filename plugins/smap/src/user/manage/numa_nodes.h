@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -14,9 +12,16 @@
 
 #define NUMA_NO_NODE (-1)
 
+#ifndef USE_DT
+#define LOCAL_NUMA_BITS 8
+#else
 #define LOCAL_NUMA_BITS 4
+#endif
 #define REMOTE_NUMA_BITS 18
 #define MAX_NODES (LOCAL_NUMA_BITS + REMOTE_NUMA_BITS)
+
+#define LOCAL_NUMA_NUM LOCAL_NUMA_BITS
+#define REMOTE_NUMA_NUM REMOTE_NUMA_BITS
 
 #define LOCAL_NUMA_SHIFT 0
 #define REMOTE_NUMA_SHIFT (LOCAL_NUMA_SHIFT + LOCAL_NUMA_BITS)
@@ -58,11 +63,6 @@ static inline bool EqualToL1(uint32_t nodes, int nid)
     return nid >= 0 && nid < LOCAL_NUMA_BITS && (GetL1(nodes) == nid);
 }
 
-static inline bool NotEqualToL1(uint32_t nodes, int nid)
-{
-    return !EqualToL1(nodes, nid);
-}
-
 static inline bool InL1(uint32_t nodes, int nid)
 {
     unsigned long bitmap = nodes;
@@ -102,11 +102,6 @@ static inline void AddL2(uint32_t *nodes, int pos)
 static inline bool EqualToL2(uint32_t nodes, int pos)
 {
     return pos >= LOCAL_NUMA_BITS && pos < MAX_NODES && (GetL2(nodes) == pos);
-}
-
-static inline bool NotEqualToL2(uint32_t nodes, int pos)
-{
-    return !EqualToL2(nodes, pos);
 }
 
 static inline bool InL2(uint32_t nodes, int pos)

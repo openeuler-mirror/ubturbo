@@ -99,6 +99,7 @@ extern int iterate_dir(struct file *, struct dir_context *);
 extern int scnprintf(char *buf, size_t size, const char *fmt, ...);
 extern int kstrtouint(const char *s, unsigned int base, unsigned int *res);
 extern int kstrtoull(const char *s, unsigned int base, unsigned long long *res);
+extern int kstrtoul(const char *s, unsigned int base, unsigned long *res);
 static inline struct inode *file_inode(const struct file *f)
 {
     return 0;

@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -75,6 +73,18 @@ RmrsResult CallbackManager::Init()
     if (ret != RMRS_OK) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[CallbackManager] Resource export init failed" << ret;
         return RMRS_ERROR;
+    }
+    // 容器场景(pageType=0)不依赖libvirt, 跳过初始化; 虚机场景(pageType=1)强依赖, 初始化失败则插件加载失败;
+    // 未知场景(pageType文件缺失)不阻塞插件加载, 由首个虚机业务惰性初始化libvirt
+    if (RmrsConfig::Instance().GetRmrsScene() == RmrsScene::CONTAINER) {
+        UBTURBO_LOG_INFO(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[CallbackManager] Container scene, skip libvirt helper init.";
+        return RMRS_OK;
+    }
+    if (RmrsConfig::Instance().GetRmrsScene() == RmrsScene::UNKNOWN) {
+        UBTURBO_LOG_INFO(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[CallbackManager] Scene unknown, skip libvirt helper init, wait for lazy init.";
+        return RMRS_OK;
     }
     ret = LibvirtHelper::Init();
     if (ret != RMRS_OK) {

@@ -9,7 +9,7 @@
 #include <linux/atomic/atomic-long.h>
 #include <linux/timer.h>
 #include <linux/completion.h>
-
+#include <linux/cpumask.h>
 enum {
     __WQ_ORDERED_EXPLICIT = 1 << 19,
     __WQ_LEGACY = 1 << 18,
@@ -38,7 +38,7 @@ struct work_struct;
 typedef void (*work_func_t)(struct work_struct *work);
 
 struct work_struct {
-	atomic_long_t data; // atomic_long_t -> atomic64_t
+	atomic_long_t data;
 	struct list_head entry;
 	work_func_t func;
 #ifdef CONFIG_LOCKDEP
@@ -56,11 +56,15 @@ static inline bool schedule_work(struct work_struct *work)
     return true;
 }
 
-struct workqueue_struct *alloc_workqueue(const char *fmt, unsigned int flags, int max_active, ...);
+struct workqueue_attrs {
+    cpumask_var_t cpumask;
+    int nice;
+    int no_numa;
+};
 
 struct timer_list;
 struct delayed_work {
-	struct work_struct work;    // main work
+	struct work_struct work;
 	struct timer_list timer;
 	struct workqueue_struct *wq;
 	int cpu;
@@ -70,6 +74,27 @@ static inline struct delayed_work *to_delayed_work(struct work_struct *work)
 {
     return container_of(work, struct delayed_work, work);
 }
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+struct workqueue_struct *alloc_workqueue(const char *fmt, unsigned int flags, int max_active, ...);
+void destroy_workqueue(struct workqueue_struct *wq);
+
+extern struct workqueue_struct *system_unbound_wq;
+extern struct workqueue_struct *system_wq;
+
+bool queue_work(struct workqueue_struct *wq, struct work_struct *work);
+bool queue_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork, unsigned long delay);
+
+struct workqueue_attrs *alloc_workqueue_attrs(void);
+void free_workqueue_attrs(struct workqueue_attrs *attrs);
+int apply_workqueue_attrs(struct workqueue_struct *wq, const struct workqueue_attrs *attrs);
+
+#ifdef __cplusplus
+}
+#endif
 
 #define flush_workqueue(wq) \
     do {                    \

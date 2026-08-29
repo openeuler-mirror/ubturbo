@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -38,14 +36,14 @@ static void SmapResetBuf(TurboByteBuffer *buffer)
     buffer->len = 0;
 }
 
-int SmapMigrateOutCodec::EncodeRequest(TurboByteBuffer &buffer, MigrateOutMsg *msg, int pidType)
+int SmapMigrateOutCodec::EncodeRequest(TurboByteBuffer &buffer, MigrateOutMsg *msg, int pageType)
 {
     size_t size = sizeof(int) + sizeof(MigrateOutMsg);
     buffer.data = new (std::nothrow) uint8_t[size];
     if (!buffer.data) {
         return -EINVAL;
     }
-    int ret = memcpy_s(buffer.data, size, &pidType, sizeof(int));
+    int ret = memcpy_s(buffer.data, size, &pageType, sizeof(int));
     if (ret) {
         SmapResetBuf(&buffer);
         return ret;
@@ -59,12 +57,12 @@ int SmapMigrateOutCodec::EncodeRequest(TurboByteBuffer &buffer, MigrateOutMsg *m
     return ret;
 }
 
-int SmapMigrateOutCodec::DecodeRequest(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pidType)
+int SmapMigrateOutCodec::DecodeRequest(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pageType)
 {
     if (buffer.len < sizeof(int) + sizeof(MigrateOutMsg) || !buffer.data) {
         return -EINVAL;
     }
-    pidType = *static_cast<int *>(static_cast<void *>(buffer.data));
+    pageType = *static_cast<int *>(static_cast<void *>(buffer.data));
     msg = *static_cast<MigrateOutMsg *>(static_cast<void *>(buffer.data + sizeof(int)));
     return 0;
 }
@@ -94,14 +92,14 @@ int SmapMigrateOutCodec::DecodeResponse(TurboByteBuffer &buffer)
     return *static_cast<int *>(static_cast<void *>(buffer.data));
 }
 
-int SmapMigrateOutGroupedCodec::EncodeRequest(TurboByteBuffer &buffer, GroupedMigrateOutMsg *msg, int pidType)
+int SmapMigrateOutGroupedCodec::EncodeRequest(TurboByteBuffer &buffer, GroupedMigrateOutMsg *msg, int pageType)
 {
     size_t size = sizeof(int) + sizeof(GroupedMigrateOutMsg);
     buffer.data = new (std::nothrow) uint8_t[size];
     if (!buffer.data) {
         return -EINVAL;
     }
-    int ret = memcpy_s(buffer.data, size, &pidType, sizeof(int));
+    int ret = memcpy_s(buffer.data, size, &pageType, sizeof(int));
     if (ret) {
         SmapResetBuf(&buffer);
         return ret;
@@ -115,12 +113,12 @@ int SmapMigrateOutGroupedCodec::EncodeRequest(TurboByteBuffer &buffer, GroupedMi
     return ret;
 }
 
-int SmapMigrateOutGroupedCodec::DecodeRequest(const TurboByteBuffer &buffer, GroupedMigrateOutMsg &msg, int &pidType)
+int SmapMigrateOutGroupedCodec::DecodeRequest(const TurboByteBuffer &buffer, GroupedMigrateOutMsg &msg, int &pageType)
 {
     if (buffer.len < sizeof(int) + sizeof(GroupedMigrateOutMsg) || !buffer.data) {
         return -EINVAL;
     }
-    pidType = *static_cast<int *>(static_cast<void *>(buffer.data));
+    pageType = *static_cast<int *>(static_cast<void *>(buffer.data));
     msg = *static_cast<GroupedMigrateOutMsg *>(static_cast<void *>(buffer.data + sizeof(int)));
     return 0;
 }
@@ -200,14 +198,14 @@ int SmapMigrateBackCodec::DecodeResponse(TurboByteBuffer &buffer)
     return *static_cast<int *>(static_cast<void *>(buffer.data));
 }
 
-int SmapRemoveCodec::EncodeRequest(TurboByteBuffer &buffer, RemoveMsg *msg, int pidType)
+int SmapRemoveCodec::EncodeRequest(TurboByteBuffer &buffer, RemoveMsg *msg, int pageType)
 {
     size_t size = sizeof(int) + sizeof(RemoveMsg);
     buffer.data = new (std::nothrow) uint8_t[size];
     if (!buffer.data) {
         return -EINVAL;
     }
-    int ret = memcpy_s(buffer.data, size, &pidType, sizeof(int));
+    int ret = memcpy_s(buffer.data, size, &pageType, sizeof(int));
     if (ret) {
         SmapResetBuf(&buffer);
         return ret;
@@ -221,12 +219,12 @@ int SmapRemoveCodec::EncodeRequest(TurboByteBuffer &buffer, RemoveMsg *msg, int 
     return ret;
 }
 
-int SmapRemoveCodec::DecodeRequest(const TurboByteBuffer &buffer, RemoveMsg &msg, int &pidType)
+int SmapRemoveCodec::DecodeRequest(const TurboByteBuffer &buffer, RemoveMsg &msg, int &pageType)
 {
     if (buffer.len < sizeof(int) + sizeof(RemoveMsg)) {
         return -EINVAL;
     }
-    pidType = *static_cast<int *>(static_cast<void *>(buffer.data));
+    pageType = *static_cast<int *>(static_cast<void *>(buffer.data));
     msg = *static_cast<RemoveMsg *>(static_cast<void *>(buffer.data + sizeof(int)));
     return 0;
 }
@@ -912,7 +910,7 @@ bool SmapIsRunningCodec::DecodeResponse(TurboByteBuffer &buffer)
     return *static_cast<bool *>(static_cast<void *>(buffer.data));
 }
 
-int SmapMigrateOutSyncCodec::EncodeRequest(TurboByteBuffer &buffer, MigrateOutMsg *msg, int pidType,
+int SmapMigrateOutSyncCodec::EncodeRequest(TurboByteBuffer &buffer, MigrateOutMsg *msg, int pageType,
                                            uint64_t maxWaitTime)
 {
     size_t size = sizeof(int) + sizeof(uint64_t) + sizeof(MigrateOutMsg);
@@ -920,7 +918,7 @@ int SmapMigrateOutSyncCodec::EncodeRequest(TurboByteBuffer &buffer, MigrateOutMs
     if (!buffer.data) {
         return -EINVAL;
     }
-    int ret = memcpy_s(buffer.data, size, &pidType, sizeof(int));
+    int ret = memcpy_s(buffer.data, size, &pageType, sizeof(int));
     if (ret) {
         SmapResetBuf(&buffer);
         return ret;
@@ -940,13 +938,13 @@ int SmapMigrateOutSyncCodec::EncodeRequest(TurboByteBuffer &buffer, MigrateOutMs
     return ret;
 }
 
-int SmapMigrateOutSyncCodec::DecodeRequest(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pidType,
+int SmapMigrateOutSyncCodec::DecodeRequest(const TurboByteBuffer &buffer, MigrateOutMsg &msg, int &pageType,
                                            uint64_t &maxWaitTime)
 {
     if (buffer.len < sizeof(int) + sizeof(uint64_t) + sizeof(MigrateOutMsg)) {
         return -EINVAL;
     }
-    pidType = *static_cast<int *>(static_cast<void *>(buffer.data));
+    pageType = *static_cast<int *>(static_cast<void *>(buffer.data));
     maxWaitTime = *static_cast<uint64_t *>(static_cast<void *>(buffer.data + sizeof(int)));
     msg = *static_cast<MigrateOutMsg *>(static_cast<void *>(buffer.data + sizeof(int) + sizeof(uint64_t)));
     return 0;

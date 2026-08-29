@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -28,6 +26,7 @@ struct AccessAddPidPayload {
     uint32_t duration;
     ScanType type;
     uint32_t nTimes;
+    PidType pidType; /* per-pid 身份：VM_TYPE/PROCESS_TYPE，与全局 pageType 解耦，镜像内核 access_pid.pid_type */
 };
 
 struct AccessAddPidMsg {
@@ -53,12 +52,17 @@ struct AccessPidFreq {
 struct TrakingInfoPayload {
     pid_t pid;
     uint32_t length;
-    actc_t *data;
+    uint16_t *data; /* DFX 统计扫描频次，保留原始 u16 真值，不压缩 */
 };
 
 struct UserInfo {
     uid_t uid;
     gid_t gid;
+};
+
+struct SmapScanCpuRange {
+    uint32_t cpuMin;
+    uint32_t cpuMax;
 };
 
 #define SMAP_ACCESS_MAGIC 0xBB
@@ -70,6 +74,7 @@ struct UserInfo {
 #define SMAP_ACCESS_CREATE_PROCFS _IOW(SMAP_ACCESS_MAGIC, 6, struct UserInfo)
 #define SMAP_ACCESS_GET_NR_LOCAL_NUMA _IOR(SMAP_ACCESS_MAGIC, 7, int)
 #define SMAP_ACCESS_REFRESH_REMOTE_RAM _IO(SMAP_ACCESS_MAGIC, 8)
+#define SMAP_ACCESS_SET_SCAN_CPU _IOW(SMAP_ACCESS_MAGIC, 9, struct SmapScanCpuRange)
 
 int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload);
 int AccessIoctlRemovePid(int len, struct AccessRemovePidPayload *payload);
@@ -78,5 +83,6 @@ int AccessIoctlWalkPagemap(size_t *len);
 int AccessIoctlCreateProcfs(struct UserInfo *ui);
 int AccessRead(size_t len, char *buf);
 void IoctlUpdateUbDmaAvail(uint32_t value);
+void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax);
 
 #endif /* __ACCESS_IOCTL_H__ */
