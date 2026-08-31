@@ -1,5 +1,10 @@
 # UBTurbo 安装指南
 
+当前 UBTurbo 提供两种环境部署方式：RPM 包安装、容器镜像部署。环境部署流程包含以下主要步骤：
+
+1. 环境准备与安装
+2. 构建项目与单元测试
+
 ## 环境要求
 
 |部件|版本|
@@ -57,6 +62,98 @@
   # 如需覆盖安装，可执行如下命令：
   sudo rpm -ivh ubturbo-rmrs-<version>-<release>.aarch64.rpm --force
   ```
+
+
+### 容器镜像部署（可选）
+
+容器环境部署有两种方式：
+
+- 基于镜像构建容器环境
+- 基于 openEuler 基础环境从零安装
+
+#### 方式一：基于镜像构建容器环境
+
+基于镜像构建容器环境，首先需要获取镜像。通过 Dockerfile 预先将全部构建依赖安装进镜像，后续进入容器即可直接编译，无需重复安装工具链，节省环境准备时间。
+
+**步骤 1：获取镜像**
+
+Dockerfile 位于仓库 `docker/ubturbo.Dockerfile`，内容如下：
+
+```dockerfile
+ARG BASE_IMAGE=openeuler/openeuler:24.03-lts
+FROM ${BASE_IMAGE}
+
+RUN dnf install -y \
+        make gcc gcc-c++ cmake ninja-build dos2unix \
+        chrpath patchelf findutils git \
+        libboundscheck libvirt-devel \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+WORKDIR /workspace
+CMD ["/bin/bash"]
+```
+
+构建镜像：
+
+```bash
+cd ubturbo
+docker build -f docker/ubturbo.Dockerfile -t ubturbo-build:24.03-lts .
+```
+
+> [!NOTE]说明
+>
+> 构建依赖与 <code>ubturbo.spec</code> 的 <code>BuildRequires</code> 保持一致；googletest 与 mockcpp 为源码子模块，随源码编译，无需预装。
+> aarch64 主机直接构建即可；x86_64 主机可加 <code>--platform linux/arm64</code> 构建镜像（仅用于验证 Dockerfile，容器内交叉编译极慢，不推荐）。
+> 覆盖率报告依赖 lcov/genhtml（openEuler 官方仓库不含，需源码安装），如容器内需生成覆盖率，可在镜像内追加安装。
+
+**步骤 2：创建容器**
+
+以 aarch64 服务器为例，创建容器（源码目录以数据卷方式挂载到 <code>/workspace</code>）：
+
+```bash
+docker run -d --privileged --name ubturbo-build \
+    -v /home/workspace/ubturbo:/workspace \
+    ubturbo-build:24.03-lts \
+    sleep infinity
+```
+
+**步骤 3：进入容器**
+
+```bash
+docker exec -it ubturbo-build bash
+```
+
+#### 方式二：基于 openEuler 基础环境从零安装
+
+不使用镜像时，可在 openEuler 24.03 LTS (aarch64) 环境手动安装全部构建依赖：
+
+```bash
+sudo dnf install -y make gcc gcc-c++ cmake ninja-build dos2unix \
+    chrpath patchelf libboundscheck libvirt-devel findutils git
+```
+
+该方式每次环境初始化均需联网安装依赖，耗时较长，推荐使用方式一。
+
+## 构建项目与单元测试
+
+进入容器后，在 `/workspace` 下执行：
+
+```bash
+cd /workspace
+git submodule update --init --recursive
+./build.sh              # Release 构建，产物 dist/release/
+./build.sh -D           # Debug 构建
+./build.sh package      # 打包 RPM
+```
+
+单元测试：
+
+```bash
+./build.sh -t test      # 编译并运行全部 UT，生成覆盖率报告
+```
+
+详细用法见仓内 `README.md`。
 
 ## 安装结果
 
@@ -185,3 +282,29 @@ ps -ef | grep ub_turbo_exec  # 观察进程是否存在
 ```bash
 cat /var/log/ubturbo/ubturbo.log | grep "loaded successfully"
 ```
+
+## 卸载与清理
+
+1. 停止并删除容器
+
+```bash
+docker ps -a
+docker stop ubturbo-build
+docker rm ubturbo-build
+```
+
+2. 删除镜像
+
+```bash
+docker rmi ubturbo-build:24.03-lts
+```
+
+3. 卸载 RPM 包
+
+```bash
+sudo dnf remove -y ubturbo-rmrs
+```
+
+> [!NOTE]说明
+>
+> 卸载 RPM 包不会自动删除 `/opt/ubturbo` 数据目录与 `/var/log/ubturbo` 日志目录，如需彻底清理请手动删除。
