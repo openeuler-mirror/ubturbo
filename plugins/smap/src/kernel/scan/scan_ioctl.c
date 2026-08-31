@@ -123,11 +123,6 @@ static long ioctl_add_pid(void __user *argp)
 		}
 	}
 	ret = add_payload(msg.count, payload, page_size);
-#ifdef DEBUG
-	print_access_pid_list();
-	print_access_ham_pid_list();
-	print_access_statistic_pid_list();
-#endif
 out_free_payload:
 	vfree(payload);
 	return ret;
@@ -164,9 +159,6 @@ static long ioctl_remove_pid(void __user *argp)
 	access_remove_pid(msg.count, payload);
 	access_remove_ham_pid(msg.count, payload);
 	access_remove_statistic_pid(msg.count, payload);
-#ifdef DEBUG
-	print_access_pid_list();
-#endif
 	vfree(payload);
 	return 0;
 }
@@ -174,9 +166,6 @@ static long ioctl_remove_pid(void __user *argp)
 static long ioctl_remove_all_pid(void __user *argp)
 {
 	access_remove_all_pid();
-#ifdef DEBUG
-	print_access_pid_list();
-#endif
 	return 0;
 }
 

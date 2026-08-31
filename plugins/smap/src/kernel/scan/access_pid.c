@@ -754,53 +754,6 @@ int init_access_pid(struct access_add_pid_payload *payload,
 	return 0;
 }
 
-void print_access_pid_list(void)
-{
-	struct ap_slot *s;
-	int i;
-
-	pr_debug("access pid list:\n");
-	for (i = 0; i < AP_MAX_SLOTS; i++) {
-		s = ap_get_slot_at(i);
-		if (!s)
-			continue;
-		pr_debug(
-			"pid %d, pid_type %d, scan_time %d, type %d\n",
-			s->ap->pid, s->ap->pid_type,
-			s->ap->scan_time, s->ap->type);
-		ap_put_slot(s);
-	}
-	pr_debug("---------------------\n");
-}
-
-void print_access_ham_pid_list(void)
-{
-	struct ham_tracking_info *ap;
-
-	pr_debug("---access ham pid list---\n");
-	spin_lock(&ham_lock);
-	list_for_each_entry(ap, &ham_pid_list, node) {
-		pr_debug("pid %d, l1_node %d, l2_node %d\n", ap->pid,
-			 ap->l1_node, ap->l2_node);
-	}
-	spin_unlock(&ham_lock);
-	pr_debug("---------------------\n");
-}
-
-void print_access_statistic_pid_list(void)
-{
-	struct statistics_tracking_info *ap;
-
-	pr_debug("statistic access pid list:\n");
-	down_read(&statistic_lock);
-	list_for_each_entry(ap, &statistic_pid_list, node) {
-		pr_debug("pid %d, l1_node %d, l2_node %d\n", ap->pid,
-			 ap->l1_node, ap->l2_node);
-	}
-	up_read(&statistic_lock);
-	pr_debug("---------------------\n");
-}
-
 static int init_ham_pid_memory(struct ham_tracking_info *info,
 			       enum node_level level)
 {

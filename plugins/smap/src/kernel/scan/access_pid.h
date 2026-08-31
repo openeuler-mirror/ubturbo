@@ -117,15 +117,12 @@ extern struct list_head statistic_pid_list;
 extern spinlock_t ham_lock;
 extern struct rw_semaphore statistic_lock;
 
-void print_access_ham_pid_list(void);
-void print_access_statistic_pid_list(void);
 void access_remove_ham_pid(int len, struct access_remove_pid_payload *payload);
 void access_remove_statistic_pid(int len,
 				 struct access_remove_pid_payload *payload);
 void destroy_access_pid(struct access_pid *elem);
 int init_access_pid(struct access_add_pid_payload *payload,
 		    struct access_pid **elem);
-void print_access_pid_list(void);
 int access_add_ham_pid(int len, struct access_add_pid_payload *payload);
 int access_add_statistic_pid(int len, struct access_add_pid_payload *payload,
 			     int page_size);
