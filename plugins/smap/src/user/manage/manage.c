@@ -916,7 +916,8 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
         SMAP_LOGGER_INFO("Set pid %d state to %d.", param->pid, PROC_MOVE);
     }
 
-    ret = SetProcessConfig(attr, param);
+    bool skipRemoteResidencyCheck = (param->scanType == STATISTIC_SCAN);
+    ret = SetProcessConfig(attr, param, skipRemoteResidencyCheck);
     if (ret) {
         SMAP_LOGGER_ERROR("Set process %d config failed: %d.", param->pid, ret);
         free(attr);
@@ -1013,7 +1014,7 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
     candidate->isPending = active && active->state == PROC_MIGRATE;
     /* memSize 增大时重置 isFirstScan，使下一轮高频扫描快速迁移新增需求 */
     uint64_t oldMemSize = active ? SumAttrMigrateMemSize(active) : 0;
-    ret = ConfigureMigrationTargetsWithCapacityPolicy(prepared, &config, param->ignoreRemoteCapacity);
+    ret = ConfigureMigrationTargetsWithCapacityPolicy(prepared, &config, param->ignoreRemoteCapacity, false);
     if (ret) {
         PutProcessAttr(candidate->active);
         DiscardProcessManageCandidate(candidate);
