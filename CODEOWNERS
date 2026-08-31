@@ -1,0 +1,6 @@
+/include/ @hlinbo
+/src/sdk/include/ @hlinbo
+/src/sdk/ @hlinbo
+/src/smap/smap_interface.h @hlinbo
+
+/CODEOWNERS @openeuler-ci-bot
