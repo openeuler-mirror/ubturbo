@@ -369,4 +369,6 @@ sh run_dt.sh
 | perl-DateTime | lcov运行依赖 | `dnf install -y perl-DateTime` |
 | lcov / genhtml | 覆盖率报告 | 源码安装 |
 
+# 说明 
+
 此开源项目非华为产品，仅提供有限支持。
