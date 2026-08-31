@@ -34,6 +34,7 @@
 #include "access_pid.h"
 #include "access_mmu.h"
 #include "access_tracking.h"
+#include "smap_page_flags.h"
 #include "accessed_bit.h"
 
 #define DECIMAL 10
@@ -414,37 +415,15 @@ static inline int get_numa_id_by_paddr(phys_addr_t paddr)
 	return page_to_nid(page);
 }
 
-static void actc_data_update(int nid, u64 pa_index)
-{
-	struct access_tracking_dev *adev = get_access_tracking_dev(nid);
-
-	if (unlikely(!adev || pa_index >= adev->page_count))
-		return;
-	if (!adev->is_hist && adev->access_bit_actc_data[pa_index] < U8_MAX)
-		adev->access_bit_actc_data[pa_index]++;
-}
-
-/*
- * Force the freq of a shared file page to the maximum so that the cold/hot
- * swap path (SELECT_TOP_K) picks it for migrate-back first. Shared file pages
- * migrated to remote memory should be promoted back promptly.
- */
-static void actc_data_set_max(struct page *page, int nid, u64 pa_index)
-{
-	struct access_tracking_dev *adev = get_access_tracking_dev(nid);
-
-	if (unlikely(!adev || pa_index >= adev->page_count))
-		return;
-	if (!is_shared_file_page(page))
-		return;
-	adev->access_bit_actc_data[pa_index] = (actc_t)-1;
-}
-
-static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
+static void actc_data_add_fast(phys_addr_t paddr, struct page *page,
+			     u32 page_size)
 {
 	struct access_tracking_dev *adev;
 	int ret, nid;
 	u64 pa_index;
+
+	if (!page)
+		return;
 
 	nid = get_numa_id_by_paddr(paddr);
 	if (unlikely(nid == NUMA_NO_NODE))
@@ -452,10 +431,10 @@ static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
 
 	if (nid < nr_local_numa) {
 		ret = calc_paddr_acidx_acpi_known_nid(paddr, nid, &pa_index,
-						      page_size);
+						  page_size);
 	} else {
 		ret = calc_paddr_acidx_iomem_known_nid(paddr, nid, &pa_index,
-						       page_size);
+						   page_size);
 	}
 
 	if (unlikely(ret))
@@ -465,8 +444,8 @@ static void actc_data_add_fast(phys_addr_t paddr, u32 page_size)
 	if (unlikely(!adev || pa_index >= adev->page_count))
 		return;
 
-	if (!adev->is_hist && adev->access_bit_actc_data[pa_index] < U8_MAX)
-		adev->access_bit_actc_data[pa_index]++;
+	if (!adev->is_hist)
+		smap_page_freq_inc(page);
 }
 
 static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
@@ -500,8 +479,11 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 	}
 
 	paddr = PFN_PHYS(pte_pfn(pte));
-	if (is_young)
-		actc_data_add_fast(paddr, g_pagesize_huge);
+	if (is_young) {
+		struct page *page = pfn_to_online_page(pte_pfn(pte));
+
+		actc_data_add_fast(paddr, page, g_pagesize_huge);
+	}
 
 	if (access_pid_cur_last_scanning(ap))
 		add_to_bm_huge(host_va, paddr, ap);
@@ -1455,7 +1437,6 @@ static void process_scan_results(struct pte_walk *pte_walk)
 	int ret;
 	bool is_last_scan;
 	int nid = 0;
-	struct page *page;
 
 	if (!pte_walk || !pte_walk->ap)
 		return;
@@ -1490,14 +1471,18 @@ static void process_scan_results(struct pte_walk *pte_walk)
 		if (ret)
 			continue;
 		entry->nid = nid;
-		if (entry->hot)
-			actc_data_update(entry->nid, pa_idx);
+		if (entry->hot) {
+			struct access_tracking_dev *adev = get_access_tracking_dev(entry->nid);
+
+			if (adev && !adev->is_hist) {
+				struct page *pg = smap_paddr_to_page(entry->paddr);
+
+				smap_page_freq_inc(pg);
+			}
+		}
 		if (is_last_scan) {
-			page = smap_paddr_to_page(entry->paddr);
-			if (page && entry->nid >= nr_local_numa)
-				actc_data_set_max(page, entry->nid, pa_idx);
 			add_to_bm_page_fast(entry->paddr, entry->nid, pa_idx,
-					    pte_walk->ap, page);
+					    pte_walk->ap);
 		}
 		cond_resched();
 	}

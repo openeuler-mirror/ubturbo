@@ -20,6 +20,7 @@
 #include "access_ioctl.h"
 #include "access_tracking.h"
 #include "access_mmu.h"
+#include "smap_page_flags.h"
 #include "access_pid.h"
 
 #undef pr_fmt
@@ -247,8 +248,6 @@ void destroy_access_pid(struct access_pid *elem)
 	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
 		vfree(elem->paddr_bm[i]);
 		elem->paddr_bm[i] = NULL;
-		vfree(elem->white_list_bm[i]);
-		elem->white_list_bm[i] = NULL;
 		elem->bm_len[i] = 0;
 		elem->scan_count[i] = 0;
 		elem->page_num[i] = 0;
@@ -434,13 +433,16 @@ static int mem_freq_release(struct inode *inode, struct file *file)
 }
 
 /**
- * fill_actc_data_by_bitmap - 根据bitmap生成actc_data数组
- * @ap: access_pid结构体指针
- * @actc: actc_data数组指针（需要预先分配足够空间）
- * @actc_len: actc数组长度（输出）
- * @mapping_offset: mapping数组的偏移量（用于获取prior）
+ * fill_actc_data_by_bitmap - Generate actc_data array from bitmap
+ * @ap: access_pid struct pointer
+ * @nid: NUMA node ID
+ * @actc: actc_data array pointer (pre-allocated)
+ * @actc_len: actc array length (output)
+ * @mapping_offset: mapping array offset (for prior)
  *
- * 遍历bitmap，结合频次数据、mapping和white_list_bm，生成actc_data结构体数组。
+ * Iterate bitmap, convert acidx to paddr, read freq from page->flags
+ * (read-clear: get then set sentinel), determine white-list flag from
+ * is_file_or_shared_page, and fill actc_data struct array.
  */
 static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 				     struct actc_data *actc, u32 *actc_len,
@@ -449,6 +451,7 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 	u32 len_cnt = 0;
 	size_t acidx, bm_len;
 	struct access_tracking_dev *adev;
+	int page_size = is_access_hugepage() ? g_pagesize_huge : PAGE_SIZE;
 
 	if (ap->page_num[nid] == 0 || !ap->paddr_bm[nid]) {
 		*actc_len = 0;
@@ -456,33 +459,61 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 	}
 
 	list_for_each_entry(adev, &access_dev, list) {
-		if (adev->node == nid) {
+		if (adev->node == nid)
 			break;
-		}
 	}
 	if (list_entry_is_head(adev, &access_dev, list)) {
 		*actc_len = 0;
 		return;
 	}
 
-	down_read(&adev->buffer_lock);
 	bm_len = BITS_PER_TYPE(long) * ap->bm_len[nid];
 	acidx = 0;
 	while (len_cnt < ap->page_num[nid]) {
+		u64 paddr;
+		struct page *page;
+		u8 flags = 0;
+		int ret;
+
 		acidx = find_next_bit(ap->paddr_bm[nid], bm_len, acidx);
 		if (acidx >= bm_len)
 			break;
 		if (unlikely(acidx >= adev->page_count)) {
-			pr_warn("exceeds total page amount: %llu when lookup access index: %zu on access device: %d\n",
-				adev->page_count, acidx, nid);
+			pr_warn_ratelimited("exceeds total page amount: %llu when lookup access index: %zu on access device: %d\n",
+				    adev->page_count, acidx, nid);
 			break;
 		}
 
-		u8 flags = 0;
-		/* 填充freq */
-		actc[len_cnt].freq = adev->access_bit_actc_data[acidx];
+		/* acidx to paddr reverse mapping */
+		if (nid < nr_local_numa)
+			ret = calc_acidx_paddr_acpi(nid, acidx, &paddr,
+						    page_size);
+		else
+			ret = calc_acidx_paddr_iomem(nid, acidx, &paddr,
+						     page_size);
+		if (ret) {
+			pr_warn_ratelimited("acidx %zu to paddr failed on node %d\n",
+					    acidx, nid);
+			acidx++;
+			continue;
+		}
 
-		/* 填充prior - 从priors获取 */
+		page = pfn_to_online_page(PHYS_PFN(paddr));
+		if (!page) {
+			acidx++;
+			continue;
+		}
+
+		if (is_file_or_shared_page(page))
+			flags |= ACTC_WHITE_LIST_BIT;
+
+		if (is_shared_file_page(page) && nid >= nr_local_numa) {
+			actc[len_cnt].freq = U8_MAX;
+		} else {
+			actc[len_cnt].freq = smap_page_freq_read_clear(page);
+		}
+
+		/* Fill prior from priors array */
 		if (ap->info.vm_size && ap->info.priors) {
 			if ((mapping_offset + len_cnt) < ap->info.vm_size) {
 				flags |= ACTC_PRIOR_SET(
@@ -493,18 +524,11 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 			flags |= ACTC_PRIOR_SET(0);
 		}
 
-		/* 填充is_white_list */
-		if (ap->white_list_bm[nid] &&
-		    test_bit(acidx, ap->white_list_bm[nid])) {
-			flags |= ACTC_WHITE_LIST_BIT;
-		}
-
 		actc[len_cnt].flags = flags;
 
 		len_cnt++;
 		acidx++;
 	}
-	up_read(&adev->buffer_lock);
 	*actc_len = len_cnt;
 }
 
@@ -566,7 +590,7 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 
 	down_read(&slot->ap_lock);
 	total_len = calc_process_page_number(ap) * sizeof(struct actc_data);
-	actc = kvmalloc(total_len, GFP_KERNEL);
+	actc = kvzalloc(total_len, GFP_KERNEL);
 	if (!actc) {
 		len = -ENOMEM;
 		up_read(&slot->ap_lock);
@@ -708,7 +732,6 @@ int init_access_pid(struct access_add_pid_payload *payload,
 		ap->page_num[i] = 0;
 		ap->bm_len[i] = 0;
 		ap->paddr_bm[i] = NULL;
-		ap->white_list_bm[i] = NULL;
 	}
 	if (ap->pid_type == SMAP_PID_VM) {
 		if (init_vm_mapping_info(ap->pid, &ap->info)) {
@@ -1396,23 +1419,8 @@ static inline void free_ap_bm(struct access_pid *ap)
 	}
 }
 
-static void free_ap_bm_white_list(struct access_pid *ap)
-{
-	int i;
-	if (!ap) {
-		return;
-	}
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
-		vfree(ap->paddr_bm[i]);
-		ap->paddr_bm[i] = NULL;
-		vfree(ap->white_list_bm[i]);
-		ap->white_list_bm[i] = NULL;
-		ap->bm_len[i] = 0;
-	}
-}
-
-int init_ap_bm_white_list(int node_len, u64 *node_page_count,
-			  struct access_pid *ap)
+int init_ap_bm(int node_len, u64 *node_page_count,
+	       struct access_pid *ap)
 {
 	size_t nr_bytes = sizeof(unsigned long);
 	int i;
@@ -1420,22 +1428,13 @@ int init_ap_bm_white_list(int node_len, u64 *node_page_count,
 	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
 		ap->page_num[i] = 0;
 		ap->bm_len[i] = BITS_TO_LONGS(node_page_count[i]);
-		if (ap->bm_len[i] == 0) {
+		if (ap->bm_len[i] == 0)
 			continue;
-		}
 		ap->paddr_bm[i] = vzalloc(ap->bm_len[i] * nr_bytes);
 		if (!ap->paddr_bm[i]) {
 			pr_err("unable to allocate memory for bitmap on node %d of pid: %d\n",
 			       i, ap->pid);
 			free_ap_bm(ap);
-			return -ENOMEM;
-		}
-
-		ap->white_list_bm[i] = vzalloc(ap->bm_len[i] * nr_bytes);
-		if (!ap->white_list_bm[i]) {
-			pr_err("unable to allocate memory for white list bitmap on node %d of pid: %d\n",
-			       i, ap->pid);
-			free_ap_bm_white_list(ap);
 			return -ENOMEM;
 		}
 	}
@@ -1462,8 +1461,6 @@ void clean_last_ap_data(struct access_pid *ap)
 	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
 		vfree(ap->paddr_bm[i]);
 		ap->paddr_bm[i] = NULL;
-		vfree(ap->white_list_bm[i]);
-		ap->white_list_bm[i] = NULL;
 		ap->bm_len[i] = 0;
 		ap->page_num[i] = 0;
 	}
@@ -1490,7 +1487,7 @@ int access_walk_pagemap_prepare(struct access_pid *ap)
 		up_read(&adev->buffer_lock);
 	}
 	clean_last_ap_data(ap);
-	ret = init_ap_bm_white_list(SMAP_MAX_NUMNODES, nodes_page_count, ap);
+	ret = init_ap_bm(SMAP_MAX_NUMNODES, nodes_page_count, ap);
 	if (ret) {
 		pr_err("unable to init access bitmap for pid: %d\n", ap->pid);
 		return ret;
@@ -1498,7 +1495,7 @@ int access_walk_pagemap_prepare(struct access_pid *ap)
 	ret = init_vm_mapping(&ap->info);
 	if (ret) {
 		pr_err("unable to init vm mapping for pid: %d\n", ap->pid);
-		free_ap_bm_white_list(ap);
+		free_ap_bm(ap);
 		return ret;
 	}
 	return 0;

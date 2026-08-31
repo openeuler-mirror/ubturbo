@@ -960,31 +960,6 @@ TEST_F(AccessedBitTest, GetNumaIdByPaddrNoOnlinePage)
     EXPECT_EQ(NUMA_NO_NODE, ret);
 }
 
-// ========== DT supplement: actc_data_update ==========
-
-extern "C" struct access_tracking_dev *get_access_tracking_dev(int node_id);
-extern "C" void actc_data_update(int nid, u64 pa_index);
-TEST_F(AccessedBitTest, ActcDataUpdateAdevNull)
-{
-    /* get_access_tracking_dev is static inline, cannot be mocked.
-       With empty access_dev list, it returns NULL -> early return */
-    actc_data_update(0, 0);
-}
-
-TEST_F(AccessedBitTest, ActcDataUpdatePaIndexOutOfRange)
-{
-    /* get_access_tracking_dev is static inline, cannot be mocked.
-       When access_dev list is empty, it returns NULL -> early return */
-    actc_data_update(0, 200);
-}
-
-TEST_F(AccessedBitTest, ActcDataUpdateIncrementSuccess)
-{
-    /* Cannot mock get_access_tracking_dev (static inline).
-       Test only verifies null adev path via empty access_dev list */
-    actc_data_update(0, 50);
-}
-
 // ========== DT supplement: actc_data_add_fast ==========
 
 extern "C" void actc_data_add_fast(phys_addr_t paddr, u32 page_size);

@@ -246,14 +246,6 @@ static void destroy_scan_workqueue(void)
 	destroy_workqueue(adev->scanq);
 }
 
-static inline void access_init_actc_data(struct access_tracking_dev *adev)
-{
-	size_t len = adev->page_count * sizeof(actc_t);
-
-	if (adev->access_bit_actc_data)
-		memset(adev->access_bit_actc_data, 0, len);
-}
-
 static void access_print_acpi_mem(void)
 {
 #ifdef DEBUG
@@ -279,37 +271,22 @@ static u64 calc_access_len_v2(struct access_tracking_dev *adev)
 	return page_count;
 }
 
-static void actc_buffer_deinit(struct access_tracking_dev *adev)
+static void pginfo_deinit(struct access_tracking_dev *adev)
 {
 	adev->page_count = 0;
-	if (adev->access_bit_actc_data) {
-		vfree(adev->access_bit_actc_data);
-		adev->access_bit_actc_data = NULL;
-	}
 }
 
-static int actc_buffer_reinit(struct access_tracking_dev *adev)
+static int pginfo_reinit(struct access_tracking_dev *adev)
 {
 	u64 page_count;
 
 	access_print_acpi_mem();
 	page_count = calc_access_len_v2(adev);
-	if (adev->page_count == page_count) {
-		access_init_actc_data(adev);
+	if (adev->page_count == page_count)
 		return 0;
-	}
 	pr_debug(
 		"page amount of tracking device on node %d has been changed from %llu to %llu\n",
 		adev->node, adev->page_count, page_count);
-	actc_buffer_deinit(adev);
-	if (page_count == 0) {
-		return 0;
-	}
-
-	adev->access_bit_actc_data = vzalloc(page_count * sizeof(actc_t));
-	if (!adev->access_bit_actc_data) {
-		return -ENOMEM;
-	}
 	adev->page_count = page_count;
 	return 0;
 }
@@ -322,7 +299,7 @@ static void access_tracking_enable(struct device *ldev)
 	if (adev->is_hist)
 		return;
 	down_write(&adev->buffer_lock);
-	ret = actc_buffer_reinit(adev);
+	ret = pginfo_reinit(adev);
 	if (ret) {
 		pr_err("unable to reinit ACTC buffer\n");
 		up_write(&adev->buffer_lock);
@@ -381,7 +358,7 @@ static int access_tracking_set_page_size(struct device *ldev,
 
 	down_write(&adev->buffer_lock);
 	access_page_size = adev->page_size_mode = page_size_index;
-	ret = actc_buffer_reinit(adev);
+	ret = pginfo_reinit(adev);
 	if (ret) {
 		up_write(&adev->buffer_lock);
 		return ret;
@@ -405,21 +382,11 @@ int calc_access_len(struct access_tracking_dev *adev)
 	return 0;
 }
 
-static int actc_buffer_init(struct access_tracking_dev *adev)
+static int pginfo_init(struct access_tracking_dev *adev)
 {
 	adev->page_count = calc_access_len_v2(adev);
 	pr_info("tracking device of node: %d, page amount: %llu\n", adev->node,
 		adev->page_count);
-	if (adev->page_count == 0) {
-		adev->access_bit_actc_data = NULL;
-		return 0;
-	}
-
-	adev->access_bit_actc_data = vzalloc(adev->page_count * sizeof(actc_t));
-	if (!adev->access_bit_actc_data) {
-		pr_err("unable to allocate memory for access bit ACTC buffer\n");
-		return -ENOMEM;
-	}
 	return 0;
 }
 
@@ -442,7 +409,7 @@ static int access_tracking_add(void)
 		adev->page_size_mode = PAGE_MODE_2M;
 		adev->is_hist = false;
 
-		ret = actc_buffer_init(adev);
+		ret = pginfo_init(adev);
 		if (ret) {
 			pr_err("unable to init ACTC buffer\n");
 			goto adev_free;
@@ -478,14 +445,14 @@ attr_del:
 	device_del(&adev->ldev);
 buff_deinit:
 	put_device(&adev->ldev);
-	actc_buffer_deinit(adev);
+	pginfo_deinit(adev);
 adev_free:
 	kfree(adev);
 	adev = NULL;
 put_dev:
 	list_for_each_entry_safe(adev, n, &access_dev, list) {
 		tracking_dev_remove(adev->tracking_dev);
-		actc_buffer_deinit(adev);
+		pginfo_deinit(adev);
 		device_unregister(&adev->ldev);
 		kfree(adev);
 	}
@@ -635,8 +602,6 @@ static void release_adev(void)
 	list_for_each_entry_safe(adev, n, &access_dev, list) {
 		tracking_dev_remove(adev->tracking_dev);
 		device_unregister(&adev->ldev);
-		vfree(adev->access_bit_actc_data);
-		adev->access_bit_actc_data = NULL;
 		kfree(adev);
 	}
 }

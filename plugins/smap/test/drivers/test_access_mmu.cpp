@@ -100,29 +100,10 @@ static int fake_calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
     return 0;
 }
 
-extern "C" int set_non_anon_bm(struct access_pid *ap, u64 acidx,
-                               struct page *page, int nid);
 extern "C" bool pfn_valid(unsigned long pfn);
 extern "C" struct page *pfn_to_online_page(unsigned long pfn);
 extern "C" int PageHuge(struct page *page);
 extern "C" bool PageAnon(struct page *page);
-TEST_F(AccessMMUTest, set_non_anon_bm)
-{
-    int ret = 0;
-    struct page page;
-    struct access_pid ap = {0};
-    ap.bm_len[0] = 1;
-    ap.white_list_bm[0] = (unsigned long *)malloc(sizeof(unsigned long));
-
-    MOCKER(pfn_valid).stubs().will(returnValue(true));
-    MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
-    MOCKER(PageHuge).stubs().will(returnValue(1));
-    MOCKER(PageAnon).stubs().will(returnValue(true));
-    ret = set_non_anon_bm(&ap, 0, &page, 0);
-    EXPECT_EQ(0, ret);
-
-    free(ap.white_list_bm[0]);
-}
 
 extern "C" int add_to_bm_page(u64 paddr, struct access_pid *ap);
 TEST_F(AccessMMUTest, AddToBMPage)
@@ -136,7 +117,7 @@ TEST_F(AccessMMUTest, AddToBMPage)
     ap.bm_len[0] = 2;
     ap.paddr_bm[0] = (unsigned long *)malloc(sizeof(unsigned long) * 2);
 
-    MOCKER(set_non_anon_bm).stubs().will(returnValue(0));
+    /* set_non_anon_bm removed; no longer needed in add_to_bm_page path */
     ret = add_to_bm_page((u64)0x00005000, &ap);
     EXPECT_EQ(0, ret);
 

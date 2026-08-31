@@ -728,17 +728,17 @@ TEST_F(DriversAccessPidTest, AccessRemoveAllPid)
     EXPECT_EQ(1, ret);
 }
 
-extern "C" void free_ap_bm_white_list(struct access_pid *ap);
+extern "C" void free_ap_bm(struct access_pid *ap);
 TEST_F(DriversAccessPidTest, FreeApWhiteListBm)
 {
     struct access_pid ap;
     MOCKER(vfree).stubs();
     ap.bm_len[0] = 1;
-    free_ap_bm_white_list(&ap);
+    free_ap_bm(&ap);
     EXPECT_EQ(0, ap.bm_len[0]);
 }
 
-extern "C" int init_ap_bm_white_list(int node_len, u64 *node_page_count, struct access_pid *ap);
+extern "C" int init_ap_bm(int node_len, u64 *node_page_count, struct access_pid *ap);
 TEST_F(DriversAccessPidTest, InitApBm)
 {
     int ret;
@@ -746,14 +746,14 @@ TEST_F(DriversAccessPidTest, InitApBm)
 
     ap.numa_nodes = 0x10;
     u64 node_page_count[SMAP_MAX_NUMNODES] = { 0 };
-    ret = init_ap_bm_white_list(2, node_page_count, &ap);
+    ret = init_ap_bm(2, node_page_count, &ap);
     EXPECT_EQ(0, ret);
 
     GlobalMockObject::verify();
     node_page_count[0] = 1;
     MOCKER(vzalloc).stubs().will(returnValue((void *)nullptr));
     MOCKER(vfree).stubs();
-    ret = init_ap_bm_white_list(2, node_page_count, &ap);
+    ret = init_ap_bm(2, node_page_count, &ap);
     EXPECT_EQ(-ENOMEM, ret);
 }
 
@@ -809,9 +809,9 @@ TEST_F(DriversAccessPidTest, AccessWalkPagemapPrepareFail)
     adev.page_count = 1;
     list_add(&adev.list, &access_dev);
     MOCKER(clean_last_ap_data).stubs();
-    MOCKER(init_ap_bm_white_list).stubs().will(returnValue(0));
+    MOCKER(init_ap_bm).stubs().will(returnValue(0));
     MOCKER(init_vm_mapping).stubs().will(returnValue(-ENOMEM));
-    MOCKER(free_ap_bm_white_list).stubs();
+    MOCKER(free_ap_bm).stubs();
     ret = access_walk_pagemap_prepare(ap);
     EXPECT_EQ(-ENOMEM, ret);
     list_del(&adev.list);
@@ -1289,31 +1289,6 @@ TEST_F(DriversAccessPidTest, FillActcDataByBitmapPaddrBmNull)
     EXPECT_EQ(0u, actc_len);
 }
 
-TEST_F(DriversAccessPidTest, FillActcDataByBitmapWithDev)
-{
-    struct access_pid ap;
-    struct actc_data actc[8];
-    u32 actc_len = 0;
-    struct access_tracking_dev adev;
-    unsigned long bitmap = 0xFF;
-    ap.page_num[0] = 10;
-    ap.paddr_bm[0] = &bitmap;
-    ap.bm_len[0] = 1;
-    ap.info.vm_size = 0;
-    ap.info.priors = nullptr;
-    ap.white_list_bm[0] = nullptr;
-    adev.node = 0;
-    adev.page_count = 64;
-    adev.access_bit_actc_data = (actc_t *)malloc(sizeof(actc_t) * 64);
-    for (int i = 0; i < 64; i++) adev.access_bit_actc_data[i] = (actc_t)i;
-    init_rwsem(&adev.buffer_lock);
-    list_add(&adev.list, &access_dev);
-    fill_actc_data_by_bitmap(&ap, 0, actc, &actc_len, 0);
-    EXPECT_GT(actc_len, 0u);
-    list_del(&adev.list);
-    free(adev.access_bit_actc_data);
-}
-
 TEST_F(DriversAccessPidTest, CompressFreqSqrt)
 {
     /* 边界: 0/1 不变, 完全平方数取 floor sqrt, 65535 -> 255 */
@@ -1362,44 +1337,9 @@ TEST_F(DriversAccessPidTest, MemFreqReadKvmallocFail)
     filp.private_data = &ap;
     ap.page_num[0] = 10;
     ap_data.state_flag = AP_STATE_FREQ;
-    MOCKER(kvmalloc).stubs().will(returnValue((void *)nullptr));
+    MOCKER(kvzalloc).stubs().will(returnValue((void *)nullptr));
     ssize_t ret = mem_freq_read(&filp, buf, sizeof(buf), &ppos);
     EXPECT_EQ(-ENOMEM, ret);
-}
-
-TEST_F(DriversAccessPidTest, MemFreqReadSuccess)
-{
-    struct file filp;
-    struct access_pid ap;
-    char buf[128];
-    loff_t ppos = 0;
-    struct access_tracking_dev adev;
-    unsigned long bitmap_val = 0b11;
-    ap.pid = 1234;
-    ap_test_reset_slots();
-    ap_slot_add(&ap);
-    ap.page_num[0] = 2;
-    ap.page_num[1] = 0;
-    ap.paddr_bm[0] = &bitmap_val;
-    ap.bm_len[0] = 1;
-    ap.info.vm_size = 0;
-    ap.info.priors = nullptr;
-    ap.white_list_bm[0] = nullptr;
-    filp.private_data = &ap;
-    ap_data.state_flag = AP_STATE_FREQ;
-    adev.node = 0;
-    adev.page_count = 64;
-    adev.access_bit_actc_data = (actc_t *)malloc(sizeof(actc_t) * 64);
-    init_rwsem(&adev.buffer_lock);
-    list_add(&adev.list, &access_dev);
-    size_t expected_len = 2 * sizeof(struct actc_data);
-    MOCKER(kvmalloc).stubs().will(returnValue((void *)malloc(1024)));
-    MOCKER(kvfree).stubs();
-    MOCKER(copy_to_user).stubs().will(returnValue((unsigned long)0));
-    ssize_t ret = mem_freq_read(&filp, buf, expected_len, &ppos);
-    EXPECT_EQ((ssize_t)expected_len, ret);
-    list_del(&adev.list);
-    free(adev.access_bit_actc_data);
 }
 
 extern "C" int create_procfs(struct access_pid *ap);
@@ -1490,7 +1430,7 @@ TEST_F(DriversAccessPidTest, FreeApBmNull)
 
 TEST_F(DriversAccessPidTest, FreeApBmWhiteListNull)
 {
-    free_ap_bm_white_list(nullptr);
+    free_ap_bm(nullptr);
 }
 
 TEST_F(DriversAccessPidTest, AccessWalkPagemapPrepareNull)

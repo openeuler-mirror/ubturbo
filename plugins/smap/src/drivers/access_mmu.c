@@ -61,37 +61,22 @@ static int calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
 	return calc_paddr_acidx_iomem(paddr, nid, index, page_size);
 }
 
-static int set_non_anon_bm(struct access_pid *ap, u64 acidx, struct page *page,
-			   int nid)
-{
-	if (!page)
-		return -EINVAL;
-	if (is_file_or_shared_page(page))
-		__set_bit(acidx, ap->white_list_bm[nid]);
-	return 0;
-}
-
 int add_to_bm_page(u64 paddr, struct access_pid *ap)
 {
 	int nid, nid_pos, ret;
 	u64 acidx;
+
 	ret = calc_paddr_acidx(paddr, &nid, &acidx);
 	if (ret)
 		return ret;
 	nid_pos = convert_nid_to_pos(nid);
 	unsigned long numa_nodes = ap->numa_nodes;
-	if (unlikely(!test_bit(nid_pos, &numa_nodes))) {
+	if (unlikely(!test_bit(nid_pos, &numa_nodes)))
 		return -EINVAL;
-	}
 
-	if (BIT_WORD(acidx) >= ap->bm_len[nid]) {
+	if (BIT_WORD(acidx) >= ap->bm_len[nid])
 		return -ERANGE;
-	}
 
-	ret = set_non_anon_bm(ap, acidx, smap_paddr_to_page(paddr), nid);
-	if (ret) {
-		return ret;
-	}
 	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly */
 	if (!_test_bit(acidx, ap->paddr_bm[nid])) {
 		__set_bit(acidx, ap->paddr_bm[nid]);
@@ -100,10 +85,9 @@ int add_to_bm_page(u64 paddr, struct access_pid *ap)
 	return 0;
 }
 
-int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap,
-			struct page *page)
+int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap)
 {
-	int ret, nid_pos;
+	int nid_pos;
 	unsigned long numa_nodes;
 
 	nid_pos = convert_nid_to_pos(nid);
@@ -114,9 +98,6 @@ int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap,
 	if (BIT_WORD(acidx) >= ap->bm_len[nid])
 		return -ERANGE;
 
-	ret = set_non_anon_bm(ap, acidx, page, nid);
-	if (ret)
-		return ret;
 	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly */
 	if (!_test_bit(acidx, ap->paddr_bm[nid])) {
 		__set_bit(acidx, ap->paddr_bm[nid]);

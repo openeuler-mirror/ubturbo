@@ -156,5 +156,18 @@ static inline struct folio *pfn_folio(unsigned long pfn)
 #else /* KERNEL_VERSION(5, 10, 0) */
 #endif /* LINUX_VERSION_CODE */
 
+static inline bool try_get_page(struct page *page)
+{
+    return true;
+}
+
+extern void put_page(struct page *page);
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern void folio_put(struct folio *folio);
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _LINUX_MM_H */

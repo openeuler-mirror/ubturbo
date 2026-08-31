@@ -15,6 +15,8 @@ void *kmalloc(size_t size, gfp_t flags);
 void *kmalloc_array(size_t n, size_t size, gfp_t flags);
 void *kzalloc(size_t size, gfp_t flags);
 void *kcalloc(size_t n, size_t size, gfp_t flags);
+void *kvmalloc(size_t size, gfp_t flags);
+void *kvzalloc(size_t size, gfp_t flags);
 void *kvcalloc(size_t n, size_t size, gfp_t flags);
 void kfree(void *p);
 void kvfree(void *p);

@@ -554,8 +554,8 @@ TEST_F(HistOpsTest, addr_segs_deinit)
     EXPECT_EQ(NULL, dev.info.segs);
 }
 
-extern "C" int hist_pginfo_reinit(struct smap_hist_dev *dev, u32 pgsize_new);
-TEST_F(HistOpsTest, hist_pginfo_reinit)
+extern "C" int addr_segs_reinit(struct smap_hist_dev *dev, u32 pgsize_new);
+TEST_F(HistOpsTest, addr_segs_reinit)
 {
     int ret;
     struct smap_hist_dev dev = {
@@ -563,13 +563,13 @@ TEST_F(HistOpsTest, hist_pginfo_reinit)
     };
     MOCKER(addr_segs_deinit).stubs().will(ignoreReturnValue());
     MOCKER(addr_segs_init).stubs().will(returnValue(1));
-    ret = hist_pginfo_reinit(&dev, 0);
+    ret = addr_segs_reinit(&dev, 0);
     EXPECT_EQ(-ENOMEM, ret);
 
     GlobalMockObject::verify();
     MOCKER(addr_segs_deinit).stubs().will(ignoreReturnValue());
     MOCKER(addr_segs_init).stubs().will(returnValue(0));
-    ret = hist_pginfo_reinit(&dev, 0);
+    ret = addr_segs_reinit(&dev, 0);
     EXPECT_EQ(0, ret);
 }
 
@@ -582,7 +582,7 @@ TEST_F(HistOpsTest, scan_thread_run)
     g_smap_hist_dev.status.status_all = 1;
     g_smap_hist_dev.thread_enable = 1;
     g_smap_hist_dev.pgcount = 10;
-    MOCKER(hist_pginfo_reinit).stubs().will(returnValue(0));
+    MOCKER(addr_segs_reinit).stubs().will(returnValue(0));
     MOCKER(hist_scan_sliding).stubs().will(returnValue(0));
     ret = scan_thread_run(&g_smap_hist_dev);
     EXPECT_EQ(0, ret);
@@ -594,7 +594,7 @@ TEST_F(HistOpsTest, scan_thread_run_two)
     MOCKER(kthread_should_stop).stubs().will(returnValue(false)).then(returnValue(true));
 
     g_smap_hist_dev.status.status_all = 1;
-    MOCKER(hist_pginfo_reinit).stubs().will(returnValue(1));
+    MOCKER(addr_segs_reinit).stubs().will(returnValue(1));
     ret = scan_thread_run(&g_smap_hist_dev);
     EXPECT_EQ(0, ret);
 }
@@ -606,7 +606,7 @@ TEST_F(HistOpsTest, scan_thread_run_three)
 
     g_smap_hist_dev.status.status_all = 1;
     g_smap_hist_dev.thread_enable = 1;
-    MOCKER(hist_pginfo_reinit).stubs().will(returnValue(0));
+    MOCKER(addr_segs_reinit).stubs().will(returnValue(0));
     MOCKER(hist_scan_sliding).stubs().will(returnValue(-EINVAL));
     ret = scan_thread_run(&g_smap_hist_dev);
     EXPECT_EQ(0, ret);
@@ -774,116 +774,6 @@ TEST_F(HistOpsTest, seq_loop_scan_mode_change_reset)
 }
 
 /*
- * Test Case 3: 硬件扫描省去中间buffer直接将频次更新到hdev->actc_data功能正常
- * Test update_actc_direct directly updates hdev->access_bit_actc_data without intermediate buffer
- */
-TEST_F(HistOpsTest, update_actc_direct_to_hdev)
-{
-    struct segs_info rmem_info;
-    struct addr_seg scan_seg;
-    u16 freq_buffer[4] = {100, 200, 300, 400};
-    struct access_tracking_dev hdev;
-    struct ram_segment rseg;
-
-    /* Setup remote memory segment info */
-    struct addr_seg *rmem_segs = (struct addr_seg *)malloc(sizeof(struct addr_seg));
-    rmem_segs[0].start = 0;
-    rmem_segs[0].size = 0x10000; /* 64KB */
-    rmem_info.cnt = 1;
-    rmem_info.segs = rmem_segs;
-
-    /* Setup scan segment (intersection with remote memory) */
-    scan_seg.start = 0;
-    scan_seg.size = 0x4000; /* 16KB = 4 pages at 4K granularity */
-
-    /* Setup hdev with actc_data buffer */
-    hdev.node = 0;
-    hdev.is_hist = true;
-    hdev.page_count = 10;
-    hdev.access_bit_actc_data = (actc_t *)calloc(10, sizeof(actc_t));
-    init_rwsem(&hdev.buffer_lock);
-
-    /* Setup ram_segment list */
-    INIT_LIST_HEAD(&remote_ram_list);
-    rseg.start = 0;
-    rseg.end = 0xFFFF;
-    rseg.numa_node = 0;
-    list_add(&rseg.node, &remote_ram_list);
-
-    /* Setup access_dev list so find_hdev_by_node can find our hdev */
-    INIT_LIST_HEAD(&access_dev);
-    list_add(&hdev.list, &access_dev);
-
-    /* Call update_actc_direct */
-    g_smap_hist_dev.freq_register_cnt = 16384;
-    update_actc_direct(&rmem_info, &scan_seg, freq_buffer, 4, STS_SIZE_4K);
-
-    /* Verify: access_bit_actc_data should be updated with compress_freq(freq) */
-    /* freq 100/200/300/400 -> floor(sqrt) = 10/14/17/20 (sum < U8_MAX) */
-    EXPECT_EQ(10, hdev.access_bit_actc_data[0]);
-    EXPECT_EQ(14, hdev.access_bit_actc_data[1]);
-    EXPECT_EQ(17, hdev.access_bit_actc_data[2]);
-    EXPECT_EQ(20, hdev.access_bit_actc_data[3]);
-
-    free(rmem_segs);
-    free(hdev.access_bit_actc_data);
-}
-
-/*
- * Test Case 3 extension: Verify update_actc_direct handles U16_MAX overflow correctly
- */
-TEST_F(HistOpsTest, update_actc_direct_overflow_handling)
-{
-    struct segs_info rmem_info;
-    struct addr_seg scan_seg;
-    u16 freq_buffer[2] = {U16_MAX, U16_MAX};
-    struct access_tracking_dev hdev;
-    struct ram_segment rseg;
-
-    /* Setup remote memory segment info */
-    struct addr_seg *rmem_segs = (struct addr_seg *)malloc(sizeof(struct addr_seg));
-    rmem_segs[0].start = 0;
-    rmem_segs[0].size = 0x10000;
-    rmem_info.cnt = 1;
-    rmem_info.segs = rmem_segs;
-
-    /* Setup scan segment */
-    scan_seg.start = 0;
-    scan_seg.size = 0x2000; /* 8KB = 2 pages at 4K granularity */
-
-    /* Setup hdev with existing high values in actc_data */
-    hdev.node = 0;
-    hdev.is_hist = true;
-    hdev.page_count = 10;
-    hdev.access_bit_actc_data = (actc_t *)calloc(10, sizeof(actc_t));
-    hdev.access_bit_actc_data[0] = U8_MAX - 1; /* Near overflow */
-    hdev.access_bit_actc_data[1] = 100;
-    init_rwsem(&hdev.buffer_lock);
-
-    /* Setup lists */
-    INIT_LIST_HEAD(&remote_ram_list);
-    rseg.start = 0;
-    rseg.end = 0xFFFF;
-    rseg.numa_node = 0;
-    list_add(&rseg.node, &remote_ram_list);
-
-    INIT_LIST_HEAD(&access_dev);
-    list_add(&hdev.list, &access_dev);
-
-    g_smap_hist_dev.freq_register_cnt = 16384;
-    update_actc_direct(&rmem_info, &scan_seg, freq_buffer, 2, STS_SIZE_4K);
-
-    /* Verify overflow handling: sum should clamp to U8_MAX */
-    /* index 0: (U8_MAX-1) + compress_freq(U16_MAX)=254+255 -> clamp U8_MAX */
-    EXPECT_EQ(U8_MAX, hdev.access_bit_actc_data[0]);
-    /* index 1: 100 + compress_freq(U16_MAX)=100+255 -> clamp U8_MAX */
-    EXPECT_EQ(U8_MAX, hdev.access_bit_actc_data[1]);
-
-    free(rmem_segs);
-    free(hdev.access_bit_actc_data);
-}
-
-/*
  * Test: Verify hist_scan_sliding uses direct_update for seq_loop mode
  */
 TEST_F(HistOpsTest, hist_scan_sliding_seq_loop_direct_update)
@@ -943,7 +833,7 @@ TEST_F(HistOpsTest, scan_thread_reset_seq_loop_offset_on_status_change)
     dev->status.status_all = 1;
 
     /* In scan_thread_run, when status.status_all != 0, offsets are reset */
-    /* This is done before hist_pginfo_reinit */
+    /* This is done before addr_segs_reinit */
     for (i = 0; i < HIST_STS_DEV_CNT; ++i) {
         dev->seq_loop_ba_offset[i] = -1;
     }

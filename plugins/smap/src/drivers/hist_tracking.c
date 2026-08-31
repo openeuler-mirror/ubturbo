@@ -44,14 +44,6 @@
 
 extern struct list_head access_dev;
 
-static inline void hist_reset_actc_data(struct access_tracking_dev *hdev)
-{
-	size_t len = hdev->page_count * sizeof(actc_t);
-
-	if (hdev->access_bit_actc_data)
-		memset(hdev->access_bit_actc_data, 0, len);
-}
-
 static int hist_tracking_disable(struct device *ldev)
 {
 	struct access_tracking_dev *hdev;
@@ -62,80 +54,51 @@ static int hist_tracking_disable(struct device *ldev)
 	return 0;
 }
 
-static void hist_actc_buffer_deinit(struct access_tracking_dev *hdev)
-{
-	hdev->page_count = 0;
-	if (hdev->access_bit_actc_data) {
-		vfree(hdev->access_bit_actc_data);
-		hdev->access_bit_actc_data = NULL;
-	}
-}
-
-static inline int hist_get_page_size(struct access_tracking_dev *hdev)
-{
-	if (hdev->page_size_mode == PAGE_MODE_2M) {
-		return g_pagesize_huge;
-	}
-	return PAGE_SIZE;
-}
-
-static u64 hist_calc_access_len(struct access_tracking_dev *hdev)
-{
-	int page_size = hist_get_page_size(hdev);
-	u64 page_count;
-	if (hdev->node >= nr_local_numa) {
-		page_count = get_node_page_cnt_iomem(hdev->node, page_size);
-	} else {
-		page_count = get_node_actc_len(hdev->node, page_size);
-	}
-	pr_debug("histogram tracking node: %d, got page count: %llu\n",
-		 hdev->node, page_count);
-
-	return page_count;
-}
-
 static void hist_dev_pgsize_update(u8 page_size_mode)
 {
 	u32 pgsize = page_size_mode == PAGE_MODE_2M ? SIZE_2M : SIZE_4K;
 	hist_update_pgsize(pgsize);
 }
 
-static int hist_actc_buffer_reinit(struct access_tracking_dev *hdev)
+/*
+ * 频次已迁移至 page->flags，无需再维护 ACTC 缓冲，
+ * 但 page_count 仍被 acidx 越界检查（fill_actc_data_by_bitmap 等）
+ * 依赖，必须在使能/页粒度变更时按最新 remote_ram_list 重算。
+ */
+static u64 hist_calc_access_len(struct access_tracking_dev *hdev)
 {
+	int page_size = get_page_size(hdev);
 	u64 page_count;
-	page_count = hist_calc_access_len(hdev);
-	if (!page_count) {
+
+	if (hdev->node >= nr_local_numa)
+		page_count = get_node_page_cnt_iomem(hdev->node, page_size);
+	else
+		page_count = get_node_actc_len(hdev->node, page_size);
+	pr_debug("histogram tracking node: %d, got page count: %llu\n",
+		 hdev->node, page_count);
+
+	return page_count;
+}
+
+static void hist_pginfo_reinit(struct access_tracking_dev *hdev)
+{
+	u64 page_count = hist_calc_access_len(hdev);
+
+	if (!page_count)
 		pr_debug("no page found on node: %d\n", hdev->node);
-	}
-	if (hdev->page_count == page_count) {
-		hist_reset_actc_data(hdev);
-		return 0;
-	}
-	hist_actc_buffer_deinit(hdev);
-	if (page_count) {
-		hdev->access_bit_actc_data =
-			vzalloc(page_count * sizeof(actc_t));
-		if (!hdev->access_bit_actc_data) {
-			return -ENOMEM;
-		}
-	}
+	if (hdev->page_count != page_count)
+		pr_debug("page amount of tracking device on node %d has been changed from %llu to %llu\n",
+			 hdev->node, hdev->page_count, page_count);
 	hdev->page_count = page_count;
-	return 0;
 }
 
 static void hist_tracking_enable(struct device *ldev)
 {
 	struct access_tracking_dev *hdev;
-	int ret;
 
 	hdev = to_access_tracking_dev(ldev);
 	down_write(&hdev->buffer_lock);
-	ret = hist_actc_buffer_reinit(hdev);
-	if (ret) {
-		pr_err("unable to reinit ACTC buffer\n");
-		up_write(&hdev->buffer_lock);
-		return;
-	}
+	hist_pginfo_reinit(hdev);
 	up_write(&hdev->buffer_lock);
 	hdev->enable_on = true;
 	hist_thread_resume();
@@ -143,8 +106,8 @@ static void hist_tracking_enable(struct device *ldev)
 
 static int hist_tracking_set_page_size(struct device *ldev, u8 pgsize)
 {
-	int ret;
 	struct access_tracking_dev *hdev;
+
 	hdev = to_access_tracking_dev(ldev);
 
 	if (pgsize != PAGE_MODE_4K && pgsize != PAGE_MODE_2M) {
@@ -155,14 +118,9 @@ static int hist_tracking_set_page_size(struct device *ldev, u8 pgsize)
 	hdev->enable_on = false;
 	hdev->page_size_mode = pgsize;
 	hist_dev_pgsize_update(pgsize);
-	ret = hist_actc_buffer_reinit(hdev);
-	if (ret) {
-		up_write(&hdev->buffer_lock);
-		pr_err("Actc buffer reinit failed. ret:%d\n", ret);
-		return ret;
-	}
+	hist_pginfo_reinit(hdev);
 	up_write(&hdev->buffer_lock);
-	return ret;
+	return 0;
 }
 
 static inline bool is_numa_flux_updated(struct ub_flux_mb_statistic *stc,
@@ -236,22 +194,6 @@ static struct tracking_operations g_hist_tracking_ops = {
 	.tracking_ub_watch_config = hist_tracking_ub_watch_config,
 };
 
-static int hist_actc_buffer_init(struct access_tracking_dev *hdev)
-{
-	hdev->page_count = hist_calc_access_len(hdev);
-	pr_info("page count: %llu for node: %d\n", hdev->page_count,
-		hdev->node);
-	if (!hdev->page_count)
-		return 0;
-	hdev->access_bit_actc_data = vzalloc(hdev->page_count * sizeof(actc_t));
-	if (!hdev->access_bit_actc_data) {
-		pr_err("unable to alloc mem for histogram tracking ACTC buffer\n");
-		hdev->page_count = 0;
-		return -ENOMEM;
-	}
-	return 0;
-}
-
 static void hist_tracking_deinit(void)
 {
 	struct access_tracking_dev *hdev, *n;
@@ -259,7 +201,6 @@ static void hist_tracking_deinit(void)
 		if (!hdev->is_hist)
 			continue;
 		tracking_dev_remove(hdev->tracking_dev);
-		hist_actc_buffer_deinit(hdev);
 		device_unregister(&hdev->ldev);
 		kfree(hdev);
 	}
@@ -291,11 +232,9 @@ static int hist_tracking_init(void)
 		hdev->page_size_mode = PAGE_MODE_2M;
 		hdev->is_hist = true;
 
-		ret = hist_actc_buffer_init(hdev);
-		if (ret) {
-			pr_err("unable to init ACTC buffer, ret: %d\n", ret);
-			goto free_hdev;
-		}
+		hdev->page_count = hist_calc_access_len(hdev);
+		pr_info("page count: %llu for node: %d\n", hdev->page_count,
+			hdev->node);
 
 		init_rwsem(&hdev->buffer_lock);
 		device_initialize(&hdev->ldev);
@@ -304,13 +243,13 @@ static int hist_tracking_init(void)
 		if (ret) {
 			pr_err("unable to set histogram tracking device name, ret: %d\n",
 			       ret);
-			goto deinit_buf;
+			goto put_dev_hdev;
 		}
 
 		ret = device_add(&hdev->ldev);
 		if (ret) {
 			pr_err("unable to add histogram tracking device\n");
-			goto deinit_buf;
+			goto put_dev_hdev;
 		}
 
 		hdev->tracking_dev = tracking_dev_add(
@@ -328,10 +267,8 @@ static int hist_tracking_init(void)
 
 del_dev:
 	device_del(&hdev->ldev);
-deinit_buf:
-	hist_actc_buffer_deinit(hdev);
+put_dev_hdev:
 	put_device(&hdev->ldev);
-free_hdev:
 	kfree(hdev);
 put_dev:
 	hist_tracking_deinit();

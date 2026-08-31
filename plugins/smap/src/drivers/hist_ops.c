@@ -26,6 +26,7 @@
 #include "ub_hist.h"
 #include "hist_tracking.h"
 #include "hist_ops.h"
+#include "smap_page_flags.h"
 
 #undef pr_fmt
 #define pr_fmt(fmt) "hist_ops: " fmt
@@ -652,22 +653,38 @@ static struct access_tracking_dev *find_hdev_by_node(int node)
 }
 
 /**
- * do_actc_update - Update frequency counts in hdev buffer
+ * do_actc_update - Update frequency counts via page flags
+ * @base: physical address of first page in intersection region
+ * @shift: page shift (HIST_ADDR_SHIFT_2M or HIST_ADDR_SHIFT_4K)
+ * @hist_offset: offset into hardware scan freq buffer
+ * @inter_pages: number of pages in intersection region
+ * @freq: hardware scan frequency buffer (u16 values)
+ *
+ * For each page in the intersection, compress the raw hardware freq
+ * and add into page->flags LAST_CPUPID via smap_page_freq_add.
  */
-static void do_actc_update(struct access_tracking_dev *hdev, u64 seg_offset,
-			   u64 hist_offset, u64 inter_pages, u16 *freq)
+static void do_actc_update(phys_addr_t base, u32 shift, u64 hist_offset,
+			   u64 inter_pages, u16 *freq)
 {
 	u64 j;
 
-	down_read(&hdev->buffer_lock);
 	for (j = 0; j < inter_pages; j++) {
-		u32 idx = seg_offset + j;
-		/* 硬件扫描: u16 频次开根号压缩成 u8 后累加进 access_bit_actc_data(actc_t) */
-		u32 sum = hdev->access_bit_actc_data[idx] +
-			  compress_freq(freq[hist_offset + j]);
-		hdev->access_bit_actc_data[idx] = (sum < U8_MAX) ? sum : U8_MAX;
+		phys_addr_t paddr = base + ((u64)j << shift);
+		struct page *page;
+		u16 raw;
+		actc_t cv;
+
+		/* Zero freq: untouched page (free pages are never accessed),
+		 * nothing to accumulate. */
+		raw = freq[hist_offset + j];
+		if (!raw)
+			continue;
+		page = pfn_to_online_page(PHYS_PFN(paddr));
+		if (!page)
+			continue;
+		cv = compress_freq(raw);
+		smap_page_freq_add(page, cv);
 	}
-	up_read(&hdev->buffer_lock);
 }
 
 /**
@@ -685,66 +702,52 @@ static struct ram_segment *find_rseg_by_start(u64 start)
 }
 
 /**
- * update_actc_direct - Directly update access frequency to hdev without intermediate buffer
+ * update_actc_direct - Update access frequency via page flags from hardware scan
+ * @rmem_info: remote memory address segment information
+ * @seg: current scan window segment
+ * @freq: hardware scan frequency buffer (u16 values)
+ * @sts_size: scan granularity (STS_SIZE_2M or STS_SIZE_4K)
+ *
+ * Iterate over remote memory segments that intersect with the scan window,
+ * and update page frequency via smap_page_freq_add for each page.
  */
 static void update_actc_direct(struct segs_info *rmem_info,
-			       struct addr_seg *seg, u16 *freq, u32 buf_len,
+			       struct addr_seg *seg, u16 *freq,
 			       enum ub_hist_sts_size sts_size)
 {
 	u32 shift = (sts_size == STS_SIZE_2M) ? HIST_ADDR_SHIFT_2M
 					      : HIST_ADDR_SHIFT_4K;
 	u64 inter_start, inter_end, inter_pages;
-	u64 seg_offset, hist_offset;
+	u64 hist_offset;
 	struct access_tracking_dev *hdev;
 	struct ram_segment *rseg;
 	struct addr_seg *cur_seg;
 	unsigned int i;
-	u64 preceding_pages[SMAP_MAX_NUMNODES] = { 0 };
 
 	read_lock(&rem_ram_list_lock);
 	for (i = 0; i < rmem_info->cnt; i++) {
 		cur_seg = &rmem_info->segs[i];
 
-		/* Find the ram_segment for NUMA node lookup */
 		rseg = find_rseg_by_start(cur_seg->start);
 		if (!rseg)
 			continue;
 
-		/* Check intersection between scan window and remote memory segment */
-		if (!is_intersect(cur_seg, seg, &inter_start, &inter_end)) {
-			preceding_pages[rseg->numa_node] += cur_seg->size >>
-							    shift;
+		if (!is_intersect(cur_seg, seg, &inter_start, &inter_end))
 			continue;
-		}
 
 		hdev = find_hdev_by_node(rseg->numa_node);
-		if (!hdev || !hdev->access_bit_actc_data) {
-			preceding_pages[rseg->numa_node] += cur_seg->size >>
-							    shift;
+		if (!hdev)
 			continue;
-		}
 
-		/* Calculate offsets and page count in intersection region */
 		hist_offset = (inter_start - seg->start) >> shift;
-		seg_offset = ((inter_start - cur_seg->start) >> shift) +
-			     preceding_pages[rseg->numa_node];
 		inter_pages = (inter_end - inter_start + 1) >> shift;
 
-		if (seg_offset + inter_pages > hdev->page_count) {
-			pr_err("exceeded hdev buffer: %llu > %llu\n",
-			       seg_offset + inter_pages, hdev->page_count);
-			preceding_pages[rseg->numa_node] += cur_seg->size >>
-							    shift;
-			continue;
-		}
-
-		/* Update frequency counts directly to hdev buffer */
-		do_actc_update(hdev, seg_offset, hist_offset, inter_pages,
+		do_actc_update(inter_start, shift, hist_offset, inter_pages,
 			       freq);
-		preceding_pages[rseg->numa_node] += cur_seg->size >> shift;
 	}
 	read_unlock(&rem_ram_list_lock);
 }
+
 
 static void copy_actc_to_buf(struct segs_info *info, struct addr_seg *seg,
 			     u16 *dst_buf, u16 *freq, u32 buf_len,
@@ -975,7 +978,7 @@ static int smap_hist_read_paral(struct segs_info *win_info,
 				update_actc_direct(
 					rmem_info,
 					&win_info->segs[offset[ba_cnt]],
-					ba_result->buffer, buf_len, sts_size);
+					ba_result->buffer, sts_size);
 			} else {
 				copy_actc_to_buf(
 					rmem_info,
@@ -1288,7 +1291,7 @@ static void addr_segs_deinit(struct smap_hist_dev *dev)
 	}
 }
 
-static int hist_pginfo_reinit(struct smap_hist_dev *dev, u32 pgsize_new)
+static int addr_segs_reinit(struct smap_hist_dev *dev, u32 pgsize_new)
 {
 	int ret;
 	addr_segs_deinit(dev);
@@ -1337,7 +1340,7 @@ static int scan_thread_run(void *data)
 				dev->status.status_all);
 
 			/* 由于周期性重建remote_ram_list，不需要重置seq_loop_ba_offset，会导致扫描不到靠后的地址段 */
-			ret = hist_pginfo_reinit(dev, pgsize);
+			ret = addr_segs_reinit(dev, pgsize);
 			if (ret) {
 				pr_err("failed to reinit histogram tracking page info, ret: %d\n",
 				       ret);
