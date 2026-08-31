@@ -79,8 +79,16 @@ EXPORT_SYMBOL(calc_time_us);
 
 void cancel_ap_scan_work(struct access_pid *ap)
 {
-	if (ap && ap->scan_work.work.func)
-		cancel_delayed_work_sync(&ap->scan_work);
+	if (ap && ap->scan_work.work.func) {
+		/* cancel_delayed_work_sync returns true if it deactivated a
+		 * pending timer; that pending instance's work-ref (taken in
+		 * submit_one_work) is now orphaned and must be dropped here.
+		 * A running instance observes AP_SLOT_REMOVING and drops its
+		 * own work-ref.
+		 */
+		if (cancel_delayed_work_sync(&ap->scan_work) && ap->slot)
+			ap_put_slot(ap->slot);
+	}
 }
 
 static void set_scan_cpus_work_fn(struct work_struct *work)
@@ -164,29 +172,47 @@ int set_scan_cpus(u32 cpu_start, u32 cpu_end)
 void submit_one_work(struct access_pid *ap)
 {
 	struct access_tracking_dev *adev_head = get_first_access_dev();
+
 	pr_debug("submit_one_work: pid=%d, delay=%dms\n", ap->pid,
 		 ap->scan_time);
 	/* check if work was already initialized */
 	cancel_ap_scan_work(ap);
 	init_completion(&ap->work_done);
 	INIT_DELAYED_WORK(&ap->scan_work, access_work_func);
+	/* take a work-reference: held across all rounds of this scan cycle,
+	 * dropped at the last round (or on cancel / when the slot is removed).
+	 */
+	if (ap->slot)
+		refcount_inc(&ap->slot->refs);
 	queue_delayed_work(adev_head->scanq, &ap->scan_work,
 			   msecs_to_jiffies(ap->scan_time));
 }
 
 static void submit_scan_works(struct access_tracking_dev *adev)
 {
-	struct access_pid *ap;
+	int i;
+
 	/* only the first adev in the list submits scan works */
 	if (adev != get_first_access_dev()) {
 		return;
 	}
-	down_read(&ap_data.lock);
-	list_for_each_entry(ap, &ap_data.list, node) {
+	for (i = 0; i < AP_MAX_SLOTS; i++) {
+		struct ap_slot *s = ap_get_slot_at(i);
+		struct access_pid *ap;
+
+		if (!s)
+			continue;
+		ap = s->ap;
+		/* re-arm the whole scan cycle (ntimes rounds). Hold the
+		 * transient ref across submit_one_work so the ap cannot be
+		 * reclaimed between; submit_one_work takes its own work-ref.
+		 */
+		down_write(&s->ap_lock);
 		ap->cur_times = 0;
+		up_write(&s->ap_lock);
 		submit_one_work(ap);
+		ap_put_slot(s);
 	}
-	up_read(&ap_data.lock);
 }
 
 static int create_scan_workqueue(void)
@@ -205,13 +231,17 @@ static int create_scan_workqueue(void)
 
 static void destroy_scan_workqueue(void)
 {
-	struct access_pid *ap;
 	struct access_tracking_dev *adev = get_first_access_dev();
-	down_read(&ap_data.lock);
-	list_for_each_entry(ap, &ap_data.list, node) {
-		cancel_ap_scan_work(ap);
+	int i;
+
+	for (i = 0; i < AP_MAX_SLOTS; i++) {
+		struct ap_slot *s = ap_get_slot_at(i);
+
+		if (!s)
+			continue;
+		cancel_ap_scan_work(s->ap);
+		ap_put_slot(s);
 	}
-	up_read(&ap_data.lock);
 	flush_workqueue(adev->scanq);
 	destroy_workqueue(adev->scanq);
 }
@@ -306,8 +336,8 @@ static void access_tracking_enable(struct device *ldev)
 static int access_tracking_disable(struct device *ldev)
 {
 	struct access_tracking_dev *adev = to_accessbit_dev(ldev);
-	struct access_pid *ap;
 	bool all_complete = true;
+	int i;
 
 	if (adev->is_hist)
 		return 0;
@@ -315,30 +345,27 @@ static int access_tracking_disable(struct device *ldev)
 		return 0;
 
 	/*
-	 * 必须在 ap_data.lock 写锁的同一临界区内完成"检查所有扫描任务完成
-	 * 并切换为 disabled"。add_pid 的 move_to_ap_data_list 同样在
-	 * down_write(&ap_data.lock) 下读 enable_on 并提交扫描，二者互斥，
-	 * 才能保证 disable 成功返回后不会再有新扫描任务被提交，避免迁移与
-	 * 扫描并发（prepare 重分配 bitmap 与迁移读侧竞态）。
-	 *
-	 * complete(&ap->work_done) 在 access_work_func 释放 ap_data.lock 读锁之后才
-	 * 调用，故 completion_done 为真时该 work 已不持读锁，此处持写锁检查
-	 * 不会与在跑的 work 互斥死锁。
+	 * No global write lock: walk the INUSE slots and check each one's
+	 * work_done. add_pid publishes a slot via ap_slot_add before calling
+	 * complete(work_done) in the disable window, so a brand-new pid appears
+	 * complete and does not force -EBUSY. If any pid still has an
+	 * in-flight/pending scan, return -EBUSY and let the upper layer retry;
+	 * once all are complete, flip enable_on off.
 	 */
-	down_write(&ap_data.lock);
-	list_for_each_entry(ap, &ap_data.list, node) {
-		/* completion_done 为 false 表示仍有在排队/在跑的扫描，
-		 * 返回 -EBUSY 让上层重试。disable 期新加的 pid 因
-		 * complete(work_done) 使 completion_done() 返回 true，不会误判 -EBUSY。
-		 */
-		if (!completion_done(&ap->work_done)) {
+	for (i = 0; i < AP_MAX_SLOTS; i++) {
+		struct ap_slot *s = ap_get_slot_at(i);
+
+		if (!s)
+			continue;
+		if (!completion_done(&s->ap->work_done)) {
 			all_complete = false;
+			ap_put_slot(s);
 			break;
 		}
+		ap_put_slot(s);
 	}
 	if (all_complete)
 		adev->enable_on = false;
-	up_write(&ap_data.lock);
 
 	return all_complete ? 0 : -EBUSY;
 }
@@ -517,43 +544,48 @@ static void access_work_func(struct work_struct *work)
 	int page_size;
 	struct access_tracking_dev *adev = get_first_access_dev();
 	struct access_pid *ap;
+	struct ap_slot *slot;
 	struct delayed_work *scan_work;
 	ktime_t start_time, end_time;
 	s64 scan_time;
-
 	unsigned long scan_delay_ms;
+
 	start_time = ktime_get();
 	scan_work = to_delay_work(work);
 	ap = delay_work_to_ap(scan_work);
+	slot = ap->slot;
+
+	/* slot may have been removed (access_remove_pid set REMOVING): drop the
+	 * work-ref and signal completion without scanning.
+	 */
+	if (!slot || atomic_read(&slot->state) != AP_SLOT_INUSE) {
+		complete(&ap->work_done);
+		if (slot)
+			ap_put_slot(slot);
+		return;
+	}
 
 	/*
 	 * 当本轮扫描为最后一轮时，需要重新分配 bitmap 给下一轮使用。
-	 * 必须在 ap_data.lock 写锁保护下执行位图的重分配，
-	 * 否则会与 convert_pos_to_paddr_sorted（持有读锁访问 bitmap）
-	 * 产生 use-after-free 竞态：
-	 *
-	 *   Thread A (migration)             Thread B (scan work)
-	 *   down_read(&ap_data.lock)         access_walk_pagemap_prepare(ap)
-	 *   read ap->paddr_bm[nid]            → vfree(ap->paddr_bm[nid])  ← freed!
-	 *   find_next_bit(paddr_bm)           → ACCESS FREED MEMORY → CRASH
-	 *
-	 * 使用写锁确保 prepare 期间无并发 reader。
+	 * 必须在 slot->ap_lock 写锁保护下执行位图的重分配，否则会与
+	 * convert_pos_to_paddr_sorted（持读锁访问 bitmap）产生 use-after-free
+	 * 竞态。per-slot 写锁仅阻塞该 pid 的读侧，不影响其他 pid 的扫描。
 	 */
 	if (access_pid_cur_last_scanning(ap)) {
-		down_write(&ap_data.lock);
+		down_write(&slot->ap_lock);
 		access_walk_pagemap_prepare(ap);
-		up_write(&ap_data.lock);
+		up_write(&slot->ap_lock);
 	}
 
 	adev_buffer_down_read();
-	down_read(&ap_data.lock);
+	down_read(&slot->ap_lock);
 	page_size = get_page_size(adev);
 	if (ap->pid_type == SMAP_PID_VM) {
 		ret = scan_accessed_bit_forward_vm(ap, page_size);
 	} else {
 		ret = scan_accessed_bit_forward_mm(ap, page_size);
 	}
-	up_read(&ap_data.lock);
+	up_read(&slot->ap_lock);
 	adev_buffer_up_read();
 	end_time = ktime_get();
 	scan_time = ktime_to_us(ktime_sub(end_time, start_time));
@@ -571,12 +603,16 @@ static void access_work_func(struct work_struct *work)
 				      &scan_delay_ms);
 	}
 	ap->last_scan_delay_ms = scan_delay_ms;
-	if (ap->cur_times < ap->ntimes) {
+	if (ap->cur_times < ap->ntimes &&
+	    atomic_read(&slot->state) == AP_SLOT_INUSE) {
 		queue_delayed_work(adev->scanq, &ap->scan_work,
 				   msecs_to_jiffies(scan_delay_ms));
 		ap->last_scan_end = ktime_get();
+		/* keep the work-ref for the next round */
 	} else {
+		/* last round, or slot removed mid-cycle: drop the work-ref */
 		complete(&ap->work_done);
+		ap_put_slot(slot);
 	}
 }
 

@@ -267,16 +267,17 @@ TEST_F(AccessedBitTest, GetHamPagesFreqs)
 {
     struct ham_tracking_info info;
     struct freq_info *freq_info_array;
-    struct access_pid ap;
-    ap.type = HAM_SCAN;
+    struct access_pid ap = {};
     uint64_t num;
 
     EXPECT_TRUE(list_empty(&ham_pid_list));
     list_add(&info.node, &ham_pid_list);
     info.pid = 1;
 
+    ap.pid = 1;
+    ap.type = HAM_SCAN;
+    ap_slot_add(&ap);
     MOCKER(change_ap_type).stubs();
-    MOCKER(find_access_pid).stubs().will(returnValue(&ap));
     MOCKER(get_freq_info).stubs().will(returnValue((struct freq_info *)nullptr));
     int ret = get_ham_pages_freqs(1, &freq_info_array, &num);
     EXPECT_EQ(-ENOMEM, ret);
@@ -284,12 +285,13 @@ TEST_F(AccessedBitTest, GetHamPagesFreqs)
     GlobalMockObject::verify();
     struct freq_info array;
     MOCKER(change_ap_type).stubs();
-    MOCKER(find_access_pid).stubs().will(returnValue(&ap));
     MOCKER(get_freq_info).stubs().will(returnValue(&array));
     MOCKER(clear_tracking_info).stubs();
     ret = get_ham_pages_freqs(1, &freq_info_array, &num);
     EXPECT_EQ(0, ret);
     list_del(&info.node);
+    MOCKER(destroy_access_pid).stubs();
+    ap_slot_remove(1);
 }
 
 extern "C" int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va);

@@ -252,15 +252,18 @@ extern "C" void adev_buffer_up_read(void);
 extern "C" void access_work_func(struct work_struct *work);
 TEST_F(AccessTrackingTest, access_work_func)
 {
-    struct access_pid ap;
-    struct access_tracking_dev adev;
+    struct access_pid ap = {};
+    struct access_tracking_dev adev = {};
 
     EXPECT_EQ(true, list_empty(&access_dev));
     list_add(&adev.list, &access_dev);
     adev.page_size_mode = PAGE_MODE_2M;
+    init_rwsem(&adev.buffer_lock);
+    ap.pid = 1;
+    ap.pid_type = SMAP_PID_VM;
     ap.cur_times = 0;
     ap.ntimes = 10;
-    ap.pid = 1;
+    ap_slot_add(&ap);
     MOCKER(scan_accessed_bit_forward_vm).stubs().will(returnValue(0));
     access_work_func(&ap.scan_work.work);
     EXPECT_EQ(1, ap.cur_times);
@@ -270,6 +273,10 @@ TEST_F(AccessTrackingTest, access_work_func)
     access_work_func(&ap.scan_work.work);
     EXPECT_EQ(2, ap.cur_times);
     list_del(&adev.list);
+    atomic_set(&ap.slot->state, AP_SLOT_FREE);
+    ap.slot->ap = nullptr;
+    ap.slot->pid = 0;
+    refcount_set(&ap.slot->refs, 0);
 }
 
 extern "C" void access_work_func(struct work_struct *work);

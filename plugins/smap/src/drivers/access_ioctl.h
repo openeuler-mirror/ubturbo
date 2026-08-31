@@ -19,6 +19,8 @@
 #define BASE_MINOR 0
 #define NR_MINOR 1
 #define MAX_SCAN_DURATION_SEC 300
+#define MAX_4K_PROCESSES_CNT 300
+#define MAX_2M_PROCESSES_CNT 100
 
 #define SMAP_PROC_ROOT "smap"
 

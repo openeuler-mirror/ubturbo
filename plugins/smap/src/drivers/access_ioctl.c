@@ -25,8 +25,6 @@
 #define MAX_NR_MIGOUT 40
 #define MAX_NR_REMOVE MAX_NR_MIGOUT
 #define SCHEDULE_INTERVAL (100000)
-#define MAX_4K_PROCESSES_CNT 300
-#define MAX_2M_PROCESSES_CNT 100
 
 static dev_t ioctl_access_dev;
 static struct class *access_class;
@@ -238,7 +236,7 @@ static long ioctl_create_smap_procfs(void __user *argp)
 static size_t calc_bitmap_len(void)
 {
 	size_t buf_len = 0;
-	struct access_pid *ap;
+	int i;
 
 	/*
 	 * Each process's information layout is as follows:
@@ -249,15 +247,21 @@ static size_t calc_bitmap_len(void)
 	 * Note: bitmap/mapping data is not transmitted here since mem_freq_read
 	 * already assembles complete actc_data including freq, prior, and white_list.
 	 */
-	down_read(&ap_data.lock);
-	list_for_each_entry(ap, &ap_data.list, node) {
-		if (ap->type != NORMAL_SCAN) {
+	for (i = 0; i < AP_MAX_SLOTS; i++) {
+		struct ap_slot *s = ap_get_slot_at(i);
+		bool normal;
+
+		if (!s)
 			continue;
+		down_read(&s->ap_lock);
+		normal = s->ap->type == NORMAL_SCAN;
+		up_read(&s->ap_lock);
+		if (normal) {
+			buf_len += sizeof(pid_t);
+			buf_len += sizeof(size_t) * SMAP_MAX_NUMNODES;
 		}
-		buf_len += sizeof(pid_t);
-		buf_len += sizeof(size_t) * SMAP_MAX_NUMNODES;
+		ap_put_slot(s);
 	}
-	up_read(&ap_data.lock);
 
 	return buf_len;
 }
@@ -307,21 +311,29 @@ static inline void write_bitmap_nrpage(char **buffer, struct access_pid *ap)
 
 static void write_bitmap_buffer(char **buffer)
 {
-	struct access_pid *ap;
+	int i;
 
 	if (unlikely(!buffer || !(*buffer))) {
 		pr_err("invalid buffer passed to write bitmap buffer\n");
 		return;
 	}
-	down_read(&ap_data.lock);
-	list_for_each_entry(ap, &ap_data.list, node) {
-		if (ap->type != NORMAL_SCAN)
-			continue;
+	for (i = 0; i < AP_MAX_SLOTS; i++) {
+		struct ap_slot *s = ap_get_slot_at(i);
+		struct access_pid *ap;
+		bool normal;
 
-		write_bitmap_pid(buffer, ap);
-		write_bitmap_nrpage(buffer, ap);
+		if (!s)
+			continue;
+		down_read(&s->ap_lock);
+		ap = s->ap;
+		normal = ap->type == NORMAL_SCAN;
+		if (normal) {
+			write_bitmap_pid(buffer, ap);
+			write_bitmap_nrpage(buffer, ap);
+		}
+		up_read(&s->ap_lock);
+		ap_put_slot(s);
 	}
-	up_read(&ap_data.lock);
 }
 
 static ssize_t read_bitmap(char __user *buf, size_t cnt, loff_t *loff,
