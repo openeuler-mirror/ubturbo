@@ -13,6 +13,7 @@
 3. 基于策略结果将虚机本地内存迁移到远端NUMA上；
 
 Demo1使用说明：
+
 ```bash
 # 环境要求：已安装ubturbo-rmrs、ubturbo-devel、ubturbo-smap、libboundscheck
 
@@ -27,6 +28,7 @@ g++ -lboundscheck -lubturbo_client demo1.cpp -o demo1
 ```
 
 Demo1源码：
+
 ```C++
 // demo1.cpp
 #include <iostream>
@@ -118,6 +120,7 @@ int main(int argc, char* argv[])
 3. 根据实际的情况修改demo2代码对应参数，编译执行；
 
 Demo2使用说明：
+
 ```bash
 # 环境要求：已安装ubturbo-rmrs、ubturbo-devel、ubturbo-smap、libboundscheck
 
@@ -132,6 +135,7 @@ g++ -lboundscheck -lubturbo_client demo2.cpp -o demo2
 ```
 
 Demo2源码：
+
 ```C++
 // demo2.cpp
 #include <iostream>
@@ -226,6 +230,7 @@ int main(int argc, char* argv[])
 }
 
 ```
+
 ## Getting Started: Compilation Guide
  
 在项目根目录执行:
@@ -235,6 +240,7 @@ git submodule update --init
 dos2unix build.sh
 sh build.sh
 ```
+
 主要编译产物：
 
 - 在dist/release/bin下会生成以下二进制文件: `ub_turbo_exec`
@@ -249,6 +255,7 @@ sh build.sh
 cd dist/release
 cpack
 ```
+
 执行上述命令之后，rpm包（例如ubturbo-rmrs-1.1.1-1.oe2403sp1.aarch64.rpm）位于`dist/release/output`中。
 
 ## Getting Started: Installation Guide
@@ -256,11 +263,15 @@ cpack
 ```bash
 rpm -ivh ubturbo-rmrs-1.1.1-1.oe2403sp1.aarch64.rpm
 ```
+
 检查ubturbo是否安装成功：
+
 ```bash
 rpm -qa | grep ubturbo-rmrs
 ```
+
 返回如下信息即表示安装成功：
+
 ```bash
 [root@controller ~]# rpm -qa | grep ubturbo-rmrs
 ubturbo-rmrs*
@@ -277,16 +288,20 @@ ubturbo-rmrs*
 | /var/log/ubturbo                                 | 日志目录 | 700 | ubturbo:ubturbo |
 
 按实际需求将ubturbo用户添加到libvirt组：ubturbo进程框架本身不依赖libvirt，当前UBTurbo进程默认无法访问libvirt服务。如果插件依赖libvirt，则需要将ubturbo用户添加到libvirt组，命令如下：
+
 ```bash
 usermod -aG libvirt ubturbo
 ```
+
 检查是否添加成功，输出内容包含libvirt则表示添加成功：
+
 ```bash
 groups ubturbo
 # 输出内容示例：ubturbo : ubturbo libvirt
 ```
 
 配置免密sudo: 创建文件/etc/sudoers.d/ubturbo，依次执行：
+
 ```bash
 # 1. 打开
 visudo -f /etc/sudoers.d/ubturbo
@@ -295,6 +310,7 @@ ubturbo ALL=(root) NOPASSWD:/usr/local/bin/cat.sh
 ```
 
 为需要与ubturbo交互的用户添加权限，例如ubse:
+
 ```bash
 usermod -aG ubturbo ubse
 ```
@@ -306,6 +322,7 @@ systemctl start ubturbo
 ```
 
 查询服务状态：
+
 ```bash
 systemctl status ubturbo
 ```
@@ -328,6 +345,7 @@ test/
 ├── CMakeLists.txt           # CMakeLists
 ├── run_ut.sh                # 单元测试执行脚本
 ```
+
 ## Getting Started: Contribution Guide
  
 我们非常欢迎新贡献者加入到项目中来，也非常高兴能为新加入贡献者提供指导和帮助，如果您有任何的意见、建议、问题，可以创建issue。

@@ -60,10 +60,6 @@ int main(void)
 }
 ```
 
-
-
-
-
 # UBTurboGetFloat: 获取指定的float类型配置项
 
 ## 框架 FRAMEWORK
@@ -126,8 +122,6 @@ int main(void)
     return 0;
 }
 ```
-
-
 
 # UBTurboGetStr: 获取指定的string类型配置项
 
@@ -192,8 +186,6 @@ int main(void)
 }
 ```
 
-
-
 # UBTurboGetBool: 获取指定的bool类型配置项
 
 ## 框架 FRAMEWORK
@@ -257,8 +249,6 @@ int main(void)
 }
 ```
 
-
-
 # UBTurboGetUInt64: 获取指定的uint64类型配置项
 
 ## 框架 FRAMEWORK
@@ -320,8 +310,6 @@ int main(void)
     return 0;
 }
 ```
-
-
 
 # UBTurboFunctionCaller: 客户端通过进程间通信调用服务端函数
 
@@ -490,20 +478,18 @@ uint32_t UBTurboRegIpcService(const std::string &name, IpcHandlerFunc function);
 
 uint32_t MemBorrowRollbackRecvHandler(const TurboByteBuffer &req, TurboByteBuffer &resp)
 {
-	/*
-	对应实现
-	*/
+    /*
+    对应实现
+    */
     return 0;
 }
 
 int main(void)
 {
-	uint32_t ret = UBTurboRegIpcService("MemBorrowRollback", MemBorrowRollbackRecvHandler);
+    uint32_t ret = UBTurboRegIpcService("MemBorrowRollback", MemBorrowRollbackRecvHandler);
     return 0;
 }
 ```
-
-
 
 # UBTurboUnRegIpcService: 服务端解注册回调函数
 
@@ -553,12 +539,10 @@ uint32_t UBTurboUnRegIpcService(const std::string &name);
 
 int main(void)
 {
-	uint32_t ret = UBTurboUnRegIpcService("MemBorrowRollback");
+    uint32_t ret = UBTurboUnRegIpcService("MemBorrowRollback");
     return 0;
 }
 ```
-
-
 
 # UBTURBO_LOG_CRIT: 创建单条CRIT级别日志，写入终端或文件
 
@@ -611,12 +595,10 @@ UBTURBO_LOG_CRIT(moduleName, moduleId) << args;
 
 int main(void)
 {
-	UBTURBO_LOG_CRIT(moduleName, moduleId) << “This is CRIT log”;
+    UBTURBO_LOG_CRIT(moduleName, moduleId) << “This is CRIT log”;
     return 0;
 }
 ```
-
-
 
 # UBTURBO_LOG_ERROR: 创建单条ERROR级别日志，写入终端或文件
 
@@ -669,12 +651,10 @@ UBTURBO_LOG_ERROR(moduleName, moduleId) << args;
 
 int main(void)
 {
-	UBTURBO_LOG_ERROR(moduleName, moduleId) << “This is ERROR log”;
+    UBTURBO_LOG_ERROR(moduleName, moduleId) << “This is ERROR log”;
     return 0;
 }
 ```
-
-
 
 # UBTURBO_LOG_WARN: 创建单条WARN级别日志，写入终端或文件
 
@@ -727,12 +707,10 @@ UBTURBO_LOG_WARN(moduleName, moduleId) << args;
 
 int main(void)
 {
-	UBTURBO_LOG_WARN(moduleName, moduleId) << “This is WARN log”;
+    UBTURBO_LOG_WARN(moduleName, moduleId) << “This is WARN log”;
     return 0;
 }
 ```
-
-
 
 # UBTURBO_LOG_INFO: 创建单条INFO级别日志，写入终端或文件
 
@@ -785,12 +763,10 @@ UBTURBO_LOG_INFO(moduleName, moduleId) << args;
 
 int main(void)
 {
-	UBTURBO_LOG_INFO(moduleName, moduleId) << “This is INFO log”;
+    UBTURBO_LOG_INFO(moduleName, moduleId) << “This is INFO log”;
     return 0;
 }
 ```
-
-
 
 # UBTURBO_LOG_DEBUG: 创建单条DEBUG级别日志，写入终端或文件
 
@@ -842,10 +818,7 @@ UBTURBO_LOG_DEBUG(moduleName, moduleId) << args;
 
 int main(void)
 {
-	UBTURBO_LOG_DEBUG(moduleName, moduleId) << “This is DEBUG log”;
+    UBTURBO_LOG_DEBUG(moduleName, moduleId) << “This is DEBUG log”;
     return 0;
 }
 ```
-
-
-
