@@ -44,9 +44,19 @@ size_t calc_page_by_node(int node, int is_huge);
 int get_node_actc_len(int len, u64 *node_actc_len);
 int calc_paddr_acidx(u64 paddr, int *nid, u64 *index);
 
+static inline bool is_numa_local(int nid)
+{
+	return nid >= 0 && nid < nr_local_numa;
+}
+
 static inline bool is_numa_remote(int nid)
 {
 	return nid >= nr_local_numa && nid < SMAP_MAX_NUMNODES;
+}
+
+static inline bool is_numa_valid(int nid)
+{
+	return is_numa_local(nid) || is_numa_remote(nid);
 }
 
 #endif /* _ACPI_MEM_H */

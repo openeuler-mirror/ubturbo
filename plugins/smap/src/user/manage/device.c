@@ -18,6 +18,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/param.h>
+#include <sys/time.h>
 #include <time.h>
 #include "securec.h"
 #include "smap_env.h"
@@ -388,4 +389,13 @@ int ConfigUbWatch(uint32_t durationMs)
     }
     SMAP_LOGGER_ERROR("ioctl SMAP_IOCTL_UB_WATCH_CONFIG_CMD failed on all remote nodes.");
     return -ENODEV;
+}
+
+long CalcDurationUs(struct timeval start, struct timeval end)
+{
+    long seconds, micros;
+
+    seconds = end.tv_sec - start.tv_sec;
+    micros = end.tv_usec - start.tv_usec;
+    return seconds * US_PER_SEC + micros;
 }

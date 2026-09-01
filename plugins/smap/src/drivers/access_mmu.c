@@ -12,6 +12,7 @@
 #include <linux/sched/mm.h>
 #include <linux/mm_types.h>
 #include <linux/page-isolation.h>
+#include <linux/bitmap.h>
 
 #include "check.h"
 #include "access_tracking.h"
@@ -32,6 +33,7 @@
 #define PM_PRESENT BIT_ULL(63)
 
 #define PM_END_OF_BUFFER 1
+#define PM_ADD_MIG_FOLIOS_SKIP 2
 
 #define FILE_NAME_MAX 32
 #define RAM_SLOT_ID 2
@@ -59,6 +61,31 @@ static int calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
 	if (is_paddr_local(paddr))
 		return calc_paddr_acidx_acpi(paddr, nid, index, page_size);
 	return calc_paddr_acidx_iomem(paddr, nid, index, page_size);
+}
+
+/* 统计指定源节点(src_nid)上的页总数，本地/远端节点分别按ACPI/IOMEM段计算 */
+static u32 get_node_page_cnt(int nid, int page_size)
+{
+	if (nid >= nr_local_numa)
+		return get_node_page_cnt_iomem(nid, page_size);
+	return get_node_actc_len(nid, page_size);
+}
+
+/* 物理地址位图去重：同一物理页只允许加入一次迁移列表，返回false表示已存在或越界 */
+static bool should_add_page(u64 paddr, unsigned long *paddr_bm, size_t bm_len)
+{
+	int ret, nid;
+	u64 acidx;
+
+	ret = calc_paddr_acidx(paddr, &nid, &acidx);
+	if (ret)
+		return false;
+	if (BIT_WORD(acidx) >= bm_len)
+		return false; /* 地址越界 */
+	if (test_bit(acidx, paddr_bm))
+		return false; /* 已加入 → 拒绝 */
+	set_bit(acidx, paddr_bm); /* 首次 → 置位 */
+	return true;
 }
 
 static int set_non_anon_bm(struct access_pid *ap, u64 acidx, u64 paddr, int nid)
@@ -217,31 +244,95 @@ static bool is_paddr_belong_remote_node(u64 pa, int nid)
 	return numa == nid;
 }
 
-static bool is_page_ready_for_migrate(struct page *page)
+static bool is_page_ready_for_migrate(struct page *page,
+				      struct page_migration_reject_statistics *stats)
 {
 	if (is_migrate_isolate_page(page)) {
+		stats->nr_isolated_pages++;
 		return false;
 	}
 	if (is_access_hugepage()) {
-		if (PageHuge(page) && !PageHead(page))
+		if (PageHuge(page) && !PageHead(page)) {
+			stats->page_mode_2m.nr_not_huge_page_head++;
 			return false;
+		}
 	} else {
-		if (__folio_test_movable(page_folio(page)) ||
-		    page_ref_count(page) == 0 || PageTransHuge(page) ||
-		    PageHuge(page)) {
+		if (__folio_test_movable(page_folio(page))) {
+			stats->page_mode_4k.nr_not_in_lru++;
+			return false;
+		}
+		if (page_ref_count(page) == 0) {
+			stats->page_mode_4k.nr_zero_ref_pages++;
+			return false;
+		}
+		if (PageTransHuge(page)) {
+			stats->page_mode_4k.nr_transparent_huge_pages++;
+			return false;
+		}
+		if (PageHuge(page)) {
+			stats->page_mode_4k.nr_huge_pages++;
 			return false;
 		}
 	}
 	if (page_mapcount(page) > 1) {
 		pr_debug("page mapcount invalid.\n");
+		stats->nr_multi_mapped_pages++;
 		return false;
 	}
 	if (!PageHuge(page)) {
 		if (!folio_try_get(page_folio(page))) {
+			stats->nr_folio_get_fail++;
 			return false;
 		}
 	}
 	return true;
+}
+
+static int handle_remote_migration(u64 pfn, u64 paddr, struct pagemapread *pm)
+{
+	struct page *page;
+
+	page = pfn_to_online_page(pfn);
+	if (!page)
+		return PM_ADD_MIG_FOLIOS_SKIP;
+	pm->mig_info.page_cnt++;
+	if (!is_paddr_belong_remote_node(paddr, pm->mig_info.remote_nid))
+		return PM_ADD_MIG_FOLIOS_SKIP;
+	if (!is_page_ready_for_migrate(page, &pm->statistics))
+		return PM_ADD_MIG_FOLIOS_SKIP;
+	if (pm->mig_info.mig_cnt >= pm->mig_info.folios_len) {
+		if (!PageHuge(page))
+			folio_put(page_folio(page)); /* 释放 ready 校验时获取的引用 */
+		return PM_END_OF_BUFFER;
+	}
+	pm->mig_info.folios[pm->mig_info.mig_cnt++] = page_folio(page);
+	return 0;
+}
+
+static int handle_sync_migration(u64 pfn, u64 paddr, struct pagemapread *pm)
+{
+	struct page *page;
+
+	page = pfn_to_online_page(pfn);
+	if (!page)
+		return PM_ADD_MIG_FOLIOS_SKIP;
+	if (page_to_nid(page) != pm->sync_mig_info.src_nid)
+		return PM_ADD_MIG_FOLIOS_SKIP;
+	if (!is_page_ready_for_migrate(page, &pm->statistics))
+		return PM_ADD_MIG_FOLIOS_SKIP;
+	if (pm->sync_mig_info.mig_cnt >= pm->sync_mig_info.folios_len) {
+		if (!PageHuge(page))
+			folio_put(page_folio(page)); /* 释放 ready 校验时获取的引用 */
+		return PM_END_OF_BUFFER;
+	}
+	if (!should_add_page(paddr, pm->sync_mig_info.paddr_bm,
+			     pm->sync_mig_info.bm_len)) {
+		if (!PageHuge(page))
+			folio_put(page_folio(page)); /* 去重拒绝，释放引用 */
+		return PM_ADD_MIG_FOLIOS_SKIP;
+	}
+	pm->sync_mig_info.folios[pm->sync_mig_info.mig_cnt++] = page_folio(page);
+	return 0;
 }
 
 static int add_to_bm(unsigned long vaddr, pagemap_entry_t *pme,
@@ -249,41 +340,35 @@ static int add_to_bm(unsigned long vaddr, pagemap_entry_t *pme,
 {
 	u64 paddr;
 	u64 pfn;
-	struct page *page;
+	int ret;
 	pfn = pme->pme & PM_PFRAME_MASK;
 	if (!pfn || !(pme->pme & PM_PRESENT))
 		goto inc_pm_pos;
 	paddr = PFN_PHYS(pfn);
 
-	if (pm->mig_type == REMOTE_MIGRATE) {
-		page = pfn_to_online_page(pfn);
-		if (!page) {
-			goto inc_pm_pos;
-		}
-		pm->mig_info.page_cnt++;
-		if (!is_paddr_belong_remote_node(paddr,
-						 pm->mig_info.remote_nid)) {
-			goto inc_pm_pos;
-		}
-
-		if (!is_page_ready_for_migrate(page)) {
-			goto inc_pm_pos;
-		}
-
-		if (pm->mig_info.mig_cnt < pm->mig_info.folios_len) {
-			pm->mig_info.folios[pm->mig_info.mig_cnt++] =
-				page_folio(page);
-		}
-	} else {
+	switch (pm->mig_type) {
+	case REMOTE_MIGRATE:
+		ret = handle_remote_migration(pfn, paddr, pm);
+		break;
+	case SYNC_MIGRATE:
+		ret = handle_sync_migration(pfn, paddr, pm);
+		break;
+	case NORMAL_MIGRATE:
 		if (is_access_hugepage())
 			add_to_bm_huge(vaddr, paddr, pm->ap);
 		else
 			add_to_bm_page(paddr, pm->ap);
+		ret = 0;
+		break;
+	default:
+		return -EINVAL;
 	}
+	if (ret == PM_END_OF_BUFFER)
+		return -ECANCELED;
 
 inc_pm_pos:
 	if (++pm->pos >= pm->len)
-		return PM_END_OF_BUFFER;
+		return -ECANCELED;
 	return 0;
 }
 
@@ -434,25 +519,46 @@ void walk_pid_pagemap(struct pagemapread *pm)
 	unsigned long svpfn = 0;
 	unsigned long evpfn;
 	unsigned long start_vaddr, end_vaddr;
+	pid_t pid;
+	int page_size;
 	ktime_t start_time, pagemap_time;
 	start_time = ktime_get();
 	if (!pm) {
 		return;
 	}
+	pid = (pm->mig_type == SYNC_MIGRATE) ? pm->sync_mig_info.pid
+					     : pm->mig_info.pid;
 	/* 获取mm_struct */
-	mm = get_mm_by_pid(pm->mig_info.pid);
+	mm = get_mm_by_pid(pid);
 	if (IS_ERR(mm))
 		return;
 	if (!mm || !mmget_not_zero(mm))
 		return;
 	pm->len = PM_LEN;
 
+	/* SYNC模式：先按src_nid计算节点页总数，分配物理地址去重位图 */
+	if (pm->mig_type == SYNC_MIGRATE) {
+		page_size = is_access_hugepage() ? g_pagesize_huge : PAGE_SIZE;
+		pm->sync_mig_info.bm_len =
+			BITS_TO_LONGS(get_node_page_cnt(
+				pm->sync_mig_info.src_nid, page_size));
+		if (pm->sync_mig_info.bm_len == 0) {
+			mmput(mm);
+			return;
+		}
+		pm->sync_mig_info.paddr_bm = vzalloc(
+			pm->sync_mig_info.bm_len * sizeof(unsigned long));
+		if (!pm->sync_mig_info.paddr_bm) {
+			mmput(mm);
+			return;
+		}
+	}
+
 	while (1) {
 		pm->pos = 0;
 		/* walk page */
 		if (mmap_read_lock_killable(mm)) {
-			mmput(mm);
-			return;
+			goto out_free_bm;
 		}
 		/* watch out for wraparound */
 		evpfn = svpfn + (unsigned long)pm->len;
@@ -478,8 +584,13 @@ void walk_pid_pagemap(struct pagemapread *pm)
 		svpfn = evpfn;
 	}
 	pagemap_time = calc_time_us(start_time);
-	pr_debug("walk pagemap of pid: %d took %lldus\n", pm->mig_info.pid,
+	pr_debug("walk pagemap of pid: %d took %lldus\n", pid,
 		 pagemap_time);
+out_free_bm:
+	if (pm->mig_type == SYNC_MIGRATE) {
+		vfree(pm->sync_mig_info.paddr_bm);
+		pm->sync_mig_info.paddr_bm = NULL;
+	}
 	mmput(mm);
 }
 EXPORT_SYMBOL(walk_pid_pagemap);

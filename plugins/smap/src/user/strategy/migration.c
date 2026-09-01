@@ -1240,15 +1240,6 @@ static int SetMigrateThreadNum(struct MigrateMsg *mMsg, uint64_t migratePages, b
     return 0;
 }
 
-static inline long CalcDurationUs(struct timeval start, struct timeval end)
-{
-    long seconds, micros;
-
-    seconds = end.tv_sec - start.tv_sec;
-    micros = end.tv_usec - start.tv_usec;
-    return seconds * US_PER_SEC + micros;
-}
-
 static void PrintMigSpeed(struct ProcessManager *manager, uint64_t nr, struct timeval start, struct timeval end)
 {
     double timeUsed, migSpeed;

@@ -203,7 +203,7 @@ void reset_acpi_mem(void)
 	nr_local_numa = 0;
 }
 
-u64 get_node_actc_len(int node_id, int page_size)
+u32 get_node_actc_len(int node_id, int page_size)
 {
 	u64 page_cnt = 0;
 	struct acpi_mem_segment *mem;
@@ -217,7 +217,7 @@ u64 get_node_actc_len(int node_id, int page_size)
 			page_cnt +=
 				calc_normal_count(mem->end - mem->start + 1);
 	}
-	return page_cnt;
+	return (u32)page_cnt;
 }
 
 int calc_paddr_acidx_acpi(u64 paddr, int *nid, u64 *index, int page_size)

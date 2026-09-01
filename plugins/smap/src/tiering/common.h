@@ -34,6 +34,12 @@
 #define SMAP_MAX_LOCAL_NUMNODES 4
 #define SMAP_MAX_NUMNODES 22
 
+#define SIZE_KB (1 << 10)
+
+/* 分批同步迁移的批次间隔时间（单位us）及区间抖动 */
+#define MIGRATE_PAGES_BATCH_SLEEP_US_MIN 100
+#define MIGRATE_PAGES_BATCH_SLEEP_US_MAX 1000000
+
 extern u32 g_pagesize_huge;
 
 enum node_level {
@@ -106,8 +112,24 @@ struct migrate_pid_remote_numa_msg {
 typedef enum {
 	NORMAL_MIGRATE,
 	REMOTE_MIGRATE,
+	SYNC_MIGRATE,
 	MAX_MIGRATE_TYPE,
 } migrate_type;
+
+typedef enum {
+	SYNC_MIGRATE_MODE_TOTAL, /* 一次性迁移全部 */
+	SYNC_MIGRATE_MODE_BATCH, /* 分批迁移 */
+} sync_migrate_mode;
+
+struct migrate_pages_msg {
+	sync_migrate_mode mode; /* SYNC_MIGRATE_MODE_TOTAL / SYNC_MIGRATE_MODE_BATCH */
+	int src_nid;            /* 源NUMA节点 */
+	int dest_nid;           /* 目的NUMA节点 */
+	pid_t pid;              /* 目标进程 */
+	uint64_t total_size;    /* 迁移总大小(KB) */
+	uint64_t batch_size;    /* 每次批量大小(KB) */
+	uint64_t sleep_time_us; /* 批次间休眠时间(us) */
+};
 
 typedef enum {
 	SMAP_MIGRATE_DISABLE = 0,

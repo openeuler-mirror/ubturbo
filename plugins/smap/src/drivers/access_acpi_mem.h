@@ -27,7 +27,7 @@ extern int nr_local_numa;
 bool is_paddr_local(u64 pa);
 int init_acpi_mem(void);
 void reset_acpi_mem(void);
-u64 get_node_actc_len(int node_id, int page_size);
+u32 get_node_actc_len(int node_id, int page_size);
 int calc_paddr_acidx_acpi(u64 paddr, int *nid, u64 *index, int page_size);
 int calc_paddr_acidx_acpi_known_nid(u64 paddr, int nid, u64 *index,
 				    int page_size);

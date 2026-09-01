@@ -53,6 +53,7 @@ struct vm_mapping_info {
 typedef enum {
 	NORMAL_MIGRATE,
 	REMOTE_MIGRATE,
+	SYNC_MIGRATE,
 	MAX_MIGRATE_TYPE,
 } migrate_type;
 
@@ -87,15 +88,46 @@ struct remote_migrate_info {
 	u64 page_cnt;
 	int remote_nid;
 	unsigned int mig_cnt;
-	u64 folios_len;
+	u32 folios_len;
 	struct folio **folios;
+};
+
+struct sync_migrate_info {
+	pid_t pid;
+	int src_nid;
+	unsigned int mig_cnt;
+	u32 folios_len;             /* 待迁移folio数量上限 */
+	struct folio **folios;      /* 收集到的folio列表 */
+	unsigned long *paddr_bm;    /* 物理地址去重位图 */
+	size_t bm_len;              /* 位图长度(以unsigned long为单位) */
+};
+
+struct page_migration_reject_statistics {
+	uint32_t nr_isolated_pages;    /* 隔离页 */
+	uint32_t nr_multi_mapped_pages; /* 多进程映射页 */
+	uint32_t nr_folio_get_fail;    /* folio引用获取失败 */
+	union {                        /* 按页模式区分 */
+		struct {
+			uint32_t nr_not_huge_page_head; /* 大页但非head page */
+		} page_mode_2m;
+		struct {
+			uint32_t nr_not_in_lru;            /* 不在LRU链表 */
+			uint32_t nr_zero_ref_pages;        /* 引用计数为0 */
+			uint32_t nr_transparent_huge_pages; /* 透明大页 */
+			uint32_t nr_huge_pages;            /* 常规大页 */
+		} page_mode_4k;
+	};
 };
 
 struct pagemapread {
 	int pos, len; /* units: PM_ENTRY_BYTES, not bytes */
 	migrate_type mig_type;
-	struct remote_migrate_info mig_info;
+	union {
+		struct remote_migrate_info mig_info;
+		struct sync_migrate_info sync_mig_info;
+	};
 	struct access_pid *ap;
+	struct page_migration_reject_statistics statistics;
 };
 
 extern struct list_head ham_pid_list;

@@ -35,6 +35,7 @@
 #include "manage/smap_ioctl.h"
 #include "manage/smap_config.h"
 #include "strategy/migration.h"
+#include "strategy/strategy.h"
 #include "strategy/strategy_config.h"
 #include "smap_interface.h"
 #define DEFAULT_NODE_NUMBER_SIZE 16
@@ -3074,6 +3075,130 @@ out:
     free(ioctlMsg.migResArray);
     SMAP_LOGGER_INFO("ubturbo_smap_pid_remote_numa_migrate done, ret: %d.", ret);
     return ret;
+}
+
+static bool IsNidValid(int nid)
+{
+    struct ProcessManager *manager;
+
+    if (nid < 0) {
+        return false;
+    }
+    manager = GetProcessManager();
+    if (!manager) {
+        SMAP_LOGGER_ERROR("process manager is null.");
+        return false;
+    }
+    if (nid < manager->nrLocalNuma) {
+        return true;
+    }
+    return IsRemoteNidValid(nid);
+}
+
+static int CheckSyncMigrateTask(SyncMigrateTask *task)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    uint64_t pageSizeKB;
+    uint64_t needPages;
+    uint64_t freePages;
+
+    if (!task) {
+        SMAP_LOGGER_ERROR("ubturbo_smap_migrate_pages task is null.");
+        return -EINVAL;
+    }
+    if (!IsNidValid(task->srcNid) || !IsNidValid(task->destNid)) {
+        SMAP_LOGGER_ERROR("ubturbo_smap_migrate_pages srcNid %d destNid %d invalid.", task->srcNid, task->destNid);
+        return -EINVAL;
+    }
+    if (task->srcNid == task->destNid) {
+        SMAP_LOGGER_ERROR("ubturbo_smap_migrate_pages src == dest == %d.", task->srcNid);
+        return -EINVAL;
+    }
+    if (!PidIsValid(task->pid)) {
+        SMAP_LOGGER_ERROR("ubturbo_smap_migrate_pages pid %d invalid.", task->pid);
+        return -EINVAL;
+    }
+    if (task->mode != SYNC_MIGRATE_MODE_TOTAL && task->mode != SYNC_MIGRATE_MODE_BATCH) {
+        SMAP_LOGGER_ERROR("ubturbo_smap_migrate_pages mode %d invalid.", task->mode);
+        return -EINVAL;
+    }
+    pageSizeKB = GetPageSize() / KIB;
+    if (pageSizeKB == 0) {
+        SMAP_LOGGER_ERROR("smap page size is 0, smap not initialized?");
+        return -EPERM;
+    }
+    if (task->totalSize == 0 || task->totalSize % pageSizeKB != 0) {
+        SMAP_LOGGER_ERROR("ubturbo_smap_migrate_pages totalSize %llu invalid, "
+                          "must be nonzero and %lluKB aligned.",
+                          (unsigned long long)task->totalSize, (unsigned long long)pageSizeKB);
+        return -EINVAL;
+    }
+    if (task->mode == SYNC_MIGRATE_MODE_BATCH) {
+        if (task->batchSize == 0) {
+            SMAP_LOGGER_ERROR("ubturbo_smap_migrate_pages batchSize is 0 in BATCH mode.");
+            return -EINVAL;
+        }
+        if (task->sleepTimeUs < MIGRATE_PAGES_BATCH_SLEEP_US_MIN ||
+            task->sleepTimeUs > MIGRATE_PAGES_BATCH_SLEEP_US_MAX) {
+            SMAP_LOGGER_ERROR("ubturbo_smap_migrate_pages sleepTimeUs %llu invalid.",
+                              (unsigned long long)task->sleepTimeUs);
+            return -EINVAL;
+        }
+    }
+    if (!manager) {
+        SMAP_LOGGER_ERROR("process manager is null.");
+        return -EPERM;
+    }
+    needPages = KBToPage(task->totalSize);
+    freePages = IsHugeMode() ? GetNrFreeHugePagesByNode(task->destNid) : GetNrFreePagesByNode(task->destNid);
+    if (needPages > freePages) {
+        SMAP_LOGGER_ERROR("ubturbo_smap_migrate_pages dest node %d free pages %llu < need %llu.",
+                          task->destNid, (unsigned long long)freePages, (unsigned long long)needPages);
+        return -ENOMEM;
+    }
+    return 0;
+}
+
+int ubturbo_smap_migrate_pages(SyncMigrateTask *task)
+{
+    struct timeval start;
+    struct timeval end;
+    struct ProcessManager *manager;
+    long costDurationUs;
+    int ret;
+
+    SMAP_LOGGER_INFO("Receive ubturbo_smap_migrate_pages msg.");
+    if (EnvAtomicRead(&g_status) != RUNNING) {
+        SMAP_LOGGER_ERROR("smap isn't running, migrate pages failed.");
+        return -EPERM;
+    }
+    ret = CheckSyncMigrateTask(task);
+    if (ret) {
+        return ret;
+    }
+    ProcessAttr *attr = GetProcessAttr(task->pid);
+    if (attr && attr->state == PROC_MOVE) {
+        SMAP_LOGGER_ERROR("ubturbo_smap_migrate_pages pid %d is in PROC_MOVE state.", task->pid);
+        return -EBUSY;
+    }
+    manager = GetProcessManager();
+    if (!manager) {
+        SMAP_LOGGER_ERROR("process manager is null.");
+        return -EPERM;
+    }
+
+    gettimeofday(&start, NULL);
+    ret = ioctl(manager->fds.migrate, SMAP_MIG_MIGRATE_PAGES, task);
+    gettimeofday(&end, NULL);
+    if (ret != 0) {
+        SMAP_LOGGER_ERROR("ubturbo_smap_migrate_pages ioctl failed, ret: %d.", ret);
+        return -EIO;
+    }
+    costDurationUs = CalcDurationUs(start, end);
+    SMAP_LOGGER_INFO("ubturbo_smap_migrate_pages pid %d node%d->%d size %lluKB done, cost %ldus.",
+                     task->pid, task->srcNid, task->destNid,
+                     (unsigned long long)task->totalSize, costDurationUs);
+    return 0;
 }
 
 static int AssignOldProcessPayload(struct OldProcessPayload *result, ProcessAttr *attr, int l2Node)

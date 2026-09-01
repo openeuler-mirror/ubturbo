@@ -14,6 +14,9 @@
 #include <linux/ioctl.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/vmalloc.h>
+#include <linux/delay.h>
+#include <linux/limits.h>
 
 #include "common.h"
 #include "acpi_mem.h"
@@ -558,6 +561,158 @@ static int __ioctl_set_migrate_status(void __user *argp)
 	return ret;
 }
 
+/* 依据迁移方向选择内核迁移类型：远端->本地用BACK，远端->远端用REMOTE，本地相关用HOTNESS */
+static enum smap_migrate_type sync_migrate_type(int src_nid, int dest_nid)
+{
+	if (src_nid >= nr_local_numa && dest_nid < nr_local_numa)
+		return MIGRATE_TYPE_BACK;
+	if (src_nid >= nr_local_numa)
+		return MIGRATE_TYPE_REMOTE;
+	return MIGRATE_TYPE_HOTNESS;
+}
+
+static int build_page_map_read(struct migrate_pages_msg *msg,
+			       struct pagemapread *pm, int page_size)
+{
+	u64 total_pages;
+
+	if (page_size <= 0)
+		return -EINVAL;
+	if (msg->total_size > ((u64)~0ULL / SIZE_KB))
+		return -EINVAL;
+	total_pages = msg->total_size * SIZE_KB / page_size;
+	if (total_pages > U32_MAX)
+		return -EINVAL;
+
+	pm->mig_type = SYNC_MIGRATE;
+	pm->sync_mig_info.pid = msg->pid;
+	pm->sync_mig_info.src_nid = msg->src_nid;
+	pm->sync_mig_info.folios_len = (u32)total_pages;
+	pm->sync_mig_info.folios = vzalloc(sizeof(struct folio *) *
+					   pm->sync_mig_info.folios_len);
+	if (!pm->sync_mig_info.folios)
+		return -ENOMEM;
+	return 0;
+}
+
+#define MIGRATION_INTERVAL_RANGE_US 500
+
+static unsigned int smap_migrate_pages_batch(struct migrate_pages_msg *msg,
+					     struct pagemapread *pm,
+					     int page_size)
+{
+	unsigned int offset = 0;
+	unsigned int nr_folios;
+	unsigned int failed_cnt = 0;
+	u64 batch_cnt;
+
+	if (page_size <= 0)
+		return 0;
+	batch_cnt = msg->batch_size * SIZE_KB / page_size;
+	if (batch_cnt == 0)
+		batch_cnt = 1;
+	while (offset < pm->sync_mig_info.mig_cnt) {
+		nr_folios = (unsigned int)MIN(batch_cnt,
+				pm->sync_mig_info.mig_cnt - offset);
+		failed_cnt += smap_migrate(
+			pm->sync_mig_info.folios + offset, nr_folios,
+			msg->dest_nid, sync_migrate_type(msg->src_nid,
+							 msg->dest_nid));
+		offset += nr_folios;
+		if (offset < pm->sync_mig_info.mig_cnt)
+			usleep_range(msg->sleep_time_us,
+				     msg->sleep_time_us +
+				     MIGRATION_INTERVAL_RANGE_US);
+	}
+	return failed_cnt;
+}
+
+static void print_sync_migrate_statistics(struct pagemapread *pm)
+{
+	struct page_migration_reject_statistics *st = &pm->statistics;
+
+	pr_info("sync migrate collect: pid %d src %d, page_cnt %u, reject "
+		"isolated %u, multi_mapped %u, folio_get_fail %u\n",
+		pm->sync_mig_info.pid, pm->sync_mig_info.src_nid,
+		pm->sync_mig_info.mig_cnt, st->nr_isolated_pages,
+		st->nr_multi_mapped_pages, st->nr_folio_get_fail);
+	if (smap_pgtype == HUGE_PAGE) {
+		pr_info("sync migrate reject 2m: not_huge_page_head %u\n",
+			st->page_mode_2m.nr_not_huge_page_head);
+	} else {
+		pr_info("sync migrate reject 4k: not_in_lru %u, zero_ref %u, "
+			"trans_huge %u, huge %u\n",
+			st->page_mode_4k.nr_not_in_lru,
+			st->page_mode_4k.nr_zero_ref_pages,
+			st->page_mode_4k.nr_transparent_huge_pages,
+			st->page_mode_4k.nr_huge_pages);
+	}
+}
+
+static int smap_migrate_pages(struct migrate_pages_msg *msg)
+{
+	int page_size = (smap_pgtype == HUGE_PAGE) ? g_pagesize_huge
+						   : PAGE_SIZE;
+	struct pagemapread pm = { 0 };
+	unsigned int failed_cnt;
+	int ret;
+
+	ret = build_page_map_read(msg, &pm, page_size);
+	if (ret)
+		return ret;
+
+	walk_pid_pagemap(&pm);
+	if (pm.sync_mig_info.mig_cnt == 0) {
+		pr_warn("pid %d has no pages on node %d to migrate\n",
+			msg->pid, msg->src_nid);
+		vfree(pm.sync_mig_info.folios);
+		return 0;
+	}
+
+	if (msg->mode == SYNC_MIGRATE_MODE_TOTAL) {
+		failed_cnt = smap_migrate(pm.sync_mig_info.folios,
+					  pm.sync_mig_info.mig_cnt,
+					  msg->dest_nid,
+					  sync_migrate_type(msg->src_nid,
+							   msg->dest_nid));
+	} else {
+		failed_cnt = smap_migrate_pages_batch(msg, &pm, page_size);
+	}
+
+	print_sync_migrate_statistics(&pm);
+	vfree(pm.sync_mig_info.folios);
+	return failed_cnt ? failed_cnt : 0;
+}
+
+static int __ioctl_migrate_pages(void __user *argp)
+{
+	struct migrate_pages_msg msg;
+
+	if (copy_from_user(&msg, argp, sizeof(msg)))
+		return -EFAULT;
+	if (!is_numa_valid(msg.src_nid))
+		return -EINVAL;
+	if (!is_numa_valid(msg.dest_nid))
+		return -EINVAL;
+	if (msg.dest_nid == msg.src_nid)
+		return -EINVAL;
+	if (msg.mode != SYNC_MIGRATE_MODE_TOTAL &&
+	    msg.mode != SYNC_MIGRATE_MODE_BATCH)
+		return -EINVAL;
+	if (msg.total_size == 0)
+		return -EINVAL;
+	if (msg.mode == SYNC_MIGRATE_MODE_BATCH) {
+		if (msg.batch_size == 0)
+			return -EINVAL;
+		if (msg.batch_size > ((u64)~0ULL / SIZE_KB))
+			return -EINVAL;
+		if (msg.sleep_time_us < MIGRATE_PAGES_BATCH_SLEEP_US_MIN ||
+		    msg.sleep_time_us > MIGRATE_PAGES_BATCH_SLEEP_US_MAX)
+			return -EINVAL;
+	}
+	return smap_migrate_pages(&msg);
+}
+
 static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 			  unsigned long arg)
 {
@@ -580,6 +735,10 @@ static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 	}
 	case SMAP_MIG_PID_REMOTE_NUMA: {
 		rc = __ioctl_migrate_pid_remote_numa(argp);
+		break;
+	}
+	case SMAP_MIG_MIGRATE_PAGES: {
+		rc = __ioctl_migrate_pages(argp);
 		break;
 	}
 	case SMAP_SET_UB_DMA_AVAIL:
