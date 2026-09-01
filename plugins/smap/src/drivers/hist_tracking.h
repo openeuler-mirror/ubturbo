@@ -28,7 +28,6 @@ struct access_tracking_dev {
 	s8 node;
 
 	void *tracking_dev;
-	actc_t *access_bit_actc_data;
 	u64 page_count;
 	u8 page_size_mode;
 	bool enable_on;

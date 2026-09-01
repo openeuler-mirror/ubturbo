@@ -52,14 +52,14 @@ TEST_F(AccessTrackingTest, is_access_hugepage)
     (void)is_access_hugepage();
 }
 
-extern "C" void access_init_actc_data(struct access_tracking_dev *adev);
+/* access_init_actc_data was deleted */
 extern "C" void access_tracking_enable(struct device *ldev);
-extern "C" int actc_buffer_reinit(struct access_tracking_dev *adev);
+extern "C" int pginfo_reinit(struct access_tracking_dev *adev);
 TEST_F(AccessTrackingTest, access_tracking_enable)
 {
         struct access_tracking_dev dev = {};
         INIT_LIST_HEAD(&access_dev);
-        MOCKER(actc_buffer_reinit).stubs().will(returnValue(0));
+        MOCKER(pginfo_reinit).stubs().will(returnValue(0));
         (void)access_tracking_enable(&dev.ldev);
         EXPECT_EQ(true, dev.enable_on);
 }
@@ -74,16 +74,6 @@ TEST_F(AccessTrackingTest, access_tracking_disable)
         (void)access_tracking_disable(&dev.ldev);
         EXPECT_EQ(false, dev.enable_on);
         list_del(&dev.list);
-}
-
-TEST_F(AccessTrackingTest, access_init_actc_data)
-{
-    struct access_tracking_dev adev;
-    adev.page_count = 1;
-    actc_t data = 0;
-    adev.access_bit_actc_data = &data;
-    access_init_actc_data(&adev);
-    EXPECT_EQ(0, adev.access_bit_actc_data[0]);
 }
 
 extern "C" int get_page_size(struct access_tracking_dev *adev);
@@ -118,39 +108,34 @@ TEST_F(AccessTrackingTest, access_print_acpi_mem)
     access_print_acpi_mem();
 }
 
-TEST_F(AccessTrackingTest, actc_buffer_reinit)
+TEST_F(AccessTrackingTest, pginfo_reinit)
 {
     struct access_tracking_dev adev;
     MOCKER(calc_access_len_v2).stubs().will(returnValue((u64)1));
     adev.page_count = 1;
-    adev.access_bit_actc_data = nullptr;
-    int ret = actc_buffer_reinit(&adev);
+    int ret = pginfo_reinit(&adev);
     EXPECT_EQ(0, ret);
 
     GlobalMockObject::verify();
     MOCKER(calc_access_len_v2).stubs().will(returnValue((u64)0));
     adev.page_count = 2;
-    MOCKER(vfree).stubs();
-    ret = actc_buffer_reinit(&adev);
+    ret = pginfo_reinit(&adev);
     EXPECT_EQ(0, ret);
 }
 
-TEST_F(AccessTrackingTest, actc_buffer_reinit_two)
+TEST_F(AccessTrackingTest, pginfo_reinit_two)
 {
     struct access_tracking_dev adev;
     adev.page_count = 2;
     MOCKER(calc_access_len_v2).stubs().will(returnValue((u64)1));
-    MOCKER(vfree).stubs();
-    MOCKER(vzalloc).stubs().will(returnValue((void *)nullptr));
-    int ret = actc_buffer_reinit(&adev);
-    EXPECT_EQ(-ENOMEM, ret);
+    /* pginfo_reinit no longer allocates memory; just updates page_count */
+    int ret = pginfo_reinit(&adev);
+    EXPECT_EQ(0, ret);
 
     GlobalMockObject::verify();
     MOCKER(calc_access_len_v2).stubs().will(returnValue((u64)1));
-    MOCKER(vfree).stubs();
-    ret = actc_buffer_reinit(&adev);
+    ret = pginfo_reinit(&adev);
     EXPECT_EQ(0, ret);
-    vfree(adev.access_bit_actc_data);
 }
 
 extern "C" int access_tracking_set_page_size(struct device *ldev, u8 page_size_index);
@@ -160,7 +145,7 @@ TEST_F(AccessTrackingTest, access_tracking_set_page_size)
     int ret = access_tracking_set_page_size(&adev.ldev, 5);
     EXPECT_EQ(-EINVAL, ret);
 
-    MOCKER(actc_buffer_reinit).stubs().will(returnValue(-1));
+    MOCKER(pginfo_reinit).stubs().will(returnValue(-1));
     ret = access_tracking_set_page_size(&adev.ldev, PAGE_MODE_2M);
     EXPECT_EQ(-1, ret);
 }
@@ -168,7 +153,7 @@ TEST_F(AccessTrackingTest, access_tracking_set_page_size)
 TEST_F(AccessTrackingTest, access_tracking_set_page_size_two)
 {
     struct access_tracking_dev adev;
-    MOCKER(actc_buffer_reinit).stubs().will(returnValue(0));
+    MOCKER(pginfo_reinit).stubs().will(returnValue(0));
     int ret = access_tracking_set_page_size(&adev.ldev, PAGE_MODE_2M);
     EXPECT_EQ(0, ret);
 }
@@ -183,36 +168,28 @@ TEST_F(AccessTrackingTest, calc_access_len)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" int actc_buffer_init(struct access_tracking_dev *adev);
-TEST_F(AccessTrackingTest, actc_buffer_init)
+extern "C" int pginfo_init(struct access_tracking_dev *adev);
+TEST_F(AccessTrackingTest, pginfo_init)
 {
     u16 buf;
     struct access_tracking_dev adev;
     MOCKER(calc_access_len_v2).stubs().will(returnValue((u64)0));
-    int ret = actc_buffer_init(&adev);
+    int ret = pginfo_init(&adev);
     EXPECT_EQ(0, ret);
 
+    /* pginfo_init no longer allocates memory; just calculates page_count */
     GlobalMockObject::verify();
     MOCKER(calc_access_len_v2).stubs().will(returnValue((u64)1));
-    MOCKER(vzalloc).stubs().will(returnValue((void *)nullptr));
-    ret = actc_buffer_init(&adev);
-    EXPECT_EQ(-ENOMEM, ret);
-
-    GlobalMockObject::verify();
-    MOCKER(calc_access_len_v2).stubs().will(returnValue((u64)1));
-    MOCKER(vzalloc).stubs().will(returnValue((void *)nullptr));
-    MOCKER(vfree).stubs();
-    ret = actc_buffer_init(&adev);
-    EXPECT_EQ(-ENOMEM, ret);
+    ret = pginfo_init(&adev);
+    EXPECT_EQ(0, ret);
 }
 
-extern "C" void actc_buffer_deinit(struct access_tracking_dev *adev);
-TEST_F(AccessTrackingTest, actc_buffer_deinit)
+extern "C" void pginfo_deinit(struct access_tracking_dev *adev);
+TEST_F(AccessTrackingTest, pginfo_deinit)
 {
     struct access_tracking_dev adev;
     adev.page_count = 1;
-    MOCKER(vfree).stubs();
-    actc_buffer_deinit(&adev);
+    pginfo_deinit(&adev);
     EXPECT_EQ(0, adev.page_count);
 }
 
@@ -224,12 +201,12 @@ TEST_F(AccessTrackingTest, access_tracking_add)
     EXPECT_EQ(-ENODEV, ret);
 
     GlobalMockObject::verify();
-    MOCKER(actc_buffer_init).stubs().will(returnValue(1));
+    MOCKER(pginfo_init).stubs().will(returnValue(1));
     ret = access_tracking_add();
     EXPECT_EQ(-ENODEV, ret);
 
     GlobalMockObject::verify();
-    MOCKER(actc_buffer_init).stubs().will(returnValue(0));
+    MOCKER(pginfo_init).stubs().will(returnValue(0));
     MOCKER(device_add).stubs().will(returnValue(1));
     ret = access_tracking_add();
     EXPECT_EQ(-ENODEV, ret);
@@ -240,7 +217,7 @@ TEST_F(AccessTrackingTest, access_tracking_add_two)
     int ret = 0;
     struct access_tracking_dev *adev;
     struct access_tracking_dev *n;
-    MOCKER(actc_buffer_init).stubs().will(returnValue(0));
+    MOCKER(pginfo_init).stubs().will(returnValue(0));
     MOCKER(tracking_dev_add).stubs().will(returnValue((struct tracking_dev *)nullptr));
     MOCKER(kfree).stubs();
     ret = access_tracking_add();

@@ -53,7 +53,7 @@ enum ap_slot_state {
 /*
  * Per-pid slot: replaces the ap_data.list node. Carries the access_pid plus a
  * refcount and a fine-grained rw_semaphore (ap_lock) that protects the bitmaps
- * (paddr_bm/white_list_bm/bm_len/info). Readers take a reference via
+ * (paddr_bm/bm_len/info). Readers take a reference via
  * ap_get_slot()/ap_collect_refs() and drop it with ap_put_slot(); the last
  * releaser reclaims the access_pid. ap_lock is a rw_semaphore (not spinlock)
  * because the scan path walks page tables and may sleep, and read-side
@@ -108,7 +108,6 @@ struct access_pid {
 	size_t page_num[SMAP_MAX_NUMNODES];
 	size_t bm_len[SMAP_MAX_NUMNODES];
 	unsigned long *paddr_bm[SMAP_MAX_NUMNODES];
-	unsigned long *white_list_bm[SMAP_MAX_NUMNODES];
 	struct list_head
 		node; /* used only for staging lists during add, not for ap_data */
 	struct vm_mapping_info info;
@@ -163,8 +162,8 @@ void access_remove_all_pid(void);
 void change_ap_type(pid_t pid);
 void clean_last_ap_data(struct access_pid *ap);
 int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr);
-int init_ap_bm_white_list(int node_len, u64 *node_page_count,
-			  struct access_pid *ap);
+int init_ap_bm(int node_len, u64 *node_page_count,
+	       struct access_pid *ap);
 int init_vm_mapping(struct vm_mapping_info *info);
 int access_walk_pagemap_prepare(struct access_pid *ap);
 

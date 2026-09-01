@@ -168,6 +168,7 @@ target_include_directories(smap_dt PUBLIC
 target_compile_definitions(smap_dt PUBLIC
     SKIP_STATIC
     CONFIG_NUMA
+    CONFIG_NUMA_BALANCING
     CONFIG_MODULES
     CONFIG_NODES_SHIFT=7
     CONFIG_PHYS_ADDR_T_64BIT

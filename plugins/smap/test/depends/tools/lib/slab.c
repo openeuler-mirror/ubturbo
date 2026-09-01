@@ -6,6 +6,11 @@ void *kvmalloc(size_t size, gfp_t flags)
     return malloc(size);
 }
 
+void *kvzalloc(size_t size, gfp_t flags)
+{
+    return calloc(1, size);
+}
+
 void *kmalloc(size_t size, gfp_t flags)
 {
     return malloc(size);
