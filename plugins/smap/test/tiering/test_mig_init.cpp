@@ -4,6 +4,7 @@
  */
 
 #include <random>
+#include <cstring>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
@@ -637,4 +638,74 @@ TEST_F(MigInitTest, __IoctlMigrateE2ETest)
         vfree(msg.mig_list[i].addr);
     }
     vfree(msg.mig_list);
+}
+
+extern "C" int __ioctl_set_migrate_status(void __user *argp);
+extern "C" int do_migrate_batch(struct migrate_msg *msg, struct mig_list *mig_list);
+extern "C" unsigned int max_pages_per_migration;
+
+TEST_F(MigInitTest, __IoctlSetMigrateStatusCopyError)
+{
+    MOCKER(copy_from_user).stubs().will(returnValue(1UL));
+    int ret = __ioctl_set_migrate_status(NULL);
+    EXPECT_EQ(-EFAULT, ret);
+}
+
+TEST_F(MigInitTest, __IoctlSetMigrateStatusInvalid)
+{
+    struct migrate_status_set_msg msg;
+    memset(&msg, 0, sizeof(msg));
+
+    msg.status = (smap_migrate_status)5;
+    msg.pid = 10;
+    int ret = __ioctl_set_migrate_status((void *)&msg);
+    EXPECT_EQ(-EINVAL, ret);
+
+    msg.status = SMAP_MIGRATE_ENABLE;
+    msg.pid = 0;
+    ret = __ioctl_set_migrate_status((void *)&msg);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(MigInitTest, __IoctlSetMigrateStatusDisable)
+{
+    struct migrate_status_set_msg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.status = SMAP_MIGRATE_DISABLE;
+    msg.pid = 10;
+
+    MOCKER(add_to_migration_disabled_procs).stubs().will(returnValue(0));
+    int ret = __ioctl_set_migrate_status((void *)&msg);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(MigInitTest, __IoctlSetMigrateStatusEnable)
+{
+    struct migrate_status_set_msg msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.status = SMAP_MIGRATE_ENABLE;
+    msg.pid = 10;
+
+    MOCKER(remove_from_migration_disabled_procs).stubs().will(returnValue(0));
+    int ret = __ioctl_set_migrate_status((void *)&msg);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(MigInitTest, __IoctlMigrateBatchPath)
+{
+    unsigned int saved = max_pages_per_migration;
+    max_pages_per_migration = 100;
+
+    MOCKER(copy_from_user).stubs().will(returnValue(0UL));
+    MOCKER(is_migrate_msg_valid).stubs().will(returnValue(true));
+    MOCKER(build_migrate_list).stubs().will(returnValue(0));
+    MOCKER(do_migrate_batch).stubs().will(returnValue(2));
+    MOCKER(filter_4k_migrate_info).stubs().will(returnValue(0UL));
+    MOCKER(copy_to_user).stubs().will(returnValue(0UL));
+    MOCKER(free_migrate_list_addr).stubs().will(ignoreReturnValue());
+    MOCKER(free_migrate_list).stubs().will(ignoreReturnValue());
+
+    int ret = __ioctl_migrate(NULL);
+    EXPECT_EQ(2, ret);
+    max_pages_per_migration = saved;
 }

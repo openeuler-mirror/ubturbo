@@ -2308,6 +2308,13 @@ void RemoveManagedProcess(int nr, pid_t *pidArr)
         if (ret) {
             SMAP_LOGGER_WARNING("Synchronize pid %d config maybe failed: %d.", pidArr[i], ret);
         }
+        struct MigrateStatusSetMsg msg = { 0 };
+        msg.pid = pidArr[i];
+        msg.status = SMAP_MIGRATE_ENABLE;
+        ret = SetMigrateStatus(&g_processManager, &msg);
+        if (ret) {
+            SMAP_LOGGER_WARNING("Restore pid %d migration status failed: %d.", pidArr[i], ret);
+        }
     }
 }
 
@@ -4589,6 +4596,17 @@ int EnableProcessMigrate(pid_t *pidArr, int len, int enable)
     newState = enable == ENABLE_PROCESS_MIGRATE ? PROC_IDLE : PROC_MOVE;
 
     SMAP_LOGGER_DEBUG("enter EnableProcessMigrate.");
+    for (int i = 0; i < len; i++) {
+        struct MigrateStatusSetMsg msg = { 0 };
+
+        msg.pid = pidArr[i];
+        msg.status = (enable == ENABLE_PROCESS_MIGRATE) ? SMAP_MIGRATE_ENABLE : SMAP_MIGRATE_DISABLE;
+        int err = SetMigrateStatus(&g_processManager, &msg);
+        if (err) {
+            SMAP_LOGGER_ERROR("set pid %d migrate status %d failed: %d.", pidArr[i], msg.status, err);
+            return err;
+        }
+    }
     while (true) {
         EnvMutexLock(&g_processManager.lock);
         int ret = IsPidArrayStateChangeReady(pidArr, len, enable);

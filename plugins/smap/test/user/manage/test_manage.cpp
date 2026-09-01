@@ -5,6 +5,7 @@
  */
 
 #include <cstdlib>
+#include <cstring>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
@@ -37,6 +38,7 @@ extern "C" int GetProcessNumaMapsObservation(pid_t pid, bool hugeFlag, uint32_t 
 extern "C" int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate);
 extern "C" void DiscardProcessManageCandidate(ProcessManageCandidate *candidate);
 extern "C" void PublishProcessManageCandidate(ProcessManageCandidate *candidate);
+extern "C" int SetMigrateStatus(struct ProcessManager *manager, struct MigrateStatusSetMsg *msg);
 
 class ScopedMigrationPeriod {
 public:
@@ -1768,6 +1770,7 @@ TEST_F(ManageTest, TestRemoveManagedProcessValidPid)
     MOCKER(GetPidType).stubs().will(returnValue(VM_TYPE));
     MOCKER(FreeProceccesAttr).stubs().will(ignoreReturnValue());
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
+    MOCKER(SetMigrateStatus).stubs().will(returnValue(0));
     RemoveManagedProcess(1, pidArr);
     EXPECT_EQ(0, g_processManager.nr[VM_TYPE]);
     EXPECT_EQ(g_processManager.processes, nullptr);
@@ -1778,6 +1781,7 @@ TEST_F(ManageTest, TestRemoveManagedProcessValidPid)
     MOCKER(GetPidType).stubs().will(returnValue(PROCESS_TYPE));
     MOCKER(FreeProceccesAttr).stubs().will(ignoreReturnValue());
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
+    MOCKER(SetMigrateStatus).stubs().will(returnValue(0));
     RemoveManagedProcess(1, pidArr);
     EXPECT_EQ(0, g_processManager.nr[PROCESS_TYPE]);
     EXPECT_EQ(g_processManager.processes, nullptr);
@@ -2461,6 +2465,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateDisableInvalid)
     pid_t pidArr[] = {1};
 
     EnvMutexInit(&g_processManager.lock);
+    MOCKER(SetMigrateStatus).stubs().will(returnValue(0));
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(-EINVAL));
     int ret = EnableProcessMigrate(pidArr, 1, DISABLE_PROCESS_MIGRATE);
     EXPECT_EQ(-EINVAL, ret);
@@ -2471,6 +2476,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateDisableRetryFail)
     pid_t pidArr[] = {1};
 
     EnvMutexInit(&g_processManager.lock);
+    MOCKER(SetMigrateStatus).stubs().will(returnValue(0));
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(0));
     int ret = EnableProcessMigrate(pidArr, 1, DISABLE_PROCESS_MIGRATE);
     EXPECT_EQ(-ETIMEDOUT, ret);
@@ -2481,6 +2487,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateDisableRetrySuccess)
     pid_t pidArr[] = {1};
 
     EnvMutexInit(&g_processManager.lock);
+    MOCKER(SetMigrateStatus).stubs().will(returnValue(0));
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(0)).then(returnValue(1));
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
     MOCKER(SetPidArrState).expects(once());
@@ -2493,6 +2500,7 @@ TEST_F(ManageTest, TestEnableProcessMigrateDisableNormal)
     pid_t pidArr[] = {1};
 
     EnvMutexInit(&g_processManager.lock);
+    MOCKER(SetMigrateStatus).stubs().will(returnValue(0));
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(1));
     MOCKER(SetPidArrState).expects(once());
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
@@ -2505,11 +2513,52 @@ TEST_F(ManageTest, TestEnableProcessMigrateEnableNormal)
     pid_t pidArr[] = {1};
 
     EnvMutexInit(&g_processManager.lock);
+    MOCKER(SetMigrateStatus).stubs().will(returnValue(0));
     MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(1));
     MOCKER(SetPidArrState).expects(once());
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
     int ret = EnableProcessMigrate(pidArr, 1, ENABLE_PROCESS_MIGRATE);
     EXPECT_EQ(0, ret);
+}
+
+TEST_F(ManageTest, TestEnableProcessMigrateSetStatusFailed)
+{
+    pid_t pidArr[] = {1};
+
+    EnvMutexInit(&g_processManager.lock);
+    MOCKER(SetMigrateStatus).stubs().will(returnValue(-EINVAL));
+    int ret = EnableProcessMigrate(pidArr, 1, ENABLE_PROCESS_MIGRATE);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+static struct MigrateStatusSetMsg gCapturedMigrateStatus;
+static int FakeSetMigrateStatus(struct ProcessManager *manager, struct MigrateStatusSetMsg *msg)
+{
+    gCapturedMigrateStatus = *msg;
+    return 0;
+}
+
+TEST_F(ManageTest, TestEnableProcessMigrateSyncMigrateStatus)
+{
+    pid_t pidArr[2] = {11, 22};
+
+    EnvMutexInit(&g_processManager.lock);
+    MOCKER(SetMigrateStatus).stubs().will(invoke(FakeSetMigrateStatus));
+    MOCKER(IsPidArrayStateChangeReady).stubs().will(returnValue(1));
+    MOCKER(SetPidArrState).stubs().will(ignoreReturnValue());
+    MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
+
+    memset(&gCapturedMigrateStatus, 0, sizeof(gCapturedMigrateStatus));
+    int ret = EnableProcessMigrate(pidArr, 2, DISABLE_PROCESS_MIGRATE);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(SMAP_MIGRATE_DISABLE, gCapturedMigrateStatus.status);
+    EXPECT_EQ(22, gCapturedMigrateStatus.pid);
+
+    memset(&gCapturedMigrateStatus, 0, sizeof(gCapturedMigrateStatus));
+    ret = EnableProcessMigrate(pidArr, 2, ENABLE_PROCESS_MIGRATE);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(SMAP_MIGRATE_ENABLE, gCapturedMigrateStatus.status);
+    EXPECT_EQ(22, gCapturedMigrateStatus.pid);
 }
 
 TEST_F(ManageTest, TestIsRemoteNumaMigrateBackAllowedInvalid)

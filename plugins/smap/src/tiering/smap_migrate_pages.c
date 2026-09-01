@@ -14,6 +14,7 @@
 #include <linux/page-isolation.h>
 #include <linux/limits.h>
 #include <linux/mm.h>
+#include <linux/spinlock.h>
 
 #include "numa.h"
 #include "rmap.h"
@@ -954,11 +955,12 @@ static int migrate_one_batch(int idx, struct migrate_msg *msg,
  * process_mig_entry - migrate all folios of a single mig_list entry.
  *
  * Validates the entry, then drives migrate_one_batch over the folios in
- * NR_BATCHED_MIGRATION sized batches until done. Returns 0 on success,
- * -EINVAL if the from/to node, nr is invalid, or a critical node error
- * occurs (caller skips the entry), or -ENOMEM if a batch folio array cannot
- * be allocated (caller aborts the whole ioctl). pre_migrate_num is reset
- * here so it accumulates per entry.
+ * NR_BATCHED_MIGRATION sized batches until done. An entry with zero pages is
+ * the fully consumed slice of a batched migration and is treated as done.
+ * Returns 0 on success, -EINVAL if the from/to node is invalid or nr exceeds
+ * MAX_MIG_LIST_NR (caller skips the entry), or -ENOMEM if a batch folio array
+ * cannot be allocated (caller aborts the whole ioctl). pre_migrate_num is
+ * reset here so it accumulates per entry.
  */
 static int process_mig_entry(int idx, struct migrate_msg *msg,
 			     struct mig_list *mig_list, struct mig_stats *stats)
@@ -976,7 +978,14 @@ static int process_mig_entry(int idx, struct migrate_msg *msg,
 		return -EINVAL;
 	}
 
-	if (mig_list[idx].nr <= 0 || mig_list[idx].nr > MAX_MIG_LIST_NR) {
+	/*
+	 * An entry with zero pages is a fully consumed slice of a batched
+	 * migration, treat it as done.
+	 */
+	if (mig_list[idx].nr == 0)
+		return 0;
+
+	if (mig_list[idx].nr > MAX_MIG_LIST_NR) {
 		pr_warn_ratelimited("[%d] invalid nr %llu\n", idx,
 				    mig_list[idx].nr);
 		return -EINVAL;
@@ -998,6 +1007,84 @@ static int process_mig_entry(int idx, struct migrate_msg *msg,
 }
 
 /*
+ * struct migrate_disabled_proc - a pid whose migration has been paused.
+ *
+ * Paused pids are skipped by do_migrate until they are removed from the list
+ * again. The list is guarded by a spinlock so it can be updated concurrently
+ * from an ioctl while a migration is in flight.
+ */
+struct migrate_disabled_proc {
+	pid_t pid;
+	struct list_head list;
+};
+
+static LIST_HEAD(migration_disabled_procs);
+static DEFINE_SPINLOCK(migration_disabled_procs_lock);
+
+int add_to_migration_disabled_procs(pid_t pid)
+{
+	struct migrate_disabled_proc *proc, *cursor;
+	unsigned long flags;
+
+	if (pid <= 0)
+		return -EINVAL;
+
+	proc = kmalloc(sizeof(*proc), GFP_KERNEL);
+	if (!proc)
+		return -ENOMEM;
+	proc->pid = pid;
+
+	spin_lock_irqsave(&migration_disabled_procs_lock, flags);
+	list_for_each_entry(cursor, &migration_disabled_procs, list) {
+		if (cursor->pid == pid) {
+			spin_unlock_irqrestore(&migration_disabled_procs_lock,
+					       flags);
+			kfree(proc);
+			return -EINVAL;
+		}
+	}
+	list_add_tail(&proc->list, &migration_disabled_procs);
+	spin_unlock_irqrestore(&migration_disabled_procs_lock, flags);
+	return 0;
+}
+
+int remove_from_migration_disabled_procs(pid_t pid)
+{
+	struct migrate_disabled_proc *proc, *next;
+	unsigned long flags;
+
+	spin_lock_irqsave(&migration_disabled_procs_lock, flags);
+	list_for_each_entry_safe(proc, next, &migration_disabled_procs, list) {
+		if (proc->pid == pid) {
+			list_del(&proc->list);
+			spin_unlock_irqrestore(&migration_disabled_procs_lock,
+					       flags);
+			kfree(proc);
+			return 0;
+		}
+	}
+	spin_unlock_irqrestore(&migration_disabled_procs_lock, flags);
+	return 0;
+}
+
+bool is_proc_migration_disabled(pid_t pid)
+{
+	struct migrate_disabled_proc *proc;
+	unsigned long flags;
+	bool disabled = false;
+
+	spin_lock_irqsave(&migration_disabled_procs_lock, flags);
+	list_for_each_entry(proc, &migration_disabled_procs, list) {
+		if (proc->pid == pid) {
+			disabled = true;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&migration_disabled_procs_lock, flags);
+	return disabled;
+}
+
+/*
  * do_migrate - drive the cold/hot swap for a batch of mig_list entries.
  *
  * Entries are grouped and processed per pid: for each pid, promotion
@@ -1009,6 +1096,10 @@ static int process_mig_entry(int idx, struct migrate_msg *msg,
  * every pid's promotion ran first and exhausted local memory, leaving later
  * pids unable to migrate back. Pids are visited in order of first appearance
  * in mig_list.
+ *
+ * A pid on the paused list is skipped entirely in this run and its pages are
+ * accounted as failed_pre_migrated_nr so the caller can see they were left
+ * unmigrated.
  */
 int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 {
@@ -1040,6 +1131,13 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 			if (mig_list[i].from < nr_local_numa)
 				continue;
 			done[i] = 1;
+			if (is_proc_migration_disabled(mig_list[i].pid)) {
+				pr_info("the migration of pid %d has been paused\n",
+					mig_list[i].pid);
+				mig_list[i].failed_pre_migrated_nr =
+					mig_list[i].nr;
+				continue;
+			}
 			ret = process_mig_entry(i, msg, mig_list, &stats);
 			if (ret && ret != -EINVAL) {
 				kfree(done);
@@ -1054,6 +1152,13 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 			if (mig_list[i].from >= nr_local_numa)
 				continue;
 			done[i] = 1;
+			if (is_proc_migration_disabled(mig_list[i].pid)) {
+				pr_info("the migration of pid %d has been paused\n",
+					mig_list[i].pid);
+				mig_list[i].failed_pre_migrated_nr =
+					mig_list[i].nr;
+				continue;
+			}
 			ret = process_mig_entry(i, msg, mig_list, &stats);
 			if (ret && ret != -EINVAL) {
 				kfree(done);
@@ -1065,6 +1170,118 @@ int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list)
 	kfree(done);
 	pr_debug("non anon page number: %u\n", stats.non_anon_num);
 	return stats.failed_num;
+}
+
+/*
+ * build_migrate_tmp_msg - carve the next batch of every pid out of mig_list.
+ *
+ * Each pid is independently limited to max_pages_per_migration per round.
+ * offset[] records how many pages of each entry have already been handed out
+ * so the rounds never overlap. Entries that are fully consumed are left with
+ * nr 0 in tmp_mig_list. Returns true while at least one pid still has pages
+ * left.
+ */
+static bool build_migrate_tmp_msg(struct migrate_msg *msg,
+				  struct mig_list *mig_list,
+				  struct mig_list *tmp_mig_list, u64 *offset,
+				  unsigned int batch_pages)
+{
+	int index;
+	bool result = false;
+
+	for (index = 0; index < msg->cnt; index++) {
+		tmp_mig_list[index].pid = mig_list[index].pid;
+		tmp_mig_list[index].from = mig_list[index].from;
+		tmp_mig_list[index].to = mig_list[index].to;
+		tmp_mig_list[index].nr = 0;
+		tmp_mig_list[index].failed_mig_nr = 0;
+		tmp_mig_list[index].failed_pre_migrated_nr = 0;
+		tmp_mig_list[index].success_to_user = false;
+
+		if (offset[index] >= mig_list[index].nr)
+			continue;
+
+		tmp_mig_list[index].nr =
+			MIN(batch_pages, mig_list[index].nr - offset[index]);
+		tmp_mig_list[index].addr = mig_list[index].addr + offset[index];
+		offset[index] += tmp_mig_list[index].nr;
+		result = true;
+	}
+	return result;
+}
+
+static void update_migrate_list_failed_num(struct mig_list *mig_list,
+					   struct mig_list *tmp_mig_list,
+					   int msg_cnt)
+{
+	int index;
+
+	for (index = 0; index < msg_cnt; index++) {
+		mig_list[index].failed_mig_nr +=
+			tmp_mig_list[index].failed_mig_nr;
+		mig_list[index].failed_pre_migrated_nr +=
+			tmp_mig_list[index].failed_pre_migrated_nr;
+		mig_list[index].success_to_user |=
+			tmp_mig_list[index].success_to_user;
+	}
+}
+
+/*
+ * do_migrate_batch - migrate a whole request in max_pages_per_migration
+ * sized batches.
+ *
+ * Each round hands do_migrate a sub-list of at most max_pages_per_migration
+ * pages per pid. This bounds the pages processed in one go, gives a natural
+ * interruption point between rounds (paused pids are skipped by do_migrate),
+ * and keeps overall statistics correct by merging every round's counters back
+ * into the original mig_list. Returns the total number of failed pages, or a
+ * negative errno.
+ */
+int do_migrate_batch(struct migrate_msg *msg, struct mig_list *mig_list)
+{
+	struct mig_list *tmp_mig_list;
+	unsigned int batch_pages;
+	u64 *offset;
+	int ret;
+	int failed_num = 0;
+
+	if (msg->cnt == 0)
+		return 0;
+
+	/*
+	 * Snapshot the limit so a concurrent sysfs write (e.g. echo 0) cannot
+	 * starve the loop with zero-sized batches mid run.
+	 */
+	batch_pages = READ_ONCE(max_pages_per_migration);
+	if (batch_pages == 0)
+		return -EINVAL;
+
+	tmp_mig_list = vzalloc(msg->cnt * sizeof(struct mig_list));
+	if (!tmp_mig_list)
+		return -ENOMEM;
+
+	offset = kzalloc(msg->cnt * sizeof(u64), GFP_KERNEL);
+	if (!offset) {
+		vfree(tmp_mig_list);
+		return -ENOMEM;
+	}
+
+	while (build_migrate_tmp_msg(msg, mig_list, tmp_mig_list, offset,
+				     batch_pages)) {
+		ret = do_migrate(msg, tmp_mig_list);
+		if (ret < 0) {
+			vfree(tmp_mig_list);
+			kfree(offset);
+			return ret;
+		}
+		update_migrate_list_failed_num(mig_list, tmp_mig_list,
+					       msg->cnt);
+		failed_num += ret;
+	}
+
+	vfree(tmp_mig_list);
+	kfree(offset);
+	return failed_num;
 }
 
 static int smap_pre_migrate_range(struct folio **folios,

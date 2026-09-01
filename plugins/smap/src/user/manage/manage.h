@@ -445,6 +445,16 @@ struct MigrateMsg {
     struct MigList *migList;
 };
 
+typedef enum {
+    SMAP_MIGRATE_DISABLE = 0,
+    SMAP_MIGRATE_ENABLE,
+} MigrateStatus;
+
+struct MigrateStatusSetMsg {
+    MigrateStatus status;
+    pid_t pid;
+};
+
 struct MigrateNumaIoctlMsg {
     int srcNid;
     int destNid;
