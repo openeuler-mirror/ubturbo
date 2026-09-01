@@ -293,7 +293,7 @@ typedef enum {
     SYNC_MIGRATE_MODE_BATCH, /* 分批迁移 */
 } SyncMigrateMode;
 
-typedef struct {
+typedef struct SyncMigrateTask {
     SyncMigrateMode mode;   // SYNC_MIGRATE_MODE_TOTAL / SYNC_MIGRATE_MODE_BATCH
     int srcNid;             // 源NUMA节点
     int destNid;            // 目的NUMA节点

@@ -152,7 +152,7 @@ TEST_F(DriversAcpiMemTest, ResetAcpiMem)
     EXPECT_EQ(0, drivers_acpi_mem.len);
 }
 
-extern "C" u64 drivers_get_node_actc_len(int node_id, int page_size);
+extern "C" u32 drivers_get_node_actc_len(int node_id, int page_size);
 TEST_F(DriversAcpiMemTest, GetNodeActcLen)
 {
     struct acpi_mem_segment mem;
