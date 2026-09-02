@@ -2843,6 +2843,45 @@ TEST_F(ManageTest, TestMigOutIsDoneSingleRemoteUsesRemotePages)
     EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
 }
 
+TEST_F(ManageTest, TestMigOutIsDonePendingTargetKeepsWaiting)
+{
+    bool isMultiNumaPid = false;
+    ProcessAttr attr = {};
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    attr.migrateMode = MIG_MEMSIZE_MODE;
+    attr.numaAttr.numaNodes = 0b00010001;
+    attr.remoteNumaCnt = 1;
+    /* 上一轮迁出遗留的旧目标：500 页。 */
+    attr.migrateParam[0].nid = 4;
+    attr.migrateParam[0].memSize = 1024 * 1000;
+    attr.walkPage.nrPages[0] = 200;
+    attr.walkPage.nrPages[4] = 500;
+    attr.walkPage.nrPage = 1000;
+    /* 旧账本恰好等于旧目标：若无 pending 守卫，这里会被误判为迁移完成。 */
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 500;
+    /* 新 memSize=0 配置因 PROC_MIGRATE 进入 pending，尚未生效。 */
+    attr.pendingTargetConfigValid = true;
+
+    EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
+    EXPECT_FALSE(isMultiNumaPid);
+
+    /* 多 NUMA 虚机同样被 pending 拦截，且 isMultiNumaPid 标志保持正确。 */
+    isMultiNumaPid = false;
+    attr.type = VM_TYPE;
+    attr.remoteNumaCnt = 2;
+    attr.migrateParam[1].nid = 5;
+    attr.migrateParam[1].memSize = 0;
+    EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
+    EXPECT_TRUE(isMultiNumaPid);
+
+    /* 无 pending 时保持原判定行为：旧账本 == 旧目标 → 完成。 */
+    attr.pendingTargetConfigValid = false;
+    attr.remoteNumaCnt = 1;
+    EXPECT_TRUE(MigOutIsDone(&attr, &isMultiNumaPid));
+}
+
 // Helper function to convert KB to pages for testing
 static uint64_t KBToPages(uint64_t kb, uint32_t pageSize)
 {

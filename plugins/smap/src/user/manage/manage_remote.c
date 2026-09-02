@@ -1344,6 +1344,14 @@ bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid)
     pid_t pid = attr->pid;
 
     attr->enableSwap = false;
+    /* 新迁移目标已暂存未生效：migrateParam 仍是上一轮配置，用它判定完成会在上一次
+     * sync 刚结束时误判成功（旧账本/旧远端页数恰好等于旧目标），导致上层提前
+     * remove。等待迁移周期 ApplyPendingMigrationTargets 生效后再判定。 */
+    if (attr->pendingTargetConfigValid) {
+        *isMultiNumaPid = IsMultiNumaVm(attr);
+        SMAP_LOGGER_INFO("Pid %d has a pending migration target, mig out is not done yet.", pid);
+        return false;
+    }
     if (IsMultiNumaVm(attr)) {
         *isMultiNumaPid = true;
         for (int i = 0; i < attr->remoteNumaCnt; i++) {
