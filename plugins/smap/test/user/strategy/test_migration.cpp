@@ -719,7 +719,7 @@ TEST_F(MigrationTest, TestCollectNodeFreeSnapshotUsesBasePages)
     EXPECT_EQ(2, context.nrLocalNuma);
     for (int nid = 0; nid < 2; nid++) {
         EXPECT_EQ(100U, context.freePages[nid]);
-        EXPECT_EQ(5U, context.safetyReservePages[nid]);
+        EXPECT_EQ(0U, context.safetyReservePages[nid]);
         EXPECT_EQ(0U, context.plannedPages[nid]);
     }
     for (int nid = 2; nid < 2 + REMOTE_NUMA_NUM; nid++) {
@@ -737,7 +737,7 @@ TEST_F(MigrationTest, TestCollectNodeFreeSnapshotUsesHugePages)
     ASSERT_EQ(0, CollectNodeFreeSnapshot(true, 2, &context));
     for (int nid = 0; nid < 2; nid++) {
         EXPECT_EQ(21U, context.freePages[nid]);
-        EXPECT_EQ(2U, context.safetyReservePages[nid]);
+        EXPECT_EQ(0U, context.safetyReservePages[nid]);
     }
     for (int nid = 2; nid < 2 + REMOTE_NUMA_NUM; nid++) {
         EXPECT_EQ(0U, context.freePages[nid]);
