@@ -34,7 +34,6 @@
 
 #define MAX_MIG_ADDR_PRINT_LEN 2
 #define MAX_GROUP_SWAP_COMP_PLANS (MAX_2M_PROCESSES_CNT * MAX_PER_PID_MIG_LIST_COUNT)
-#define PAIR_PLAN_LOCAL_FREE_RESERVE_DIVISOR 20
 
 typedef struct {
     pid_t pid;
@@ -99,8 +98,6 @@ int CollectNodeFreeSnapshot(bool hugePage, int nrLocalNuma, PairPlanContext *con
     for (int nid = 0; nid < nrLocalNuma; nid++) {
         uint64_t freePages = hugePage ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
         snapshot.freePages[nid] = freePages;
-        snapshot.safetyReservePages[nid] =
-            freePages / PAIR_PLAN_LOCAL_FREE_RESERVE_DIVISOR + (freePages % PAIR_PLAN_LOCAL_FREE_RESERVE_DIVISOR != 0);
     }
     *context = snapshot;
     return 0;
