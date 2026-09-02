@@ -1025,7 +1025,7 @@ TEST_F(ManageTest, TestSetProcessConfig)
     EXPECT_EQ(attr.numaAttr.numaNodes, 17);
 }
 
-TEST_F(ManageTest, TestSetProcessConfigRejectsUnexpectedRemoteResidency)
+TEST_F(ManageTest, TestSetProcessConfigTracksUnexpectedRemoteResidencyForDrain)
 {
     g_processManager.nrLocalNuma = 4;
     ProcessAttr attr = {};
@@ -1040,7 +1040,9 @@ TEST_F(ManageTest, TestSetProcessConfigRejectsUnexpectedRemoteResidency)
     MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
     MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddUnexpectedRemoteResidentForTest));
     int ret = SetProcessConfig(&attr, &param, false);
-    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ(0, ret);
+    EXPECT_TRUE(InAttrL2(&attr, 5));
+    EXPECT_EQ(nullptr, FindProcessRemoteTarget(&attr.targetConfig, 5));
 }
 
 TEST_F(ManageTest, TestSetProcessConfigSkipsUnexpectedRemoteResidencyWhenStatScan)
@@ -1059,6 +1061,7 @@ TEST_F(ManageTest, TestSetProcessConfigSkipsUnexpectedRemoteResidencyWhenStatSca
     MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddUnexpectedRemoteResidentForTest));
     int ret = SetProcessConfig(&attr, &param, true);
     EXPECT_EQ(0, ret);
+    EXPECT_FALSE(InAttrL2(&attr, 5));
 }
 
 extern "C" FILE *OpenNumaMaps(pid_t pid);
@@ -1342,7 +1345,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateRejectsNoObservation)
     EXPECT_EQ(BIT(0), active.numaAttr.numaNodes);
 }
 
-TEST_F(ManageTest, TestPrepareProcessManageCandidateRejectsUnexpectedRemote)
+TEST_F(ManageTest, TestPrepareProcessManageCandidateTracksUnexpectedRemoteForDrain)
 {
     ProcessAttr active = {};
     ProcessParam param = InitCandidateTest(&active);
@@ -1355,8 +1358,11 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateRejectsUnexpectedRemote)
     MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
     MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddUnexpectedRemoteResidentForTest));
 
-    EXPECT_EQ(-EINVAL, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
-    EXPECT_EQ(nullptr, candidate.prepared);
+    ASSERT_EQ(0, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
+    ASSERT_NE(nullptr, candidate.prepared);
+    EXPECT_TRUE(InAttrL2(candidate.prepared, 5));
+    EXPECT_EQ(nullptr, FindProcessRemoteTarget(&candidate.prepared->targetConfig, 5));
+    DiscardProcessManageCandidate(&candidate);
 }
 
 TEST_F(ManageTest, TestPrepareProcessManageCandidateKeepsPairAccountFor4KMultiNuma)

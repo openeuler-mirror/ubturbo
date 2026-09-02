@@ -556,38 +556,39 @@ static void UpdateAutoRemoveRemoteEmptyFlag(ProcessAttr *attr, const ProcessTarg
     }
 }
 
-static int ValidateCandidateRemoteResidency(ProcessAttr *candidate, const ProcessTargetConfig *config,
-                                            const ManagedLocalObservation *observation)
+static uint32_t BuildCandidateRemoteDrainNodes(ProcessAttr *candidate, const ProcessTargetConfig *config,
+                                               const ManagedLocalObservation *observation)
 {
     if (!candidate || !config || !observation || !observation->residentValid) {
         return 0;
     }
 
+    uint32_t drainNodes = 0;
     int nrLocalNuma = GetNrLocalNuma();
     for (int remoteNid = nrLocalNuma; remoteNid < nrLocalNuma + REMOTE_NUMA_NUM; remoteNid++) {
-        if (observation->numaPages[remoteNid] == 0 || FindProcessRemoteTarget(config, remoteNid) ||
-            InAttrL2(candidate, remoteNid)) {
+        if (observation->numaPages[remoteNid] == 0 || FindProcessRemoteTarget(config, remoteNid)) {
             continue;
         }
-        SMAP_LOGGER_ERROR("Pid %d has unmanaged remote node %d resident pages.", candidate->pid, remoteNid);
-        return -EINVAL;
+        AddL2ByNid(&drainNodes, remoteNid);
+        if (!InAttrL2(candidate, remoteNid)) {
+            SMAP_LOGGER_INFO("Pid %d remote node %d has unmanaged resident pages; add it to drain tracking.",
+                             candidate->pid, remoteNid);
+        }
     }
-    return 0;
+    return drainNodes;
 }
 
 static int PrepareProcessTargetCandidate(ProcessAttr *candidate, const ProcessTargetConfig *config,
                                          const ManagedLocalObservation *observation, bool skipRemoteResidencyCheck)
 {
     ProcessTargetConfig targetConfig;
+    uint32_t drainNodes = 0;
     int ret = CopyProcessTargetConfig(&targetConfig, config);
     if (ret) {
         return ret;
     }
     if (!skipRemoteResidencyCheck) {
-        ret = ValidateCandidateRemoteResidency(candidate, &targetConfig, observation);
-        if (ret) {
-            return ret;
-        }
+        drainNodes = BuildCandidateRemoteDrainNodes(candidate, &targetConfig, observation);
     }
 
     candidate->targetConfig = targetConfig;
@@ -595,7 +596,7 @@ static int PrepareProcessTargetCandidate(ProcessAttr *candidate, const ProcessTa
     if (ret) {
         return ret;
     }
-    candidate->numaAttr.numaNodes = BuildManagedTrackingNodes(candidate);
+    candidate->numaAttr.numaNodes = BuildManagedTrackingNodes(candidate) | drainNodes;
     ret = UpdateProcessMigrateConfig(candidate, &targetConfig, observation);
     if (ret) {
         return ret;
