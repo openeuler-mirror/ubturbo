@@ -343,6 +343,10 @@ static bool IsMigParaValid(struct MigrateOutPayload *payload)
         SMAP_LOGGER_ERROR("migrate out payload is null.");
         return false;
     }
+    if (payload->srcNid != -1 && !IsLocalNidValid(payload->srcNid)) {
+        SMAP_LOGGER_ERROR("mig para pid:%d src node%d invalid.", payload->pid, payload->srcNid);
+        return false;
+    }
     if (payload->count < 0 || payload->count > REMOTE_NUMA_NUM) {
         SMAP_LOGGER_ERROR("pid %d migrate out target count %d invalid.", payload->pid, payload->count);
         return false;
@@ -869,6 +873,28 @@ static void DiscardMigrateOutCandidates(ProcessManageCandidate *candidates, int 
     }
 }
 
+/*
+ * 指定迁出源本地 numa：srcNid != -1 时以 srcNid 作为进程本地 numa（L1）节点，
+ * 覆盖基于 CPU 推断的本地节点位图。
+ */
+static void SetSpecifiedLocalNuma(ProcessAttr *attr, int srcNid)
+{
+    if (!attr || srcNid < 0 || srcNid >= GetNrLocalNuma()) {
+        return;
+    }
+
+    /* 清空 L1 位并只置 srcNid，保留远端（L2）位。 */
+    attr->numaAttr.numaNodes &= REMOTE_NUMA_MASK;
+    attr->numaAttr.numaNodes |= 1U << srcNid;
+    /* 同步 managedLocalMask，保证运行期跟踪刷新仍以 srcNid 为本地节点。 */
+    attr->managedLocalState.managedLocalMask = 1U << srcNid;
+    if (attr->pendingTargetConfigValid) {
+        attr->pendingTargetNumaNodes &= REMOTE_NUMA_MASK;
+        attr->pendingTargetNumaNodes |= 1U << srcNid;
+    }
+    SMAP_LOGGER_INFO("Set pid %d local numa because of specified localNuma:%d.", attr->pid, srcNid);
+}
+
 static int PrepareMigrateOutCandidatesWithCapacityPolicy(struct MigrateOutMsg *msg, int pidType,
                                                          ProcessManageCandidate *candidates, uint32_t *nodeBitmap,
                                                          bool ignoreRemoteCapacity)
@@ -887,6 +913,14 @@ static int PrepareMigrateOutCandidatesWithCapacityPolicy(struct MigrateOutMsg *m
                 firstError = ret;
             }
             continue;
+        }
+
+        /*
+         * 指定迁出源本地 numa：srcNid != -1 时以 srcNid 作为进程本地 numa，
+         * 覆盖基于 CPU 推断的本地节点。
+         */
+        if (msg->payload[i].srcNid != -1 && candidates[i].prepared) {
+            SetSpecifiedLocalNuma(candidates[i].prepared, msg->payload[i].srcNid);
         }
 
         if (candidates[i].isPending) {
