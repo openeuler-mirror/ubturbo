@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <cstdlib>
+#include <errno.h>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
