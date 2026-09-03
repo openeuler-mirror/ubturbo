@@ -74,15 +74,8 @@ RetCode TurboPluginManager::LoadPlugin(const std::string &pluginName, const std:
         return TURBO_ERROR;
     }
 
-    char *canonicalPath = realpath(fileName.c_str(), nullptr);
-    if (canonicalPath == nullptr) {
-        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Plugin] The path of the so file corresponding to the plugin "
-                                                    << pluginName << " is invalid, file: " << fileName;
-        return TURBO_ERROR;
-    }
-
-    void *handle = dlopen(canonicalPath, RTLD_NOW | RTLD_GLOBAL);
-    free(canonicalPath);
+    // so 统一按安装态处理：so 名称直接取自配置，交给 dlopen 走系统库目录搜索
+    void *handle = dlopen(fileName.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (handle == nullptr) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
             << "[Plugin] Failed to load plugin " << pluginName << " so, error: " << dlerror();

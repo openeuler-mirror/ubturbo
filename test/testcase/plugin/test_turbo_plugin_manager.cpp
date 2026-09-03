@@ -39,7 +39,6 @@ class TestTurboPluginManager : public ::testing::Test {
 protected:
     std::string pluginNameMock = "testPlugin";
     std::string fileNameMock = "testFile.so";
-    std::string pluginPath = "/tmp";
     const uint16_t moduleCodeMock = 888;
     TurboPluginManager &pMgr = TurboPluginManager::GetInstance();
     void SetUp() override {}
@@ -102,19 +101,13 @@ TEST_F(TestTurboPluginManager, LoadPluginShouldReturnErrWhenPluginHasBeenLoaded)
 TEST_F(TestTurboPluginManager, LoadPluginShouldReturnErrWhenDlopenIsNull)
 {
     MOCKER(dlopen).stubs().will(returnValue((void *)nullptr));
-    EXPECT_EQ(pMgr.LoadPlugin(pluginNameMock, pluginPath), TURBO_ERROR);
-}
-
-TEST_F(TestTurboPluginManager, LoadPluginShouldReturnErrWhenRealpathIsNull)
-{
-    MOCKER(dlopen).stubs().will(returnValue((void *)nullptr));
     EXPECT_EQ(pMgr.LoadPlugin(pluginNameMock, fileNameMock), TURBO_ERROR);
 }
 
 TEST_F(TestTurboPluginManager, LoadPluginShouldReturnOKWhenDlopenIsNotNull)
 {
     MOCKER(dlopen).stubs().will(returnValue((void *)InitFuncMock));
-    EXPECT_EQ(pMgr.LoadPlugin(pluginNameMock, pluginPath), TURBO_OK);
+    EXPECT_EQ(pMgr.LoadPlugin(pluginNameMock, fileNameMock), TURBO_OK);
 }
 
 TEST_F(TestTurboPluginManager, LoadAndInitPluginShouldReturnErrWhenLoadPluginErr)
