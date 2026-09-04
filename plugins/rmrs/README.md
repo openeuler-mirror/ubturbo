@@ -1,4 +1,7 @@
 # RMRS
+
+<p > 简体中文 | <a href="README_EN.md">English</a> </p>
+
 ## 项目简介
 
 RMRS是一款开源的内存迁移工具, 是ubturbo框架的插件，其搭配OBMM、底层调用SMAP使用，可以决策及执行将虚拟机的内存迁出到远端以及决策、执行将内存迁回.

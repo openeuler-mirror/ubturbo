@@ -1,5 +1,7 @@
 # Project Introduction
 
+<p> English | <a href="README.md">简体中文</a>
+
 SMAP migrates page data based on the local spatiotemporal characteristics of application access patterns, combined with the hardware-assisted hot and cold data identification capabilities provided by the chip (the chip must support hot and cold data identification for remote memory). Hot data is stored in local memory while cold data is placed in remote memory, thereby delivering end-to-end performance acceleration for applications.
 
 - Hot and cold data identification: The Linux kernel page table and the 1650 chip are used to identify hot and cold memory pages.
