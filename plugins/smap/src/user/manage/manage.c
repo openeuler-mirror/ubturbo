@@ -367,9 +367,6 @@ int ProcessManagerInit(uint32_t pageType)
         g_processManager.migPeriod = GetMigratePeriodConfig();
     }
 
-    for (i = 0; i < MAX_NODES; i++) {
-        g_processManager.fds.nodes[i] = DEFAULT_FD;
-    }
     g_processManager.fds.migrate = DEFAULT_FD;
     g_processManager.fds.access = DEFAULT_FD;
     g_processManager.fds.lock = DEFAULT_FD;

@@ -19,12 +19,8 @@ SMAP (Smart Memory Accelerator Processor) - Memory tiering and page migration pl
 # Clean build and output directories
 ./build.sh -t clean
 
-# Build kernel modules (drivers)
-cd src/drivers && make KERNEL_VERSION=openeuler -j$(nproc)
-cp -f src/drivers/Module.symvers src/tiering/depends
-
-# Build kernel modules (tiering)
-cd src/tiering && make KERNEL_VERSION=openeuler -j$(nproc)
+# Build the unified SMAP kernel module
+make -C src/kernel KERNEL_VERSION=openeuler -j$(nproc)
 
 # Build kernel modules (ucache)
 cd src/ucache && make -j$(nproc)
@@ -50,9 +46,9 @@ cd test/build && cmake -DCMAKE_BUILD_TYPE=Debug .. && make -j$(nproc)
 
 ## Code Style
 
-- C11 standard (user-space), kernel C (drivers/tiering/ucache modules)
+- C11 standard (user-space), kernel C (scan/migrate/ucache modules)
 - Two distinct code styles:
-  - **Kernel code** (`src/drivers/`, `src/tiering/`, `src/ucache/`): Linux kernel style, tabs, 8-column indent, 80 column limit (`src/.clang-format`)
+  - **Kernel code** (`src/kernel/`, `src/ucache/`): Linux kernel style, tabs, 8-column indent, 80 column limit (`src/.clang-format`)
   - **User-space code** (`src/user/`): 4-space indent, 120 column limit, no tabs (`src/user/.clang-format`)
 - clang-format for formatting, clang-tidy for static analysis
   - Kernel: `src/.clang--tidy` (minimal checks, no C++ rules)
@@ -64,7 +60,7 @@ cd test/build && cmake -DCMAKE_BUILD_TYPE=Debug .. && make -j$(nproc)
 
 - Default build type is Debug; tests use Debug with coverage (`-fprofile-arcs -ftest-coverage`)
 - User-space library builds into `build/`, outputs to `output/smap/` (lib, bin, include)
-- Kernel modules build `.ko` files in their respective source directories
+- Unified SMAP module is `src/kernel/smap.ko`; ucache remains `src/ucache/ucache.ko`
 - Main output: `libsmap.so` shared library (from `src/user/`)
 - Kernel version support via `KERNEL_VERSION` variable: `openeuler` (default, enables HAM), `ocos`, `velinux`
 - `libboundscheck` is a required dependency; build script auto-builds it from `3rdparty/` if not installed
@@ -77,21 +73,11 @@ cd test/build && cmake -DCMAKE_BUILD_TYPE=Debug .. && make -j$(nproc)
 
 ```
 src/
-├── drivers/              # Kernel tracking drivers (smap_tracking_core.ko, smap_access_tracking.ko, smap_histogram_tracking.ko)
-│   ├── core.c/bus.c      # Tracking core and bus infrastructure
-│   ├── access_tracking.c # Software access tracking (page table AF bit scanning)
-│   ├── hist_tracking.c   # Hardware histogram tracking
-│   ├── access_mmu.c      # MMU/page table walking
-│   ├── access_iomem.c    # IOMEM / ACPI memory access
-│   ├── access_pid.c      # PID-based access tracking
-│   └── kvm_pgtable.c     # KVM page table operations
-├── tiering/              # Kernel tiering module (smap_tiering.ko)
-│   ├── smap_migrate_*.c  # Page migration core
-│   ├── rmap.c            # Reverse mapping
-│   ├── numa.c            # NUMA topology
-│   ├── ham_migration.c   # HAM (Hot Access Memory) migration (openEuler only)
-│   ├── tracking_manage.c # Tracking management
-│   └── smap_debugfs.c    # Debugfs interface
+├── common.h              # Shared kernel/user constants
+├── kernel/               # Unified smap.ko source
+│   ├── comm/             # ACPI and IOMEM address-range support
+│   ├── scan/             # Software scan and hardware histogram tracking
+│   └── migrate/          # Page migration, NUMA and OBMM monitoring
 ├── ucache/               # Kernel ucache module (ucache.ko)
 │   ├── core.c            # Ucache core
 │   └── ucache_migrate.c   # Cache migration
@@ -105,8 +91,8 @@ src/
     └── user_log/         # Logging (smap_log_core, smap_user_log)
 
 test/
-├── drivers/              # Driver unit tests (18 test files)
-├── tiering/              # Tiering unit tests (25 files, includes stubs)
+├── scan/                 # Scan unit tests
+├── migrate/              # Migration unit tests (includes stubs)
 ├── ucache/               # Ucache unit tests
 ├── user/                 # User-space unit tests (manage, strategy, advanced-strategy)
 ├── depends/              # Kernel stub/mock implementations

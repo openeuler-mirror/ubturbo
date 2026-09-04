@@ -7,8 +7,8 @@ set(CMAKE_CXX_STANDARD 11)
 find_package(Threads REQUIRED)
 
 set(SMAP_SRC ${CMAKE_CURRENT_LIST_DIR}/dt_src)
-set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage -DACPI_NOT_READY")
-set(CMAKE_C_FLAGS " ${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage -DACPI_NOT_READY")
+set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage")
+set(CMAKE_C_FLAGS " ${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage")
 add_link_options(-lgcov --coverage)
 set(CMAKE_EXE_LINKER_FLAGS " -lgcov --coverage ")
 set(CMAKE_SHARED_LINKER_FLAGS " -lgcov --coverage ")
@@ -18,8 +18,8 @@ add_subdirectory(3rdparty)
 add_compile_definitions(USE_DT CONFIG_MIGRATE_PAGES_DMA_OFFLOADING)
 
 # include all source files
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/tiering TEST_SRC)
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/drivers TEST_SRC)
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/migrate TEST_SRC)
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/scan TEST_SRC)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/user TEST_SRC)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/user/manage TEST_SRC)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/user/strategy TEST_SRC)
@@ -55,68 +55,64 @@ aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/user/strategy/migration_stub.c TE
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/user/manage/thread_stub.c TEST_SRC)
 
 # dump_info
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/dump_info.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/dump_info.c)
 
 # numa
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/numa.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/numa.c)
 
-# iomem
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/iomem.c)
+# obmm_monitor
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/obmm_monitor.c)
 
 # smap_migrate_wrapper
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/smap_migrate_wrapper.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/smap_migrate_wrapper.c)
 
 # smap_migrate_page
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/smap_migrate_pages.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/smap_migrate_pages.c)
 
 # smap_debugfs
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/smap_debugfs.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/smap_debugfs.c)
 
-#tracking_manage
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/tracking_manage.c)
+#migrate_main
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/migrate_main.c)
 # acpi_helper
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/acpi_helper.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/comm/acpi_helper.c)
 
 # pid
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/pid_ioctl.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/migrate_task.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/work.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/migrate_back_debugfs.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/mig_init.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/migrate_back_ioctl.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/migrate_task.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/work.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/migrate_back_debugfs.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/migrate_dev.c)
 
 # ham
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/basic.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/coherence_maintain.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/ham_migration.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/tiering/ham_tasks_mgr.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/basic.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/coherence_maintain.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/ham_migration.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/ham_tasks_mgr.c)
 
 # access_mmu
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_mmu.c)
-# bus
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/bus.c)
-# core
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/core.c)
-# access ioctl
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_ioctl.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/scan/access_mmu.c)
+# scan ioctl
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/scan/scan_ioctl.c)
 # scan
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/accessed_bit.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/scan/accessed_bit.c)
 # access_acpi_mem
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_acpi_mem.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/comm/acpi_mem.c)
 
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_iomem.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/comm/iomem.c)
 
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/kvm_pgtable.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/scan/kvm_pgtable.c)
 
 # access_pid
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_pid.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/scan/access_pid.c)
 
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_tracking.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/access_tracking_wrapper.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/scan/scan_main.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/scan/access_tracking_wrapper.c)
 
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/ub_hist.c)
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/hist_ops.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/scan/ub_hist.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/scan/hist_ops.c)
 
-list(APPEND TEST_SRC ${SMAP_SRC}/src/drivers/hist_tracking.c)
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/scan/hist_tracking.c)
 
 # smap user
 list(APPEND TEST_SRC ${SMAP_SRC}/src/user/smap_interface.c)
@@ -154,8 +150,9 @@ target_include_directories(smap_dt PUBLIC
     ${SMAP_SRC}/src/user
     ${SMAP_SRC}/src/user/user_log
     ${SMAP_SRC}/src/user/user_log/smap_user_log
-    ${SMAP_SRC}/src/tiering
-    ${SMAP_SRC}/src/drivers
+    ${SMAP_SRC}/src/kernel/comm
+    ${SMAP_SRC}/src/kernel/migrate
+    ${SMAP_SRC}/src/kernel/scan
     ${SMAP_SRC}/src/ucache
     ${CMAKE_CURRENT_LIST_DIR}/ucache
     ${CMAKE_CURRENT_LIST_DIR}/3rdparty/include

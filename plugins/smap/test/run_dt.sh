@@ -103,22 +103,20 @@ cp -r ${CURRENT_PATH}/../src $DT_SRC_DIR
 
 code_dir=$(cd ${DT_SRC_DIR} && pwd)
 
-rm -f ${CURRENT_PATH}/tiering/test_iomem.cpp
-
 remove_static ${code_dir}/src
 remove_inline ${code_dir}/src
 rename_class ${code_dir}/src
 rename_min ${code_dir}/src
 add_atomic ${code_dir}/src
 
-replace_string "${code_dir}/src/drivers/access_mmu.c" "walk->private" "walk->private_data" "true"
+replace_string "${code_dir}/src/kernel/scan/access_mmu.c" "walk->private" "walk->private_data" "true"
 
-replace_string "${code_dir}/src/drivers/accessed_bit.c" "walk->private" "walk->private_data" "true"
+replace_string "${code_dir}/src/kernel/scan/accessed_bit.c" "walk->private" "walk->private_data" "true"
 # hist_ops.c
 # migration.c
 
-replace_string "${code_dir}/src/tiering/coherence_maintain.c" "walk->private" "walk->private_data" "true"
-replace_string "${code_dir}/src/tiering/ham_migration.c" "walk->private" "walk->private_data" "true"
+replace_string "${code_dir}/src/kernel/migrate/coherence_maintain.c" "walk->private" "walk->private_data" "true"
+replace_string "${code_dir}/src/kernel/migrate/ham_migration.c" "walk->private" "walk->private_data" "true"
 # test/depends/include/linux/pagewalk.h
 replace_string "${CURRENT_PATH}/depends/include/linux/pagewalk.h" "private;" "private_data;" "true"
 

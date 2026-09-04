@@ -30,9 +30,7 @@ This package contains the Huawei SMAP Driver
 
 %build
 %{!?KERNEL_VERSION:%global KERNEL_VERSION openeuler}
-cd %{_builddir}/smap/src/drivers && make KERNEL_VERSION=%{KERNEL_VERSION} -j`nproc`
-cp %{_builddir}/smap/src/drivers/Module.symvers %{_builddir}/smap/src/tiering/depends
-cd %{_builddir}/smap/src/tiering && make KERNEL_VERSION=%{KERNEL_VERSION} -j`nproc`
+cd %{_builddir}/smap/src/kernel && make KERNEL_VERSION=%{KERNEL_VERSION} -j`nproc`
 cd %{_builddir}/smap/src/ucache && make -j`nproc`
 cd %{_builddir}/smap && cmake -DCMAKE_BUILD_TYPE=Release %{_builddir}/smap
 make -j`nproc` install
@@ -44,10 +42,7 @@ mkdir -p -m755 ${RPM_BUILD_ROOT}/%{smap_dir}
 mkdir -p -m755 ${RPM_BUILD_ROOT}/%{ucache_dir}
 mkdir -p -m755 ${RPM_BUILD_ROOT}/%{smap_libsmap_dir}
 mkdir -p -m755 ${RPM_BUILD_ROOT}/%{udev_rules_dir}
-%{__install} -b -m 0500 %{_builddir}/smap/src/drivers/smap_tracking_core.ko ${RPM_BUILD_ROOT}/%{smap_dir}
-%{__install} -b -m 0500 %{_builddir}/smap/src/drivers/smap_access_tracking.ko ${RPM_BUILD_ROOT}/%{smap_dir}
-%{__install} -b -m 0500 %{_builddir}/smap/src/drivers/smap_histogram_tracking.ko ${RPM_BUILD_ROOT}/%{smap_dir}
-%{__install} -b -m 0500 %{_builddir}/smap/src/tiering/smap_tiering.ko ${RPM_BUILD_ROOT}/%{smap_dir}
+%{__install} -b -m 0500 %{_builddir}/smap/src/kernel/smap.ko ${RPM_BUILD_ROOT}/%{smap_dir}
 %{__install} -b -m 0500 %{_builddir}/smap/src/ucache/ucache.ko ${RPM_BUILD_ROOT}/%{ucache_dir}
 %{__install} -b -m 0500 %{_builddir}/smap/output/smap/lib/libsmap.so ${RPM_BUILD_ROOT}/%{smap_libsmap_dir}
 %{__install} -b -m 0640 %{_builddir}/smap/99-smap.rules ${RPM_BUILD_ROOT}/%{udev_rules_dir}
@@ -57,10 +52,7 @@ rm -rf ${RPM_BUILD_ROOT}
 
 %files
 %defattr(-,ubturbo,ubturbo)
-%{smap_dir}/smap_tracking_core.ko
-%{smap_dir}/smap_access_tracking.ko
-%{smap_dir}/smap_histogram_tracking.ko
-%{smap_dir}/smap_tiering.ko
+%{smap_dir}/smap.ko
 %{ucache_dir}/ucache.ko
 %{smap_libsmap_dir}/libsmap.so
 %{udev_rules_dir}/99-smap.rules
@@ -77,10 +69,7 @@ depmod -a
 
 %preun
 if [ "$1" = "0" ]; then
-    modprobe -r smap_tiering
-    modprobe -r smap_histogram_tracking
-    modprobe -r smap_access_tracking
-    modprobe -r smap_tracking_core
+    modprobe -r smap
     modprobe -r ucache
 fi
 

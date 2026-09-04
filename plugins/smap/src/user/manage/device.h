@@ -16,10 +16,8 @@
 
 #include "manage.h"
 
-#define TIERING_PATH "/dev/smap_mig_device"
-#define NODE_PATH "/dev/smap_node%d"
+#define TIERING_PATH "/dev/smap_migrate_dev"
 #define SYS_NODE_PATH "/sys/devices/system/node"
-#define DECIMAL 10
 #define MS_PER_SEC 1000
 #define US_PER_MSEC 1000
 #define US_PER_SEC (US_PER_MSEC * MS_PER_SEC)

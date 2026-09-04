@@ -12,14 +12,12 @@
 #ifndef __NUMA_NODES_H__
 #define __NUMA_NODES_H__
 
+#include "common.h"
+
 #define NUMA_NO_NODE (-1)
 
-#ifndef USE_DT
-#define LOCAL_NUMA_BITS 8
-#else
-#define LOCAL_NUMA_BITS 4
-#endif
-#define REMOTE_NUMA_BITS 18
+#define LOCAL_NUMA_BITS SMAP_MAX_LOCAL_NUMA_NODES
+#define REMOTE_NUMA_BITS SMAP_MAX_REMOTE_NUMA_NODES
 #define MAX_NODES (LOCAL_NUMA_BITS + REMOTE_NUMA_BITS)
 
 #define LOCAL_NUMA_NUM LOCAL_NUMA_BITS

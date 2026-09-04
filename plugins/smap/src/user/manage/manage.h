@@ -29,8 +29,6 @@
 #ifndef MAX_GROUP_REMOTE_NUMA
 #define MAX_GROUP_REMOTE_NUMA REMOTE_NUMA_NUM
 #endif
-#define MAX_4K_PROCESSES_CNT 300
-#define MAX_2M_PROCESSES_CNT 100
 #define MAX_PAIR_TARGET_COUNT (MAX_4K_PROCESSES_CNT * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM)
 #define MAX_RES_LEN 4
 #define PAGE_SHIFT 12
@@ -73,8 +71,6 @@
 
 #define WAIT_PROC_STATE_PERIOD 100
 #define WAIT_PROC_STATE_MAX_RETRY 300
-#define MAX_NR_MIGRATE_NUMA_RANGE 50
-
 #define PID_CMD_LENGTH 64
 #define MAX_LINE_LENGTH 1024
 #define NUMA_MAPS_MAX_PATTERN_LEN 20
@@ -466,7 +462,7 @@ struct MigrateNumaIoctlMsg {
     int srcNid;
     int destNid;
     int count;
-    uint64_t memids[MAX_NR_MIGRATE_NUMA_RANGE];
+    uint64_t memids[MAX_NR_MIGNUMA];
 };
 
 struct MigPayload {
@@ -492,10 +488,9 @@ typedef struct {
     bool trackingEnabled; // tracking当前是否处于enable状态
 } TrackingAttr;
 
-typedef struct { // tracking设备与迁移设备的fd
-    int nodes[MAX_NODES]; // 每个tracking-node设备的fd
+typedef struct { // 扫描与迁移设备的fd
     int migrate; // 迁移字符设备fd
-    int access; // access设备
+    int access; // 扫描字符设备fd
     int lock; // 文件锁，使SmapStart只被初始化一次
 } DevFds;
 

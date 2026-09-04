@@ -1,0 +1,31 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * Shared SMAP kernel/user constants.
+ */
+#ifndef SMAP_COMMON_H
+#define SMAP_COMMON_H
+
+#define SMAP_ACCESS_MAGIC 0xBB
+#define SMAP_MIGRATE_MAGIC 0xB9
+
+#define DECIMAL 10
+#define MAX_4K_PROCESSES_CNT 300
+#define MAX_2M_PROCESSES_CNT 100
+#define MAX_PER_PID_MIG_LIST_COUNT 8
+#define MAX_NR_MIGOUT 40
+#define MAX_NR_REMOVE MAX_NR_MIGOUT
+#define MAX_NR_MIGBACK 50
+#define MAX_NR_MIGNUMA 50
+#define MAX_SCAN_DURATION_SEC 300
+#define NON_EXIST_PID (-1)
+
+#ifndef USE_DT
+#define SMAP_MAX_LOCAL_NUMA_NODES 8
+#else
+#define SMAP_MAX_LOCAL_NUMA_NODES 4
+#endif
+#define SMAP_MAX_REMOTE_NUMA_NODES 18
+#define SMAP_MAX_NUMA_NODES \
+	(SMAP_MAX_LOCAL_NUMA_NODES + SMAP_MAX_REMOTE_NUMA_NODES)
+
+#endif /* SMAP_COMMON_H */

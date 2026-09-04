@@ -174,8 +174,8 @@ sh run_dt.sh
 
 > **运行前提**：运行 `ub_turbo_exec` 前必须先**构建并安装 SMAP**（见下方 [SMAP插件安装与单元测试](#SMAP插件安装与单元测试) 章节），包括：
 > 1. 构建 `libsmap.so` 用户态库并安装到 `/usr/lib64/`；
-> 2. 构建 4 个内核模块（`smap_tracking_core.ko`、`smap_histogram_tracking.ko`、`smap_access_tracking.ko`、`smap_tiering.ko`）并安装到 `/lib/modules/smap/`；
-> 3. 按 [SMAP安装方式](#安装RPM包) 加载内核模块（`insmod` 顺序见下文）。
+> 2. 构建 SMAP 内核模块 `smap.ko` 并安装到 `/lib/modules/smap/`；
+> 3. 按 [SMAP安装方式](#安装RPM包) 加载该模块。
 >
 > 若 SMAP 未安装或内核模块未加载，UBTurbo 启动时会因 Smap 模块启动失败而退出（日志：`Start module failed, name:Smap`）。
 
@@ -275,18 +275,18 @@ rpm -ivh ubturbo-smap-x.x.x-x.oe2403sp1.aarch64.rpm
 ```
 
 RPM安装会自动部署以下文件：
-- 内核模块：`/lib/modules/smap/`（smap_tracking_core.ko、smap_access_tracking.ko、smap_histogram_tracking.ko、smap_tiering.ko）
+- 内核模块：`/lib/modules/smap/smap.ko`
 - 用户态库：`/usr/lib64/libsmap.so`
 
-2. 加载内核模块（按顺序，顺序有依赖，不可调整）：
+2. 加载 SMAP 内核模块：
 
 ```bash
 cd /lib/modules/smap
-insmod smap_tracking_core.ko
-insmod smap_histogram_tracking.ko                        # 必需，smap_access_tracking 依赖它
-insmod smap_access_tracking.ko                           # 使能硬件判热时传 enable_hist=1，可不传
-insmod smap_tiering.ko smap_pgsize=1                     # smap_pgsize: 1=2M模式(虚拟化), 0=4K模式(容器)
+insmod smap.ko                                           # 硬件判热场景使用 enable_hist=1（仅鲲鹏950机型支持）
 ```
+
+页面类型由 `ubturbo_smap_start(pageType)` 选择：`0` 为 4K，`1` 为 2M；不再通过 `insmod` 参数设置。
+加载后提供 `/dev/smap_scan_dev` 和 `/dev/smap_migrate_dev` 两个 SMAP 主设备节点，udev 将其设置为 `ubturbo:ubturbo`、0600。
 
 3. 启动 ubturbo 服务：
 
