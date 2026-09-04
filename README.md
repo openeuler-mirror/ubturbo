@@ -181,7 +181,7 @@ sh run_dt.sh
 > 2. 构建 4 个内核模块（`smap_tracking_core.ko`、`smap_histogram_tracking.ko`、`smap_access_tracking.ko`、`smap_tiering.ko`）并安装到 `/lib/modules/smap/`；
 > 3. 按 [SMAP安装方式](#安装RPM包) 加载内核模块（`insmod` 顺序见下文）。
 >
-> 若 SMAP 未安装或内核模块未加载，UBTurbo 启动时会因 Smap 模块启动失败而退出（日志：`Start module failed, name:Smap`）。
+> 若 SMAP 未安装或内核模块未加载，UBTurbo 启动时会因 Smap 模块启动失败而退出（日志：`Start module failed, name:Smap`）。若要完整运行样例可参考脚本`docker/run_verify.sh`。
 
 - 配置ubturbo.conf，控制日志级别
 
