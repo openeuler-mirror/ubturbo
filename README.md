@@ -1,5 +1,7 @@
 # UBTurbo
 
+<p > 简体中文 | <a href="README_EN.md">English</a> </p>
+
 ## 项目简介
 
 UBTurbo是一款开源的节点内资源管理框架, 具备配置读取、插件加载、日志打印和IPC通信能力，集成SMAP能力提供基础的多级内存调度服务。

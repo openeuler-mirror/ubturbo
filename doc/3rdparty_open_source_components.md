@@ -64,7 +64,7 @@
 
 `ub_turbo_exec`、`libubturbo_client.so`、`librmrs_ubturbo_plugin.so`（RPM 发布件）链接关系：
 
-```
+```text
 ub_turbo_exec / libubturbo_client.so / librmrs_ubturbo_plugin.so
 ├── libboundscheck.so   (openEuler 开源件，动态)
 ├── libvirt.so          (openEuler 开源件，动态)
