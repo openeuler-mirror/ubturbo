@@ -65,6 +65,7 @@ private:
 
     /* *
      * 加载指定插件的模块（so文件）。
+     * so 名称直接取自配置，交给 dlopen 走系统库目录搜索
      * @param pluginName  插件名称
      * @param fileName so文件路径
      * @return RetCode

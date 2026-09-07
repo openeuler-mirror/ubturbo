@@ -22,7 +22,6 @@ BuildRequires: libvirt-devel
 %define debug_package %{nil}
 %define ubturbo_dir /opt/ubturbo
 %define ubturbo_bin_dir /opt/ubturbo/bin
-%define ubturbo_lib_dir /opt/ubturbo/lib
 %define ubturbo_conf_dir /opt/ubturbo/conf
 %define ubturbo_scripts_dir /opt/ubturbo/scripts
 
@@ -39,28 +38,25 @@ cd %{_builddir}/ubturbo && bash -x build.sh -c
 #install ubturbo
 mkdir -p -m755 ${RPM_BUILD_ROOT}/%{ubturbo_dir}
 mkdir -p -m755 ${RPM_BUILD_ROOT}/%{ubturbo_bin_dir}
-mkdir -p -m755 ${RPM_BUILD_ROOT}/%{ubturbo_lib_dir}
 mkdir -p -m755 ${RPM_BUILD_ROOT}/%{ubturbo_conf_dir}
 mkdir -p -m755 ${RPM_BUILD_ROOT}/%{ubturbo_scripts_dir}
+mkdir -p -m755 ${RPM_BUILD_ROOT}/usr/lib64
 
 %{__install} -b -m 0644 %{_builddir}/ubturbo/dist/release/bin/ub_turbo_exec ${RPM_BUILD_ROOT}/%{ubturbo_bin_dir}
 %{__install} -b -m 0644 %{_builddir}/ubturbo/build/rpm/ubturbo.service ${RPM_BUILD_ROOT}/%{ubturbo_scripts_dir}
-%{__install} -b -m 0644 %{_builddir}/ubturbo/dist/release/lib/libubturbo_client.so ${RPM_BUILD_ROOT}/%{ubturbo_lib_dir}
-%{__install} -b -m 0644 %{_builddir}/ubturbo/dist/release/lib/librmrs_ubturbo_plugin.so ${RPM_BUILD_ROOT}/%{ubturbo_lib_dir}
+%{__install} -m 0755 %{_builddir}/ubturbo/dist/release/lib/libubturbo_client.so ${RPM_BUILD_ROOT}/usr/lib64/
+%{__install} -m 0755 %{_builddir}/ubturbo/dist/release/lib/librmrs_ubturbo_plugin.so ${RPM_BUILD_ROOT}/usr/lib64/
 %{__install} -b -m 0644 %{_builddir}/ubturbo/dist/release/conf/ubturbo_plugin_admission.conf ${RPM_BUILD_ROOT}/%{ubturbo_conf_dir}
 %{__install} -b -m 0644 %{_builddir}/ubturbo/dist/release/conf/ubturbo.conf ${RPM_BUILD_ROOT}/%{ubturbo_conf_dir}
 %{__install} -b -m 0644 %{_builddir}/ubturbo/dist/release/conf/plugin_rmrs.conf ${RPM_BUILD_ROOT}/%{ubturbo_conf_dir}
-
-find ${RPM_BUILD_ROOT}/%{ubturbo_lib_dir} -name "*.so" -exec patchelf --set-rpath '$ORIGIN/../lib' {} \;
-patchelf --set-rpath '$ORIGIN/../lib' ${RPM_BUILD_ROOT}/%{ubturbo_bin_dir}/ub_turbo_exec
 
 %clean
 rm -rf ${RPM_BUILD_ROOT}
 
 %files
 %defattr(-,root,root)
-%{ubturbo_lib_dir}/libubturbo_client.so
-%{ubturbo_lib_dir}/librmrs_ubturbo_plugin.so
+/usr/lib64/libubturbo_client.so
+/usr/lib64/librmrs_ubturbo_plugin.so
 %{ubturbo_conf_dir}/ubturbo_plugin_admission.conf
 %{ubturbo_conf_dir}/ubturbo.conf
 %{ubturbo_conf_dir}/plugin_rmrs.conf
@@ -244,7 +240,6 @@ handle_error() {
 LOG_DIR="/var/log/ubturbo"
 PROGRAM_DIR="/opt/ubturbo"
 PROGRAM_CONF_DIR="/opt/ubturbo/conf"
-PROGRAM_LIB_DIR="/opt/ubturbo/lib"
 PROGRAM_BIN_DIR="/opt/ubturbo/bin"
 PROGRAM_LOG_DIR="/var/log/ubturbo"
 SYSTEM_USER="ubturbo"
@@ -307,7 +302,6 @@ ensure_permission() {
     # 目录权限控制
     chmod 750 "$PROGRAM_DIR" || handle_error "Failed to set permissions for $PROGRAM_DIR"
     chmod 700 "$PROGRAM_CONF_DIR" || handle_error "Failed to set permissions for $PROGRAM_CONF_DIR"
-    chmod 500 "$PROGRAM_LIB_DIR" || handle_error "Failed to set permissions for $PROGRAM_LIB_DIR"
     chmod 500 "$PROGRAM_BIN_DIR" || handle_error "Failed to set permissions for $PROGRAM_BIN_DIR"
     chmod 700 "$PROGRAM_LOG_DIR" || handle_error "Failed to set permissions for $PROGRAM_LOG_DIR"
 
@@ -315,7 +309,6 @@ ensure_permission() {
     chmod 600 "$PROGRAM_CONF_DIR"/* || handle_error "Failed to set permissions for conf files in $PROGRAM_CONF_DIR"
     chmod 600 "$PROGRAM_LOG_DIR"/* || handle_error "Failed to set permissions for log files in $PROGRAM_LOG_DIR"
     chmod 500 "$PROGRAM_BIN_DIR"/* || handle_error "Failed to set permissions for exec files in $PROGRAM_BIN_DIR"
-    chmod 500 "$PROGRAM_LIB_DIR"/* || handle_error "Failed to set permissions for exec files in $PROGRAM_LIB_DIR"
 }
 
 # 拷贝服务文件
@@ -343,24 +336,6 @@ copy_service_file() {
     fi
 }
 
-# 拷贝libubturbo_client.so文件
-copy_client_so() {
-    local source_so_file="/opt/ubturbo/lib/libubturbo_client.so"
-    local installed_so_file="/usr/lib64/libubturbo_client.so"
-
-    cp "$source_so_file" "$installed_so_file" || handle_error "Failed to copy so file"
-    log_message "INFO" "Smap so file copied to $installed_so_file"
-
-    chmod 550 "$installed_so_file" || handle_error "Failed to set permissions for $installed_so_file"
-    chown "$SYSTEM_USER:$SYSTEM_GROUP" "$installed_so_file" || handle_error "Failed to set ownership for directory $installed_so_file"
-
-    # 删除源文件
-    if [ -f "$source_so_file" ]; then
-        rm -f "$source_so_file" || handle_error "Failed to remove source $source_so_file"
-        log_message "INFO" "Removed source $source_so_file"
-    fi
-}
-
 # 重新加载 systemd，这里只是让 systemd 重刷文件，不会影响运行的服务
 reload_systemd() {
     systemctl daemon-reload || handle_error "Failed to reload systemd"
@@ -376,7 +351,6 @@ main() {
     create_group
     create_user
     copy_service_file
-    copy_client_so
     reload_systemd
     # 确保日志和程序目录的属主正确
     ensure_directory_owner "$LOG_DIR" true
