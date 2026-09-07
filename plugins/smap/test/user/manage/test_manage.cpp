@@ -1451,6 +1451,8 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(SetLocalNumaByCpu).stubs().will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).stubs().will(invoke(AddEmptyCandidateResidentForTest));
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
 
     ret = ProcessAddManage(&param, nullptr);
