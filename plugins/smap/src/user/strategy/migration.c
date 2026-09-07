@@ -1105,15 +1105,6 @@ static int DecideThreadNum(struct MigrateMsg *mMsg, struct ProcessManager *manag
     return nThread;
 }
 
-struct SubMigrateCtx {
-    struct MigrateMsg msg;
-    int *origIdx;
-    int fd;
-    int ret;
-    uint32_t cpuMin;
-    uint32_t cpuMax;
-};
-
 static void *SubMigrateThreadFn(void *arg)
 {
     struct SubMigrateCtx *ctx = arg;
@@ -1188,13 +1179,33 @@ static void AggregateSubMigResults(struct SubMigrateCtx *subs, int nrThreads, st
     for (int i = 0; i < nrThreads; i++) {
         for (int k = 0; k < subs[i].msg.cnt; k++) {
             int orig = subs[i].origIdx[k];
-            mMsg->migList[orig].failedMigNr += subs[i].msg.migList[k].failedMigNr;
-            mMsg->migList[orig].failedIsolatedNr += subs[i].msg.migList[k].failedIsolatedNr;
+            if (subs[i].ret < 0) {
+                /* ioctl整体失败（如全局状态竞争-EAGAIN）时内核不回填统计字段，
+                 * 子条目仍为初始值0，若直接聚合会把下发数虚报为成功数，
+                 * 全部计为隔离失败，保证successMigCount真实 */
+                mMsg->migList[orig].failedIsolatedNr += subs[i].msg.migList[k].nr;
+            } else {
+                mMsg->migList[orig].failedMigNr += subs[i].msg.migList[k].failedMigNr;
+                mMsg->migList[orig].failedIsolatedNr += subs[i].msg.migList[k].failedIsolatedNr;
+            }
             if (subs[i].msg.migList[k].successToUser) {
                 mMsg->migList[orig].successToUser = true;
             }
         }
     }
+}
+
+/* 汇总子线程返回值：任一线程ioctl整体失败（负errno）即返回首个错误码，
+ * 全部ioctl成功返回0。部分失败页数（正值）不进入返回值，
+ * 实际迁移成功/失败量由UpdateMigResult日志承载 */
+static int AggregateSubThreadRet(const struct SubMigrateCtx *subs, int nrThreads)
+{
+    for (int i = 0; i < nrThreads; i++) {
+        if (subs[i].ret < 0) {
+            return subs[i].ret;
+        }
+    }
+    return 0;
 }
 
 static int RunMultiThreadedMigrate(struct MigrateMsg *mMsg, struct ProcessManager *manager, int nrThreads)
@@ -1239,13 +1250,7 @@ static int RunMultiThreadedMigrate(struct MigrateMsg *mMsg, struct ProcessManage
             pthread_join(tids[i], NULL);
         }
     }
-    for (int i = 0; i < nrThreads; i++) {
-        if (subs[i].ret > 0 && err >= 0) {
-            err += subs[i].ret;
-        } else {
-            err = subs[i].ret;
-        }
-    }
+    err = AggregateSubThreadRet(subs, nrThreads);
     AggregateSubMigResults(subs, nrThreads, mMsg);
     FreeSubMigrateMsgs(subs, nrThreads);
     free(subs);
@@ -1272,6 +1277,9 @@ int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager)
         err = (mMsg->cnt > 0) ? ioctl(manager->fds.migrate, SMAP_MIG_MIGRATE, mMsg) : 0;
     } else {
         err = RunMultiThreadedMigrate(mMsg, manager, nThread);
+    }
+    if (err < 0) {
+        SMAP_LOGGER_ERROR("DoMigration ioctl failed, ret: %d.", err);
     }
 
     for (int i = 0; i < mMsg->cnt; i++) {
@@ -1723,12 +1731,9 @@ static int PerformMigration(struct ProcessManager *manager)
     ret = DoMigration(&mMsg, manager);
     gettimeofday(&end, NULL);
     PrintMigSpeed(manager, migratePages, start, end);
+    /* ret=0为所有线程ioctl成功，<0为ioctl错误码 */
     SMAP_LOGGER_INFO("Do migration result: %d.", ret);
     PostMigration(manager, &mMsg);
-    if (ret) {
-        SMAP_LOGGER_INFO("Do migration failed! migration_failure_count=%d.", ret);
-        return ret;
-    }
     return ret;
 }
 
@@ -1961,7 +1966,6 @@ int ScanMigrateWork(struct ProcessManager *manager)
     }
     UpdateRemoteNumaCriticalErr();
     ret = PerformMigration(manager);
-    SMAP_LOGGER_INFO("Migration result: %d.", ret);
     // 迁移结束后：仅在开启带宽限制时配置ub_watch开启统计（下周期查询时得到纯业务带宽）
     if (IsBwMonitorEnabled(manager)) {
         ConfigUbWatch(manager->migPeriod);

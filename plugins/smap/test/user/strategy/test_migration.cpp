@@ -3,6 +3,7 @@
  */
 
 #include <cstdlib>
+#include <errno.h>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
@@ -414,6 +415,109 @@ TEST_F(MigrationTest, DoMigrationMinusCnt)
     struct ProcessManager manager;
     int ret = DoMigration(&mMsg, &manager);
     EXPECT_EQ(-ENOMEM, ret);
+}
+
+extern "C" int AggregateSubThreadRet(const struct SubMigrateCtx *subs, int nrThreads);
+extern "C" void AggregateSubMigResults(struct SubMigrateCtx *subs, int nrThreads, struct MigrateMsg *mMsg);
+
+/* 回归：任一线程ioctl整体失败（负errno）时，返回首个错误码，不得被后续成功线程的返回值0覆盖 */
+TEST_F(MigrationTest, TestAggregateSubThreadRetKeepsFirstHardError)
+{
+    struct SubMigrateCtx subs[4] = {};
+    subs[0].ret = -EAGAIN;
+    subs[1].ret = 0;
+    subs[2].ret = -ENOMEM;
+    subs[3].ret = 0;
+
+    EXPECT_EQ(-EAGAIN, AggregateSubThreadRet(subs, 4));
+}
+
+/* 全部ioctl成功时返回0；部分失败页数（正值）不进入返回值 */
+TEST_F(MigrationTest, TestAggregateSubThreadRetAllSuccessReturnsZero)
+{
+    struct SubMigrateCtx subs[4] = {};
+    subs[0].ret = 0;
+    subs[1].ret = 5;
+    subs[2].ret = 3;
+    subs[3].ret = 0;
+
+    EXPECT_EQ(0, AggregateSubThreadRet(subs, 4));
+}
+
+/* 硬错误不得被正值（部分失败页数）覆盖 */
+TEST_F(MigrationTest, TestAggregateSubThreadRetHardErrorNotMasked)
+{
+    struct SubMigrateCtx subs[3] = {};
+    subs[0].ret = -EAGAIN;
+    subs[1].ret = 5;
+    subs[2].ret = 0;
+
+    EXPECT_EQ(-EAGAIN, AggregateSubThreadRet(subs, 3));
+}
+
+/* 回归：ioctl整体失败的线程内核不回填统计字段（保持初始值0），
+ * 聚合时必须将其页面数计入failedIsolatedNr，不得虚报为成功数 */
+TEST_F(MigrationTest, TestAggregateSubMigResultsFailedThreadCounted)
+{
+    struct MigList origList = {};
+    struct MigrateMsg mMsg = {.cnt = 1, .migList = &origList};
+    struct SubMigrateCtx subs[4] = {};
+    struct MigList subLists[4] = {};
+    int origIdx[4] = {0, 0, 0, 0};
+
+    origList.nr = 64;
+    /* 线程0/1：ioctl整体失败，子条目保持初始值 */
+    subs[0].ret = -EAGAIN;
+    subs[1].ret = -EAGAIN;
+    /* 线程2/3：成功，内核回填真实统计 */
+    subs[2].ret = 0;
+    subs[3].ret = 0;
+    for (int i = 0; i < 4; i++) {
+        subs[i].msg.cnt = 1;
+        subs[i].msg.migList = &subLists[i];
+        subs[i].origIdx = &origIdx[i];
+        subLists[i].nr = 16;
+    }
+    subLists[2].failedMigNr = 1;
+    subLists[2].failedIsolatedNr = 2;
+    subLists[2].successToUser = true;
+    subLists[3].successToUser = true;
+
+    AggregateSubMigResults(subs, 4, &mMsg);
+
+    /* 失败线程16+16全部计为隔离失败，成功线程的内核统计正常合并：
+     * 有效成功页 = 64 - 1 - 34 = 29，与线程2(13)+线程3(16)一致 */
+    EXPECT_EQ((uint64_t)34, origList.failedIsolatedNr);
+    EXPECT_EQ((uint64_t)1, origList.failedMigNr);
+    EXPECT_TRUE(origList.successToUser);
+}
+
+/* 回归：多线程迁移整体失败时，DoMigration返回负值且全部页面计入隔离失败，
+ * 不得出现 nr - 0 - 0 的假成功计数（fd非法时ioctl必然失败） */
+TEST_F(MigrationTest, TestDoMigrationMultiThreadFailAllAccounted)
+{
+    struct MigList migList = {};
+    struct MigrateMsg mMsg = {.cnt = 1, .migList = &migList};
+    struct ProcessManager manager;
+
+    memset(&manager, 0, sizeof(manager));
+    migList.pid = 1;
+    migList.from = 0;
+    migList.to = 1;
+    /* 64 > LESS_MIG_OUT_HUGE_PAGE_THRE(40) 且 <= MORE_MIG_OUT_HUGE_PAGE_THRE(400)，走4线程 */
+    migList.nr = 64;
+    migList.addr = (uint64_t *)malloc(sizeof(uint64_t) * migList.nr);
+    for (uint64_t i = 0; i < migList.nr; i++) {
+        migList.addr[i] = i;
+    }
+    mMsg.pageSize = PAGESIZE_2M;
+
+    MOCKER(GetHugePageSize).stubs().will(returnValue((uint32_t)PAGESIZE_2M));
+
+    int ret = DoMigration(&mMsg, &manager);
+    EXPECT_LT(ret, 0);
+    EXPECT_EQ((uint64_t)64, migList.failedIsolatedNr);
+    EXPECT_EQ((uint64_t)0, migList.failedMigNr);
 }
 
 extern "C" int InitMigrateMsg(struct MigrateMsg *mMsg, struct ProcessManager *manager);
