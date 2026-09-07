@@ -158,7 +158,7 @@ static int MigratePidFromToL2(pid_t pid, int nrLocalNuma, int destNid, uint64_t 
         free(addrs);
         free(nodes);
         free(status);
-        (void)pclose(fp);
+        (void)fclose(fp);
         SMAP_LOGGER_ERROR("malloc batch arrays failed, pid %d.", pid);
         return -ENOMEM;
     }
@@ -215,7 +215,7 @@ static int MigratePidFromToL2(pid_t pid, int nrLocalNuma, int destNid, uint64_t 
         movedCnt += batchMoved;
         *pageBudget -= (batchMoved > *pageBudget) ? *pageBudget : batchMoved; /* 扣减预算 */
     }
-    if (pclose(fp)) {
+    if (fclose(fp)) {
         SMAP_LOGGER_WARNING("Close numa_maps failed, pid=%d.", pid);
     }
     free(addrs);

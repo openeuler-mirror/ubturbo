@@ -6,9 +6,9 @@ UBTurbo 是面向单节点（openEuler Linux / aarch64）的节点内资源管�
 
 1. **节点内信任**：UBTurbo 仅在单机节点内运行，对外通信完全基于 Unix Domain Socket（UDS），**不监听任何网络端口、不提供 TLS 加密通道、不实现基于角色的访问控制（RBAC）**。调用方（本机进程）默认被视为可信主体，可信前提是：调用进程的执行用户已被加入 `ubturbo` 用户组。
 
-2. **职责分层信任**：UBTurbo 将"内存冷热识别与迁移"这一高风险特权操作下沉到 SMAP 内核态驱动完成，用户态守护进程 `ub_turbo_exec` 自身以**普通系统账户 `ubturbo`** 运行，不持有 `CAP_SYS_ADMIN` 等高阶能力（`AmbientCapabilities` 为空）。内核态驱动以 root 身份加载并创建设备文件后，通过 udev 规则将设备属主移交 `ubturbo:ubturbo` 并收紧为 `0600`，用户态仅持有"已降权设备"的访问句柄。
+2. **职责分层信任**：UBTurbo 将"内存冷热识别与迁移"这一高风险特权操作下沉到 SMAP 内核态驱动完成，用户态守护进程 `ub_turbo_exec` 自身以**普通系统账户 `ubturbo`** 运行，仅持有读取 `/proc` 所需的两项低阶能力（`CAP_DAC_READ_SEARCH`、`CAP_SYS_PTRACE`），不持有 `CAP_SYS_ADMIN` 等高阶能力。内核态驱动以 root 身份加载并创建设备文件后，通过 udev 规则将设备属主移交 `ubturbo:ubturbo` 并收紧为 `0600`，用户态仅持有"已降权设备"的访问句柄。
 
-3. **唯一提权点**：UBTurbo 需读取受保护进程的 `/proc/<pid>/*` 信息用于迁移决策，该操作受 Linux `/proc` 默认权限约束。为此引入了一个**受控的提权脚本** `cat.sh`，以 `sudo` 方式被 SMAP 用户态库调用，是整个系统唯一的权限提升通道，且对入参做了严格白名单约束。
+3. **最小能力授权**：UBTurbo 需读取受保护进程的 `/proc/<pid>/*` 信息用于迁移决策，该操作受 Linux `/proc` 默认权限约束。为此由 systemd 授予两项最小能力（`CAP_DAC_READ_SEARCH` 绕过 DAC 读取其他 uid 拥有的 `/proc/<pid>/*`、`CAP_SYS_PTRACE` 绕过 ptrace 访问校验），守护进程启动时再由进程内安全模块将能力收敛到该最小集，随后**进程内直读 `/proc`**——不使用 `sudo`、不依赖任何辅助脚本。
 
 4. **可信边界之外**：节点之外的网络实体、非 `ubturbo` 组的本地用户、未登记在准入白名单中的插件 `.so`，均处于可信边界之外，不具备任何可直接触达 UBTurbo 服务的入口。
 
@@ -33,8 +33,8 @@ flowchart TB
             CONF["配置管理\nsection+key / SMAP 解析器"]
             LOG["异步日志\n/var/log/ubturbo"]
         end
-        subgraph 提权层["第 3 道：受控提权"]
-            CAT["sudo /usr/local/bin/cat.sh\nPID 数字校验 + 文件名白名单"]
+        subgraph 提权层["第 3 道：能力最小化的 /proc 直读"]
+            CAP["进程内直读 /proc/<pid>/*\nCAP_DAC_READ_SEARCH + CAP_SYS_PTRACE"]
         end
         subgraph 内核层["第 4 道：内核态 SMAP 驱动（root 加载）"]
             DEV["设备文件 /dev/smap_*\nudev 规则 0600"]
@@ -48,25 +48,24 @@ flowchart TB
     SOCK --> IPC --> PLUGIN
     PLUGIN --> CONF
     PLUGIN --> LOG
-    PLUGIN -- libsmap.so 调用 --> CAT
+    PLUGIN -- 进程内直读 /proc --> CAP
     PLUGIN -- libsmap.so 调用 --> DEV
     DEV --> SHM
-    CAT -->|root:root 0500| CAT
 ```
 
-整体安全设计遵循"默认降权 + 最小暴露 + 受控提权 + 文件权限兜底"四原则：进程降权到普通账户、内核设备文件收紧到 `0600`、提权通道仅保留一个且做白名单校验、所有关键路径以文件系统权限作为最后防线。
+整体安全设计遵循"默认降权 + 最小暴露 + 能力最小化 + 文件权限兜底"四原则：进程降权到普通账户、内核设备文件收紧到 `0600`、仅授予读取 `/proc` 所需的两项能力并在进程内收敛、所有关键路径以文件系统权限作为最后防线。
 
 ## 最小权限原则
 
 UBTurbo 自始至终贯彻最小权限：
 
-1. **进程账户降权**：`ub_turbo_exec` 由 systemd 以 `User=ubturbo / Group=ubturbo` 启动，`AmbientCapabilities` 显式置空，不继承任何 Linux capability。`NoNewPrivileges=no` 仅为允许 `sudo cat.sh` 这一受控提权路径保留，不对守护进程自身放宽。
+1. **进程账户降权**：`ub_turbo_exec` 由 systemd 以 `User=ubturbo / Group=ubturbo` 启动，`AmbientCapabilities` 与 `CapabilityBoundingSet` 仅授予 `CAP_DAC_READ_SEARCH`、`CAP_SYS_PTRACE` 两项能力，不持有其他任何 capability；`NoNewPrivileges=yes` 杜绝运行期经由 execve 获取新特权。守护进程启动后由进程内安全模块（`TurboModuleSecurity`，位于模块初始化首位）经 `capget`/`capset` 将 permitted+effective 能力进一步收敛到该最小集。
 
 2. **设备属主移交**：内核模块以 root 加载后创建的字符设备文件，由 udev 规则 `99-smap.rules` 统一设置 `OWNER="ubturbo" GROUP="ubturbo" MODE="0600"`，仅属主可读写，组用户与其他用户均无任何权限。
 
 3. **配置与日志隔离**：配置目录 `/opt/ubturbo/conf` 权限 `700`、日志目录 `/var/log/ubturbo` 权限 `700`，仅 `ubturbo` 用户可进入；内部文件统一 `600`，杜绝同机其他用户窥探或篡改策略。
 
-4. **提权通道收敛**：所有需越过 `/proc` 默认权限的读取，统一收口到 `cat.sh` 一个脚本，且该脚本内置 PID 数字校验与文件名白名单（`numa_maps`/`smaps`/`status`/`maps`/`cmdline`/`environ`/`comm`），不暴露任意文件读取能力。
+4. **能力收敛**：所有需越过 `/proc` 默认权限的读取，仅依赖 `CAP_DAC_READ_SEARCH` + `CAP_SYS_PTRACE` 两项能力，由 systemd 授予并在进程内安全模块启动时收敛；读取路径固定为 `/proc/<pid>/{numa_maps,comm,cmdline}`，经 `fopen`/`GetFileInfo` 直读，不引入 shell、不拼接命令、不依赖辅助脚本，从根本上规避命令注入。
 
 5. **资源边界**：systemd 单元设置 `MemoryMax=30G`，对守护进程内存用量做上界约束，避免异常场景下的内存失控。
 
@@ -76,10 +75,9 @@ UBTurbo 体系内的可执行/库文件及其特权配置如下：
 
 | 程序/库 | 运行/属主 | 权限 | 特权来源 | 说明 |
 | :--- | :--- | :--- | :--- | :--- |
-| `ub_turbo_exec`（守护进程） | `ubturbo:ubturbo` | `500` | systemd `User=ubturbo` | 主守护进程，无 capability，负责加载插件、IPC、配置、日志。 |
+| `ub_turbo_exec`（守护进程） | `ubturbo:ubturbo` | `500` | systemd `User=ubturbo` + `AmbientCapabilities` | 主守护进程，仅持有 `CAP_DAC_READ_SEARCH`、`CAP_SYS_PTRACE` 两项能力（启动后进程内收敛），负责加载插件、IPC、配置、日志。 |
 | `libubturbo_client.so`（客户端 SDK） | `ubturbo:ubturbo` | `550` | 文件权限 | 外部进程经此库调用 UDS；需调用方用户属于 `ubturbo` 组方能访问 socket。 |
-| `libsmap.so`（SMAP 用户态库） | `ubturbo:ubturbo` | `0500` | 文件权限 | 守护进程通过 `dlopen` 加载，内部封装对内核设备与 `cat.sh` 的调用。 |
-| `cat.sh`（提权脚本） | `root:root` | `0500` | sudoers 规则 | 唯一提权点；`ubturbo` 用户经 sudo 执行，脚本自身做入参白名单校验。 |
+| `libsmap.so`（SMAP 用户态库） | `ubturbo:ubturbo` | `0500` | 文件权限 | 守护进程通过 `dlopen` 加载，内部封装对内核设备的调用与对 `/proc/<pid>/*` 的直读。 |
 | `*.ko`（SMAP 内核模块） | `ubturbo:ubturbo` | `0500` | 内核态 | 以 root 加载到内核，运行于内核态，用户态仅经设备文件交互。 |
 
 ## 文件与目录权限
@@ -99,7 +97,6 @@ UBTurbo 体系内的可执行/库文件及其特权配置如下：
 | `/var/log/ubturbo` | `700` | `ubturbo:ubturbo` | 日志目录。 |
 | `/var/log/ubturbo/*` | `600` | `ubturbo:ubturbo` | 各日志文件。 |
 | `/usr/lib64/libubturbo_client.so` | `550` | `ubturbo:ubturbo` | 对外客户端 SDK。 |
-| `/usr/local/bin/cat.sh` | `0500` | `root:root` | 提权脚本，仅 root 可读写执行。 |
 | `/etc/systemd/system/ubturbo.service` | `644` | `root:root` | systemd 单元文件。 |
 
 ### SMAP 内核组件（`ubturbo-smap` 组件）
@@ -135,10 +132,10 @@ UBTurbo 对外的可触达暴露面逐一收敛如下：
    - 配置目录 `700`、文件 `600`，仅 `ubturbo` 用户可读写。SMAP 运行期共享配置 `/dev/shm/smap_config` 同样为 `0600`，避免同机其他进程窥探或篡改迁移策略。
    - 配置项读取时对取值做范围校验，越界值统一重置为默认值（详见《UBTurbo 配置说明》），不因畸形配置触发未定义行为。
 
-4. **`/proc` 读取暴露面（提权通道）**
-   - 提权脚本 `cat.sh` 入参双重校验：`PID` 必须匹配 `^[0-9]+$`，文件名必须在白名单 `{"numa_maps","smaps","status","maps","cmdline","environ","comm"}` 内，二者任一不满足即拒绝执行。
-   - 最终调用 `/usr/bin/cat`，不引入 shell 解释、不接受通配、不拼接命令，规避命令注入。
-   - 该脚本固定路径 `/usr/local/bin/cat.sh`，属主 `root:root`，权限 `0500`，仅 root 可改写；`ubturbo` 用户经 sudoers 规则以 `root` 身份执行该固定脚本，sudoers 不开放其他命令。
+4. **`/proc` 读取暴露面（能力授权）**
+   - 读取受保护进程的 `/proc/<pid>/*` 仅依赖两项能力：`CAP_DAC_READ_SEARCH`（绕过 DAC 读取其他 uid 拥有的 `0400` 文件）与 `CAP_SYS_PTRACE`（绕过 ptrace 访问校验），由 systemd `AmbientCapabilities`/`CapabilityBoundingSet` 授予，`CapabilityBoundingSet` 将能力上界锁定为这两项，运行期无法扩充。
+   - 守护进程启动时由进程内安全模块经 `capget`/`capset` 将 permitted+effective 收敛到该最小集；读取经 `fopen`/`GetFileInfo` 直读固定路径 `/proc/<pid>/{numa_maps,comm,cmdline}`，不引入 shell、不拼接命令、不依赖 `sudo` 或辅助脚本，从根本上规避命令注入。
+   - `NoNewPrivileges=yes` 确保运行期任何 execve（如 `system("tar")`、`popen("numastat")` 等非特权程序）都不会获得额外权限。
 
 5. **内核设备暴露面**
    - 所有 SMAP 字符设备经 udev 统一收敛为 `0600`，仅 `ubturbo` 用户可访问；其他本地用户与组用户均无权限。
@@ -168,13 +165,13 @@ UBTurbo 体系内各主体间的通信关系如下：
 | 守护进程/插件 ↔ SMAP 内核 | 字符设备 `ioctl` | `/dev/smap_*`、`/dev/ucache` | 设备文件权限 `0600` | — | 经 udev 设置属主为 `ubturbo`，仅属主可访问。 |
 | 守护进程 ↔ 配置 | 文件读 | `/opt/ubturbo/conf/*` | 目录 `700` / 文件 `600` | — | 启动与周期性读取。 |
 | 守护进程 ↔ 日志 | 文件写 | `/var/log/ubturbo/*` | 目录 `700` / 文件 `600` | — | 异态环形缓冲写入。 |
-| 守护进程 ↔ systemd | D-Bus / 进程管理 | `/etc/systemd/system/ubturbo.service` | root | — | 服务自启动、重启、资源约束。 |
+| 守护进程 ↔ systemd | D-Bus / 进程管理 | `/etc/systemd/system/ubturbo.service` | root | — | 服务自启动、重启、资源约束与能力（capability）授予。 |
 
 ## 系统账号
 
 | 账号 | 类型 | shell | 用途 | 创建方式 |
 | :--- | :--- | :--- | :--- | :--- |
-| `ubturbo` | 系统账户（服务账户） | `/sbin/nologin` | 守护进程运行身份、内核设备属主、IPC socket 属主、`cat.sh` sudo 调用方 | `ubturbo-rmrs` RPM 安装时创建 |
-| `root` | 系统账户 | — | 内核模块加载、`cat.sh` 实际执行身份、systemd 单元管理 | 系统默认 |
+| `ubturbo` | 系统账户（服务账户） | `/sbin/nologin` | 守护进程运行身份、内核设备属主、IPC socket 属主、`CAP_DAC_READ_SEARCH`/`CAP_SYS_PTRACE` 能力持有者 | `ubturbo-rmrs` RPM 安装时创建 |
+| `root` | 系统账户 | — | 内核模块加载、systemd 单元管理与能力授予 | 系统默认 |
 
-`ubturbo` 账户不可交互登录，仅服务于 UBTurbo 进程；其权限边界由文件系统权限、udev 规则、sudoers 规则共同界定，不持有任何 Linux capability。任何需要调用 UBTurbo 的本机用户，经管理员加入 `ubturbo` 组即可获得 IPC 访问权限，无需额外凭证。
+`ubturbo` 账户不可交互登录，仅服务于 UBTurbo 进程；其权限边界由文件系统权限、udev 规则、systemd 能力配置共同界定，仅持有读取 `/proc` 所需的 `CAP_DAC_READ_SEARCH`、`CAP_SYS_PTRACE` 两项能力（且经进程内安全模块收敛），不再依赖 sudoers。任何需要调用 UBTurbo 的本机用户，经管理员加入 `ubturbo` 组即可获得 IPC 访问权限，无需额外凭证。

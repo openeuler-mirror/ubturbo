@@ -404,15 +404,15 @@ bool PidIsValid(pid_t pid)
 int GetPidTypeFromComm(pid_t pid)
 {
     char comm[BUFFER_SIZE];
-    char cmdBuf[BUFFER_SIZE];
-    int ret = snprintf_s(cmdBuf, sizeof(cmdBuf), sizeof(cmdBuf) - 1, "%s %d comm %s", CAT_SCRIPT_CAT_PATH, pid,
-                         CAT_SCRIPT_TAIL);
+    char path[BUFFER_SIZE];
+    int ret = snprintf_s(path, sizeof(path), sizeof(path) - 1, "/proc/%d/comm", pid);
     if (ret < 0) {
-        SMAP_LOGGER_ERROR("Failed to generate cmd string, ret is %d.", ret);
+        SMAP_LOGGER_ERROR("Failed to generate comm path, ret is %d.", ret);
         return -EINVAL;
     }
     SMAP_LOGGER_INFO("Before open comm file");
-    FILE *file = popen(cmdBuf, "r");
+    /* 进程内直读 /proc/<pid>/comm，依赖 CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE，不再经 sudo cat.sh */
+    FILE *file = fopen(path, "r");
     if (!file) {
         SMAP_LOGGER_ERROR("Failed to open file, errno is %d.", errno);
         return -EINVAL;
@@ -422,12 +422,12 @@ int GetPidTypeFromComm(pid_t pid)
         foundLine = true;
         if ((strncmp(comm, VM_NAME_STR, PID_NAME_LEN) == 0) ||
             (strncmp(comm, VM_KVM_NAME_STR, PID_KVM_NAME_LEN) == 0)) {
-            pclose(file);
+            fclose(file);
             return VM_TYPE;
         }
     }
     SMAP_LOGGER_ERROR("Error occur in fgets comm file");
-    (void)pclose(file);
+    (void)fclose(file);
     if (foundLine) {
         return PROCESS_TYPE;
     }
@@ -762,30 +762,24 @@ ProcessAttr *GetProcessAttr(pid_t pid)
 
 int ReadCmdlineByPid(pid_t pid, char *buf, int len)
 {
-    char cmdBuf[BUFFER_SIZE];
-    char skip[BUFFER_SIZE];
-    int ret = snprintf_s(cmdBuf, sizeof(cmdBuf), sizeof(cmdBuf) - 1, "%s %d cmdline %s", CAT_SCRIPT_CAT_PATH, pid,
-                         CAT_SCRIPT_TAIL);
+    char path[BUFFER_SIZE];
+    int ret = snprintf_s(path, sizeof(path), sizeof(path) - 1, "/proc/%d/cmdline", pid);
     if (ret < 0) {
-        SMAP_LOGGER_ERROR("Make pid %d cmdline cmd error.", pid);
+        SMAP_LOGGER_ERROR("Make pid %d cmdline path error.", pid);
         return -EINVAL;
     }
-    FILE *file = popen(cmdBuf, "r");
+    /* 进程内直读 /proc/<pid>/cmdline，依赖 CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE，不再经 sudo cat.sh */
+    FILE *file = fopen(path, "r");
     if (file == NULL) {
         SMAP_LOGGER_ERROR("Open pid %d cmdline error: %d.", pid, errno);
         return -errno;
     }
-    if (fgets(skip, sizeof(skip), file) == NULL) {
-        (void)pclose(file);
-        SMAP_LOGGER_ERROR("Read pid %d cmdline skip-line failed.", pid);
-        return -EIO;
-    }
     if (fgets(buf, len, file) == NULL) {
-        (void)pclose(file);
+        (void)fclose(file);
         SMAP_LOGGER_ERROR("Read pid %d cmdline content failed.", pid);
         return -EIO;
     }
-    (void)pclose(file);
+    (void)fclose(file);
     /* /proc/<pid>/cmdline 不受 4096 字节限制: 大虚机参数可能更长。缓冲填满说明被截断,
      * share 标志可能落在窗口外导致误判 PRIVATE。保守返回错误, 由 ParseMmapType 置 SHARED。 */
     if (strlen(buf) >= (size_t)len - 1) {
@@ -1115,14 +1109,14 @@ int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap)
 
 FILE *OpenNumaMaps(pid_t pid)
 {
-    char cmdBuf[BUFFER_SIZE];
-    int ret = snprintf_s(cmdBuf, sizeof(cmdBuf), sizeof(cmdBuf) - 1, "%s %d numa_maps %s", CAT_SCRIPT_CAT_PATH, pid,
-                         CAT_SCRIPT_TAIL);
+    char path[BUFFER_SIZE];
+    int ret = snprintf_s(path, sizeof(path), sizeof(path) - 1, "/proc/%d/numa_maps", pid);
     if (ret < 0) {
         SMAP_LOGGER_ERROR("OpenNumaMaps for pid %d err.", pid);
         return NULL;
     }
-    FILE *fp = popen(cmdBuf, "r");
+    /* 进程内直读 /proc/<pid>/numa_maps，依赖 CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE，不再经 sudo cat.sh */
+    FILE *fp = fopen(path, "r");
     if (!fp) {
         SMAP_LOGGER_ERROR("OpenNumaMaps fopen failed: %d.", -errno);
     }
@@ -1177,7 +1171,7 @@ int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool o
             break;
         }
     }
-    if (pclose(fp)) {
+    if (fclose(fp)) {
         SMAP_LOGGER_WARNING("Close numa maps failed, pid=%d.", pid);
     }
     return ret;
@@ -1193,11 +1187,11 @@ bool IsPidUsingHugePages(pid_t pid)
     }
     while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
         if (IsNumaMapLineHuge(line)) {
-            (void)pclose(fp);
+            (void)fclose(fp);
             return true;
         }
     }
-    if (pclose(fp)) {
+    if (fclose(fp)) {
         SMAP_LOGGER_WARNING("Close numa maps failed when probing page type, pid=%d.", pid);
     }
     return false;
@@ -1250,7 +1244,7 @@ int GetProcessNumaMapsObservation(pid_t pid, bool hugeFlag, uint32_t *residentLo
         }
         SetLocalByNumaMaps(line, residentLocalMask, hugeFlag);
     }
-    if (pclose(fp)) {
+    if (fclose(fp)) {
         SMAP_LOGGER_WARNING("Close numa maps failed, pid=%d.", pid);
     }
     return ret;

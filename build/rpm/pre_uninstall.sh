@@ -126,6 +126,9 @@ stop_and_disable_service "ubturbo.service"
 # 卸载服务文件
 uninstall_service
 
+# 清理历史遗留的提权脚本（已改为 capability 方案，不再需要 cat.sh）
+remove_file_if_exists "/usr/local/bin/cat.sh"
+
 log_message "INFO" "======================"
 log_message "INFO" "pre_uninstall.sh ended"
 log_message "INFO" "======================"

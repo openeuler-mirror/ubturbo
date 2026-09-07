@@ -32,7 +32,7 @@ protected:
 /*
  * mockcpp 在 aarch64 上连续 mock 同一函数后恢复不稳定（函数入口点 jmp 覆写后恢复失败）。
  * 因此不在 UT 中直接 mock MigratePidFromToL2/SmapMovePages 等同一二进制内的内部函数，
- * 改为 mock 它们调用的外部接口（OpenNumaMaps → pclose、malloc/free 通过 libc PLT 可靠拦截），
+ * 改为 mock 它们调用的外部接口（OpenNumaMaps → fclose、malloc/free 通过 libc PLT 可靠拦截），
  * 让 MigratePidFromToL2 走真实内部逻辑。
  *
  * 真实 securec/string 已链接进 smap_dt，snprintf_s/sscanf_s/strstr/strtoull 跑真实。
@@ -98,10 +98,10 @@ TEST_F(OomMigrateTest, TestMigratePidFromToL2_OpenFail)
 }
 
 /* 预算为 0：不进迁移循环，返回 0。
- * OpenNumaMaps 返回 fakeFile，但 pclose(fakeFile) 会崩溃，故 mock pclose。
+ * OpenNumaMaps 返回 fakeFile，但 fclose(fakeFile) 会崩溃，故 mock fclose。
  * CollectVaddrsBatch 内的 fgets 读 fakeFile 返回空 → 无候选 → while 不进入。
  */
-extern "C" int pclose(FILE *stream);
+extern "C" int fclose(FILE *__stream);
 
 /* fgets mock：返回 NULL 表示 EOF，防止真实 fgets 对 fake FILE* 崩溃。
  * aarch64 mockcpp mock fgets 在 .stubs().will(returnValue(nullptr)) 模式下不涉及 char[] 类型退化问题。 */
@@ -113,7 +113,7 @@ TEST_F(OomMigrateTest, TestMigratePidFromToL2_ZeroBudget)
     static FILE fakeFile;
     MOCKER(OpenNumaMaps).stubs().will(returnValue(&fakeFile));
     MOCKER(fgets).stubs().will(returnValue(static_cast<char *>(nullptr)));
-    MOCKER(pclose).stubs().will(returnValue(0));
+    MOCKER(fclose).stubs().will(returnValue(0));
     MOCKER(SmapMovePages).expects(never());
     uint64_t budget = 0;
     int ret = MigratePidFromToL2(123, 2, 2, 4096, &budget);
@@ -127,7 +127,7 @@ TEST_F(OomMigrateTest, TestMigratePidFromToL2_NoAddrs)
     static FILE fakeFile;
     MOCKER(OpenNumaMaps).stubs().will(returnValue(&fakeFile));
     MOCKER(fgets).stubs().will(returnValue(static_cast<char *>(nullptr)));
-    MOCKER(pclose).stubs().will(returnValue(0));
+    MOCKER(fclose).stubs().will(returnValue(0));
     MOCKER(SmapMovePages).expects(never());
     uint64_t budget = 100;
     int ret = MigratePidFromToL2(123, 2, 2, 4096, &budget);

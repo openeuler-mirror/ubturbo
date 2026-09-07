@@ -171,24 +171,6 @@ copy_client_so() {
     fi
 }
 
-# 控制cat.sh脚本的权限
-chmod_cat_sh() {
-    local source_sh_file="/opt/ubturbo/bin/cat.sh"
-    local installed_sh_file="/usr/local/bin/cat.sh"
- 
-    cp "$source_sh_file" "$installed_sh_file" || handle_error "Failed to copy so file"
-    log_message "INFO" "Smap so file copied to $installed_sh_file"
- 
-    # 删除源文件
-    if [ -f "$source_sh_file" ]; then
-        rm -f "$source_sh_file" || handle_error "Failed to remove source $source_sh_file"
-        log_message "INFO" "Removed source $source_sh_file"
-    fi
-
-    chmod 500 "$installed_sh_file" || handle_error "Failed to set permissions for $installed_sh_file"
-    chown "$ROOT_USER:$ROOT_GROUP" "$installed_sh_file" || handle_error "Failed to set ownership for directory $installed_sh_file"
-}
-
 # 重新加载 systemd，这里只是让 systemd 重刷文件，不会影响运行的服务
 reload_systemd() {
     systemctl daemon-reload || handle_error "Failed to reload systemd"
@@ -211,7 +193,6 @@ main() {
     ensure_directory_owner "$PROGRAM_DIR" true
     # 权限控制
     ensure_permission
-    chmod_cat_sh
 
     # 将程序设为开机自启动
     systemctl enable ubturbo.service

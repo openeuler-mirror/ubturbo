@@ -17,9 +17,9 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 
 #### 前提条件
 
-* 安装前先创建ubturbo用户和用户组，配置免密登录，命令如下。
+* 安装前先创建ubturbo用户和用户组，命令如下。
 
-  <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen580884719598"><p class="p" id="p1395174862716">groupadd -r ubturbo</p><p class="p" id="p179511848102716">useradd -r -g ubturbo -s /sbin/nologin ubturbo</p><p class="p" id="p1095194882719">touch /etc/sudoers.d/ubturbo</p><p class="p" id="p17951104832720">echo "ubturbo ALL=(root) NOPASSWD:/user/local/bin/cat.sh" > /etc/sudoers.d/ubturbo</p></pre>
+  <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen580884719598"><p class="p" id="p1395174862716">groupadd -r ubturbo</p><p class="p" id="p179511848102716">useradd -r -g ubturbo -s /sbin/nologin ubturbo</p></pre>
 
 * 当前部署环境需开启ACPI，并提前安装好obmm、URMA、libvirt库和numactl库。执行以下命令关闭numa\_balancing和透明大页。
   
