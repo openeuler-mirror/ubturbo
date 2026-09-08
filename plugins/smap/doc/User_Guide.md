@@ -37,33 +37,16 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
    
    安装smap软件包。
    <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen5971151198"><p class="p" id="p39578483278">rpm -ivh smap-x.x.x-x.oe2403sp1.aarch64.rpm</p></pre>
-2. 载入扫描驱动。
-   
-   <pre class="screen" id="screen8274308918"><p class="p" id="p1958548202716">cd /lib/modules/smap</p><p class="p" id="p295820488271">insmod smap_tracking_core.ko</p></pre>
-   
-   
-   * 安装smap_histogram_tracking.ko。
-     
-     <pre class="screen" id="screen1810215131197"><p class="p" id="p995994814275">insmod smap_histogram_tracking.ko</p></pre>
-   * 安装smap_access_tracking.ko。在UB仿真中安装时，如使能SMAP硬件判热功能，则增加enable_hist=1参数。
-     
-     <pre class="screen"><p class="p" id="p8959848192712">insmod smap_access_tracking.ko</p></pre>
-3. 检查扫描驱动是否载入成功。
-   
-   <pre class="screen" id="screen1884674894220"><p class="p" id="p9960648142719">lsmod | grep tracking</p></pre>
-   
-   * 在环境能查询到插入的3个ko，则表示载入成功，示例如下：
-     
-     <pre class="screen" id="screen81169214579"><p class="p" id="p179602488279">[root@controller ~]# lsmod | grep tracking</p><p class="p" id="p15960174814274">smap_access_tracking         65536  0</p><p class="p" id="p1696084810278">smap_histogram_tracking      28672  1 access_tracking</p><p class="p" id="p179602488279">smap_tracking_core           28672  1 smap_access_tracking</p></pre>
+2. 载入SMAP内核模块。硬件判热场景在加载时增加`enable_hist=1`（仅鲲鹏950机型支持）；该参数为0时不初始化直方图子系统。
+
+   <pre class="screen" id="screen8274308918"><p class="p" id="p1958548202716">cd /lib/modules/smap</p><p class="p" id="p295820488271">insmod smap.ko</p></pre>
+
+3. 检查模块是否载入成功。
+
+   <pre class="screen" id="screen1884674894220"><p class="p" id="p9960648142719">lsmod | grep '^smap'</p></pre>
+
+   * 查询到`smap`模块即表示载入成功。
 4. 虚拟化场景需安装qemu-system-aarch64。
    
    <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen113013468319"><p class="p" id="p17961114816271">yum install qemu-system-aarch64 -y</p></pre>
-5. 进入以下目录，载入迁移驱动。
-   
-   <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen14933143815411"><p class="p" id="p8962164813273">cd /lib/modules/smap</p></pre>
-   
-   pageType（容器4K=0 / 虚拟化2M=1）由 ubturbo_smap_start(pageType) 下发，insmod 阶段不再通过参数区分场景。
-   <pre class="screen"><p class="p" id="p4962648122720">insmod smap_tiering.ko</p></pre>
-6. 检查迁移驱动是否载入成功，返回smap信息即表示安装成功。
-   
-   <pre class="screen"><p class="p" id="p20963104815273">lsmod | grep smap</p></pre>
+5. pageType（容器4K=0 / 虚拟化2M=1）由`ubturbo_smap_start(pageType)`下发，insmod阶段不再通过参数区分场景。SMAP仅创建`/dev/smap_scan_dev`和`/dev/smap_migrate_dev`两个主设备节点，均由udev配置为`ubturbo:ubturbo`、0600权限。

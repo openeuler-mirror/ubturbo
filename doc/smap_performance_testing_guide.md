@@ -355,7 +355,7 @@ echo 39495 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepa
 插SMAP ko时指定enable\_hist参数为0：
 
 ```shell
-insmod smap_access_tracking.ko enable_hist=0 smap_scene=2
+insmod smap.ko enable_hist=0
 ```
 
 MySQL的配置文件my.cnf的内容如下：

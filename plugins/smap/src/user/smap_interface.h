@@ -22,9 +22,6 @@ extern "C" {
 #endif
 
 #define MAX_NR_MIGRATE_ESCAPE 300
-#define MAX_NR_MIGBACK 50
-#define MAX_NR_MIGNUMA 50
-#define MAX_NR_REMOVE MAX_NR_MIGOUT
 #ifndef MAX_NR_GROUPED_MIGOUT
 #define MAX_NR_GROUPED_MIGOUT MAX_NR_MIGOUT
 #endif
@@ -48,9 +45,6 @@ extern "C" {
 #define DEFAULT_L2_NODE (-1)
 #define KB_PER_2MB 2048
 #define KB_PER_4KB 4
-#define MAX_SCAN_DURATION_SEC 300
-#define NON_EXIST_PID (-1)
-
 enum {
     SLEEP = 0,
     RUNNING = 1,

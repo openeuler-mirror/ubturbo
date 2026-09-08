@@ -101,17 +101,12 @@ int main()
 进入项目根目录执行下列命令来编译内核模块：
 
 ```shell
-make -C src/drivers -j
-cp drivers/Module.symvers  tiering/depends
-make -C src/tiering -j
+make -C src/kernel KERNEL_VERSION=openeuler -j$(nproc)
 ```
 
 编译成功后会生成以下文件:
 
-- src/drivers/smap_access_tracking.ko
-- src/drivers/smap_histogram_tracking.ko
-- src/drivers/smap_tracking_core.ko
-- src/tiering/smap_tiering.ko
+- src/kernel/smap.ko
 
 在项目根目录下执行下列命令来编译动态库:
 
@@ -126,14 +121,13 @@ sh build.sh
 
 ## Getting Started: Installation Guide
 
-SMAP的运行模式根据进程的页面大小, 分为4K模式和2M模式。模式由 ubturbo_smap_start(pageType) 入参控制（0=4K，1=2M），不再在插入ko时通过参数指定，与ko加载解耦，切换模式无需重插ko。smap_histogram_tracking.ko依赖硬件, 按实际需求插入。安装命令如下：
+SMAP的运行模式根据进程页面大小分为4K和2M模式，由`ubturbo_smap_start(pageType)`入参控制（0=4K，1=2M），无需重插模块切换。SMAP仅加载一个内核模块；硬件判热场景在加载时设置`enable_hist=1`（仅鲲鹏950机型支持）。安装命令如下：
 
     ```shell
-    insmod src/drivers/smap_tracking_core.ko
-    insmod src/drivers/smap_histogram_tracking.ko
-    insmod src/drivers/smap_access_tracking.ko
-    insmod src/tiering/smap_tiering.ko
+    insmod src/kernel/smap.ko
     ```
+
+加载后提供`/dev/smap_scan_dev`和`/dev/smap_migrate_dev`两个SMAP主设备节点，权限为`ubturbo:ubturbo`、0600。
 
 ## Getting Started: Test Guide
 
@@ -142,9 +136,9 @@ SMAP的运行模式根据进程的页面大小, 分为4K模式和2M模式。模�
 ```plaintext
 test/
 ├── depends/                # 内核态打桩代码目录
-├── drivers/                # 内核态扫描模块测试代码目录
+├── scan/                   # 内核态扫描模块测试代码目录
 ├── run_dt.sh               # 单元测试准备代码
-├── tiering/                # 内核态迁移模块测试代码目录
+├── migrate/                # 内核态迁移模块测试代码目录
 ├── user/                   # 用户态测试代码目录
 │   ├── advanced-strategy/  # 高阶策略测试代码目录
 │   ├── manage/             # 用户态管理模块测试代码目录

@@ -15,17 +15,12 @@
 SMAP编译需要环境上安装有openEuler 6.6.0-86.0.0.90.oe2403sp1.aarch64内核的kernel-devel包，进入项目根目录执行下列命令来编译内核模块：
 
 ```shell
-make -C src/drivers -j
-cp src/drivers/Module.symvers src/tiering/depends
-make -C src/tiering -j
+make -C src/kernel KERNEL_VERSION=openeuler -j$(nproc)
 ```
 
 编译成功后会生成以下文件:
 
-- src/drivers/smap_access_tracking.ko
-- src/drivers/smap_histogram_tracking.ko
-- src/drivers/smap_tracking_core.ko
-- src/tiering/smap_tiering.ko
+- src/kernel/smap.ko
 
 SMAP用户态代码编译有以下依赖：
 
@@ -45,22 +40,18 @@ sh build.sh
 
 ## Installation
 
-SMAP的运行模式根据进程的页面大小, 分为4K模式和2M模式。模式由 ubturbo_smap_start(pageType) 入参控制（0=4K，1=2M），不再在插入ko时通过参数指定，与ko加载解耦，切换模式无需重插ko。smap_histogram_tracking.ko依赖硬件, 按实际需求插入。安装命令如下：
+SMAP的运行模式根据进程页面大小分为4K和2M模式，由`ubturbo_smap_start(pageType)`入参控制（0=4K，1=2M），无需重插模块切换。SMAP仅加载一个内核模块；硬件判热场景在加载时设置`enable_hist=1`（仅鲲鹏950机型支持）。安装命令如下：
 
     ```shell
-    insmod src/drivers/smap_tracking_core.ko
-    insmod src/drivers/smap_histogram_tracking.ko
-    insmod src/drivers/smap_access_tracking.ko
-    insmod src/tiering/smap_tiering.ko
+    insmod src/kernel/smap.ko
     ```
 
-卸载时按以下顺序卸载，卸载前需要先停止UBTurbo服务或其它使用SMAP的进程：
+加载后提供`/dev/smap_scan_dev`和`/dev/smap_migrate_dev`两个SMAP主设备节点，权限为`ubturbo:ubturbo`、0600。
+
+卸载前需要先停止UBTurbo服务或其它使用SMAP的进程：
 
 ```shell
-rmmod smap_tiering
-rmmod smap_access_tracking
-rmmod smap_histogram_tracking
-rmmod smap_tracking_core
+rmmod smap
 ```
 
 # Motivation

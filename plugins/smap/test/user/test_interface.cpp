@@ -736,7 +736,7 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgAllowsZeroTargetOnDisabledRemote)
     EnvAtomicSet(&g_forbiddenNodes[4], 0);
 }
 
-extern "C" int IoctlHandler(const void *msg, int pidType, const unsigned long *ioctlCommands);
+extern "C" int IoctlHandler(int fd, const void *msg);
 extern "C" int PrepareMigrateOutCandidates(struct MigrateOutMsg *msg, int pidType, ProcessManageCandidate *candidates,
                                            uint32_t *nodeBitmap);
 extern "C" int TrackMigrateOutCandidates(ProcessManageCandidate *candidates, int count);
@@ -1894,38 +1894,27 @@ TEST_F(InterfaceTest, TestSmapStopOne)
 TEST_F(InterfaceTest, TestIoctlHandlerOne)
 {
     int ret;
-    const void *msg;
-    int pidType = 0;
-    const unsigned long *ioctlCommands;
+    const void *msg = nullptr;
 
-    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(-1));
-    ret = IoctlHandler(msg, pidType, ioctlCommands);
+    ret = IoctlHandler(-1, msg);
     EXPECT_EQ(-EBADF, ret);
 }
 
 TEST_F(InterfaceTest, TestIoctlHandlerTwo)
 {
     int ret;
-    const void *msg;
-    int pidType = 0;
-    const unsigned long *ioctlCommands;
-    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(0));
+    const void *msg = nullptr;
     MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
-    MOCKER(close).stubs().will(ignoreReturnValue());
-    ret = IoctlHandler(msg, pidType, ioctlCommands);
+    ret = IoctlHandler(0, msg);
     EXPECT_EQ(0, ret);
 }
 
 TEST_F(InterfaceTest, TestIoctlHandlerThree)
 {
     int ret;
-    const void *msg;
-    int pidType = 0;
-    const unsigned long *ioctlCommands;
-    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(0));
+    const void *msg = nullptr;
     MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-1));
-    MOCKER(close).stubs().will(ignoreReturnValue());
-    ret = IoctlHandler(msg, pidType, ioctlCommands);
+    ret = IoctlHandler(0, msg);
     EXPECT_EQ(-EBADF, ret);
 }
 
@@ -4334,9 +4323,8 @@ TEST_F(InterfaceTest, TestIsPidArrValidDuplicatePid)
 TEST_F(InterfaceTest, TestIoctlHandlerOpenFailed)
 {
     int ret;
-    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(-1));
     struct MigrateBackMsg msg = {};
-    ret = IoctlHandler(&msg, 0, nullptr);
+    ret = IoctlHandler(-1, &msg);
     EXPECT_EQ(-EBADF, ret);
 }
 
@@ -4344,9 +4332,8 @@ TEST_F(InterfaceTest, TestIoctlHandlerIoctlFailed)
 {
     int ret;
     struct MigrateBackMsg msg = {};
-    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(10));
     MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-1));
-    ret = IoctlHandler(&msg, 0, nullptr);
+    ret = IoctlHandler(0, &msg);
     EXPECT_EQ(-EBADF, ret);
 }
 
@@ -4354,9 +4341,8 @@ TEST_F(InterfaceTest, TestIoctlHandlerSuccess)
 {
     int ret;
     struct MigrateBackMsg msg = {};
-    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(10));
     MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
-    ret = IoctlHandler(&msg, 0, nullptr);
+    ret = IoctlHandler(0, &msg);
     EXPECT_EQ(0, ret);
 }
 

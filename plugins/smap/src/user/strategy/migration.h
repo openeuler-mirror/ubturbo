@@ -23,7 +23,6 @@
 #define MORE_THREAD_MIG_OUT 8
 #define LESS_MIG_OUT_HUGE_PAGE_THRE 40
 #define MORE_MIG_OUT_HUGE_PAGE_THRE 400
-#define MAX_PER_PID_MIG_LIST_COUNT 8
 #define REMOTE_MIG_FAIL 92
 
 int AddMigList(struct MigrateMsg *mMsg, struct MigList *mList);

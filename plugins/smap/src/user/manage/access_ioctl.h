@@ -16,9 +16,10 @@
 #include <sys/ioctl.h>
 #include <linux/types.h>
 
+#include "common.h"
 #include "manage.h"
 
-#define ACCESS_DEVICE "/dev/smap_access_device"
+#define ACCESS_DEVICE "/dev/smap_scan_dev"
 #define MAX_NR_PID MAX_NR_MIGOUT
 
 struct AccessAddPidPayload {
@@ -67,7 +68,6 @@ struct SmapScanCpuRange {
     uint32_t cpuMax;
 };
 
-#define SMAP_ACCESS_MAGIC 0xBB
 #define SMAP_ACCESS_ADD_PID _IOW(SMAP_ACCESS_MAGIC, 1, struct AccessAddPidMsg)
 #define SMAP_ACCESS_REMOVE_PID _IOW(SMAP_ACCESS_MAGIC, 2, struct AccessRemovePidMsg)
 #define SMAP_ACCESS_REMOVE_ALL_PID _IOW(SMAP_ACCESS_MAGIC, 3, int)

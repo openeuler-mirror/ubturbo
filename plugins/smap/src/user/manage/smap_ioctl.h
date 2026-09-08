@@ -16,6 +16,7 @@
 
 #include <sys/ioctl.h>
 #include <stdint.h>
+#include "common.h"
 #include "numa_nodes.h"
 
 /*
@@ -24,15 +25,9 @@
  * arg 1->Tracking enable
  */
 
-#define SMAP_DEVICE "/dev/smap_device"
+#define SMAP_IOCTL_TRACKING_CMD _IOW(SMAP_ACCESS_MAGIC, 0, unsigned long)
 
-#define SMAP_IOCTL_TRACKING_CMD _IOW('N', 0, unsigned long)
-
-#define SMAP_IOCTL_MAP_MODE_CMD _IOW('N', 2, unsigned long)
-
-#define SMAP_IOCTL_GET_SIZE_CMD _IOR('N', 3, unsigned long)
-
-#define SMAP_IOCTL_PAGE_SIZE_SET_CMD _IOW('N', 4, unsigned long)
+#define SMAP_IOCTL_PAGE_SIZE_SET_CMD _IOW(SMAP_ACCESS_MAGIC, 10, unsigned long)
 
 struct NumaUbFluxMb {
     int numaId;
@@ -45,22 +40,22 @@ struct UbFluxMbStatistic {
     struct NumaUbFluxMb flux[REMOTE_NUMA_NUM];
 };
 
-#define SMAP_IOCTL_UB_WATCH_CMD _IOR('N', 5, struct UbFluxMbStatistic)
+#define SMAP_IOCTL_UB_WATCH_CMD _IOR(SMAP_ACCESS_MAGIC, 11, struct UbFluxMbStatistic)
 
 struct UbWatchConfig {
     uint32_t durationMs;
 };
 
-#define SMAP_IOCTL_UB_WATCH_CONFIG_CMD _IOW('N', 6, struct UbWatchConfig)
+#define SMAP_IOCTL_UB_WATCH_CONFIG_CMD _IOW(SMAP_ACCESS_MAGIC, 12, struct UbWatchConfig)
 
-#define SMAP_MIG_MAGIC 0xB9
-#define SMAP_MIG_MIGRATE _IOW(SMAP_MIG_MAGIC, 0, struct MigrateMsg)
-#define SMAP_SET_PAGETYPE _IOW(SMAP_MIG_MAGIC, 1, uint32_t)
-#define SMAP_MIG_MIGRATE_NUMA _IOW(SMAP_MIG_MAGIC, 2, struct MigrateNumaIoctlMsg)
-#define SMAP_MIG_PID_REMOTE_NUMA _IOW(SMAP_MIG_MAGIC, 3, struct MigPidRemoteNumaIoctlMsg)
-#define SMAP_SET_UB_DMA_AVAIL _IOW(SMAP_MIG_MAGIC, 4, unsigned int)
+#define SMAP_MIG_MIGRATE _IOW(SMAP_MIGRATE_MAGIC, 0, struct MigrateMsg)
+#define SMAP_SET_PAGETYPE _IOW(SMAP_MIGRATE_MAGIC, 1, uint32_t)
+#define SMAP_MIG_MIGRATE_NUMA \
+    _IOW(SMAP_MIGRATE_MAGIC, 2, struct MigrateNumaIoctlMsg)
+#define SMAP_MIG_PID_REMOTE_NUMA \
+    _IOW(SMAP_MIGRATE_MAGIC, 3, struct MigPidRemoteNumaIoctlMsg)
+#define SMAP_SET_UB_DMA_AVAIL _IOW(SMAP_MIGRATE_MAGIC, 4, unsigned int)
 
-#define SMAP_MAGIC 0xBA
-#define SMAP_MIGRATE_BACK _IOW(SMAP_MAGIC, 0, struct MigrateBackMsg)
+#define SMAP_MIGRATE_BACK _IOW(SMAP_MIGRATE_MAGIC, 5, struct MigrateBackMsg)
 
 #endif /* __SMAP_IOCTL_H__ */

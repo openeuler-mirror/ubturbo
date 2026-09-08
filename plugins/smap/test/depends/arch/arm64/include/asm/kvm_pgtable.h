@@ -20,10 +20,10 @@
 #define EINVAL 22
 #define ERANGE 34
 #define PTRS_PER_PTE (1UL << (PAGE_SHIFT - 3))
-#define BIT(x) x
+#define BIT(x) (1UL << (x))
 
 #define FIELD_GET(_mask, _reg) ((_mask) & (_reg))
-#define GENMASK(h, l) ((l) | (h))
+#define GENMASK(h, l) ((~0UL << (l)) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
 #define __va(x) (x)
 #define ALIGN_DOWN(x, align_to) 0
 #define WARN_ON_ONCE(condition) 1
@@ -135,10 +135,10 @@ static inline kvm_pte_t *kvm_dereference_pteref(struct kvm_pgtable_walker *walke
 #define EINVAL 22
 #define ERANGE 34
 #define PTRS_PER_PTE (1UL << (PAGE_SHIFT - 3))
-#define BIT(x) (1 << (x))
+#define BIT(x) (1UL << (x))
 
 #define FIELD_GET(_mask, _reg) ((_mask) & (_reg))
-#define GENMASK(h, l) ((l) | (h))
+#define GENMASK(h, l) ((~0UL << (l)) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
 #define __va(x) (x)
 #define ALIGN_DOWN(x, align_to) 0
 #define WARN_ON_ONCE(condition) 1

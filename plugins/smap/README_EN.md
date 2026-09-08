@@ -21,14 +21,11 @@ Key technologies and solutions:
 
    ![ARCH](./doc/images/ARCH_EN.png)
 
-   As shown in the preceding figure, the device driver creation and working processes related to hot and cold data identification are as follows:
+   As shown in the preceding figure, hot and cold data identification is provided by the `smap.ko` module:
 
-   1. In the initialization phase, to decouple the core service layer from the device layer, the control character device and the underlying software and hardware tracking device are created.
-   2. The upper-layer management module delivers a scanning start command to the corresponding node device.
-   3. The node device delivers the command to the software and hardware control device, which allows user-mode programs to operate without sensing specific software and hardware devices.
-   4. The software and hardware control device enables software scanning and hardware scanning based on the configuration.
-   5. After software scanning and hardware scanning are complete, the control device sorts the results by node and mounts them to the node character device.
-   6. The upper-layer management module reads the scanning result from the character device.
+   1. Module initialization creates `/dev/smap_scan_dev` and initializes software scanning. Setting `enable_hist=1` also initializes the hardware histogram subsystem (only supported on Kunpeng 950).
+   2. The management layer sends PID management, page-table scanning, and frequency-query commands through the scan device.
+   3. The scan subsystem performs software or hardware scanning and returns results to user space.
 
 2. Data migration
 
