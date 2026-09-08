@@ -287,7 +287,11 @@ int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t 
                 }
             }
         }
-        if (!process->enableSwap || IsNodeForbidden(plan->remoteNid) || !IsOnlyLocalForRemote(plans, planCnt, i) ||
+        int sourceLocalNid = process->targetConfig.sourceLocalNid;
+        bool sourceMismatch = process->targetConfig.count > 0 && sourceLocalNid != NUMA_NO_NODE &&
+                              sourceLocalNid != plan->localNid;
+        if (!process->enableSwap || sourceMismatch || IsNodeForbidden(plan->remoteNid) ||
+            !IsOnlyLocalForRemote(plans, planCnt, i) ||
             (plan->targetPages == 0 && plan->demotePages == 0 && plan->promotePages == 0)) {
             PutProcessAttr(process);
             continue;

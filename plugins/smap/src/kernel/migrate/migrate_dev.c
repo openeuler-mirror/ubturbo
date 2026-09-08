@@ -366,13 +366,6 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 		for (i = 0; i < len; i++) {
 			struct pagemapread pm = { 0 };
 
-			if (is_trouble_numa(payloads[i].src_nid) || is_trouble_numa(payloads[i].dest_nid)) {
-				pr_err("walk and migrate is trouble numa(%d-%d), stop migrate pid %d.\n",
-					payloads[i].src_nid, payloads[i].dest_nid, payloads[i].pid);
-				continue;
-			}
-			struct pagemapread pm = { 0 };
-
 			if (node_is_critical_err(payloads[i].src_nid) ||
 			    node_is_critical_err(payloads[i].dest_nid)) {
 				pr_err_ratelimited(

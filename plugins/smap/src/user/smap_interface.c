@@ -362,6 +362,10 @@ static bool IsMigParaValid(struct MigrateOutPayload *payload)
         SMAP_LOGGER_ERROR("pid %d migrate out target count %d invalid.", payload->pid, payload->count);
         return false;
     }
+    if (!IsLocalNidValid(payload->srcNid)) {
+        SMAP_LOGGER_ERROR("pid %d migrate out source local node %d invalid.", payload->pid, payload->srcNid);
+        return false;
+    }
     if (payload->count == 0) {
         return true;
     }
@@ -395,6 +399,7 @@ static int BuildProcessTargetConfig(const struct MigrateOutPayload *payload, Pro
     }
 
     config->migrateMode = payload->inner[0].migrateMode;
+    config->sourceLocalNid = payload->srcNid;
     config->count = payload->count;
     for (uint32_t i = 0; i < config->count; i++) {
         config->targets[i].remoteNid = payload->inner[i].destNid;
@@ -457,9 +462,11 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
         }
 
         for (int j = 0; j < msg->payload[i].count; j++) {
-            SMAP_LOGGER_INFO("mig out msg num:[%d] pid:%d, destNid:%d, ratio:%d, memSize:%llu, migMode:%d.", j,
-                             msg->payload[i].pid, msg->payload[i].inner[j].destNid, msg->payload[i].inner[j].ratio,
-                             msg->payload[i].inner[j].memSize, msg->payload[i].inner[j].migrateMode);
+            SMAP_LOGGER_INFO("mig out msg num:[%d] pid:%d, srcNid:%d, destNid:%d, ratio:%d, memSize:%llu, "
+                             "migMode:%d.",
+                             j, msg->payload[i].pid, msg->payload[i].srcNid, msg->payload[i].inner[j].destNid,
+                             msg->payload[i].inner[j].ratio, msg->payload[i].inner[j].memSize,
+                             msg->payload[i].inner[j].migrateMode);
         }
 
         if (!IsMigParaValid(&msg->payload[i])) {

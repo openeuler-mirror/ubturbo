@@ -388,16 +388,18 @@ static void WriteOneNumaConfig(char *numaBase, struct NumaPayload *np)
     SMAP_LOGGER_DEBUG("Exit WriteOneNumaPayload.");
 }
 
-static int RestoreProcessTargetConfig(ProcessTargetConfig *config, uint8_t migrateMode, int count,
+static int RestoreProcessTargetConfig(ProcessTargetConfig *config, uint8_t migrateMode, int srcNid, int count,
                                       const struct PersistRemoteTarget targets[])
 {
     if (!config || !targets || count < 0 || count > REMOTE_NUMA_NUM ||
-        (migrateMode != MIG_RATIO_MODE && migrateMode != MIG_MEMSIZE_MODE)) {
+        (migrateMode != MIG_RATIO_MODE && migrateMode != MIG_MEMSIZE_MODE) || srcNid < NUMA_NO_NODE ||
+        srcNid >= GetNrLocalNuma()) {
         return -EINVAL;
     }
 
     InitProcessTargetConfig(config);
     config->migrateMode = (MigrateMode)migrateMode;
+    config->sourceLocalNid = srcNid;
     uint64_t totalRatio = 0;
     uint64_t pageSizeKB = GetPageSize() / KIB;
     bool remoteSeen[REMOTE_NUMA_NUM] = { false };
@@ -477,7 +479,8 @@ static int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayload *pay
     }
 
     ProcessTargetConfig activeConfig;
-    int ret = RestoreProcessTargetConfig(&activeConfig, payload->migrateMode, payload->count, payload->migrateParam);
+    int ret = RestoreProcessTargetConfig(&activeConfig, payload->migrateMode, payload->srcNid, payload->count,
+                                         payload->migrateParam);
     if (ret) {
         return ret;
     }
@@ -615,7 +618,8 @@ static int WriteTargetConfigToPayload(struct PersistRemoteTarget payloadTargets[
                                       uint8_t *payloadMode, const ProcessTargetConfig *config)
 {
     if (!payloadTargets || !payloadCount || !payloadMode || !config || config->count > REMOTE_NUMA_NUM ||
-        (config->migrateMode != MIG_RATIO_MODE && config->migrateMode != MIG_MEMSIZE_MODE)) {
+        (config->migrateMode != MIG_RATIO_MODE && config->migrateMode != MIG_MEMSIZE_MODE) ||
+        config->sourceLocalNid < NUMA_NO_NODE || config->sourceLocalNid >= GetNrLocalNuma()) {
         return -EINVAL;
     }
     *payloadCount = (int)config->count;
@@ -685,6 +689,7 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
         tmp->type = attr->type;
         const ProcessTargetConfig *effectiveConfig = attr->pendingTargetConfigValid ? &attr->pendingTargetConfig :
                                                                                       &attr->targetConfig;
+        tmp->srcNid = effectiveConfig->sourceLocalNid;
         tmp->state = attr->state == PROC_MIGRATE ? PROC_IDLE : attr->state;
         /* numaAttr.numaNodes is user-synthesized; persist the last read-back value. */
         tmp->numaNodes = attr->numaAttr.numaNodes;

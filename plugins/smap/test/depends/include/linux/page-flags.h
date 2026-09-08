@@ -36,6 +36,11 @@ static inline bool folio_test_hugetlb(struct folio *folio)
     return false;
 }
 
+static inline bool is_page_hwpoison(struct page *page)
+{
+    return false;
+}
+
 static inline bool folio_test_anon(struct folio *folio)
 {
     return false;

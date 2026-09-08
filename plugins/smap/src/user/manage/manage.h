@@ -244,6 +244,7 @@ typedef struct {
  */
 typedef struct {
     MigrateMode migrateMode;
+    int sourceLocalNid;
     uint32_t count;
     ProcessRemoteTarget targets[REMOTE_NUMA_NUM];
 } ProcessTargetConfig;

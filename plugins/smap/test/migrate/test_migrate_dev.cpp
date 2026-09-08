@@ -595,12 +595,12 @@ TEST_F(MigInitTest, __IoctlMigrateE2ETest)
     IoctlMigrateE2ETestMock(&msg, HUGE_PAGE, 5120, 10);
     ret = __ioctl_migrate(&argp);
     EXPECT_EQ(0, ret);
-    // Each batch processes NR_BATCHED_MIGRATION (512) pages
-    // First batch: 512 - 10 = 502, second batch: 512, total = 1014
-    EXPECT_EQ(1014, migList[0].failed_pre_migrated_nr);
+    // Each 5120-page list is processed in 10 batches. The first batch
+    // isolates 10 pages, so the remaining 5110 pages fail pre-migration.
+    EXPECT_EQ(5110, migList[0].failed_pre_migrated_nr);
     EXPECT_EQ(0, migList[0].failed_mig_nr);
-    // migList[1]: similar pattern, first batch 502 + second batch 512 = 1014
-    EXPECT_EQ(1014, migList[1].failed_pre_migrated_nr);
+    // The 10240-page list likewise has 10 successful and 10230 failed pages.
+    EXPECT_EQ(10230, migList[1].failed_pre_migrated_nr);
     EXPECT_EQ(0, migList[1].failed_mig_nr);
 
     GlobalMockObject::verify();

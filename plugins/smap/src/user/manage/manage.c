@@ -171,6 +171,10 @@ int ApplyManagedLocalObservation(ProcessAttr *attr, const ManagedLocalObservatio
     }
 
     uint32_t managedLocalMask = state.observedLocalMask | allAccountLocalMask;
+    int sourceLocalNid = attr->targetConfig.sourceLocalNid;
+    if (attr->targetConfig.count > 0 && sourceLocalNid >= 0 && sourceLocalNid < GetNrLocalNuma()) {
+        AddL1(&managedLocalMask, sourceLocalNid);
+    }
     if (!fullReplacement) {
         managedLocalMask |= attr->managedLocalState.managedLocalMask;
     }
