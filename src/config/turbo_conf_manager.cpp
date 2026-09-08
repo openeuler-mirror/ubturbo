@@ -16,10 +16,9 @@ using namespace turbo::common;
 
 namespace fs = std::filesystem;
 
-RetCode TurboConfManager::Init(const std::string &confDir, const std::string &libDir)
+RetCode TurboConfManager::Init(const std::string &confDir)
 {
     this->confDir = confDir;
-    this->libDir = libDir;
 
     //  读取 ubturbo.conf
     fs::path absPath;
@@ -89,19 +88,12 @@ RetCode TurboConfManager::InitPluginConf(const std::string &pluginConfPath)
             std::cerr << "[Conf] No so path found for plugin " << pluginName << " in configuration file." << std::endl;
             return TURBO_ERROR;
         }
-        fs::path soPath;
-        try {
-            soPath = fs::canonical(fs::path(libDir) / fs::path(pluginConf[KEY_PLUGIN_SO_PATH]));
-        } catch (const fs::filesystem_error &e) {
-            std::cerr << "Plugin " << pluginName << " so path resolution failed: " << e.what()
-                      << ", libdir = " << libDir << ", pluginConf = " << pluginConf[KEY_PLUGIN_SO_PATH] << std::endl
-                      << ".";
-            return TURBO_ERROR;
-        }
+        // so 位于系统库目录（已注册 ldconfig），直接使用配置中的 so 名称，
+        // 由插件管理器交给 dlopen 走系统库目录搜索
         // 加入配置文件，plugin 模块会读取并初始化插件
         allPluginConf.push_back({
             .name = pluginName,
-            .soPath = soPath.string(),
+            .soPath = pluginConf[KEY_PLUGIN_SO_PATH],
             .moduleCode = pluginCode,
         });
         //  插件配置文件加入全局配置

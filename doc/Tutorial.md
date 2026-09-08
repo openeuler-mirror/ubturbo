@@ -300,15 +300,6 @@ groups ubturbo
 # 输出内容示例：ubturbo : ubturbo libvirt
 ```
 
-配置免密sudo: 创建文件/etc/sudoers.d/ubturbo，依次执行：
-
-```bash
-# 1. 打开
-visudo -f /etc/sudoers.d/ubturbo
-# 2. 新增
-ubturbo ALL=(root) NOPASSWD:/usr/local/bin/cat.sh
-```
-
 为需要与ubturbo交互的用户添加权限，例如ubse:
 
 ```bash

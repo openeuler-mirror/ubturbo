@@ -168,12 +168,6 @@ install(
   DESTINATION scripts
   COMPONENT rmrs
 )
-# 安装脚本文件
-install(
-  PROGRAMS ${PROJECT_SOURCE_DIR}/build/rpm/cat.sh
-  DESTINATION bin
-  COMPONENT rmrs
-)
 # ------------------------------
 # CPack 配置
 # ------------------------------

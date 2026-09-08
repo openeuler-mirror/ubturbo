@@ -7,19 +7,21 @@
  * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
  * See the Mulan PSL v2 for more details.
  */
-#ifndef TURBO_COMMON_H
-#define TURBO_COMMON_H
-#include <cstdint>
-#include <functional>
+#ifndef TURBO_SECURITY_MANAGER_H
+#define TURBO_SECURITY_MANAGER_H
 
-namespace turbo::common {
+#include "turbo_common.h"
 
-using RetCode = uint32_t;
+namespace turbo::security {
+using namespace turbo::common;
 
-constexpr auto CONFIG_DEFAULT_DIR = "conf";
+// 进程内 Linux capability 管理，取代原 sudo cat.sh 提权方式
+class TurboSecurityManager {
+public:
+    static RetCode GetCapabilities();
+    static RetCode SetInitialCapabilities();
+};
 
-constexpr inline auto MODULE_NAME = "ubturbo";
-constexpr inline auto MODULE_CODE = 1;
-} // namespace turbo::common
+} // namespace turbo::security
 
-#endif //  TURBO_COMMON_H
+#endif // TURBO_SECURITY_MANAGER_H

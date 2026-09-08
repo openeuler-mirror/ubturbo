@@ -833,7 +833,7 @@ TEST_F(ManageTest, TestGetPidTypeFromCommPath)
     MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
         .stubs()
         .will(returnValue(0));
-    MOCKER(popen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
+    MOCKER(fopen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
     ret = GetPidTypeFromComm(1);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -867,9 +867,9 @@ TEST_F(ManageTest, TestGetPidTypeFromCommFile)
         .stubs()
         .will(returnValue(0));
     static FILE fake_file;
-    MOCKER(popen).stubs().will(returnValue(&fake_file));
+    MOCKER(fopen).stubs().will(returnValue(&fake_file));
     MOCKER(fgets).stubs().will(returnValue(static_cast<char *>(nullptr)));
-    MOCKER(pclose).stubs().will(returnValue(0));
+    MOCKER(fclose).stubs().will(returnValue(0));
     ret = GetPidTypeFromComm(1);
     EXPECT_EQ(-1, ret);
 
@@ -877,9 +877,9 @@ TEST_F(ManageTest, TestGetPidTypeFromCommFile)
     MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
         .stubs()
         .will(returnValue(0));
-    MOCKER(popen).stubs().will(returnValue(&fake_file));
+    MOCKER(fopen).stubs().will(returnValue(&fake_file));
     MOCKER(fgets).stubs().will(invoke(FakeFgetsProcessComm));
-    MOCKER(pclose).stubs().will(returnValue(0));
+    MOCKER(fclose).stubs().will(returnValue(0));
     ret = GetPidTypeFromComm(1);
     EXPECT_EQ(0, ret);
 }
@@ -1104,10 +1104,9 @@ TEST_F(ManageTest, TestIsPidUsingHugePagesHasHuge)
     FILE *fp = fmemopen((void *)huge_data, strlen(huge_data), "r");
     ASSERT_NE(nullptr, fp);
     MOCKER(OpenNumaMaps).stubs().will(returnValue(fp));
-    MOCKER(pclose).stubs().will(returnValue(0));
+    /* IsPidUsingHugePages 内部 fclose(fp) 真实关闭 fmemopen 流，此处不再重复 fclose */
     bool ret = IsPidUsingHugePages(1234);
     EXPECT_EQ(true, ret);
-    fclose(fp);
 }
 
 TEST_F(ManageTest, TestIsPidUsingHugePagesNoHuge)
@@ -1116,10 +1115,9 @@ TEST_F(ManageTest, TestIsPidUsingHugePagesNoHuge)
     FILE *fp = fmemopen((void *)no_huge_data, strlen(no_huge_data), "r");
     ASSERT_NE(nullptr, fp);
     MOCKER(OpenNumaMaps).stubs().will(returnValue(fp));
-    MOCKER(pclose).stubs().will(returnValue(0));
+    /* IsPidUsingHugePages 内部 fclose(fp) 真实关闭 fmemopen 流，此处不再重复 fclose */
     bool ret = IsPidUsingHugePages(1234);
     EXPECT_EQ(false, ret);
-    fclose(fp);
 }
 
 extern "C" void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag);
@@ -1453,6 +1451,8 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(SetLocalNumaByCpu).stubs().will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).stubs().will(invoke(AddEmptyCandidateResidentForTest));
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
 
     ret = ProcessAddManage(&param, nullptr);

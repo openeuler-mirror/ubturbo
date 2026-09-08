@@ -10,8 +10,9 @@ ExecStart=/opt/ubturbo/bin/ub_turbo_exec
 Restart=on-failure
 StartLimitInterval=10s
 StartLimitBurst=5
-NoNewPrivileges=no
-AmbientCapabilities=
+NoNewPrivileges=yes
+AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
 MemoryMax=30G
 RuntimeDirectory=ubturbo
 
