@@ -142,7 +142,7 @@ section 取值：`plugin_turbo_ucache`
 > - 该文件不走 UBTurbo 框架的「section + key」机制，而由 SMAP 自身的策略解析器（`StrategyConfigRead`）逐行匹配键名读取，为扁平 `key = value` 格式，无 section。
 > - SMAP 首次启动时若文件不存在会自动生成一份带默认值的配置；若已存在则不覆盖，用户可在其上按需修改。
 > - 生效方式：SMAP 在每个迁移周期重新读取该文件，但仅当 `smap.period.file.config.switch = true` 时，文件中的配置才会逐周期覆盖内存中已生效的配置；该开关为 `false` 时仅读取不覆盖，SMAP 始终使用启动时加载的配置。
-> - 该文件依赖 `ubturbo-rmrs` 组件；环境未安装时需手动创建 `/opt/ubturbo/conf` 目录并设置权限。
+> - 该文件位于 `/opt/ubturbo/conf`（由 `ubturbo` 主框架包创建）；环境未安装 `ubturbo` 时需手动创建 `/opt/ubturbo/conf` 目录并设置权限。
 > - 配置项分「必配项」与「可选项」：必配项缺失时本次读取失败、配置不生效；可选项缺失时使用默认值。
 
 ### 扫描与迁移周期
@@ -258,4 +258,4 @@ section 取值：`plugin_turbo_ucache`
 
 >[!NOTE]说明
 > - UBTurbo 进程切换运行用户或切换场景（如虚拟化场景切换到大数据/容器场景）时，需先删除 `/dev/shm/smap_config` 与 `/dev/shm/ubturbo_page_type.dat`，避免读到旧用户的进程迁移配置或旧的 pageType。
-> - 若环境未安装 `ubturbo-rmrs` 组件，需手动创建 `/opt/ubturbo/conf` 目录，并确保目录权限与 `ub_turbo_exec` 二进制文件权限一致。
+> - 若环境未安装 `ubturbo` 主框架包（该包负责创建 `/opt/ubturbo/conf` 目录），需手动创建 `/opt/ubturbo/conf` 目录，并确保目录权限与 `ub_turbo_exec` 二进制文件权限一致。

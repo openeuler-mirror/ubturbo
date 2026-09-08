@@ -68,8 +68,10 @@ ubturbo-smap-*.aarch64
 
 ## 2.4 安装ubturbo
 
+`ubturbo` 为主框架包，`ubturbo-rmrs` 为 RMRS 插件包（依赖 `ubturbo`），需一并安装：
+
 ```bash
-rpm -ivh ubturbo-rmrs-1.1.1-1.oe2203sp1.aarch64 --force
+rpm -ivh ubturbo-1.0.0-23.aarch64.rpm ubturbo-rmrs-1.0.0-23.aarch64.rpm --force
 ```
 
 **目录结构：**
@@ -85,13 +87,14 @@ rpm -ivh ubturbo-rmrs-1.1.1-1.oe2203sp1.aarch64 --force
 ## 2.5 检查UBTurbo是否安装成功
 
 ```bash
-rpm -qa | grep ubturbo-rmrs
+rpm -qa | grep ubturbo
 ```
 
-返回如下信息即表示安装成功：
+返回如下信息即表示安装成功（`ubturbo` 为主框架包，`ubturbo-rmrs` 为 RMRS 插件包）：
 
 ```bash
-[root@controller ~]# rpm -qa | grep ubturbo-rmrs
+[root@controller ~]# rpm -qa | grep ubturbo
+ubturbo-*.aarch64
 ubturbo-rmrs-*.aarch64
 ```
 
@@ -191,13 +194,13 @@ journalctl -u ubturbo
 - 升级
   
   ```bash
-  rpm -Uvh ubturbo-rmrs-*.aarch64.rpm
+  rpm -Uvh ubturbo-*.aarch64.rpm ubturbo-rmrs-*.aarch64.rpm
   ```
   
 - 回退
   
   ```bash
-  rpm -Uvh --oldpackage ubturbo-rmrs-*.aarch64.rpm
+  rpm -Uvh --oldpackage ubturbo-*.aarch64.rpm ubturbo-rmrs-*.aarch64.rpm
   ```
 
 **说明：**
