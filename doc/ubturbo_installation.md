@@ -43,8 +43,9 @@
   > 需要系统已配置包含 ubturbo 组件的 openEuler 镜像源。
 
   ```bash
-  # 安装主程序包（含 RMRS 插件）
-  sudo dnf install -y ubturbo-rmrs
+  # ubturbo 为主框架包，ubturbo-rmrs 为 RMRS 插件包（依赖 ubturbo）
+  # dnf 会自动解析依赖并一并安装
+  sudo dnf install -y ubturbo ubturbo-rmrs
   ```
 
 - 离线安装
@@ -57,10 +58,11 @@
 
   ```bash
   # 通过rpm包安装运行包
-  # 安装主程序包（含 RMRS 插件）
+  # 先安装主框架包 ubturbo，再安装 RMRS 插件包 ubturbo-rmrs
+  sudo rpm -ivh ubturbo-<version>-<release>.aarch64.rpm
   sudo rpm -ivh ubturbo-rmrs-<version>-<release>.aarch64.rpm
   # 如需覆盖安装，可执行如下命令：
-  sudo rpm -ivh ubturbo-rmrs-<version>-<release>.aarch64.rpm --force
+  sudo rpm -ivh ubturbo-<version>-<release>.aarch64.rpm ubturbo-rmrs-<version>-<release>.aarch64.rpm --force
   ```
 
 
@@ -144,7 +146,8 @@ cd /workspace
 git submodule update --init --recursive
 ./build.sh              # Release 构建，产物 dist/release/
 ./build.sh -D           # Debug 构建
-./build.sh package      # 打包 RPM
+./build.sh ubturbo      # 基于 ubturbo.spec 通过 rpmbuild 构建 ubturbo RPM，产物 output/
+./build.sh ubturbo-rmrs # 构建 ubturbo-rmrs RPM，产物 output/
 ```
 
 单元测试：
@@ -157,20 +160,19 @@ git submodule update --init --recursive
 
 ## 安装结果
 
-  UBTurbo 主程序安装结果：
+  UBTurbo 安装结果（`ubturbo` 为主框架包，`ubturbo-rmrs` 为 RMRS 插件包）：
 
-  | 路径                                  | 用途          |
-  |-------------------------------------| -------------|
-  | /opt/ubturbo/bin/ub_turbo_exec      | UBTurbo 守护进程主程序 |
-  | /opt/ubturbo/lib/                   | 插件动态库目录 |
-  | /opt/ubturbo/lib/librmrs_ubturbo_plugin.so | RMRS 插件动态库 |
-  | /opt/ubturbo/conf/ubturbo.conf      | 主配置文件    |
-  | /opt/ubturbo/conf/ubturbo_plugin_admission.conf | 插件准入配置文件 |
-  | /opt/ubturbo/conf/plugin_rmrs.conf  | RMRS 插件配置文件 |
-  | /etc/systemd/system/ubturbo.service | systemd 服务  |
-  | /var/log/ubturbo/                   | 日志目录      |
-  | /var/run/ubturbo/                   | 运行时目录    |
-  | ubturbo 用户/用户组                  | 系统用户与用户组（安装脚本自动创建） |
+  | 路径                                  | 所属包 | 用途          |
+  |-------------------------------------| ------ | -------------|
+  | /opt/ubturbo/bin/ub_turbo_exec      | ubturbo | UBTurbo 守护进程主程序 |
+  | /usr/lib64/libubturbo_client.so     | ubturbo | 客户端 SDK 运行库 |
+  | /usr/lib64/librmrs_ubturbo_plugin.so | ubturbo-rmrs | RMRS 插件动态库 |
+  | /opt/ubturbo/conf/ubturbo.conf      | ubturbo | 主配置文件    |
+  | /opt/ubturbo/conf/ubturbo_plugin_admission.conf | ubturbo | 插件准入配置文件 |
+  | /opt/ubturbo/conf/plugin_rmrs.conf  | ubturbo-rmrs | RMRS 插件配置文件 |
+  | /usr/lib/systemd/system/ubturbo.service | ubturbo | systemd 服务  |
+  | /var/log/ubturbo/                   | ubturbo | 日志目录      |
+  | ubturbo 用户/用户组                  | ubturbo | 系统用户与用户组（安装时自动创建） |
 
 - UBTurbo 客户端运行库安装结果：
 
@@ -245,7 +247,7 @@ ubturbo-smap-*.aarch64
 ### 检查安装结果
 
 ```bash
-rpm -qa | grep ubturbo-rmrs  # 应输出 ubturbo-rmrs-*.aarch64
+rpm -qa | grep ubturbo  # 应输出 ubturbo-*.aarch64 与 ubturbo-rmrs-*.aarch64
 ```
 
 ### 检查服务状态
@@ -296,7 +298,7 @@ docker rmi ubturbo-build:24.03-lts
 3. 卸载 RPM 包
 
 ```bash
-sudo dnf remove -y ubturbo-rmrs
+sudo dnf remove -y ubturbo-rmrs ubturbo
 ```
 
 > [!NOTE]说明

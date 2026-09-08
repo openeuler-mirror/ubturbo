@@ -1,638 +1,174 @@
-%global ubturbo_version    1.1.1
-%global release_version 1
+%global version    1.0.0
+%global release_version 23
+%global __strip /bin/true
 
-Name:          ubturbo-rmrs
-Version:       %{ubturbo_version}
+%global build_subdir %{name}-%{version}
+
+Name:          ubturbo
+Version:       %{version}
 Release:       %{release_version}
-Summary:       openEuler ubturbo
-License:       GPLv2
-Source0:       ubturbo.tar.gz
-Vendor:        openEuler Community
+Summary:       ubturbo - hierarchical memory management framework
+License:       MulanPSL2
+URL:           https://gitee.com/openeuler/ubturbo.git
+Source0:       %{name}-%{version}.tar.gz
+Provides:      %{name}
+BuildRoot:     %{buildroot}
 
+# ─── Main framework + rmrs user-space build ───
 BuildRequires: make
 BuildRequires: gcc
 BuildRequires: cmake
-BuildRequires: chrpath
-BuildRequires: patchelf
+BuildRequires: ninja-build
 BuildRequires: libboundscheck
 BuildRequires: rapidjson
-BuildRequires: ninja-build
-BuildRequires: libvirt-devel
+BuildRequires: libvirt libvirt-devel
 
-%define debug_package %{nil}
-%define ubturbo_dir /opt/ubturbo
-%define ubturbo_bin_dir /opt/ubturbo/bin
-%define ubturbo_conf_dir /opt/ubturbo/conf
-%define ubturbo_scripts_dir /opt/ubturbo/scripts
+# ─── Build helpers ───
+BuildRequires: chrpath
+
+# ─── Base tools ───
+BuildRequires: coreutils
+
+# Main package runtime dependencies (systemd macros auto-expand Requires(post/preun/postun))
+Requires:        coreutils
+Requires:        libboundscheck
+Requires:        libvirt-libs
+Requires(post):  shadow-utils
+%{?systemd_requires}
 
 %description
-This package contains the ubturbo daemon
+ubturbo is based on the hardware-enhanced hot and cold identification
+capabilities, providing hierarchical memory management, including memory
+migration, hot and cold data flow, etc, and accelerating application
+performance.
+
+This package contains the ubturbo framework core: the main executable
+(ub_turbo_exec), the client SDK runtime library (libubturbo_client.so),
+framework configuration, and the systemd service unit.
+
+# ─── Path macros ───
+%define systemd_unit_dir  /usr/lib/systemd/system
+%define ubturbo_dir       /opt/ubturbo
+%define ubturbo_bin_dir   /opt/ubturbo/bin
+%define ubturbo_conf_dir  /opt/ubturbo/conf
+%define ubturbo_log_dir   /var/log/ubturbo
+
+%define debug_package %{nil}
+
+# =============================================================================
+# Subpackages
+# =============================================================================
+
+%package rmrs
+Summary: ubturbo rmrs plugin and auxiliary scripts
+Requires: ubturbo = %{version}-%{release}
+
+%description rmrs
+This package contains the rmrs plugin (librmrs_ubturbo_plugin.so) and its
+configuration files.
+
+# =============================================================================
+# Prep & Build
+# =============================================================================
 
 %prep
-%setup -q -b 0 -c -n ubturbo
+%setup -q -T -b 0 -n %{build_subdir}
 
 %build
-cd %{_builddir}/ubturbo && bash -x build.sh -c
+# Build ubturbo framework + rmrs plugin (user-space only)
+cd %{_builddir}/%{build_subdir} && bash -x build.sh -c
 
 %install
-#install ubturbo
-mkdir -p -m755 ${RPM_BUILD_ROOT}/%{ubturbo_dir}
-mkdir -p -m755 ${RPM_BUILD_ROOT}/%{ubturbo_bin_dir}
-mkdir -p -m755 ${RPM_BUILD_ROOT}/%{ubturbo_conf_dir}
-mkdir -p -m755 ${RPM_BUILD_ROOT}/%{ubturbo_scripts_dir}
-mkdir -p -m755 ${RPM_BUILD_ROOT}/usr/lib64
+rm -rf ${RPM_BUILD_ROOT}
 
-%{__install} -b -m 0644 %{_builddir}/ubturbo/dist/release/bin/ub_turbo_exec ${RPM_BUILD_ROOT}/%{ubturbo_bin_dir}
-%{__install} -b -m 0644 %{_builddir}/ubturbo/build/rpm/ubturbo.service ${RPM_BUILD_ROOT}/%{ubturbo_scripts_dir}
-%{__install} -m 0755 %{_builddir}/ubturbo/dist/release/lib/libubturbo_client.so ${RPM_BUILD_ROOT}/usr/lib64/
-%{__install} -m 0755 %{_builddir}/ubturbo/dist/release/lib/librmrs_ubturbo_plugin.so ${RPM_BUILD_ROOT}/usr/lib64/
-%{__install} -b -m 0644 %{_builddir}/ubturbo/dist/release/conf/ubturbo_plugin_admission.conf ${RPM_BUILD_ROOT}/%{ubturbo_conf_dir}
-%{__install} -b -m 0644 %{_builddir}/ubturbo/dist/release/conf/ubturbo.conf ${RPM_BUILD_ROOT}/%{ubturbo_conf_dir}
-%{__install} -b -m 0644 %{_builddir}/ubturbo/dist/release/conf/plugin_rmrs.conf ${RPM_BUILD_ROOT}/%{ubturbo_conf_dir}
+# ─── Main package: ubturbo framework ───
+mkdir -p -m 0750 ${RPM_BUILD_ROOT}%{ubturbo_dir}
+mkdir -p -m 0700 ${RPM_BUILD_ROOT}%{ubturbo_bin_dir}
+mkdir -p -m 0700 ${RPM_BUILD_ROOT}%{ubturbo_conf_dir}
+mkdir -p -m 0755 ${RPM_BUILD_ROOT}%{_libdir}
+mkdir -p -m 0755 ${RPM_BUILD_ROOT}%{systemd_unit_dir}
+mkdir -p -m 0700 ${RPM_BUILD_ROOT}%{ubturbo_log_dir}
+
+# ub_turbo_exec: 0500 ubturbo:ubturbo
+install -m 0500 %{_builddir}/%{build_subdir}/dist/release/bin/ub_turbo_exec \
+    ${RPM_BUILD_ROOT}%{ubturbo_bin_dir}/
+# /usr/lib64/libubturbo_client.so: 0550 ubturbo:ubturbo (r-xr-x---)
+# Install real file with version, then create symlinks:
+#   libubturbo_client.so -> libubturbo_client.so.1 -> libubturbo_client.so.1.0.0
+install -m 0550 %{_builddir}/%{build_subdir}/dist/release/lib/libubturbo_client.so \
+    ${RPM_BUILD_ROOT}%{_libdir}/libubturbo_client.so.%{version}
+ln -s libubturbo_client.so.%{version} \
+    ${RPM_BUILD_ROOT}%{_libdir}/libubturbo_client.so.1
+ln -s libubturbo_client.so.1 \
+    ${RPM_BUILD_ROOT}%{_libdir}/libubturbo_client.so
+# ubturbo.conf: 0600 ubturbo:ubturbo (rw-------)
+install -m 0600 %{_builddir}/%{build_subdir}/dist/release/conf/ubturbo.conf \
+    ${RPM_BUILD_ROOT}%{ubturbo_conf_dir}/
+# ubturbo_plugin_admission.conf: 0600 ubturbo:ubturbo
+install -m 0600 %{_builddir}/%{build_subdir}/dist/release/conf/ubturbo_plugin_admission.conf \
+    ${RPM_BUILD_ROOT}%{ubturbo_conf_dir}/
+# ubturbo.service: 0644 root:root
+install -m 0644 %{_builddir}/%{build_subdir}/build/rpm/ubturbo.service \
+    ${RPM_BUILD_ROOT}%{systemd_unit_dir}/
+
+# ─── rmrs subpackage ───
+# Install real file with version, then create symlinks:
+#   librmrs_ubturbo_plugin.so -> librmrs_ubturbo_plugin.so.1 -> librmrs_ubturbo_plugin.so.1.0.0
+install -m 0500 %{_builddir}/%{build_subdir}/dist/release/lib/librmrs_ubturbo_plugin.so \
+    ${RPM_BUILD_ROOT}%{_libdir}/librmrs_ubturbo_plugin.so.%{version}
+ln -s librmrs_ubturbo_plugin.so.%{version} \
+    ${RPM_BUILD_ROOT}%{_libdir}/librmrs_ubturbo_plugin.so.1
+ln -s librmrs_ubturbo_plugin.so.1 \
+    ${RPM_BUILD_ROOT}%{_libdir}/librmrs_ubturbo_plugin.so
+install -m 0600 %{_builddir}/%{build_subdir}/dist/release/conf/plugin_rmrs.conf \
+    ${RPM_BUILD_ROOT}%{ubturbo_conf_dir}/
 
 %clean
 rm -rf ${RPM_BUILD_ROOT}
 
 %files
-%defattr(-,root,root)
-/usr/lib64/libubturbo_client.so
-/usr/lib64/librmrs_ubturbo_plugin.so
-%{ubturbo_conf_dir}/ubturbo_plugin_admission.conf
-%{ubturbo_conf_dir}/ubturbo.conf
-%{ubturbo_conf_dir}/plugin_rmrs.conf
-%{ubturbo_scripts_dir}/ubturbo.service
-%defattr(0755,root,root,0755)
-%dir %{ubturbo_bin_dir}
-%{ubturbo_bin_dir}/ub_turbo_exec
+%attr(0750,ubturbo,ubturbo) %dir %{ubturbo_dir}
+%attr(0500,ubturbo,ubturbo) %dir %{ubturbo_bin_dir}
+%attr(0700,ubturbo,ubturbo) %dir %{ubturbo_conf_dir}
+%attr(0700,ubturbo,ubturbo) %dir %{ubturbo_log_dir}
+%attr(0500,ubturbo,ubturbo) %{ubturbo_bin_dir}/ub_turbo_exec
+%attr(0600,ubturbo,ubturbo) %{ubturbo_conf_dir}/ubturbo.conf
+%attr(0600,ubturbo,ubturbo) %{ubturbo_conf_dir}/ubturbo_plugin_admission.conf
+%attr(0550,ubturbo,ubturbo) %{_libdir}/libubturbo_client.so.%{version}
+%{_libdir}/libubturbo_client.so.1
+%{_libdir}/libubturbo_client.so
+%attr(0644,root,root)      %{systemd_unit_dir}/ubturbo.service
 
+%files rmrs
+%attr(0500,ubturbo,ubturbo) %{_libdir}/librmrs_ubturbo_plugin.so.%{version}
+%{_libdir}/librmrs_ubturbo_plugin.so.1
+%{_libdir}/librmrs_ubturbo_plugin.so
+%attr(0600,ubturbo,ubturbo) %{ubturbo_conf_dir}/plugin_rmrs.conf
+
+# ─── Main package ubturbo ───
 %pre
-#!/bin/bash
-# 默认日志目录和日志文件
-LOG_DIR="/var/log/ubturbo"
-LOG_FILE="$LOG_DIR/ubturbo-install.log"
-
-# 检查并创建日志目录
-create_log_directory() {
-  # 只检查一次，减少不必要的文件系统操作
-  if [ ! -d "$LOG_DIR" ]; then
-    mkdir -p "$LOG_DIR" || handle_error "Failed to create log directory $LOG_DIR"
-    chmod 700 "$LOG_DIR"  # 设置日志目录权限为700
-    log_message "INFO" "Log directory $LOG_DIR created successfully."
-  elif [ ! -w "$LOG_DIR" ]; then
-    handle_error "Log directory $LOG_DIR is not writable."
-  fi
-}
-
-# 输出日志到文件和控制台
-log_message() {
-  local log_type="$1"
-  local message="$2"
-
-  # 获取时间戳
-  local timestamp
-  timestamp="$(date)"
-  local log_entry="[$timestamp] [$log_type] $message"
-
-  # 检查日志目录是否存在并且可写
-  create_log_directory
-
-  # 如果日志文件是首次创建，则设置权限为600
-  if [ ! -f "$LOG_FILE" ]; then
-    touch "$LOG_FILE"
-    chmod 600 "$LOG_FILE"  # 只在首次创建时设置权限
-  fi
-
-  # 写入日志文件
-  echo "$log_entry" >> "$LOG_FILE"
-}
-
-# 统一错误处理
-handle_error() {
-    log_message "ERROR" "$1"
-    exit 1
-}
-
-# 统一错误处理
-handle_warn() {
-    log_message "WARN" "$1"
-}
-
-# 调用示例：
-# log_message "INFO" "This is an info message."
-# log_message "ERROR" "This is an error message."
-# log_message "DEBUG" "This is a debug message."
-
-# 检查服务是否存在
-service_exists() {
-    local service_name="$1"
-    systemctl list-units --type=service --all | grep -q "$service_name"
-}
-
-# 停止并禁用服务
-stop_and_disable_service() {
-    local service_name="$1"
-
-    if service_exists "$service_name"; then
-        # 停止服务
-        log_message "INFO" "Stopping $service_name service..."
-        if ! systemctl stop "$service_name"; then
-            handle_warn "Failed to stop $service_name"
-        fi
-
-        # 禁用服务
-        log_message "INFO" "Disabling $service_name service..."
-        if ! systemctl disable "$service_name"; then
-            handle_warn "Failed to disable $service_name"
-        fi
-    else
-        log_message "INFO" "$service_name does not exist, skipping stop and disable."
-    fi
-}
-
-# 删除文件，如果文件不存在，则跳过
-remove_file_if_exists() {
-    local file="$1"
-
-    if [ -f "$file" ]; then
-        log_message "INFO" "Removing file $file..."
-        if ! rm -f "$file"; then
-            handle_error "Failed to remove $file"
-        fi
-    else
-        log_message "INFO" "File $file does not exist, skipping removal."
-    fi
-}
-
-# 主流程
-main() {
-# 脚本开始执行
-log_message "INFO" "======================"
-log_message "INFO" "pre_install.sh started"
-log_message "INFO" "======================"
-
-# 停止并禁用服务
-stop_and_disable_service "ubturbo.service"
-rm -f /tmp/ubturbo_ipc
-
-# 脚本结束执行
-log_message "INFO" "======================"
-log_message "INFO" "pre_install.sh ended"
-log_message "INFO" "======================"
-}
-
-# 执行主流程
-main "$@"
+if command -v groupadd >/dev/null 2>&1; then
+    getent group ubturbo >/dev/null || groupadd -r ubturbo
+    getent passwd ubturbo >/dev/null || \
+        useradd -r -g ubturbo -s /sbin/nologin -d %{ubturbo_dir} ubturbo
+fi
 
 %post
-#!/bin/bash
-
-# 默认日志目录和日志文件
-LOG_DIR="/var/log/ubturbo"
-LOG_FILE="$LOG_DIR/ubturbo-install.log"
-
-# 检查并创建日志目录
-create_log_directory() {
-  # 只检查一次，减少不必要的文件系统操作
-  if [ ! -d "$LOG_DIR" ]; then
-    mkdir -p "$LOG_DIR" || handle_error "Failed to create log directory $LOG_DIR"
-    chmod 700 "$LOG_DIR"  # 设置日志目录权限为700
-    log_message "INFO" "Log directory $LOG_DIR created successfully."
-  elif [ ! -w "$LOG_DIR" ]; then
-    handle_error "Log directory $LOG_DIR is not writable."
-  fi
-}
-
-# 输出日志到文件和控制台
-log_message() {
-  local log_type="$1"
-  local message="$2"
-
-  # 获取时间戳
-  local timestamp
-  timestamp="$(date)"
-  local log_entry="[$timestamp] [$log_type] $message"
-
-  # 检查日志目录是否存在并且可写
-  create_log_directory
-
-  # 如果日志文件是首次创建，则设置权限为600
-  if [ ! -f "$LOG_FILE" ]; then
-    touch "$LOG_FILE"
-    chmod 600 "$LOG_FILE"  # 只在首次创建时设置权限
-  fi
-
-  # 写入日志文件
-  echo "$log_entry" >> "$LOG_FILE"
-}
-
-# 统一错误处理
-handle_error() {
-    log_message "ERROR" "$1"
-    exit 1
-}
-
-# 调用示例：
-# log_message "INFO" "This is an info message."
-# log_message "ERROR" "This is an error message."
-# log_message "DEBUG" "This is a debug message."
-
-# 系统相关配置
-LOG_DIR="/var/log/ubturbo"
-PROGRAM_DIR="/opt/ubturbo"
-PROGRAM_CONF_DIR="/opt/ubturbo/conf"
-PROGRAM_BIN_DIR="/opt/ubturbo/bin"
-PROGRAM_LOG_DIR="/var/log/ubturbo"
-SYSTEM_USER="ubturbo"
-SYSTEM_GROUP="ubturbo"
-ROOT_USER="root"
-ROOT_GROUP="root"
-
-# 创建系统组
-create_group() {
-    if ! getent group "$SYSTEM_GROUP" > /dev/null; then
-        groupadd -r "$SYSTEM_GROUP" || handle_error "Failed to create group $SYSTEM_GROUP"
-        log_message "INFO" "Group $SYSTEM_GROUP created"
-    else
-        log_message "INFO" "Group $SYSTEM_GROUP already exists"
-    fi
-}
-
-# 创建系统用户
-create_user() {
-    if ! getent passwd "$SYSTEM_USER" > /dev/null; then
-        useradd -r -g "$SYSTEM_GROUP" -s /sbin/nologin "$SYSTEM_USER" || handle_error "Failed to create user $SYSTEM_USER"
-        log_message "INFO" "User $SYSTEM_USER created"
-    else
-        log_message "INFO" "User $SYSTEM_USER already exists"
-    fi
-}
-
-# 创建并设置目录及其内容的属主
-ensure_directory_owner() {
-    local dir_path="$1"
-    local recursive="${2:-false}"  # 是否递归设置内容属主，默认为 false
-
-    # 创建目录（如果不存在）
-    if [ ! -d "$dir_path" ]; then
-        mkdir -p "$dir_path" || handle_error "Failed to create directory $dir_path"
-        log_message "INFO" "Directory $dir_path created"
-    fi
-
-    # 获取当前目录的属主和属组
-    local current_owner
-    current_owner=$(stat -c "%U:%G" "$dir_path")
-
-    # 设置目录的属主（如果不匹配）
-    if [ "$current_owner" != "$SYSTEM_USER:$SYSTEM_GROUP" ]; then
-        log_message "INFO" "Setting ownership for $dir_path to $SYSTEM_USER:$SYSTEM_GROUP"
-        chown "$SYSTEM_USER:$SYSTEM_GROUP" "$dir_path" || handle_error "Failed to set ownership for directory $dir_path"
-    fi
-
-    # 如果递归设置内容属主
-    if [ "$recursive" = true ]; then
-        log_message "INFO" "Recursively setting ownership for contents of $dir_path"
-        chown -R "$SYSTEM_USER:$SYSTEM_GROUP" "$dir_path" || handle_error "Failed to set ownership recursively for $dir_path"
-    fi
-
-    log_message "INFO" "Ownership for $dir_path and contents (if recursive) set to $SYSTEM_USER:$SYSTEM_GROUP"
-}
-
-# ubturbo目录与文件权限控制
-ensure_permission() {
-    # 目录权限控制
-    chmod 750 "$PROGRAM_DIR" || handle_error "Failed to set permissions for $PROGRAM_DIR"
-    chmod 700 "$PROGRAM_CONF_DIR" || handle_error "Failed to set permissions for $PROGRAM_CONF_DIR"
-    chmod 500 "$PROGRAM_BIN_DIR" || handle_error "Failed to set permissions for $PROGRAM_BIN_DIR"
-    chmod 700 "$PROGRAM_LOG_DIR" || handle_error "Failed to set permissions for $PROGRAM_LOG_DIR"
-
-    # 文件权限控制
-    chmod 600 "$PROGRAM_CONF_DIR"/* || handle_error "Failed to set permissions for conf files in $PROGRAM_CONF_DIR"
-    chmod 600 "$PROGRAM_LOG_DIR"/* || handle_error "Failed to set permissions for log files in $PROGRAM_LOG_DIR"
-    chmod 500 "$PROGRAM_BIN_DIR"/* || handle_error "Failed to set permissions for exec files in $PROGRAM_BIN_DIR"
-}
-
-# 拷贝服务文件
-copy_service_file() {
-    local src_dir="/opt/ubturbo/scripts"
-    local src_file="$src_dir/ubturbo.service"
-    local service_file="/etc/systemd/system/ubturbo.service"
-
-    # 拷贝 service 文件
-    cp "$src_file" "$service_file" || handle_error "Failed to copy service file"
-    log_message "INFO" "Service file copied to $service_file"
-
-    # 设置权限
-    chmod 644 "$service_file" || handle_error "Failed to set permissions for $service_file"
-
-    # 删除原 service 文件
-    rm -f "$src_file" || handle_error "Failed to remove original service file"
-    log_message "INFO" "Original service file removed"
-
-    # 删除目录（如果为空）
-    if [ -d "$src_dir" ]; then
-        rmdir "$src_dir" 2>/dev/null && \
-        log_message "INFO" "Empty directory $src_dir removed" || \
-        log_message "INFO" "Directory $src_dir not empty, not removed"
-    fi
-}
-
-# 重新加载 systemd，这里只是让 systemd 重刷文件，不会影响运行的服务
-reload_systemd() {
-    systemctl daemon-reload || handle_error "Failed to reload systemd"
-    log_message "INFO" "Systemd daemon reloaded"
-}
-
-# 主流程
-main() {
-    log_message "INFO" "======================"
-    log_message "INFO" "post_install.sh started"
-    log_message "INFO" "======================"
-
-    create_group
-    create_user
-    copy_service_file
-    reload_systemd
-    # 确保日志和程序目录的属主正确
-    ensure_directory_owner "$LOG_DIR" true
-    ensure_directory_owner "$PROGRAM_DIR" true
-    # 权限控制
-    ensure_permission
-
-    # 将程序设为开机自启动
-    systemctl enable ubturbo.service
-    
-    log_message "INFO" "======================"
-    log_message "INFO" "post_install.sh ended"
-    log_message "INFO" "======================"
-}
-
-# 执行主流程
-main "$@"
+%systemd_post ubturbo.service
 
 %preun
-#!/bin/bash
-
-# 默认日志目录和日志文件
-LOG_DIR="/var/log/ubturbo"
-LOG_FILE="$LOG_DIR/ubturbo-uninstall.log"
-
-# 检查并创建日志目录
-create_log_directory() {
-  # 只检查一次，减少不必要的文件系统操作
-  if [ ! -d "$LOG_DIR" ]; then
-    mkdir -p "$LOG_DIR" || handle_error "Failed to create log directory $LOG_DIR"
-    chmod 700 "$LOG_DIR"  # 设置日志目录权限为700
-    log_message "INFO" "Log directory $LOG_DIR created successfully."
-  elif [ ! -w "$LOG_DIR" ]; then
-    handle_error "Log directory $LOG_DIR is not writable."
-  fi
-}
-
-# 输出日志到文件和控制台
-log_message() {
-  local log_type="$1"
-  local message="$2"
-
-  # 获取时间戳
-  local timestamp
-  timestamp="$(date)"
-  local log_entry="[$timestamp] [$log_type] $message"
-
-  # 检查日志目录是否存在并且可写
-  create_log_directory
-
-  # 如果日志文件是首次创建，则设置权限为600
-  if [ ! -f "$LOG_FILE" ]; then
-    touch "$LOG_FILE"
-    chmod 600 "$LOG_FILE"  # 只在首次创建时设置权限
-  fi
-
-  # 写入日志文件
-  echo "$log_entry" >> "$LOG_FILE"
-}
-
-# 统一错误处理
-handle_error() {
-    log_message "ERROR" "$1"
-    exit 1
-}
-
-# 调用示例：
-# log_message "INFO" "This is an info message."
-# log_message "ERROR" "This is an error message."
-# log_message "DEBUG" "This is a debug message."
-
-# 检查服务是否存在
-service_exists() {
-    local service_name="$1"
-    systemctl list-units --type=service --all | grep -q "$service_name"
-}
-
-# 停止并禁用服务
-stop_and_disable_service() {
-    local service_name="$1"
-
-    if service_exists "$service_name"; then
-        # 停止服务
-        log_message "INFO" "Stopping $service_name service..."
-        if ! systemctl stop "$service_name"; then
-            handle_error "Failed to stop $service_name"
-        fi
-
-        # 禁用服务
-        log_message "INFO" "Disabling $service_name service..."
-        if ! systemctl disable "$service_name"; then
-            handle_error "Failed to disable $service_name"
-        fi
-    else
-        log_message "INFO" "$service_name does not exist, skipping stop and disable."
-    fi
-}
-
-# 删除文件，如果文件不存在，则跳过
-remove_file_if_exists() {
-    local file="$1"
-
-    if [ -f "$file" ]; then
-        log_message "INFO" "Removing file $file..."
-        if ! rm -f "$file"; then
-            handle_error "Failed to remove $file"
-        fi
-    else
-        log_message "INFO" "File $file does not exist, skipping removal."
-    fi
-}
-
-# 卸载服务文件
-uninstall_service() {
-    # 检查服务文件是否存在并且已加载，然后重置失败状态
-    if systemctl list-units --type=service | grep -q "ubturbo.service"; then
-        # 如果服务已加载，重置失败状态
-        systemctl reset-failed ubturbo.service || true
-    fi
-    local service_file="/etc/systemd/system/ubturbo.service"
-    remove_file_if_exists "$service_file"
-    # 重载 systemd 配置
-    systemctl daemon-reload
-}
-
-# 主流程
-main() {
-# 检查是否是卸载操作
-if [ "$1" -ne 0 ]; then
-    log_message "INFO"  "Not an uninstall operation."
-    chown "ubturbo:ubturbo" "/var/log/ubturbo/ubturbo-uninstall.log"
-    exit 0
-else
-    log_message "INFO"  "Uninstalling the package pre..."
-fi
-
-log_message "$RPM_INSTALL"
-log_message "INFO" "======================"
-log_message "INFO" "pre_uninstall.sh started"
-log_message "INFO" "======================"
-
-# 停止并禁用服务
-stop_and_disable_service "ubturbo.service"
-
-# 卸载服务文件
-uninstall_service
-
-log_message "INFO" "======================"
-log_message "INFO" "pre_uninstall.sh ended"
-log_message "INFO" "======================"
-}
-
-# 执行主流程
-main "$@"
+%systemd_preun ubturbo.service
 
 %postun
-#!/bin/bash
+%systemd_postun_with_restart ubturbo.service
 
-# 默认日志目录和日志文件
-LOG_DIR="/var/log/ubturbo"
-LOG_FILE="$LOG_DIR/ubturbo-uninstall.log"
-
-# 检查并创建日志目录
-create_log_directory() {
-  # 只检查一次，减少不必要的文件系统操作
-  if [ ! -d "$LOG_DIR" ]; then
-    mkdir -p "$LOG_DIR" || handle_error "Failed to create log directory $LOG_DIR"
-    chmod 700 "$LOG_DIR"  # 设置日志目录权限为700
-    log_message "INFO" "Log directory $LOG_DIR created successfully."
-  elif [ ! -w "$LOG_DIR" ]; then
-    handle_error "Log directory $LOG_DIR is not writable."
-  fi
-}
-
-# 输出日志到文件和控制台
-log_message() {
-  local log_type="$1"
-  local message="$2"
-
-  # 获取时间戳
-  local timestamp
-  timestamp="$(date)"
-  local log_entry="[$timestamp] [$log_type] $message"
-
-  # 检查日志目录是否存在并且可写
-  create_log_directory
-
-  # 如果日志文件是首次创建，则设置权限为600
-  if [ ! -f "$LOG_FILE" ]; then
-    touch "$LOG_FILE"
-    chmod 600 "$LOG_FILE"  # 只在首次创建时设置权限
-  fi
-
-  # 写入日志文件
-  echo "$log_entry" >> "$LOG_FILE"
-}
-
-# 统一错误处理
-handle_error() {
-    log_message "ERROR" "$1"
-    exit 1
-}
-
-# 调用示例：
-# log_message "INFO" "This is an info message."
-# log_message "ERROR" "This is an error message."
-# log_message "DEBUG" "This is a debug message."
-
-# 删除指定目录（如果存在）
-remove_directory_if_exists() {
-    local dir="$1"
-    if [ -d "$dir" ]; then
-        log_message "INFO" "Removing directory $dir..."
-        rm -rf "$dir" || handle_error "Failed to remove directory $dir"
-    else
-        log_message "INFO" "Directory $dir does not exist, skipping removal."
-    fi
-}
-
-# 删除日志目录
-remove_log_directory() {
-    local dir="/var/log/ubturbo"
-    if [ -d "$dir" ]; then
-        rm -rf "$dir" || echo "Failed to remove directory $dir"
-    else
-        echo "Directory $dir does not exist, skipping removal."
-    fi
-}
-
-# 删除用户及用户组
-remove_user_and_group() {
-    local user="ubturbo"
-    local group="ubturbo"
-
-    # 删除用户
-    if id "$user" &>/dev/null; then
-        log_message "INFO" "Removing user $user..."
-        userdel -r "$user" >/dev/null 2>> "$LOG_FILE"
-    else
-        log_message "INFO" "User $user does not exist, skipping removal."
-    fi
-
-    # 删除用户组
-    if getent group "$group" &>/dev/null; then
-        log_message "INFO" "Removing group $group..."
-        groupdel "$group" >/dev/null 2>> "$LOG_FILE" || handle_error "Failed to remove group $group"
-    else
-        log_message "INFO" "Group $group does not exist, skipping removal."
-    fi
-}
-
-# 去除字符串前后空白字符的函数
-trim_spaces() {
-    local input="$1"
-    # 使用 awk 去除首尾空格
-    input=$(echo "$input" | awk '{gsub(/^[ \t]+/, ""); gsub(/[ \t]+$/, ""); print}')
-    echo "$input"
-}
-
-# 主流程
-main() {
-# 检查是否是卸载操作
-if [ "$1" -ne 0 ]; then
-    log_message "INFO"  "Not an uninstall operation."
-    chown "ubturbo:ubturbo" "/var/log/ubturbo/ubturbo-uninstall.log"
-    exit 0
-else
-    log_message "INFO"  "Uninstalling the package post..."
+# ─── rmrs subpackage ───
+%post rmrs
+if [ "$1" -ge 1 ]; then
+    %systemd_postun_with_restart ubturbo.service
 fi
-log_message "INFO" "======================"
-log_message "INFO" "post_uninstall.sh started"
-log_message "INFO" "======================"
 
-# 删除用户组
-remove_user_and_group
-
-log_message "INFO" "======================"
-log_message "INFO" "post_uninstall.sh ended"
-log_message "INFO" "======================"
-# 删除日志目录
-remove_log_directory
-}
-
-# 执行主流程
-main "$@"
+%postun rmrs
+if [ "$1" -ge 1 ]; then
+    %systemd_postun_with_restart ubturbo.service
+fi

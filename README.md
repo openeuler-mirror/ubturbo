@@ -82,7 +82,7 @@ UBTURBO/
 
 ## 构建依赖
 
-> **架构与操作系统要求**：UBTurbo仅支持aarch64架构，构建强依赖openEuler（`CMakeLists.txt`读取`/etc/openEuler-release`），推荐在openEuler 24.03 LTS上构建。SMAP插件同样仅支持aarch64。
+> **架构与操作系统要求**：UBTurbo仅支持aarch64架构，推荐在openEuler 24.03 LTS上构建与打包（RPM 打包基于仓库根目录的 `ubturbo.spec`，通过 `rpmbuild` 构建）。SMAP插件同样仅支持aarch64。
 
 编译UBTurbo需要安装以下依赖（以openEuler为例）：
 
@@ -122,6 +122,26 @@ sh build.sh
 - 在dist/release/lib下会有以下库文件: `libubturbo_client.so`
 
 - 在dist/release/conf下会有以配置文件: `ubturbo_plugin_admission.conf`、`ubturbo.conf`
+
+### 构建 RPM 包
+
+RPM 打包基于仓库根目录的 `ubturbo.spec`，通过 `rpmbuild` 构建（不再使用 CPack），需先安装 `rpm-build`：
+
+```bash
+sudo dnf install -y rpm-build
+```
+
+在根目录下执行：
+
+```bash
+sh build.sh ubturbo        # 构建 ubturbo 主包
+sh build.sh ubturbo-rmrs   # 构建 ubturbo-rmrs 子包
+```
+
+构建产物位于根目录 `output/`：
+
+- `ubturbo-*.aarch64.rpm`：UBTurbo 主框架（`ub_turbo_exec`、`libubturbo_client.so`、框架配置与 systemd 服务）
+- `ubturbo-rmrs-*.aarch64.rpm`：rmrs 插件（`librmrs_ubturbo_plugin.so`）及其配置
 
 ## 单元测试
 
@@ -224,20 +244,16 @@ sudo dnf install -y rpm-build cmake make gcc gcc-c++ ninja-build \
     mkdir -p "$RPMBUILD_DIR"/{SOURCES,SPECS,RPMS,SRPMS,BUILD,BUILDROOT}
     ```
 
-2. 构建 ubturbo-rmrs RPM（打包 UBTurbo 源码并执行 rpmbuild）：
+2. 构建 ubturbo / ubturbo-rmrs RPM（推荐使用仓库封装的入口，基于 `ubturbo.spec` 自动打包源码并执行 rpmbuild）：
 
     ```bash
     cd <SOURCE_DIR>
-    tar -czf "$RPMBUILD_DIR/SOURCES/ubturbo.tar.gz" \
-        --exclude='.git' --exclude='.gitignore' --exclude='.gitmodules' \
-        --exclude='dist' --exclude='output' --exclude='*.tar.gz' --exclude='*.rpm' .
-    cp ubturbo.spec "$RPMBUILD_DIR/SPECS/"
-    rpmbuild -ba "$RPMBUILD_DIR/SPECS/ubturbo.spec" \
-        --define "_topdir $RPMBUILD_DIR" \
-        --define "_sourcedir $RPMBUILD_DIR/SOURCES" \
-        --define "ubturbo_version 1.1.1" \
-        --define "release_version 1"
+    bash build.sh ubturbo        # 构建 ubturbo 主包
+    bash build.sh ubturbo-rmrs   # 构建 ubturbo-rmrs 子包
     ```
+
+    产物位于 `<SOURCE_DIR>/output/`（`ubturbo-*.aarch64.rpm`、`ubturbo-rmrs-*.aarch64.rpm`）。
+    SMAP 相关的 rpmbuild 工作目录 `$RPMBUILD_DIR` 仅用于下面的 SMAP 步骤。
 
 3. 构建 ubturbo-smap RPM（打包 `plugins/smap/` 源码并执行 rpmbuild，传入 `KERNEL_VERSION` 宏）：
 
@@ -257,7 +273,7 @@ sudo dnf install -y rpm-build cmake make gcc gcc-c++ ninja-build \
 
     `KERNEL_VERSION` 默认 `openeuler`，可选值：`openeuler` | `ocos` | `velinux`。
 
-4. 收集 RPM 产物到输出目录：
+4. 收集 SMAP RPM 产物到输出目录（ubturbo / ubturbo-rmrs 已在上一步生成于 `<SOURCE_DIR>/output/`）：
 
     ```bash
     mkdir -p <OUTPUT_DIR>
@@ -268,7 +284,8 @@ sudo dnf install -y rpm-build cmake make gcc gcc-c++ ninja-build \
 
 **构建产物**
 
-- `ubturbo-rmrs-*.aarch64.rpm`：UBTurbo 主框架
+- `ubturbo-*.aarch64.rpm`：UBTurbo 主框架（`ub_turbo_exec`、`libubturbo_client.so`、框架配置与 systemd 服务）
+- `ubturbo-rmrs-*.aarch64.rpm`：RMRS 插件（`librmrs_ubturbo_plugin.so`）及其配置
 - `ubturbo-smap-*.aarch64.rpm`：SMAP 内核驱动与用户态库
 
 #### 安装RPM包

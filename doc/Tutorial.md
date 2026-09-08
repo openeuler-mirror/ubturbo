@@ -15,7 +15,7 @@
 Demo1使用说明：
 
 ```bash
-# 环境要求：已安装ubturbo-rmrs、ubturbo-devel、ubturbo-smap、libboundscheck
+# 环境要求：已安装ubturbo（主框架）、ubturbo-rmrs（插件）、ubturbo-devel、ubturbo-smap、libboundscheck
 
 # 编译
 g++ -lboundscheck -lubturbo_client demo1.cpp -o demo1
@@ -122,7 +122,7 @@ int main(int argc, char* argv[])
 Demo2使用说明：
 
 ```bash
-# 环境要求：已安装ubturbo-rmrs、ubturbo-devel、ubturbo-smap、libboundscheck
+# 环境要求：已安装ubturbo（主框架）、ubturbo-rmrs（插件）、ubturbo-devel、ubturbo-smap、libboundscheck
 
 # 编译
 g++ -lboundscheck -lubturbo_client demo2.cpp -o demo2
@@ -249,32 +249,35 @@ sh build.sh
 
 - 在dist/release/conf下会生成以下配置文件: `ubturbo_plugin_admission.conf`、`ubturbo.conf`、`plugin_rmrs.conf`
 
-构建rpm包：
+构建rpm包（基于仓库根目录的 `ubturbo.spec`，通过 `rpmbuild` 构建，需先安装 `rpm-build`）：
 
 ```bash
-cd dist/release
-cpack
+# 在仓库根目录执行
+sh build.sh ubturbo        # 构建 ubturbo 主包
+sh build.sh ubturbo-rmrs   # 构建 ubturbo-rmrs 子包
 ```
 
-执行上述命令之后，rpm包（例如ubturbo-rmrs-1.1.1-1.oe2403sp1.aarch64.rpm）位于`dist/release/output`中。
+执行上述命令之后，rpm包（例如 `ubturbo-1.0.0-23.aarch64.rpm`、`ubturbo-rmrs-1.0.0-23.aarch64.rpm`）位于仓库根目录的 `output/` 中。
 
 ## Getting Started: Installation Guide
 
 ```bash
-rpm -ivh ubturbo-rmrs-1.1.1-1.oe2403sp1.aarch64.rpm
+rpm -ivh ubturbo-1.0.0-23.aarch64.rpm
+rpm -ivh ubturbo-rmrs-1.0.0-23.aarch64.rpm
 ```
 
 检查ubturbo是否安装成功：
 
 ```bash
-rpm -qa | grep ubturbo-rmrs
+rpm -qa | grep ubturbo
 ```
 
-返回如下信息即表示安装成功：
+返回如下信息即表示安装成功（`ubturbo` 为主框架包，`ubturbo-rmrs` 为 RMRS 插件包）：
 
 ```bash
-[root@controller ~]# rpm -qa | grep ubturbo-rmrs
-ubturbo-rmrs*
+[root@controller ~]# rpm -qa | grep ubturbo
+ubturbo-1.0.0-23.aarch64
+ubturbo-rmrs-1.0.0-23.aarch64
 ```
 
 安装后的目录结构：

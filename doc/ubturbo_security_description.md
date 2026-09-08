@@ -82,7 +82,7 @@ UBTurbo 体系内的可执行/库文件及其特权配置如下：
 
 ## 文件与目录权限
 
-### UBTurbo 主框架（`ubturbo-rmrs` 组件）
+### UBTurbo 主框架（`ubturbo` 组件）
 
 | 路径 | 权限 | 属主 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -97,7 +97,7 @@ UBTurbo 体系内的可执行/库文件及其特权配置如下：
 | `/var/log/ubturbo` | `700` | `ubturbo:ubturbo` | 日志目录。 |
 | `/var/log/ubturbo/*` | `600` | `ubturbo:ubturbo` | 各日志文件。 |
 | `/usr/lib64/libubturbo_client.so` | `550` | `ubturbo:ubturbo` | 对外客户端 SDK。 |
-| `/etc/systemd/system/ubturbo.service` | `644` | `root:root` | systemd 单元文件。 |
+| `/usr/lib/systemd/system/ubturbo.service` | `644` | `root:root` | systemd 单元文件。 |
 
 ### SMAP 内核组件（`ubturbo-smap` 组件）
 
@@ -171,7 +171,7 @@ UBTurbo 体系内各主体间的通信关系如下：
 
 | 账号 | 类型 | shell | 用途 | 创建方式 |
 | :--- | :--- | :--- | :--- | :--- |
-| `ubturbo` | 系统账户（服务账户） | `/sbin/nologin` | 守护进程运行身份、内核设备属主、IPC socket 属主、`CAP_DAC_READ_SEARCH`/`CAP_SYS_PTRACE` 能力持有者 | `ubturbo-rmrs` RPM 安装时创建 |
+| `ubturbo` | 系统账户（服务账户） | `/sbin/nologin` | 守护进程运行身份、内核设备属主、IPC socket 属主、`CAP_DAC_READ_SEARCH`/`CAP_SYS_PTRACE` 能力持有者 | `ubturbo` RPM 安装时创建 |
 | `root` | 系统账户 | — | 内核模块加载、systemd 单元管理与能力授予 | 系统默认 |
 
 `ubturbo` 账户不可交互登录，仅服务于 UBTurbo 进程；其权限边界由文件系统权限、udev 规则、systemd 能力配置共同界定，仅持有读取 `/proc` 所需的 `CAP_DAC_READ_SEARCH`、`CAP_SYS_PTRACE` 两项能力（且经进程内安全模块收敛），不再依赖 sudoers。任何需要调用 UBTurbo 的本机用户，经管理员加入 `ubturbo` 组即可获得 IPC 访问权限，无需额外凭证。
