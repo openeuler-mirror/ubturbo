@@ -1,0 +1,16 @@
+# 本地敏感配置（含 API Key）
+config.py
+
+# 运行时产物
+runtime/
+logs/
+snapshots/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# IDE / 本地工具配置
+.idea/
+.opencode/
+.testagent/
