@@ -2589,6 +2589,136 @@ TEST_F(ManageTest, TestChangePidRemoteByPidDedupSamePid)
     free(msg.payloads);
 }
 
+extern "C" void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destNodeIndex,
+                                      uint64_t memSize, int ratio);
+extern "C" int SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRemoteNumaIoctlMsg *msg, int len);
+
+/* WATERLINE + MIG_MEMSIZE_MODE：部分量迁移后源节点 L2 位必须保留，否则同源节点
+ * 二次迁移会在 IsPidArrRemoteNumaMatch 处因 NotInAttrL2 返回 -ENXIO。
+ * 判据为扣减后的 strategyAttr.memSize[l1node][srcNodeIndex]，非零即视为仍有剩余。 */
+TEST_F(ManageTest, TestChangePidRemoteMemoryMemsizePartialKeepsSrcL2)
+{
+    g_runMode = WATERLINE_MODE;
+    g_processManager.nrLocalNuma = 4;
+    const int srcNid = 8;
+    const int destNid = 9;
+    int srcNodeIndex = srcNid - g_processManager.nrLocalNuma;
+    int destNodeIndex = destNid - g_processManager.nrLocalNuma;
+    const uint64_t srcTotal = 1024 * 1024; /* 1GB，单位 KB */
+
+    ProcessAttr attr = {};
+    attr.pid = 100;
+    attr.migrateMode = MIG_MEMSIZE_MODE;
+    attr.numaAttr.numaNodes = BIT(0); /* 本地 numa0 */
+    AddAttrL2(&attr, srcNid);
+    attr.strategyAttr.memSize[0][srcNodeIndex] = srcTotal;
+
+    /* 迁 512MB < 1GB：扣减后源仍非零 → migOutAll=false → 源 L2 位保留，目的 L2 位新增。 */
+    ChangePidRemoteMemory(&attr, srcNodeIndex, destNodeIndex, srcTotal / 2, 0);
+    EXPECT_TRUE(InAttrL2(&attr, srcNid));
+    EXPECT_TRUE(InAttrL2(&attr, destNid));
+}
+
+TEST_F(ManageTest, TestChangePidRemoteMemoryMemsizeFullClearsSrcL2)
+{
+    g_runMode = WATERLINE_MODE;
+    g_processManager.nrLocalNuma = 4;
+    const int srcNid = 8;
+    const int destNid = 9;
+    int srcNodeIndex = srcNid - g_processManager.nrLocalNuma;
+    int destNodeIndex = destNid - g_processManager.nrLocalNuma;
+    const uint64_t srcTotal = 1024 * 1024;
+
+    ProcessAttr attr = {};
+    attr.pid = 100;
+    attr.migrateMode = MIG_MEMSIZE_MODE;
+    attr.numaAttr.numaNodes = BIT(0);
+    AddAttrL2(&attr, srcNid);
+    attr.strategyAttr.memSize[0][srcNodeIndex] = srcTotal;
+
+    /* 全量迁出：扣减后源归零 → migOutAll=true → 源 L2 位清除，目的 L2 位新增。 */
+    ChangePidRemoteMemory(&attr, srcNodeIndex, destNodeIndex, srcTotal, 0);
+    EXPECT_FALSE(InAttrL2(&attr, srcNid));
+    EXPECT_TRUE(InAttrL2(&attr, destNid));
+}
+
+/* SetPayloadValue 构建 ioctl 用 transient payload 的 numaNodes，WATERLINE 下
+ * MIG_MEMSIZE_MODE 需按 memSize >= strategyAttr.memSize 判定是否清除源位（与
+ * ChangePidRemoteMemory 的持久位图语义保持一致）。 */
+TEST_F(ManageTest, TestSetPayloadValueMemsizePartialKeepsSrcL2)
+{
+    g_runMode = WATERLINE_MODE;
+    g_processManager.nrLocalNuma = 4;
+    const int srcNid = 8;
+    const int destNid = 9;
+    int srcNodeIndex = srcNid - g_processManager.nrLocalNuma;
+    const uint64_t srcTotal = 1024 * 1024;
+    int offset = LOCAL_NUMA_BITS - g_processManager.nrLocalNuma;
+
+    ProcessAttr attr = {};
+    attr.pid = 100;
+    attr.migrateMode = MIG_MEMSIZE_MODE;
+    attr.numaAttr.numaNodes = BIT(0);
+    AddAttrL2(&attr, srcNid);
+    attr.strategyAttr.memSize[0][srcNodeIndex] = srcTotal;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotAdd(&g_processManager, &attr);
+    EnvMutexInit(&g_processManager.threadLock);
+
+    struct MigPidRemoteNumaIoctlMsg msg = {.pidCnt = 1};
+    msg.payloads = (struct MigPayload *)malloc(sizeof(struct MigPayload));
+    msg.payloads[0].pid = attr.pid;
+    msg.payloads[0].srcNid = srcNid;
+    msg.payloads[0].destNid = destNid;
+    msg.payloads[0].memSize = srcTotal / 2; /* 部分量 */
+    msg.payloads[0].ratio = 0;
+
+    struct AccessAddPidPayload payload[1] = {{0}};
+    int ret = SetPayloadValue(payload, &msg, 1);
+    EXPECT_EQ(1, ret);
+    /* 部分量：源位保留，目的位新增。 */
+    EXPECT_TRUE(InL2(payload[0].numaNodes, srcNid + offset));
+    EXPECT_TRUE(InL2(payload[0].numaNodes, destNid + offset));
+    free(msg.payloads);
+}
+
+TEST_F(ManageTest, TestSetPayloadValueMemsizeFullClearsSrcL2)
+{
+    g_runMode = WATERLINE_MODE;
+    g_processManager.nrLocalNuma = 4;
+    const int srcNid = 8;
+    const int destNid = 9;
+    int srcNodeIndex = srcNid - g_processManager.nrLocalNuma;
+    const uint64_t srcTotal = 1024 * 1024;
+    int offset = LOCAL_NUMA_BITS - g_processManager.nrLocalNuma;
+
+    ProcessAttr attr = {};
+    attr.pid = 100;
+    attr.migrateMode = MIG_MEMSIZE_MODE;
+    attr.numaAttr.numaNodes = BIT(0);
+    AddAttrL2(&attr, srcNid);
+    attr.strategyAttr.memSize[0][srcNodeIndex] = srcTotal;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotAdd(&g_processManager, &attr);
+    EnvMutexInit(&g_processManager.threadLock);
+
+    struct MigPidRemoteNumaIoctlMsg msg = {.pidCnt = 1};
+    msg.payloads = (struct MigPayload *)malloc(sizeof(struct MigPayload));
+    msg.payloads[0].pid = attr.pid;
+    msg.payloads[0].srcNid = srcNid;
+    msg.payloads[0].destNid = destNid;
+    msg.payloads[0].memSize = srcTotal; /* 全量 */
+    msg.payloads[0].ratio = 0;
+
+    struct AccessAddPidPayload payload[1] = {{0}};
+    int ret = SetPayloadValue(payload, &msg, 1);
+    EXPECT_EQ(1, ret);
+    /* 全量：源位清除，目的位新增。 */
+    EXPECT_FALSE(InL2(payload[0].numaNodes, srcNid + offset));
+    EXPECT_TRUE(InL2(payload[0].numaNodes, destNid + offset));
+    free(msg.payloads);
+}
+
 TEST_F(ManageTest, TestEnableProcessMigrateDisableInvalid)
 {
     pid_t pidArr[] = {1};
