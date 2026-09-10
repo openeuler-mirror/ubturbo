@@ -484,6 +484,8 @@ static int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayload *pay
     attr->enableSwap = true;
     attr->isFirstScan = true;
     ApplyRecoveredTargetConfig(attr, &activeConfig);
+    /* 恢复持久化的 sync 旁路容量标记：payload 存 uint8_t，非 0 视为 true */
+    attr->ignoreRemoteCapacity = (payload->ignoreRemoteCapacity == 1);
     attr->autoRemoveWhenRemoteEmpty = attr->scanType == NORMAL_SCAN && IsRecoveredTargetConfigZero(&activeConfig);
     if (time(&attr->scanStart) == (time_t)-1) {
         SMAP_LOGGER_ERROR("get time error.");
@@ -678,6 +680,9 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
             PidSlotReleaseRefs(all, n);
             return ret;
         }
+        /* 与 effectiveConfig 选择一致：pending 生效时用 pending 的容量策略 */
+        tmp->ignoreRemoteCapacity =
+            (attr->pendingTargetConfigValid ? attr->pendingIgnoreRemoteCapacity : attr->ignoreRemoteCapacity) ? 1 : 0;
         tmp++;
     }
 
