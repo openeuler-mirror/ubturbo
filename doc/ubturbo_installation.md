@@ -65,19 +65,25 @@
   sudo rpm -ivh ubturbo-<version>-<release>.aarch64.rpm ubturbo-rmrs-<version>-<release>.aarch64.rpm --force
   ```
 
-
 ### 容器镜像部署（可选）
 
-容器环境部署有两种方式：
+容器环境部署方式：
 
 - 基于镜像构建容器环境
-- 基于 openEuler 基础环境从零安装
 
 #### 方式一：基于镜像构建容器环境
 
 基于镜像构建容器环境，首先需要获取镜像。通过 Dockerfile 预先将全部构建依赖安装进镜像，后续进入容器即可直接编译，无需重复安装工具链，节省环境准备时间。
 
 **步骤 1：获取镜像**
+
+选项一：直接拉取预构建镜像
+
+```bash
+docker pull swr.cn-north-4.myhuaweicloud.com/ubscore/ubturbo:24.03-lts
+```
+
+选项二：基于 Dockerfile 构建镜像
 
 Dockerfile 位于仓库 `docker/ubturbo.Dockerfile`，内容如下：
 
@@ -105,9 +111,9 @@ docker build -f docker/ubturbo.Dockerfile -t ubturbo-build:24.03-lts .
 
 > [!NOTE]说明
 >
-> 构建依赖与 <code>ubturbo.spec</code> 的 <code>BuildRequires</code> 保持一致；googletest 与 mockcpp 为源码子模块，随源码编译，无需预装。
+> 构建依赖与 <code>ubturbo.spec</code> 的 <code>BuildRequires</code> 保持一致；googletest 与 mock 测试桩框架为源码子模块，随源码编译，无需预装。
 > aarch64 主机直接构建即可；x86_64 主机可加 <code>--platform linux/arm64</code> 构建镜像（仅用于验证 Dockerfile，容器内交叉编译极慢，不推荐）。
-> 覆盖率报告依赖 lcov/genhtml（openEuler 官方仓库不含，需源码安装），如容器内需生成覆盖率，可在镜像内追加安装。
+> 覆盖率报告依赖 lcov 工具链（openEuler 官方仓库不含，需源码安装），如容器内需生成覆盖率，可在镜像内追加安装。
 
 **步骤 2：创建容器**
 
@@ -125,17 +131,6 @@ docker run -d --privileged --name ubturbo-build \
 ```bash
 docker exec -it ubturbo-build bash
 ```
-
-#### 方式二：基于 openEuler 基础环境从零安装
-
-不使用镜像时，可在 openEuler 24.03 LTS (aarch64) 环境手动安装全部构建依赖：
-
-```bash
-sudo dnf install -y make gcc gcc-c++ cmake ninja-build dos2unix \
-    chrpath patchelf libboundscheck libvirt-devel findutils git
-```
-
-该方式每次环境初始化均需联网安装依赖，耗时较长，推荐使用方式一。
 
 ## 构建项目与单元测试
 
@@ -283,23 +278,23 @@ cat /var/log/ubturbo/ubturbo.log | grep "loaded successfully"
 
 1. 停止并删除容器
 
-```bash
-docker ps -a
-docker stop ubturbo-build
-docker rm ubturbo-build
-```
+   ```bash
+   docker ps -a
+   docker stop ubturbo-build
+   docker rm ubturbo-build
+   ```
 
 2. 删除镜像
 
-```bash
-docker rmi ubturbo-build:24.03-lts
-```
+   ```bash
+   docker rmi ubturbo-build:24.03-lts
+   ```
 
 3. 卸载 RPM 包
 
-```bash
-sudo dnf remove -y ubturbo-rmrs ubturbo
-```
+   ```bash
+   sudo dnf remove -y ubturbo-rmrs ubturbo
+   ```
 
 > [!NOTE]说明
 >
