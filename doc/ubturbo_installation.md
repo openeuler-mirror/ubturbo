@@ -64,6 +64,7 @@
   # 如需覆盖安装，可执行如下命令：
   sudo rpm -ivh ubturbo-<version>-<release>.aarch64.rpm ubturbo-rmrs-<version>-<release>.aarch64.rpm --force
   ```
+
 ### 容器镜像部署（可选）
 
 容器环境部署方式：
@@ -110,9 +111,9 @@ docker build -f docker/ubturbo.Dockerfile -t ubturbo-build:24.03-lts .
 
 > [!NOTE]说明
 >
-> 构建依赖与 <code>ubturbo.spec</code> 的 <code>BuildRequires</code> 保持一致；googletest 与 mockcpp 为源码子模块，随源码编译，无需预装。
+> 构建依赖与 <code>ubturbo.spec</code> 的 <code>BuildRequires</code> 保持一致；googletest 与 mock 测试桩框架为源码子模块，随源码编译，无需预装。
 > aarch64 主机直接构建即可；x86_64 主机可加 <code>--platform linux/arm64</code> 构建镜像（仅用于验证 Dockerfile，容器内交叉编译极慢，不推荐）。
-> 覆盖率报告依赖 lcov/genhtml（openEuler 官方仓库不含，需源码安装），如容器内需生成覆盖率，可在镜像内追加安装。
+> 覆盖率报告依赖 lcov 工具链（openEuler 官方仓库不含，需源码安装），如容器内需生成覆盖率，可在镜像内追加安装。
 
 **步骤 2：创建容器**
 
