@@ -314,7 +314,7 @@ static int BuildAndFillBitmapBuf(size_t *len, char **buf)
     return 0;
 }
 
-int RefreshManagedLocalTrackingScope(ProcessAttr *attr)
+int RefreshManagedLocalStatePeriodic(ProcessAttr *attr)
 {
     ProcessAttr candidate = *attr;
     int ret = RefreshManagedLocalState(&candidate, false);
@@ -322,25 +322,11 @@ int RefreshManagedLocalTrackingScope(ProcessAttr *attr)
         return ret;
     }
 
-    candidate.numaAttr.numaNodes = BuildManagedTrackingNodes(&candidate);
-    if (candidate.numaAttr.numaNodes != attr->numaAttr.numaNodes) {
-        struct AccessAddPidPayload payload = {
-            .type = attr->scanType,
-            .pid = attr->pid,
-            .scanTime = attr->scanTime,
-            .duration = attr->duration,
-            .numaNodes = candidate.numaAttr.numaNodes,
-            .pidType = attr->type,
-        };
-        ret = AccessIoctlAddPid(1, &payload);
-        if (ret) {
-            SMAP_LOGGER_ERROR("Refresh pid %d managed tracking failed: %d.", attr->pid, ret);
-            return ret;
-        }
-    }
-
+    /*
+     * 内核不维护 numa_nodes 位图，numaAttr.numaNodes 由用户态在
+     * bitmap 回读后按各节点页数合成；此处仅刷新本地观测状态。
+     */
     attr->managedLocalState = candidate.managedLocalState;
-    attr->numaAttr.numaNodes = candidate.numaAttr.numaNodes;
     return 0;
 }
 
@@ -365,9 +351,34 @@ int BuildAllPidData(void)
         }
         ProcessAttr *current = GetProcessAttr(pmb.pid);
         if (current && current->scanType == NORMAL_SCAN) {
+            SetPidNrPages(current, pmb.nrPages, MAX_NODES);
+            /*
+             * 本地位直接由回读的各节点页数构造（nrPages[nid] != 0 即置位），
+             * 如实反映本轮实际内存分布；远端位以接口配置的迁移目标
+             * （targetConfig）为准，不随内核观测波动。
+             */
+            uint32_t numaNodes = 0;
+            int nrLocalNuma = GetProcessManager()->nrLocalNuma;
+            for (int nid = 0; nid < nrLocalNuma; nid++) {
+                if (pmb.nrPages[nid] != 0) {
+                    AddL1(&numaNodes, nid);
+                }
+            }
+            for (uint32_t i = 0; i < current->targetConfig.count; i++) {
+                AddL2ByNid(&numaNodes, current->targetConfig.targets[i].remoteNid);
+            }
+            /*
+             * 本地位为空有两种情况：首个 walk 尚未完成（全零快照），或
+             * 进程页已全部迁到远端。两种情况都保留现有本地位（纳管预置
+             * 的观测过渡值/迁移前的分布），保证 GetAttrL1 始终返回合法
+             * L1；待进程重新产生本地页后自然收敛到实际分布。
+             */
+            if ((numaNodes & BuildAllLocalNumaMask()) == 0) {
+                numaNodes |= current->numaAttr.numaNodes & BuildAllLocalNumaMask();
+            }
+            current->numaAttr.numaNodes = numaNodes;
             SMAP_LOGGER_INFO("Pid %d, numaNodes %#x, nrLocalNuma %u.", current->pid, current->numaAttr.numaNodes,
                              GetProcessManager()->nrLocalNuma);
-            SetPidNrPages(current, pmb.nrPages, MAX_NODES);
             ret = FillPidData(current, &pmb);
             if (ret) {
                 SMAP_LOGGER_ERROR("Fill pid %d actc data failed.", current->pid);
@@ -376,7 +387,7 @@ int BuildAllPidData(void)
                 continue;
             }
             if (!current->groupPolicy.enabled) {
-                ret = RefreshManagedLocalTrackingScope(current);
+                ret = RefreshManagedLocalStatePeriodic(current);
                 if (ret) {
                     SMAP_LOGGER_ERROR("Refresh pid %d managed local state failed: %d.", current->pid, ret);
                     failedCount++;

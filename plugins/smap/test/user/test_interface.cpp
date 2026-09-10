@@ -737,8 +737,7 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgAllowsZeroTargetOnDisabledRemote)
 }
 
 extern "C" int IoctlHandler(int fd, const void *msg);
-extern "C" int PrepareMigrateOutCandidates(struct MigrateOutMsg *msg, int pidType, ProcessManageCandidate *candidates,
-                                           uint32_t *nodeBitmap);
+extern "C" int PrepareMigrateOutCandidates(struct MigrateOutMsg *msg, int pidType, ProcessManageCandidate *candidates);
 extern "C" int TrackMigrateOutCandidates(ProcessManageCandidate *candidates, int count);
 
 static int CheckPreparedCandidateTrackingPayload(int len, struct AccessAddPidPayload *payload)
@@ -3513,14 +3512,15 @@ TEST_F(InterfaceTest, AddProcessTrackingHAMScanSuccess)
     EXPECT_EQ(0, ret);
 }
 
-static int CheckTrackingPayloadKeepsAllRemoteNodes(int len, struct AccessAddPidPayload *payload)
+static int CheckTrackingPayloadSendsNoBitmap(int len, struct AccessAddPidPayload *payload)
 {
     EXPECT_EQ(1, len);
-    EXPECT_EQ((1U << 4) | (1U << 6), payload[0].numaNodes);
+    /* numaAttr.numaNodes is user-synthesized: tracking-add must not carry any bitmap. */
+    EXPECT_EQ(0U, payload[0].numaNodes);
     return 0;
 }
 
-TEST_F(InterfaceTest, AddProcessTrackingKeepsAllManagedRemoteNodes)
+TEST_F(InterfaceTest, AddProcessTrackingSendsNoTrackingBitmap)
 {
     pid_t pid = 1234;
     uint32_t scanTime = MIN_SCAN_TIME;
@@ -3537,7 +3537,7 @@ TEST_F(InterfaceTest, AddProcessTrackingKeepsAllManagedRemoteNodes)
     MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
     MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
-    MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckTrackingPayloadKeepsAllRemoteNodes));
+    MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckTrackingPayloadSendsNoBitmap));
 
     EXPECT_EQ(0, AddProcessTracking(&pid, &scanTime, &duration, 1, NORMAL_SCAN));
 }
@@ -4555,15 +4555,32 @@ TEST_F(InterfaceTest, TestAccessRemovePidFailed)
     EXPECT_EQ(-EBADF, ret);
 }
 
-extern "C" uint32_t ClearRemovePayloadRemoteNodes(ProcessAttr *attr, const struct RemovePayload *payload);
-TEST_F(InterfaceTest, TestClearRemovePayloadRemoteNodes)
+extern "C" bool RemoveLeavesNoRemoteTarget(ProcessAttr *attr, const struct RemovePayload *payload);
+TEST_F(InterfaceTest, TestRemoveLeavesNoRemoteTarget)
 {
+    /* The helper is a pure predicate: it never mutates attr. */
     ProcessAttr attr = {};
-    attr.numaAttr.numaNodes = 0b00010100;
-    struct RemovePayload payload = { .count = 1, .nid = { 4 } };
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
-    uint32_t ret = ClearRemovePayloadRemoteNodes(&attr, &payload);
-    EXPECT_NE(attr.numaAttr.numaNodes, ret);
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.count = 2;
+    attr.targetConfig.targets[0] = {4, 25, 0};
+    attr.targetConfig.targets[1] = {5, 25, 0};
+
+    /* Removing one of two targets leaves the other one. */
+    struct RemovePayload partial = { .count = 1, .nid = { 4 } };
+    EXPECT_FALSE(RemoveLeavesNoRemoteTarget(&attr, &partial));
+
+    /* Removing the only remaining target leaves none. */
+    ProcessAttr lastAttr = {};
+    lastAttr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    lastAttr.targetConfig.count = 1;
+    lastAttr.targetConfig.targets[0] = {5, 25, 0};
+    struct RemovePayload last = { .count = 1, .nid = { 5 } };
+    EXPECT_TRUE(RemoveLeavesNoRemoteTarget(&lastAttr, &last));
+
+    /* Removing a nid that is not a target changes nothing. */
+    ProcessAttr otherAttr = attr;
+    struct RemovePayload other = { .count = 1, .nid = { 6 } };
+    EXPECT_FALSE(RemoveLeavesNoRemoteTarget(&otherAttr, &other));
 }
 
 extern "C" int CheckSmapRemoveGroupedPidLocked(struct RemoveMsg *msg);

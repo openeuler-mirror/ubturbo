@@ -29,8 +29,7 @@ extern "C" RunMode g_runMode;
 extern "C" void RemoteNumaInfoInit();
 extern "C" int GetNodeFromCpu(int cpu);
 extern "C" int RefreshManagedLocalState(ProcessAttr *attr, bool fullReplacement);
-extern "C" uint32_t BuildManagedTrackingNodes(const ProcessAttr *attr);
-extern "C" int RefreshManagedLocalTrackingScope(ProcessAttr *attr);
+extern "C" int RefreshManagedLocalStatePeriodic(ProcessAttr *attr);
 extern "C" int UpdateManagedProcessTrackingMode(ProcessAttr *attr, ScanType scanType, uint32_t scanTime,
                                                 uint32_t duration);
 extern "C" int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
@@ -374,7 +373,6 @@ TEST_F(ManageTest, TestInitProcessMigrationTargetState)
     attr.pendingTargetConfig.count = 1;
     attr.pendingTargetConfigValid = true;
     attr.pendingIgnoreRemoteCapacity = true;
-    attr.pendingTargetNumaNodes = 0x31;
     attr.managedLocalState.managedLocalMask = 0xf;
     attr.managedLocalState.accountLocalMask[0] = 0x1;
 
@@ -384,7 +382,6 @@ TEST_F(ManageTest, TestInitProcessMigrationTargetState)
     EXPECT_EQ(0U, attr.pendingTargetConfig.count);
     EXPECT_FALSE(attr.pendingTargetConfigValid);
     EXPECT_FALSE(attr.pendingIgnoreRemoteCapacity);
-    EXPECT_EQ(0U, attr.pendingTargetNumaNodes);
     EXPECT_EQ(0U, attr.managedLocalState.managedLocalMask);
     EXPECT_EQ(0U, attr.managedLocalState.accountLocalMask[0]);
 
@@ -524,32 +521,6 @@ TEST_F(ManageTest, TestRefreshManagedLocalStateKeepsAccountLocal)
     EXPECT_EQ(BIT(0) | BIT(3), attr.managedLocalState.managedLocalMask);
 }
 
-TEST_F(ManageTest, TestBuildManagedTrackingNodes)
-{
-    ProcessAttr attr = {};
-    g_processManager.nrLocalNuma = 4;
-    attr.numaAttr.numaNodes = BIT(1) | BIT(4);
-    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(2);
-    attr.managedLocalState.accountLocalMask[2] = BIT(2);
-    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
-    attr.targetConfig.count = 1;
-    attr.targetConfig.targets[0] = {5, 25, 0};
-
-    EXPECT_EQ(BIT(0) | BIT(2) | BIT(4) | BIT(5) | BIT(6), BuildManagedTrackingNodes(&attr));
-    EXPECT_EQ(0U, BuildManagedTrackingNodes(nullptr));
-}
-
-TEST_F(ManageTest, TestBuildManagedTrackingNodesKeepsOmittedRemoteWithResidentPages)
-{
-    ProcessAttr attr = {};
-    g_processManager.nrLocalNuma = 4;
-    attr.numaAttr.numaNodes = BIT(4);
-    attr.walkPage.nrPage = 1;
-    attr.walkPage.nrPages[4] = 1;
-
-    EXPECT_EQ(BIT(4), BuildManagedTrackingNodes(&attr));
-}
-
 static int RefreshPeriodicManagedLocalCandidate(ProcessAttr *attr, bool fullReplacement)
 {
     EXPECT_FALSE(fullReplacement);
@@ -567,26 +538,7 @@ static int RefreshUnchangedManagedLocalCandidate(ProcessAttr *attr, bool fullRep
     return 0;
 }
 
-static int CheckManagedTrackingPayload(int len, struct AccessAddPidPayload *payload)
-{
-    EXPECT_EQ(1, len);
-    EXPECT_EQ(123, payload[0].pid);
-    EXPECT_EQ(100U, payload[0].scanTime);
-    EXPECT_EQ(NORMAL_SCAN, payload[0].type);
-    EXPECT_EQ(BIT(0) | BIT(2) | BIT(4), payload[0].numaNodes);
-    EXPECT_EQ(VM_TYPE, payload[0].pidType);
-    return 0;
-}
-
-static int CheckPendingMigrationTargetPayload(int len, struct AccessAddPidPayload *payload)
-{
-    EXPECT_EQ(1, len);
-    EXPECT_EQ(123, payload[0].pid);
-    EXPECT_EQ(VM_TYPE, payload[0].pidType);
-    return 0;
-}
-
-TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopePublishesAfterTracking)
+TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicPublishesLocalStateOnly)
 {
     ProcessAttr attr = {};
     g_processManager.nrLocalNuma = 4;
@@ -598,14 +550,15 @@ TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopePublishesAfterTracking)
     attr.managedLocalState.managedLocalMask = BIT(0);
 
     MOCKER(RefreshManagedLocalState).expects(once()).will(invoke(RefreshPeriodicManagedLocalCandidate));
-    MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckManagedTrackingPayload));
+    /* Kernel tracks all nodes by topology; no per-cycle tracking-scope ioctl. */
+    MOCKER(AccessIoctlAddPid).expects(never());
 
-    EXPECT_EQ(0, RefreshManagedLocalTrackingScope(&attr));
+    EXPECT_EQ(0, RefreshManagedLocalStatePeriodic(&attr));
     EXPECT_EQ(BIT(0) | BIT(2), attr.managedLocalState.managedLocalMask);
-    EXPECT_EQ(BIT(0) | BIT(2) | BIT(4), attr.numaAttr.numaNodes);
+    EXPECT_EQ(BIT(0) | BIT(4), attr.numaAttr.numaNodes);
 }
 
-TEST_F(ManageTest, TestRefreshManagedLocalTrackingFailureKeepsActiveState)
+TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicNoIoctlOnSuccess)
 {
     ProcessAttr attr = {};
     g_processManager.nrLocalNuma = 4;
@@ -616,14 +569,14 @@ TEST_F(ManageTest, TestRefreshManagedLocalTrackingFailureKeepsActiveState)
     attr.managedLocalState.managedLocalMask = BIT(0);
 
     MOCKER(RefreshManagedLocalState).expects(once()).will(invoke(RefreshPeriodicManagedLocalCandidate));
-    MOCKER(AccessIoctlAddPid).expects(once()).will(returnValue(-EIO));
+    MOCKER(AccessIoctlAddPid).expects(never());
 
-    EXPECT_EQ(-EIO, RefreshManagedLocalTrackingScope(&attr));
-    EXPECT_EQ(BIT(0), attr.managedLocalState.managedLocalMask);
+    EXPECT_EQ(0, RefreshManagedLocalStatePeriodic(&attr));
+    EXPECT_EQ(BIT(0) | BIT(2), attr.managedLocalState.managedLocalMask);
     EXPECT_EQ(BIT(0) | BIT(4), attr.numaAttr.numaNodes);
 }
 
-TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopeSkipsUnchangedBitmap)
+TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicSkipsUnchangedBitmap)
 {
     ProcessAttr attr = {};
     g_processManager.nrLocalNuma = 4;
@@ -636,7 +589,7 @@ TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopeSkipsUnchangedBitmap)
     MOCKER(RefreshManagedLocalState).expects(once()).will(invoke(RefreshUnchangedManagedLocalCandidate));
     MOCKER(AccessIoctlAddPid).expects(never());
 
-    EXPECT_EQ(0, RefreshManagedLocalTrackingScope(&attr));
+    EXPECT_EQ(0, RefreshManagedLocalStatePeriodic(&attr));
     EXPECT_EQ(BIT(0), attr.managedLocalState.residentLocalMask);
     EXPECT_EQ(BIT(0) | BIT(4), attr.numaAttr.numaNodes);
 }
@@ -672,7 +625,6 @@ TEST_F(ManageTest, TestConfigureMigrationTargetsStagesWhileMigrating)
     EXPECT_EQ(25, attr.strategyAttr.initRemoteMemRatio[0][0]);
     EXPECT_EQ(0x1U, attr.managedLocalState.managedLocalMask);
     EXPECT_EQ(5, attr.pendingTargetConfig.targets[0].remoteNid);
-    EXPECT_EQ(0x31U, attr.pendingTargetNumaNodes);
 }
 
 TEST_F(ManageTest, TestApplyPendingMigrationTargets)
@@ -690,7 +642,6 @@ TEST_F(ManageTest, TestApplyPendingMigrationTargets)
     attr.pendingTargetConfig.targets[0] = {5, 0, 4096};
     attr.pendingTargetConfigValid = true;
     attr.pendingIgnoreRemoteCapacity = true;
-    attr.pendingTargetNumaNodes = 0x21;
 
     g_processManager.nrLocalNuma = 4;
     g_pageSizeNormal = PAGESIZE_4K;
@@ -699,7 +650,8 @@ TEST_F(ManageTest, TestApplyPendingMigrationTargets)
     MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
     MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddEmptyCandidateResidentForTest));
     MOCKER(GetPidNumaPagesFromNumaMaps).expects(never());
-    MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckPendingMigrationTargetPayload));
+    /* Kernel tracks all nodes by topology; applying pending targets needs no ioctl. */
+    MOCKER(AccessIoctlAddPid).expects(never());
     MOCKER(SyncAllProcessConfig).expects(once()).will(returnValue(0));
 
     int ret = ApplyPendingMigrationTargets(&attr);
@@ -713,37 +665,6 @@ TEST_F(ManageTest, TestApplyPendingMigrationTargets)
     EXPECT_TRUE(attr.ignoreRemoteCapacity);
     EXPECT_FALSE(attr.pendingIgnoreRemoteCapacity);
     EXPECT_EQ(0x21U, attr.numaAttr.numaNodes);
-    EXPECT_EQ(0U, attr.pendingTargetNumaNodes);
-}
-
-TEST_F(ManageTest, TestPendingTrackingFailureKeepsActiveTarget)
-{
-    ProcessAttr attr = {};
-    attr.pid = 123;
-    attr.numaAttr.numaNodes = 0x11;
-    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
-    attr.targetConfig.count = 1;
-    attr.targetConfig.targets[0] = {4, 25, 0};
-    attr.pendingTargetConfig.migrateMode = MIG_RATIO_MODE;
-    attr.pendingTargetConfig.count = 1;
-    attr.pendingTargetConfig.targets[0] = {5, 30, 0};
-    attr.pendingTargetConfigValid = true;
-    attr.pendingTargetNumaNodes = 0x31;
-    g_processManager.nrLocalNuma = 4;
-    g_pageSizeNormal = PAGESIZE_4K;
-    g_pageSizeHuge = PAGESIZE_2M;
-    g_processManager.tracking.pageSize = PAGESIZE_4K;
-    MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
-    MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddEmptyCandidateResidentForTest));
-    MOCKER(GetPidNumaPagesFromNumaMaps).expects(never());
-    MOCKER(AccessIoctlAddPid).expects(once()).will(returnValue(-EIO));
-
-    EXPECT_EQ(-EIO, ApplyPendingMigrationTargets(&attr));
-    EXPECT_TRUE(attr.pendingTargetConfigValid);
-    EXPECT_EQ(4, attr.targetConfig.targets[0].remoteNid);
-    EXPECT_EQ(5, attr.pendingTargetConfig.targets[0].remoteNid);
-    EXPECT_EQ(0x11U, attr.numaAttr.numaNodes);
-    EXPECT_EQ(0x31U, attr.pendingTargetNumaNodes);
 }
 
 extern "C" errno_t memset_s(void *dest, size_t destMax, int c, size_t count);
@@ -1102,6 +1023,7 @@ TEST_F(ManageTest, TestSetProcessLocalNuma)
 {
     int pid = 1;
     uint32_t nodeBitmap = 0;
+    g_processManager.nrLocalNuma = 4;
     CPU_ZERO(&g_fake_cpu_mask);
     CPU_SET(1, &g_fake_cpu_mask);
     CPU_SET(2, &g_fake_cpu_mask);
@@ -1109,6 +1031,7 @@ TEST_F(ManageTest, TestSetProcessLocalNuma)
     MOCKER(GetNodeFromCpu).stubs().will(returnValue(1)).then(returnValue(2));
     int ret = SetProcessLocalNuma(pid, &nodeBitmap, true);
     EXPECT_EQ(ret, 0);
+    /* Observed local nodes (affinity ∪ numa_maps), not the full local set. */
     EXPECT_EQ(nodeBitmap, BIT(1) | BIT(2));
 }
 
@@ -1203,7 +1126,8 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateSamplesOnce)
     ASSERT_NE(nullptr, candidate.prepared);
     EXPECT_EQ(0U, active.managedLocalState.managedLocalMask);
     EXPECT_EQ(BIT(0) | BIT(2), candidate.prepared->managedLocalState.managedLocalMask);
-    EXPECT_EQ(BIT(0) | BIT(2), candidate.prepared->numaAttr.numaNodes);
+    /* numaAttr.numaNodes is user-synthesized from page-count readback; it stays 0 at prepare time. */
+    EXPECT_EQ(0U, candidate.prepared->numaAttr.numaNodes);
     EXPECT_TRUE(candidate.prepared->ignoreRemoteCapacity);
 
     PublishProcessManageCandidate(&candidate);
@@ -1224,7 +1148,6 @@ TEST_F(ManageTest, TestPublishProcessManageCandidateStagesCapacityBypass)
     prepared->pendingTargetConfig.targets[0] = {4, 0, 2048};
     prepared->pendingTargetConfigValid = true;
     prepared->pendingIgnoreRemoteCapacity = true;
-    prepared->pendingTargetNumaNodes = BIT(0) | BIT(4);
     ProcessManageCandidate candidate = {
         .active = &active,
         .prepared = prepared,
@@ -1237,7 +1160,6 @@ TEST_F(ManageTest, TestPublishProcessManageCandidateStagesCapacityBypass)
     EXPECT_TRUE(active.pendingTargetConfigValid);
     EXPECT_TRUE(active.pendingIgnoreRemoteCapacity);
     EXPECT_EQ(4, active.pendingTargetConfig.targets[0].remoteNid);
-    EXPECT_EQ(BIT(0) | BIT(4), active.pendingTargetNumaNodes);
 }
 
 TEST_F(ManageTest, TestPrepareProcessManageCandidateAffinityFailureUsesResident)
@@ -1253,7 +1175,8 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateAffinityFailureUsesResident)
     ASSERT_EQ(0, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
     ASSERT_NE(nullptr, candidate.prepared);
     EXPECT_EQ(BIT(2), candidate.prepared->managedLocalState.managedLocalMask);
-    EXPECT_EQ(BIT(2), candidate.prepared->numaAttr.numaNodes);
+    /* numaAttr.numaNodes is user-synthesized from page-count readback; it stays 0 at prepare time. */
+    EXPECT_EQ(0U, candidate.prepared->numaAttr.numaNodes);
     DiscardProcessManageCandidate(&candidate);
 }
 
@@ -1270,7 +1193,8 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateResidentFailureUsesAffinity)
     ASSERT_EQ(0, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
     ASSERT_NE(nullptr, candidate.prepared);
     EXPECT_EQ(BIT(0), candidate.prepared->managedLocalState.managedLocalMask);
-    EXPECT_EQ(BIT(0), candidate.prepared->numaAttr.numaNodes);
+    /* numaAttr.numaNodes is user-synthesized from page-count readback; it stays 0 at prepare time. */
+    EXPECT_EQ(0U, candidate.prepared->numaAttr.numaNodes);
     DiscardProcessManageCandidate(&candidate);
 }
 
@@ -1287,7 +1211,31 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateEmptyObservationUsesAllLocal
     ASSERT_EQ(0, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
     ASSERT_NE(nullptr, candidate.prepared);
     EXPECT_EQ(0x7U, candidate.prepared->managedLocalState.managedLocalMask);
-    EXPECT_EQ(0x7U, candidate.prepared->numaAttr.numaNodes);
+    /* numaAttr.numaNodes is user-synthesized from page-count readback; it stays 0 at prepare time. */
+    EXPECT_EQ(0U, candidate.prepared->numaAttr.numaNodes);
+    DiscardProcessManageCandidate(&candidate);
+}
+
+TEST_F(ManageTest, TestPrepareProcessManageCandidateSeedsLocalNumaNodes)
+{
+    /* New pid: not registered in slots, so the prepare path takes the new-process branch. */
+    ProcessParam param = {
+        .pid = 456,
+        .scanType = NORMAL_SCAN,
+        .count = 0,
+    };
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    g_processManager.nrLocalNuma = 4;
+    ProcessManageCandidate candidate = {};
+
+    MOCKER(DetectPidType).stubs().will(returnValue(0));
+    MOCKER(SetLocalNumaByCpu).stubs().will(returnValue(0));
+    MOCKER(GetProcessNumaMapsObservation).stubs().will(invoke(AddEmptyCandidateResidentForTest));
+
+    ASSERT_EQ(0, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
+    ASSERT_NE(nullptr, candidate.prepared);
+    /* Local full mask is seeded at add time so GetAttrL1 is valid before the first kernel readback. */
+    EXPECT_EQ(0xFU, candidate.prepared->numaAttr.numaNodes);
     DiscardProcessManageCandidate(&candidate);
 }
 
@@ -1355,12 +1303,11 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateKeepsPairAccountFor4KMultiNu
     DiscardProcessManageCandidate(&candidate);
 }
 
-extern "C" int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap);
+extern "C" int ProcessAddManage(ProcessParam *param);
 TEST_F(ManageTest, TestProcessAddManageResetPidConfig)
 {
     int ret;
     pid_t pid = 123;
-    uint32_t localNodeBitmap = 1;
     ProcessAttr mockProcess = {};
     mockProcess.pid = pid;
     mockProcess.duration = 100;
@@ -1383,11 +1330,11 @@ TEST_F(ManageTest, TestProcessAddManageResetPidConfig)
     MOCKER(SetLocalNumaByCpu).stubs().will(invoke(AddAffinityLocalForTest));
     MOCKER(GetProcessNumaMapsObservation).stubs().will(invoke(AddEmptyCandidateResidentForTest));
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
-    ret = ProcessAddManage(&param, &localNodeBitmap);
+    ret = ProcessAddManage(&param);
     EXPECT_EQ(0, ret);
 
     mockProcess.numaAttr.numaNodes = 47;
-    ret = ProcessAddManage(&param, &localNodeBitmap);
+    ret = ProcessAddManage(&param);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(mockProcess.scanTime, PmHeadAttr(&g_processManager)->scanTime);
     EXPECT_EQ(mockProcess.duration, PmHeadAttr(&g_processManager)->duration);
@@ -1420,7 +1367,7 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
 
-    ret = ProcessAddManage(&param, nullptr);
+    ret = ProcessAddManage(&param);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
     EXPECT_NE(nullptr, PmHeadAttr(&g_processManager));
@@ -1429,15 +1376,13 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     EXPECT_EQ(50, PmHeadAttr(&g_processManager)->initLocalMemRatio);
 
     // when scanType is HAM_SCAN/STATISTIC_SCAN, state should be set to PROC_MOVE
-    // when nodeBitmap is not null, local numanodes should be updated
     free(PmHeadAttr(&g_processManager));
-    uint32_t localNodeBitmap = 1;
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     g_processManager.nr[VM_TYPE] = 0;
     param.scanType = HAM_SCAN;
     MOCKER(DetectPidType).stubs().will(returnValue((int)VM_TYPE));
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
-    ret = ProcessAddManage(&param, &localNodeBitmap);
+    ret = ProcessAddManage(&param);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
     EXPECT_NE(nullptr, PmHeadAttr(&g_processManager));
@@ -1464,7 +1409,7 @@ TEST_F(ManageTest, TestProcessAddManageNewPidFailed)
     g_pageSizeHuge = PAGESIZE_2M;
     MOCKER(DetectPidType).stubs().will(returnValue((int)VM_TYPE));
     MOCKER(VMPreprocess).stubs().will(returnValue(-EINVAL));
-    ret = ProcessAddManage(&param, nullptr);
+    ret = ProcessAddManage(&param);
     EXPECT_EQ(-EINVAL, ret);
     EXPECT_EQ(0, g_processManager.nr[VM_TYPE]);
 }
@@ -4648,7 +4593,7 @@ TEST_F(ManageTest, TestIsMemoryLowTrue)
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
-extern "C" int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap);
+extern "C" int AddProcess(ProcessParam *param, PidType type);
 TEST_F(ManageTest, TestAddProcessNormal)
 {
     ProcessParam param = {};
@@ -4670,7 +4615,7 @@ TEST_F(ManageTest, TestAddProcessNormal)
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
     MOCKER(SetLocalNumaByCpu).stubs().will(invoke(AddAffinityLocalForTest));
     MOCKER(GetProcessNumaMapsObservation).stubs().will(invoke(AddEmptyCandidateResidentForTest));
-    int ret = AddProcess(&param, VM_TYPE, nullptr);
+    int ret = AddProcess(&param, VM_TYPE);
     EXPECT_EQ(0, ret);
     EXPECT_NE(nullptr, PmHeadAttr(&g_processManager));
     free(PmHeadAttr(&g_processManager));
@@ -4897,7 +4842,7 @@ extern "C" int GetNrLocalNuma(void);
 extern "C" uint32_t GetNormalPageSize(void);
 extern "C" uint32_t GetHugePageSize(void);
 extern "C" uint32_t GetPageSize(void);
-extern "C" int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap);
+extern "C" int AddProcess(ProcessParam *param, PidType type);
 TEST_F(ManageTest, TestAddProcessLimitReached)
 {
     uint32_t savedNr = g_processManager.nr[VM_TYPE];
@@ -4907,7 +4852,7 @@ TEST_F(ManageTest, TestAddProcessLimitReached)
     ProcessParam param = {};
     param.pid = 123;
     param.count = 1;
-    int ret = AddProcess(&param, VM_TYPE, nullptr);
+    int ret = AddProcess(&param, VM_TYPE);
     EXPECT_EQ(-EINVAL, ret);
     g_processManager.nr[VM_TYPE] = savedNr;
     g_processManager.tracking.pageSize = PAGESIZE_4K;
@@ -5317,11 +5262,14 @@ TEST_F(ManageTest, TestParseBitmapSuccess)
     char *buf = (char *)calloc(1, totalSize);
     ASSERT_NE(nullptr, buf);
     pid_t testPid = 99;
+    size_t pages0 = 7;
     memcpy(buf, &testPid, sizeof(pid_t));
+    memcpy(buf + sizeof(pid_t), &pages0, sizeof(size_t));
     size_t offset = 0;
     int ret = ParseBitmap(totalSize, buf, &offset, &pmb);
     EXPECT_EQ(0, ret);
     EXPECT_EQ((pid_t)99, pmb.pid);
+    EXPECT_EQ((size_t)7, pmb.nrPages[0]);
     EXPECT_EQ(totalSize, offset);
     free(buf);
 }
@@ -5345,52 +5293,27 @@ TEST_F(ManageTest, TestBuildAndFillBitmapBufReadFail)
     EXPECT_EQ(-ENOMEM, ret);
 }
 
-TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopeRefreshFail)
+TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicRefreshFail)
 {
     ProcessAttr attr = {.pid = 100};
     MOCKER(RefreshManagedLocalState).stubs().will(returnValue(-EINVAL));
-    int ret = RefreshManagedLocalTrackingScope(&attr);
+    int ret = RefreshManagedLocalStatePeriodic(&attr);
     EXPECT_EQ(-EINVAL, ret);
 }
 
-TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopeBitmapUnchanged)
+TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicKeepsNumaNodes)
 {
     ProcessAttr attr = {.pid = 100};
     attr.numaAttr.numaNodes = 0x0F;
+    attr.scanType = NORMAL_SCAN;
+    attr.scanTime = 100;
+    attr.duration = 200;
     MOCKER(RefreshManagedLocalState).stubs().will(returnValue(0));
-    MOCKER(BuildManagedTrackingNodes).stubs().will(returnValue((uint32_t)0x0F));
-    int ret = RefreshManagedLocalTrackingScope(&attr);
+    /* numaNodes is synthesized in user-state; periodic refresh must not touch it. */
+    MOCKER(AccessIoctlAddPid).expects(never());
+    int ret = RefreshManagedLocalStatePeriodic(&attr);
     EXPECT_EQ(0, ret);
     EXPECT_EQ((uint32_t)0x0F, attr.numaAttr.numaNodes);
-}
-
-TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopeBitmapChanged)
-{
-    ProcessAttr attr = {.pid = 100};
-    attr.numaAttr.numaNodes = 0x0F;
-    attr.scanType = NORMAL_SCAN;
-    attr.scanTime = 100;
-    attr.duration = 200;
-    MOCKER(RefreshManagedLocalState).stubs().will(returnValue(0));
-    MOCKER(BuildManagedTrackingNodes).stubs().will(returnValue((uint32_t)0xFF));
-    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
-    int ret = RefreshManagedLocalTrackingScope(&attr);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ((uint32_t)0xFF, attr.numaAttr.numaNodes);
-}
-
-TEST_F(ManageTest, TestRefreshManagedLocalTrackingScopeIoctlFail)
-{
-    ProcessAttr attr = {.pid = 100};
-    attr.numaAttr.numaNodes = 0x0F;
-    attr.scanType = NORMAL_SCAN;
-    attr.scanTime = 100;
-    attr.duration = 200;
-    MOCKER(RefreshManagedLocalState).stubs().will(returnValue(0));
-    MOCKER(BuildManagedTrackingNodes).stubs().will(returnValue((uint32_t)0xFF));
-    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(-EIO));
-    int ret = RefreshManagedLocalTrackingScope(&attr);
-    EXPECT_EQ(-EIO, ret);
 }
 
 TEST_F(ManageTest, TestBuildAllPidDataBuildBufFail)

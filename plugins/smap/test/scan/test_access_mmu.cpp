@@ -109,9 +109,7 @@ TEST_F(AccessMMUTest, AddToBMPage)
     MOCKER(calc_paddr_acidx).stubs().will(invoke(fake_calc_paddr_acidx));
 
     int ret = 0;
-    struct access_pid ap = {
-        .numa_nodes = 0x11,
-    };
+    struct access_pid ap = {};
     ap.bm_len[0] = 2;
     ap.paddr_bm[0] = (unsigned long *)malloc(sizeof(unsigned long) * 2);
 
@@ -125,9 +123,7 @@ TEST_F(AccessMMUTest, AddToBMPage)
 TEST_F(AccessMMUTest, AddToBMPageTwo)
 {
     int ret = 0;
-    struct access_pid ap = {
-        .numa_nodes = 0x11,
-    };
+    struct access_pid ap = {};
 
     MOCKER(calc_paddr_acidx).stubs().will(returnValue(1));
     ret = add_to_bm_page((u64)0x00005000, &ap);
@@ -143,27 +139,23 @@ TEST_F(AccessMMUTest, AddToBmHugepage)
     MOCKER(calc_paddr_acidx).stubs().will(invoke(fake_calc_paddr_acidx));
 
     int ret = 0;
-    struct access_pid ap = {
-        .numa_nodes = 0x10,
-    };
+    struct access_pid ap = {};
     ap.bm_len[0] = 2;
-    ap.paddr_bm[0] = (unsigned long *)malloc(sizeof(unsigned long) * 2);
-
-    ret = add_to_bm_hugepage((u64)0x00005000, 0, &ap);
-    EXPECT_EQ(-EINVAL, ret);
-
-    ap.numa_nodes = 0x11;
-    MOCKER(set_pa_prior).stubs();
+    /* paddr_bm 必须清零：计数路径依赖 bit 初值为 0 */
+    ap.paddr_bm[0] = (unsigned long *)calloc(2, sizeof(unsigned long));
     ret = add_to_bm_hugepage((u64)0x00005000, 0, &ap);
     EXPECT_EQ(0, ret);
+    EXPECT_EQ((size_t)1, ap.page_num[0]);
+
+    ret = add_to_bm_hugepage((u64)0x00005000, 0, &ap);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ((size_t)1, ap.page_num[0]); /* same PA counted once */
 }
 
 TEST_F(AccessMMUTest, AddToBmHugepageTwo)
 {
     int ret = 0;
-    struct access_pid ap = {
-        .numa_nodes = 0x10,
-    };
+    struct access_pid ap = {};
     ap.bm_len[L1] = 2;
     ap.paddr_bm[L1] = (unsigned long *)malloc(sizeof(unsigned long) * 2);
 
@@ -257,9 +249,7 @@ TEST_F(AccessMMUTest, AddToBM)
         .pme = 0,
     };
 
-    struct access_pid ap = {
-        .numa_nodes = 0x10,
-    };
+    struct access_pid ap = {};
     ap.bm_len[0] = 2;
     ap.paddr_bm[0] = (unsigned long *)malloc(sizeof(unsigned long) * 2);
 
@@ -281,9 +271,7 @@ TEST_F(AccessMMUTest, AddToBMTwo)
     pagemap_entry_t pe {
         .pme = 1,
     };
-    struct access_pid ap = {
-        .numa_nodes = 0x10,
-    };
+    struct access_pid ap = {};
     struct pagemapread pm = {
         .pos = 2,
         .len = 2,

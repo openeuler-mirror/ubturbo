@@ -247,52 +247,6 @@ int RefreshManagedLocalState(ProcessAttr *attr, bool fullReplacement)
     return ApplyManagedLocalObservation(attr, &observation, fullReplacement);
 }
 
-uint32_t BuildManagedTrackingNodes(const ProcessAttr *attr)
-{
-    if (!attr) {
-        return 0;
-    }
-
-    uint32_t allLocalMask = BuildAllLocalNumaMask();
-    if (allLocalMask == 0) {
-        return 0;
-    }
-
-    /*
-     * Rebuild the remote tracking scope from the current target and resident
-     * page state. An omitted remote must remain tracked while it still owns
-     * pages, but stale bits must not survive after reconciliation reaches zero.
-     */
-    uint32_t localBitmapMask = (1U << LOCAL_NUMA_BITS) - 1U;
-    /* A zero total-page count means no fresh pagemap snapshot is available. */
-    bool pageSnapshotValid = attr->walkPage.nrPage != 0;
-    uint32_t numaNodes = pageSnapshotValid ? 0 : (attr->numaAttr.numaNodes & ~localBitmapMask);
-    numaNodes |= attr->managedLocalState.managedLocalMask & allLocalMask;
-
-    uint32_t targetCount = attr->targetConfig.count;
-    if (targetCount > REMOTE_NUMA_NUM) {
-        SMAP_LOGGER_WARNING("Pid %d target count %u exceeds limit.", attr->pid, targetCount);
-        targetCount = REMOTE_NUMA_NUM;
-    }
-    for (uint32_t i = 0; i < targetCount; i++) {
-        int remoteIndex;
-        int remoteNid = attr->targetConfig.targets[i].remoteNid;
-        if (RemoteNidToIndex(remoteNid, GetNrLocalNuma(), &remoteIndex) == 0) {
-            AddL2ByNid(&numaNodes, remoteNid);
-        }
-    }
-    for (int remoteIndex = 0; remoteIndex < REMOTE_NUMA_NUM; remoteIndex++) {
-        int remoteNid = GetNrLocalNuma() + remoteIndex;
-        bool hasResidentPages = remoteNid < MAX_NODES && attr->walkPage.nrPages[remoteNid] != 0;
-        bool hasAccount = attr->managedLocalState.accountLocalMask[remoteIndex] != 0;
-        if (!hasResidentPages && !hasAccount) {
-            continue;
-        }
-        AddL2ByNid(&numaNodes, remoteNid);
-    }
-    return numaNodes;
-}
-
 /*
  * Validate that nid belongs to the configured remote NUMA id range. This is a
  * range check only; callers that require online-node validation should do that
@@ -886,10 +840,9 @@ void SetMultiNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
     }
 }
 
-int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
+int AddProcess(ProcessParam *param, PidType type)
 {
     int ret;
-    (void)nodeBitmap;
     if (g_processManager.nr[VM_TYPE] + g_processManager.nr[PROCESS_TYPE] >= GetCurrentMaxNrPid()) {
         SMAP_LOGGER_ERROR("nr of pid is out of limit.");
         return -EINVAL;
@@ -921,6 +874,13 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
         free(attr);
         return ret;
     }
+    /*
+     * 纳管时以观测值（CPU 亲和性 + numa_maps 驻留）预置本地位：作为首次
+     * bitmap 回读前的过渡值，保证 GetAttrL1 等本地位消费方拿到合法 L1。
+     * 首轮回读后由 BuildAllPidData 按各节点回读页数重新合成本地位。
+     * 仅写用户态 attr，内核不维护 numa_nodes。
+     */
+    attr->numaAttr.numaNodes |= attr->managedLocalState.managedLocalMask;
     attr->scanTime = DEFAULT_SCAN_PERIOD;
     PidSlotAdd(&g_processManager, attr);
     SMAP_LOGGER_INFO("Set pid %d scan cycle to %ums.", attr->pid, attr->scanTime);
@@ -1035,6 +995,13 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
         }
     }
     if (candidate->isNew) {
+        /*
+         * 纳管时以观测值（CPU 亲和性 + numa_maps 驻留，Configure 阶段已采样
+         * 合入 managedLocalState）预置本地位：作为首次 bitmap 回读前的过渡
+         * 值，保证 GetAttrL1 等本地位消费方拿到合法 L1。首轮回读后由
+         * BuildAllPidData 按各节点回读页数重新合成。
+         */
+        prepared->numaAttr.numaNodes |= prepared->managedLocalState.managedLocalMask;
         prepared->scanTime = DEFAULT_SCAN_PERIOD;
     }
     return 0;
@@ -1051,7 +1018,6 @@ void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
         candidate->active->pendingTargetConfig = prepared->pendingTargetConfig;
         candidate->active->pendingTargetConfigValid = prepared->pendingTargetConfigValid;
         candidate->active->pendingIgnoreRemoteCapacity = prepared->pendingIgnoreRemoteCapacity;
-        candidate->active->pendingTargetNumaNodes = prepared->pendingTargetNumaNodes;
         int ret = SyncAllProcessConfig();
         if (ret) {
             SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", prepared->pid, ret);
@@ -1319,7 +1285,7 @@ static uint64_t SumParamMigrateMemSize(const ProcessParam *param)
     return total;
 }
 
-int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
+int ProcessAddManage(ProcessParam *param)
 {
     int ret;
     ProcessTargetConfig config;
@@ -1343,9 +1309,6 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
             return ret;
         }
         bool pending = current->pendingTargetConfigValid;
-        if (pending && nodeBitmap) {
-            current->pendingTargetNumaNodes = *nodeBitmap;
-        }
         SMAP_LOGGER_INFO("Update pid %d migrate config, migrateMode: %d, remoteNumaCnt: %d.", current->pid,
                          current->migrateMode, current->remoteNumaCnt);
         for (int i = 0; i < param->count; i++) {
@@ -1367,7 +1330,7 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
         }
         PutProcessAttr(current);
     } else {
-        ret = AddProcess(param, pidType, nodeBitmap);
+        ret = AddProcess(param, pidType);
         if (ret) {
             SMAP_LOGGER_ERROR("Add pid %d to list failed: %d.", param->pid, ret);
             return ret;

@@ -218,7 +218,6 @@ void InitProcessMigrationTargetState(ProcessAttr *attr)
     attr->ignoreRemoteCapacity = false;
     attr->pendingTargetConfigValid = false;
     attr->pendingIgnoreRemoteCapacity = false;
-    attr->pendingTargetNumaNodes = 0;
     attr->managedLocalState = (ManagedLocalState){ 0 };
 }
 
@@ -595,7 +594,7 @@ static int PrepareProcessTargetCandidate(ProcessAttr *candidate, const ProcessTa
     if (ret) {
         return ret;
     }
-    candidate->numaAttr.numaNodes = BuildManagedTrackingNodes(candidate);
+    /* 内核不维护 numa_nodes 位图，配置事件不改变跟踪范围，payload 只更新扫描参数 */
     ret = UpdateProcessMigrateConfig(candidate, &targetConfig, observation);
     if (ret) {
         return ret;
@@ -646,19 +645,13 @@ int StagePendingMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *c
         return -EINVAL;
     }
 
-    ProcessAttr trackingCandidate = *attr;
-    trackingCandidate.targetConfig = targetConfig;
-    if (trackingCandidate.managedLocalState.managedLocalMask == 0) {
-        uint32_t allLocalMask = BuildAllLocalNumaMask();
-        trackingCandidate.managedLocalState.managedLocalMask = attr->numaAttr.numaNodes & allLocalMask;
-        if (trackingCandidate.managedLocalState.managedLocalMask == 0) {
-            trackingCandidate.managedLocalState.managedLocalMask = allLocalMask;
-        }
-    }
+    /*
+     * The kernel tracks pages per node without a numa_nodes bitmap; staging a
+     * target config must not touch tracking scope. Nothing to seed here.
+     */
     attr->pendingTargetConfig = targetConfig;
     attr->pendingTargetConfigValid = true;
     attr->pendingIgnoreRemoteCapacity = ignoreRemoteCapacity;
-    attr->pendingTargetNumaNodes = BuildManagedTrackingNodes(&trackingCandidate);
     SMAP_LOGGER_INFO("Save pending migration target for pid %d.", attr->pid);
     return 0;
 }
@@ -706,27 +699,17 @@ int ApplyPendingMigrationTargets(ProcessAttr *attr)
         return ret;
     }
 
-    struct AccessAddPidPayload payload = {
-        .type = NORMAL_SCAN,
-        .pid = attr->pid,
-        .scanTime = attr->scanTime,
-        .duration = attr->duration,
-        .numaNodes = candidate.numaAttr.numaNodes,
-        .pidType = attr->type,
-    };
-    ret = AccessIoctlAddPid(1, &payload);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Update pending pid %d tracking failed: %d.", attr->pid, ret);
-        return ret;
-    }
-
+    /*
+     * No tracking-scope ioctl needed here: the kernel tracks pages per node
+     * without a numa_nodes bitmap and the pid is already tracked, so ADD_PID
+     * would be a no-op re-seed.
+     */
     PublishProcessTargetCandidate(attr, &candidate);
 
     attr->ignoreRemoteCapacity = attr->pendingIgnoreRemoteCapacity;
     ClearProcessTargetConfig(&attr->pendingTargetConfig);
     attr->pendingTargetConfigValid = false;
     attr->pendingIgnoreRemoteCapacity = false;
-    attr->pendingTargetNumaNodes = 0;
     ret = SyncAllProcessConfig();
     if (ret) {
         SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", attr->pid, ret);
@@ -1131,8 +1114,9 @@ static void ChangePidRemoteMemoryByNuma(ProcessAttr *attr, int srcNode, int dest
 }
 
 /*
- * Move the targetConfig entry from srcNid to destNid so that
- * BuildManagedTrackingNodes does not re-add the stale srcNid.
+ * Move the targetConfig entry from srcNid to destNid so that the stale srcNid
+ * is no longer a migration target; kernel tracking of srcNid drains naturally
+ * via idle reclaim once its pages are gone.
  */
 static void MoveProcessTargetConfig(ProcessAttr *attr, int srcNid, int destNid)
 {

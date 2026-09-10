@@ -28,6 +28,7 @@
 #include "smap_env.h"
 #include "smap_user_log.h"
 #include "manage/manage.h"
+#include "manage/manage_internal.h"
 #include "manage/oom_migrate.h"
 #include "manage/device.h"
 #include "manage/thread.h"
@@ -895,7 +896,7 @@ static void DiscardMigrateOutCandidates(ProcessManageCandidate *candidates, int 
 }
 
 static int PrepareMigrateOutCandidatesWithCapacityPolicy(struct MigrateOutMsg *msg, int pageType,
-                                                         ProcessManageCandidate *candidates, uint32_t *nodeBitmap,
+                                                         ProcessManageCandidate *candidates,
                                                          bool ignoreRemoteCapacity)
 {
     int firstError = 0;
@@ -911,22 +912,14 @@ static int PrepareMigrateOutCandidatesWithCapacityPolicy(struct MigrateOutMsg *m
             if (firstError == 0) {
                 firstError = ret;
             }
-            continue;
-        }
-
-        if (candidates[i].isPending) {
-            nodeBitmap[i] = candidates[i].prepared->pendingTargetNumaNodes;
-        } else {
-            nodeBitmap[i] = candidates[i].prepared->numaAttr.numaNodes;
         }
     }
     return firstError;
 }
 
-static int PrepareMigrateOutCandidates(struct MigrateOutMsg *msg, int pageType, ProcessManageCandidate *candidates,
-                                       uint32_t *nodeBitmap)
+static int PrepareMigrateOutCandidates(struct MigrateOutMsg *msg, int pageType, ProcessManageCandidate *candidates)
 {
-    return PrepareMigrateOutCandidatesWithCapacityPolicy(msg, pageType, candidates, nodeBitmap, false);
+    return PrepareMigrateOutCandidatesWithCapacityPolicy(msg, pageType, candidates, false);
 }
 
 static int TrackMigrateOutCandidates(ProcessManageCandidate *candidates, int count)
@@ -983,11 +976,10 @@ static int MigrateOutWithCapacityPolicy(struct MigrateOutMsg *msg, int pageType,
         return -EINVAL;
     }
 
-    uint32_t nodeBitmap[MAX_NR_MIGOUT] = { 0 };
     ProcessManageCandidate candidates[MAX_NR_MIGOUT] = { 0 };
     int prepareError = ignoreRemoteCapacity ?
-                           PrepareMigrateOutCandidatesWithCapacityPolicy(msg, pageType, candidates, nodeBitmap, true) :
-                           PrepareMigrateOutCandidates(msg, pageType, candidates, nodeBitmap);
+                           PrepareMigrateOutCandidatesWithCapacityPolicy(msg, pageType, candidates, true) :
+                           PrepareMigrateOutCandidates(msg, pageType, candidates);
 
     ret = TrackMigrateOutCandidates(candidates, msg->count);
     if (ret) {
@@ -1301,31 +1293,29 @@ static int AccessRemovePid(pid_t pid)
     return ret;
 }
 
-/* Build the remaining remote-node mask after clearing requested remote nodes. */
-static uint32_t ClearRemovePayloadRemoteNodes(ProcessAttr *attr, const struct RemovePayload *payload)
+/*
+ * Decide whether removing the requested remote nodes leaves the process
+ * without any remote target. The kernel tracks pages per node without a
+ * numa_nodes bitmap, so no tracking-scope update is needed; the result only
+ * decides whether kernel tracking should be torn down entirely.
+ */
+static bool RemoveLeavesNoRemoteTarget(ProcessAttr *attr, const struct RemovePayload *payload)
 {
-    uint32_t numaNodes = attr->numaAttr.numaNodes;
-    int nrLocalNuma = GetNrLocalNuma();
-    for (int i = 0; i < payload->count; i++) {
-        ClearNodeBit(&numaNodes, payload->nid[i] + (LOCAL_NUMA_BITS - nrLocalNuma));
+    int remaining = 0;
+    for (uint32_t i = 0; i < attr->targetConfig.count; i++) {
+        int nid = attr->targetConfig.targets[i].remoteNid;
+        bool removedNow = false;
+        for (int j = 0; j < payload->count; j++) {
+            if (payload->nid[j] == nid) {
+                removedNow = true;
+                break;
+            }
+        }
+        if (!removedNow) {
+            remaining++;
+        }
     }
-    return numaNodes;
-}
-
-/* Refresh kernel access-tracking state with the remaining remote nodes. */
-static int AccessUpdateProcessRemoteNodes(ProcessAttr *attr, uint32_t numaNodes)
-{
-    struct AccessAddPidPayload payload = { .pid = attr->pid };
-    payload.numaNodes = numaNodes;
-    payload.scanTime = attr->scanTime;
-    payload.duration = attr->duration;
-    payload.type = attr->scanType;
-    payload.pidType = attr->type;
-    int ret = AccessIoctlAddPid(1, &payload);
-    if (ret) {
-        SMAP_LOGGER_ERROR("access ioctl update pid %d error: %d.", attr->pid, ret);
-    }
-    return ret;
+    return remaining == 0;
 }
 
 /* Apply remove requests to kernel access tracking before changing manager state. */
@@ -1352,12 +1342,15 @@ static int IoctlRemoveProcess(struct RemoveMsg *msg)
             PutProcessAttr(attr);
             continue;
         }
-        uint32_t numaNodes = ClearRemovePayloadRemoteNodes(attr, payload);
-        int ret = GetL2Count(numaNodes) == 0 ? AccessRemovePid(pid) : AccessUpdateProcessRemoteNodes(attr, numaNodes);
-        if (ret) {
-            PutProcessAttr(attr);
-            return ret;
+        if (RemoveLeavesNoRemoteTarget(attr, payload)) {
+            int ret = AccessRemovePid(pid);
+            if (ret) {
+                PutProcessAttr(attr);
+                return ret;
+            }
         }
+        /* kernel tracks pages per node without a numa_nodes bitmap: draining
+         * pages on removed remote nodes keep tracked until idle reclaim. */
         PutProcessAttr(attr);
     }
     return 0;
@@ -2323,8 +2316,8 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
                 PutProcessAttr(attr);
                 return -EINVAL;
             }
-            /* Keep every historically tracked remote node when changing scan type. */
-            payload[i].numaNodes |= attr->numaAttr.numaNodes & REMOTE_NUMA_MASK;
+            /* numaAttr.numaNodes is user-synthesized from page-count readback:
+             * duplicate add keeps the current value, no bitmap re-sent here. */
         } else if (scanType == NORMAL_SCAN) {
             SMAP_LOGGER_ERROR("pid %d is not managed, scan type can not be %d.", pidArr[i], scanType);
             free(payload);
@@ -2411,7 +2404,7 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
         param.duration = duration[i];
         param.scanType = scanType;
         param.numaParam[0].migrateMode = MIG_RATIO_MODE;
-        ret = ProcessAddManage(&param, NULL);
+        ret = ProcessAddManage(&param);
         if (ret) {
             SMAP_LOGGER_ERROR("Add process tracking %d failed: %d.", pidArr[i], ret);
             return ret;

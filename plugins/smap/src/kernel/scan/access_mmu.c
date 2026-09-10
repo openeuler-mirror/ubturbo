@@ -63,16 +63,12 @@ static int calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
 
 int add_to_bm_page(u64 paddr, struct access_pid *ap)
 {
-	int nid, nid_pos, ret;
+	int nid, ret;
 	u64 acidx;
 
 	ret = calc_paddr_acidx(paddr, &nid, &acidx);
 	if (ret)
 		return ret;
-	nid_pos = convert_nid_to_pos(nid);
-	unsigned long numa_nodes = ap->numa_nodes;
-	if (unlikely(!test_bit(nid_pos, &numa_nodes)))
-		return -EINVAL;
 
 	if (BIT_WORD(acidx) >= ap->bm_len[nid])
 		return -ERANGE;
@@ -87,14 +83,6 @@ int add_to_bm_page(u64 paddr, struct access_pid *ap)
 
 int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap)
 {
-	int nid_pos;
-	unsigned long numa_nodes;
-
-	nid_pos = convert_nid_to_pos(nid);
-	numa_nodes = ap->numa_nodes;
-	if (unlikely(!_test_bit(nid_pos, &numa_nodes)))
-		return -EINVAL;
-
 	if (BIT_WORD(acidx) >= ap->bm_len[nid])
 		return -ERANGE;
 
@@ -151,17 +139,12 @@ static void set_pa_prior(struct access_pid *ap, u64 vaddr)
 
 int add_to_bm_hugepage(u64 vaddr, u64 paddr, struct access_pid *ap)
 {
-	int nid, nid_pos, ret;
+	int nid, ret;
 	u64 acidx;
 
 	ret = calc_paddr_acidx(paddr, &nid, &acidx);
 	if (ret)
 		return ret;
-	nid_pos = convert_nid_to_pos(nid);
-	unsigned long numa_nodes = ap->numa_nodes;
-	if (unlikely(!test_bit(nid_pos, &numa_nodes))) {
-		return -EINVAL;
-	}
 
 	if (BIT_WORD(acidx) >= ap->bm_len[nid]) {
 		return -ERANGE;

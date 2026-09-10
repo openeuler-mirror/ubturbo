@@ -965,3 +965,30 @@ TEST_F(ScanIoctlTestKernel, IoctlSetScanCpuSuccess)
     long ret = ioctl_set_scan_cpu(nullptr);
     EXPECT_EQ(0, ret);
 }
+
+/* bitmap 布局：pid + page_num[SMAP_MAX_NUMNODES]
+ * （内核不回读 numa_nodes，用户态按页数自行合成位图） */
+TEST_F(ScanIoctlTestKernel, WriteBitmapBufferLayout)
+{
+    struct access_pid ap = {};
+    unsigned char buf[512] = { 0 };
+    char *cursor = (char *)buf;
+    char *const base = cursor;
+
+    ap_test_reset_slots();
+    ap.pid = 4321;
+    ap.type = NORMAL_SCAN;
+    ap.page_num[0] = 3;
+    ap.page_num[SMAP_MAX_NUMNODES - 1] = 5;
+    ap_slot_add(&ap);
+
+    write_bitmap_buffer(&cursor);
+
+    const size_t nodePagesBytes = sizeof(size_t) * SMAP_MAX_NUMNODES;
+    EXPECT_EQ(sizeof(pid_t) + nodePagesBytes,
+              (size_t)(cursor - base));
+    EXPECT_EQ(4321, *(pid_t *)base);
+    const size_t *pages = (const size_t *)(base + sizeof(pid_t));
+    EXPECT_EQ((size_t)3, pages[0]);
+    EXPECT_EQ((size_t)5, pages[SMAP_MAX_NUMNODES - 1]);
+}
