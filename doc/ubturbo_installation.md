@@ -64,8 +64,6 @@
   # 如需覆盖安装，可执行如下命令：
   sudo rpm -ivh ubturbo-<version>-<release>.aarch64.rpm ubturbo-rmrs-<version>-<release>.aarch64.rpm --force
   ```
-
-
 ### 容器镜像部署（可选）
 
 容器环境部署方式：
@@ -279,23 +277,23 @@ cat /var/log/ubturbo/ubturbo.log | grep "loaded successfully"
 
 1. 停止并删除容器
 
-```bash
-docker ps -a
-docker stop ubturbo-build
-docker rm ubturbo-build
-```
+   ```bash
+   docker ps -a
+   docker stop ubturbo-build
+   docker rm ubturbo-build
+   ```
 
 2. 删除镜像
 
-```bash
-docker rmi ubturbo-build:24.03-lts
-```
+   ```bash
+   docker rmi ubturbo-build:24.03-lts
+   ```
 
 3. 卸载 RPM 包
 
-```bash
-sudo dnf remove -y ubturbo-rmrs ubturbo
-```
+   ```bash
+   sudo dnf remove -y ubturbo-rmrs ubturbo
+   ```
 
 > [!NOTE]说明
 >
