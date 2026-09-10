@@ -7,6 +7,7 @@ repos:
         language: system
         pass_filenames: false
         files: ^(?!test/).*(\.(h|c|cpp|sh|cmake)|CMakeLists\.txt)$
+        exclude: ^(tools/ebpf/)
       - id: run-build-test
         name: Run Tests Build
         entry: bash build.sh ut --skip-run-tests
@@ -18,14 +19,14 @@ repos:
         entry: clang-format
         language: system
         files: \.(h|c|cpp)$
-        exclude: ^(plugins/smap/test/|plugins/ubdma/test/)
+        exclude: ^(plugins/smap/test/|plugins/ubdma/test/|tools/ebpf/)
         args: [-style=file, -i]
       - id: clang-tidy
         name: Run clang-tidy check
         entry: clang-tidy
         language: system
         files: ^(?!test/).*\.(h|c|cpp)$
-        exclude: ^(plugins/smap/test/|plugins/ubdma/test/)
+        exclude: ^(plugins/smap/test/|plugins/ubdma/test/|tools/ebpf/)
         args: [-p=dist/release, -header-filter=.*, --fix]
       - id: clang-tidy-test
         name: Run clang-tidy check for test files
