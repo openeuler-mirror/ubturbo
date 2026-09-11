@@ -2759,6 +2759,8 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint6
         return ret;
     }
 
+    /* 迁移前预保护：已纳管零目标 pid 在迁移期间免于被自动移除；
+     * 未纳管 pid 此时 GetProcessAttr 返回 NULL，天然跳过，迁移后再统一保护。 */
     SetSyncWaitRemoteEmpty(msg, true);
     syncWaitProtected = true;
 
@@ -2768,6 +2770,9 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint6
         goto out;
     }
     SMAP_LOGGER_INFO("Smap migrate out done.");
+
+    /* 迁移完成后为（含新纳管的）零目标 pid 建立保护，直到等待结束。 */
+    SetSyncWaitRemoteEmpty(msg, true);
 
     while (maxWaitTime == 0 || waitTime < maxWaitTime) {
         waitTime += WAIT_TIME;
