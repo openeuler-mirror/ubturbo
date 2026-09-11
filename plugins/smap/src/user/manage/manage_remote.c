@@ -1029,13 +1029,13 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
     if (GetRunMode() == WATERLINE_MODE) {
         l1node = GetAttrL1(attr);
         if (attr->migrateMode == MIG_MEMSIZE_MODE) {
-            ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
             attr->migrateParam[0].nid = destNodeIndex + nrLocalNuma;
         } else {
             if (ratio >= attr->strategyAttr.initRemoteMemRatio[l1node][srcNodeIndex]) {
                 ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
             }
         }
+        bool migOutAll = true;
         for (int i = 0; i < GetProcessManager()->nrLocalNuma; i++) {
             if (!InAttrL1(attr, i)) {
                 continue;
@@ -1051,10 +1051,17 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
             } else {
                 attr->strategyAttr.memSize[i][srcNodeIndex] = 0;
             }
+            if (attr->migrateMode == MIG_MEMSIZE_MODE && attr->strategyAttr.memSize[i][srcNodeIndex] != 0) {
+                migOutAll = false;
+            }
 
             SMAP_LOGGER_INFO("[change_remote] pid=%d local=%d old_remote=%d new_remote=%d old_sz=%llu new_sz=%llu",
                              attr->pid, i, srcNodeIndex, destNodeIndex, attr->strategyAttr.memSize[i][srcNodeIndex],
                              attr->strategyAttr.memSize[i][destNodeIndex]);
+        }
+        /* 部分迁移时保留原节点L2位，否则同源节点后续迁移请求可能会被拒绝 */
+        if (attr->migrateMode == MIG_MEMSIZE_MODE && migOutAll) {
+            ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
         }
     } else if (GetRunMode() == MEM_POOL_MODE) {
         uint64_t srcMemSize = 0;
@@ -1420,7 +1427,14 @@ static int SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRem
         l1node = GetAttrL1(attr);
         l2node = msg->payloads[i].srcNid;
         if (runMode == WATERLINE_MODE) {
-            if (msg->payloads[i].ratio >= attr->strategyAttr.initRemoteMemRatio[l1node][l2node - nrLocalNuma]) {
+            bool clearSrc;
+            if (attr->migrateMode == MIG_MEMSIZE_MODE) {
+                clearSrc = msg->payloads[i].memSize >= attr->strategyAttr.memSize[l1node][l2node - nrLocalNuma];
+            } else {
+                int initRatio = attr->strategyAttr.initRemoteMemRatio[l1node][l2node - nrLocalNuma];
+                clearSrc = msg->payloads[i].ratio >= initRatio;
+            }
+            if (clearSrc) {
                 ClearNodeBit(&payload[found].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
             }
         } else {
