@@ -81,6 +81,7 @@ struct ProcessPayload {
     uint32_t duration;
     int count;
     struct PersistRemoteTarget migrateParam[REMOTE_NUMA_NUM];
+    uint8_t ignoreRemoteCapacity; /* 新增：sync 旁路容量标记 */
 };
 
 int RecoverFromConfig(void);

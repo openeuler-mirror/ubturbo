@@ -594,6 +594,40 @@ TEST_F(SmapConfigTest, TestAssignProcessAttr)
     EXPECT_EQ(attr.enableSwap, true);
 }
 
+TEST_F(SmapConfigTest, TestAssignProcessAttrRestoresIgnoreRemoteCapacity)
+{
+    ProcessAttr attr;
+    struct ProcessPayload payload = {0};
+    payload.pid = 1025;
+    payload.scanType = NORMAL_SCAN;
+    payload.type = PROCESS_TYPE;
+    payload.state = PROC_IDLE;
+    payload.migrateMode = MIG_RATIO_MODE;
+    payload.count = 0;
+    payload.ignoreRemoteCapacity = 1;
+
+    memset(&attr, 0, sizeof(ProcessAttr));
+    EXPECT_EQ(0, AssignProcessAttr(&attr, &payload));
+    EXPECT_TRUE(attr.ignoreRemoteCapacity);
+}
+
+TEST_F(SmapConfigTest, TestAssignProcessAttrIgnoreRemoteCapacityDefault)
+{
+    ProcessAttr attr;
+    struct ProcessPayload payload = {0};
+    payload.pid = 1025;
+    payload.scanType = NORMAL_SCAN;
+    payload.type = PROCESS_TYPE;
+    payload.state = PROC_IDLE;
+    payload.migrateMode = MIG_RATIO_MODE;
+    payload.count = 0;
+    payload.ignoreRemoteCapacity = 0;
+
+    memset(&attr, 0, sizeof(ProcessAttr));
+    EXPECT_EQ(0, AssignProcessAttr(&attr, &payload));
+    EXPECT_FALSE(attr.ignoreRemoteCapacity);
+}
+
 extern "C" size_t CalcNumaConfigLen(void);
 extern "C" bool IsProcessConfigValid(char *processBase, size_t totalLen);
 TEST_F(SmapConfigTest, TestIsProcessConfigValid)
@@ -909,6 +943,57 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffe
     EXPECT_EQ(1, payload[0].count);
     EXPECT_EQ(8, payload[0].migrateParam[0].nid);
     EXPECT_EQ(8192U, payload[0].migrateParam[0].memSize);
+    free(payload);
+}
+
+TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsIgnoreRemoteCapacity)
+{
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    ProcessAttr attr = {};
+    struct ProcessPayload *payload = nullptr;
+    int len = 0;
+    attr.type = PROCESS_TYPE;
+    attr.pid = 1234;
+    attr.scanType = NORMAL_SCAN;
+    attr.state = PROC_IDLE;
+    attr.migrateMode = MIG_RATIO_MODE;
+    attr.ignoreRemoteCapacity = true;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+
+    EXPECT_EQ(0, BuildAllProcessPayload(&payload, &len));
+    ASSERT_NE(nullptr, payload);
+    EXPECT_EQ(1, len);
+    EXPECT_EQ(1, payload[0].ignoreRemoteCapacity);
+    free(payload);
+}
+
+TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingIgnoreRemoteCapacity)
+{
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    ProcessAttr attr = {};
+    struct ProcessPayload *payload = nullptr;
+    int len = 0;
+    attr.type = PROCESS_TYPE;
+    attr.pid = 1234;
+    attr.scanType = NORMAL_SCAN;
+    attr.state = PROC_MIGRATE;
+    attr.migrateMode = MIG_RATIO_MODE;
+    attr.ignoreRemoteCapacity = false;
+    attr.pendingTargetConfigValid = true;
+    attr.pendingIgnoreRemoteCapacity = true;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+
+    EXPECT_EQ(0, BuildAllProcessPayload(&payload, &len));
+    ASSERT_NE(nullptr, payload);
+    EXPECT_EQ(1, len);
+    EXPECT_EQ(PROC_IDLE, payload[0].state);
+    EXPECT_EQ(1, payload[0].ignoreRemoteCapacity);
     free(payload);
 }
 
