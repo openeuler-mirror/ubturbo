@@ -264,16 +264,16 @@ rpm -ivh ubturbo-smap-x.x.x-x.oe2403sp1.aarch64.rpm
 ```
 
 RPM安装会自动部署以下文件：
-- 内核模块：`/lib/modules/smap/`（smap_tracking_core.ko、smap_access_tracking.ko、smap_histogram_tracking.ko、smap_tiering.ko）
+- 内核模块：`/lib/modules/smap/`（tracking-core.ko、access-tracking.ko、hist-tracking.ko、smap_tiering.ko）
 - 用户态库：`/usr/lib64/libsmap.so`
 
 2. 加载内核模块（按顺序，顺序有依赖，不可调整）：
 
 ```bash
 cd /lib/modules/smap
-insmod smap_tracking_core.ko
-insmod smap_histogram_tracking.ko                        # 必需，smap_access_tracking 依赖它
-insmod smap_access_tracking.ko                           # 使能硬件判热时传 enable_hist=1，可不传
+insmod tracking-core.ko
+insmod hist-tracking.ko                        # 必需，access-tracking 依赖它
+insmod access-tracking.ko                      # 使能硬件判热时传 enable_hist=1，可不传
 insmod smap_tiering.ko smap_pgsize=1                     # smap_pgsize: 1=2M模式(虚拟化), 0=4K模式(容器)
 ```
 
