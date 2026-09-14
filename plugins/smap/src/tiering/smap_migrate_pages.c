@@ -600,11 +600,6 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 	nr_folios_backup = nr_folios;
 #endif
 	do {
-		if (node_is_critical_err(task->src_nid)) {
-			pr_err_ratelimited("critical error on node %d\n",
-					   task->src_nid);
-			break;
-		}
 		nr_folios_min = MIN(nr_folios, NR_BATCHED_MIGRATION);
 		nr_migrate_fail += smap_migrate(
 			&migrate_folios[cnt * NR_BATCHED_MIGRATION],
@@ -714,11 +709,6 @@ void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 		cnt = 0;
 		nr_fail = 0;
 		do {
-			if (node_is_critical_err(i)) {
-				pr_err_ratelimited(
-					"critical error on node %d\n", i);
-				break;
-			}
 			nr_folios_min =
 				MIN(mig_pages_cnt[i], NR_BATCHED_MIGRATION);
 			nr_fail += smap_migrate(
@@ -902,13 +892,6 @@ static int migrate_one_batch(int idx, struct migrate_msg *msg,
 	struct mig_batch batch = { 0 };
 	u64 j, folio_index, nr_this_migrate;
 	unsigned int batch_failed;
-
-	if (node_is_critical_err(mig_list[idx].from) ||
-	    node_is_critical_err(mig_list[idx].to)) {
-		pr_warn_ratelimited("[%d] critical error node from %d to %d\n",
-				    idx, mig_list[idx].from, mig_list[idx].to);
-		return -EINVAL;
-	}
 
 	nr_this_migrate = MIN(nr_remain, NR_BATCHED_MIGRATION);
 	folio_index = mig_list[idx].nr - nr_remain;
@@ -1386,12 +1369,6 @@ unsigned int smap_migrate_numa(struct migrate_numa_inner_msg *msg)
 	int i;
 	int nid = msg->dest_nid;
 
-	if (node_is_critical_err(msg->src_nid) ||
-	    node_is_critical_err(msg->dest_nid)) {
-		pr_err_ratelimited("critical error on node %d or %d\n",
-				   msg->src_nid, msg->dest_nid);
-		return -EINVAL;
-	}
 	for (i = 0; i < msg->count; i++) {
 		int retry = MAX_MIGRATE_NUMA_RETRY_TIME;
 		u64 start_pa = msg->range[i].pa_start;
@@ -1402,13 +1379,6 @@ unsigned int smap_migrate_numa(struct migrate_numa_inner_msg *msg)
 				break;
 			pr_info("migrate range to %d failed %d pages\n", nid,
 				ret);
-			if (node_is_critical_err(msg->src_nid) ||
-			    node_is_critical_err(msg->dest_nid)) {
-				pr_err_ratelimited(
-					"critical error on node %d or %d\n",
-					msg->src_nid, msg->dest_nid);
-				return -EINVAL;
-			}
 		} while (retry--);
 		if (retry == 0)
 			return ret;
