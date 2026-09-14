@@ -119,7 +119,7 @@ SMAP/
 ├── cmake/                        # cmake脚本目录
 ├── doc/                          # 文档目录
 │   ├── api_docs_reference.md     # API接口文档
-│   ├── Design_docs_Reference.md  # 设计文档
+│   ├── design_docs_reference.md  # 设计文档
 ├── README.md                     # README
 ├── smap.spec                     # SPEC文件
 ├── src/                          # 源代码目录

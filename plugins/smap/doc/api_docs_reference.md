@@ -692,7 +692,7 @@ int main(void)
 }
 ```
 
-# ubturbo_smap_freq_query: 查询进程冷热信息
+# ubturbo_smap_vm_freq_query: 查询进程冷热信息
 
 ## 库 LIBRARY
 
@@ -702,7 +702,7 @@ SMAP库 (libsmap.so)
 
 ```c
 #include "smap_interface.h"
-int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource);
+int ubturbo_smap_vm_freq_query(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut, int dataSource);
 ```
 
 ## 描述 DESCRIPTION
@@ -752,10 +752,10 @@ int main(void)
     int ret;
     int pid = 10253;
     uint16_t data[1024] = { 0 };
-    uint32_t lengthIn = 1024;
-    uint32_t lengthOut;
+    uint16_t lengthIn = 1024;
+    uint16_t lengthOut;
 
-    ret = ubturbo_smap_freq_query(pid, data, lengthIn, &lengthOut, 1);
+    ret = ubturbo_smap_vm_freq_query(pid, data, lengthIn, &lengthOut, 1);
     if (ret != 0) {
         return ret;
     }

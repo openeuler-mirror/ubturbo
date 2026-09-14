@@ -2102,36 +2102,36 @@ extern "C" int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint16_t length
                                         int dataSource);
 extern "C" int QueryVMFreqFromKernel(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut);
 extern "C" int QueryVMFreqFromUser(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut);
-extern "C" int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource);
+extern "C" int ubturbo_smap_vm_freq_query(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut, int dataSource);
 TEST_F(InterfaceTest, TestSmapQueryVmFreqAbnormalOne)
 {
     int ret;
-    uint32_t lengthOut;
+    uint16_t lengthOut;
     struct ProcessManager manager;
     EnvAtomicSet(&g_status, 0);
-    ret = ubturbo_smap_freq_query(0, nullptr, 0, &lengthOut, 0);
+    ret = ubturbo_smap_vm_freq_query(0, nullptr, 0, &lengthOut, 0);
     EXPECT_EQ(-EPERM, ret);
 
     EnvAtomicSet(&g_status, 1);
     MOCKER(CheckQueryVMFreqMsgValid).stubs().will(returnValue(-EINVAL));
-    ret = ubturbo_smap_freq_query(0, nullptr, 0, &lengthOut, 0);
+    ret = ubturbo_smap_vm_freq_query(0, nullptr, 0, &lengthOut, 0);
     EXPECT_EQ(-EINVAL, ret);
 }
 
 TEST_F(InterfaceTest, TestSmapQueryVmFreqAbnormalTwo)
 {
     int ret;
-    uint32_t lengthOut;
+    uint16_t lengthOut;
     uint16_t data[3] = { 0 };
     struct ProcessManager manager;
     EnvAtomicSet(&g_status, 1);
     MOCKER(CheckQueryVMFreqMsgValid).stubs().will(returnValue(0));
     MOCKER(QueryVMFreqFromUser).stubs().will(returnValue(-EINVAL));
-    ret = ubturbo_smap_freq_query(0, data, 0, &lengthOut, 0);
+    ret = ubturbo_smap_vm_freq_query(0, data, 0, &lengthOut, 0);
     EXPECT_EQ(-EINVAL, ret);
 
     MOCKER(QueryVMFreqFromKernel).stubs().will(returnValue(-EINVAL));
-    ret = ubturbo_smap_freq_query(0, data, 0, &lengthOut, 1);
+    ret = ubturbo_smap_vm_freq_query(0, data, 0, &lengthOut, 1);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -2344,6 +2344,7 @@ TEST_F(InterfaceTest, PidNotManaged)
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
     // 模拟GetProcessAttr返回NULL
     MOCKER(GetProcessAttr).stubs().will(returnValue((ProcessAttribute *)nullptr));
 
@@ -2360,6 +2361,7 @@ TEST_F(InterfaceTest, DataSourceMismatch)
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
     ProcessAttr attr;
     attr.scanType = NORMAL_SCAN;
 
@@ -2379,6 +2381,7 @@ TEST_F(InterfaceTest, TimeCheckFailed)
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
     ProcessAttr attr;
     attr.scanType = STATISTIC_SCAN;
     attr.scanStart = time(nullptr) - 10; // 设置scanStart为10秒前
@@ -2399,6 +2402,7 @@ TEST_F(InterfaceTest, TimeCheckSuccess)
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
     ProcessAttr attr;
     attr.scanType = STATISTIC_SCAN;
     attr.scanStart = time(nullptr) - 10; // 设置scanStart为10秒前
@@ -4897,13 +4901,13 @@ TEST_F(InterfaceTest, TestSmapRemoteNumaInfoSetInvalidSrcNid)
     EnvAtomicSet(&g_status, SLEEP);
 }
 
-extern "C" int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource);
+extern "C" int ubturbo_smap_vm_freq_query(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut, int dataSource);
 TEST_F(InterfaceTest, TestSmapFreqQueryNotRunning)
 {
     uint16_t data[10];
-    uint32_t lengthOut;
+    uint16_t lengthOut;
     EnvAtomicSet(&g_status, SLEEP);
-    int ret = ubturbo_smap_freq_query(1, data, 10, &lengthOut, 0);
+    int ret = ubturbo_smap_vm_freq_query(1, data, 10, &lengthOut, 0);
     EXPECT_EQ(-EPERM, ret);
 }
 
