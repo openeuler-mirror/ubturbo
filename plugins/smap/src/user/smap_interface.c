@@ -2050,23 +2050,28 @@ int ubturbo_smap_remote_numa_info_set(struct SetRemoteNumaInfoMsg *msg)
     return 0;
 }
 
-static int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource)
+static int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut, int dataSource)
 {
     time_t currentTime;
     struct ProcessManager *manager = GetProcessManager();
     if (!data || !lengthOut) {
-        SMAP_LOGGER_ERROR("data or lengthOut null, ubturbo_smap_freq_query failed.");
+        SMAP_LOGGER_ERROR("data or lengthOut null, ubturbo_smap_vm_freq_query failed.");
         return -EINVAL;
     }
-    if (lengthIn == 0) {
-        SMAP_LOGGER_ERROR("lengthIn(%llu) invalid. ubturbo_smap_freq_query failed.", lengthIn);
+    if (lengthIn == 0 || lengthIn > MAX_NR_OF_QUERY_VM_FREQ_HCCS) {
+        SMAP_LOGGER_ERROR("lengthIn(%llu) invalid, limit(%lu). ubturbo_smap_vm_freq_query failed.", lengthIn,
+                          MAX_NR_OF_QUERY_VM_FREQ_HCCS);
         return -EINVAL;
     }
     if (dataSource < 0 || dataSource >= MAX_SOURCE) {
-        SMAP_LOGGER_ERROR("dataSource(%d) invalid, limit(%d). ubturbo_smap_freq_query failed.", dataSource, MAX_SOURCE);
+        SMAP_LOGGER_ERROR("dataSource(%d) invalid, limit(%d). ubturbo_smap_vm_freq_query failed.", dataSource,
+                          MAX_SOURCE);
         return -EINVAL;
     }
-
+    if (dataSource == STATISTIC_DATA_SOURCE && !IsPidTypeValid(PAGETYPE_HUGE)) {
+        SMAP_LOGGER_ERROR("dataSource is %d but pagetype is not 2M\n", dataSource);
+        return -EINVAL;
+    }
     ProcessAttr *attr = GetProcessAttr(pid);
     if (!attr) {
         SMAP_LOGGER_ERROR("pid %d is not in managed process list\n", pid);
@@ -2092,7 +2097,7 @@ static int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint32_t lengthIn, 
     return 0;
 }
 
-static int QueryVMFreqFromKernel(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut)
+static int QueryVMFreqFromKernel(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut)
 {
     int ret;
     struct ProcessManager *manager = GetProcessManager();
@@ -2120,7 +2125,7 @@ static int QueryVMFreqFromKernel(int pid, uint16_t *data, uint32_t lengthIn, uin
     return ret;
 }
 
-static int QueryVMFreqFromUser(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut)
+static int QueryVMFreqFromUser(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut)
 {
     uint64_t i = 0;
     uint64_t actcLen = 0;
@@ -2128,7 +2133,7 @@ static int QueryVMFreqFromUser(int pid, uint16_t *data, uint32_t lengthIn, uint3
     EnvMutexLock(&manager->lock);
     ProcessAttr *attr = GetProcessAttrLocked(pid);
     if (!attr) {
-        SMAP_LOGGER_ERROR("pid %d doesn't exist, ubturbo_smap_freq_query failed.", pid);
+        SMAP_LOGGER_ERROR("pid %d doesn't exist, ubturbo_smap_vm_freq_query failed.", pid);
         EnvMutexUnlock(&manager->lock);
         return -EINVAL;
     }
@@ -2137,7 +2142,7 @@ static int QueryVMFreqFromUser(int pid, uint16_t *data, uint32_t lengthIn, uint3
     }
     if (actcLen == 0) {
         *lengthOut = 0;
-        SMAP_LOGGER_ERROR("pid %d, actcLen %llu, ubturbo_smap_freq_query failed.", pid, actcLen);
+        SMAP_LOGGER_ERROR("pid %d, actcLen %llu, ubturbo_smap_vm_freq_query failed.", pid, actcLen);
         EnvMutexUnlock(&manager->lock);
         return -EINVAL;
     }
@@ -2149,22 +2154,22 @@ static int QueryVMFreqFromUser(int pid, uint16_t *data, uint32_t lengthIn, uint3
             data[i] = actc[j].freq;
         }
     }
-    SMAP_LOGGER_INFO("ubturbo_smap_freq_query success, pid %d lengthIn %llu lengthOut %llu.", pid, lengthIn,
+    SMAP_LOGGER_INFO("ubturbo_smap_vm_freq_query success, pid %d lengthIn %llu lengthOut %llu.", pid, lengthIn,
                      *lengthOut);
     EnvMutexUnlock(&manager->lock);
     return 0;
 }
 
-int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource)
+int ubturbo_smap_vm_freq_query(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut, int dataSource)
 {
-    SMAP_LOGGER_INFO("Receive ubturbo_smap_freq_query msg, dataSource: %d.\n", dataSource);
+    SMAP_LOGGER_INFO("Receive ubturbo_smap_vm_freq_query msg, dataSource: %d.\n", dataSource);
     if (!ubturbo_smap_is_running()) {
-        SMAP_LOGGER_ERROR("Smap isn't running. ubturbo_smap_freq_query failed.\n");
+        SMAP_LOGGER_ERROR("Smap isn't running. ubturbo_smap_vm_freq_query failed.\n");
         return -EPERM;
     }
     int ret = CheckQueryVMFreqMsgValid(pid, data, lengthIn, lengthOut, dataSource);
     if (ret) {
-        SMAP_LOGGER_ERROR("ubturbo_smap_freq_query check msg valid failed: %d\n", ret);
+        SMAP_LOGGER_ERROR("ubturbo_smap_vm_freq_query check msg valid failed: %d\n", ret);
         return ret;
     }
 
@@ -2174,10 +2179,10 @@ int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t
         ret = QueryVMFreqFromUser(pid, data, lengthIn, lengthOut);
     }
     if (ret) {
-        SMAP_LOGGER_ERROR("ubturbo_smap_freq_query failed: %d\n", ret);
+        SMAP_LOGGER_ERROR("ubturbo_smap_vm_freq_query failed: %d\n", ret);
         return ret;
     }
-    SMAP_LOGGER_INFO("ubturbo_smap_freq_query success, pid %d lengthIn %llu lengthOut %llu.\n", pid, lengthIn,
+    SMAP_LOGGER_INFO("ubturbo_smap_vm_freq_query success, pid %d lengthIn %llu lengthOut %llu.\n", pid, lengthIn,
                      *lengthOut);
     return 0;
 }

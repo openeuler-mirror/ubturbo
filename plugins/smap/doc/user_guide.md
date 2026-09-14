@@ -1,4 +1,4 @@
-## SMAP简介
+# SMAP简介
 
 SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使用其他节点内存资源，可以将进程的热页留在本地, 冷页迁往远端, 达到扩容的目的。
 
@@ -9,7 +9,7 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 
 ## SMAP安装&部署
 
-#### 前提条件
+### 前提条件
 
 * 安装前先创建ubturbo用户和用户组，配置免密登录，命令如下。
 
@@ -25,7 +25,7 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 * /dev/shm/smap\_config保存了NUMA和进程配置等信息，使用SMAP动态库的进程如果需要切换用户，则需要先删除该文件。
 * smap的period.config文件依赖ubturbo-rmrs组件，若环境上未安装ubturbo-rmrs，则需要手动创建目录/opt/ubturbo/conf，且确保目录权限和smap二进制文件权限一致。
 
-#### 安装步骤
+### 安装步骤
 
 1. 安装SMAP。
    
@@ -34,7 +34,6 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 2. 载入扫描驱动。
    
    <pre class="screen" id="screen8274308918"><p class="p" id="p1958548202716">cd /lib/modules/smap</p><p class="p" id="p295820488271">insmod tracking-core.ko</p></pre>
-   
    
    * 安装hist-tracking.ko。
      

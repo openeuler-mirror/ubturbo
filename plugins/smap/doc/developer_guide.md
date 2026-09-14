@@ -70,8 +70,8 @@ N/A
 
 | 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
 | --- | --- | --- | --- | --- |
-| msg | struct MigrateOutMsg\* | - 单次最多配置40个pid。SMAP可管理的最大虚机个数为100个，最大4K进程个数为300个。- 配置的虚机PID重复时参数错误。- 远端NUMA需要存在。- 迁出比例有效值为[0-100]。- 迁出内存量memSize单位KB，必须为2MB的倍数- PID对应进程名在黑名单中时参数错误。- 虚拟化内存水线场景下，迁出比例非精确的迁出比例，其含义为pid可迁出到远端NUMA的内存比例，SMAP会根据SetSmapRemoteNumaInfo接口传入的借用内存量进行调整；在多虚机场景也会根据虚机的冷热信息调整实际迁出比例。- 内存碎片场景下，migrateMode只能是按照memSize迁移。在保证迁出内存足够的情况下，迁出比例含义为pid总的实际使用内存的迁出比例，迁移大小为pid总的实际使用内存的迁出大小（KB）。 | 入参 | 详细如下 |
-| pidType | int | {0,1} | 入参 | int配置类型：- 0-进程（4K）- 1-虚机（2M） |
+| msg | struct MigrateOutMsg\* | 单次最多配置40个pid。SMAP可管理的最大虚机个数为100个，最大4K进程个数为300个。配置的虚机PID重复时参数错误。远端NUMA需要存在。迁出比例有效值为[0-100]。迁出内存量memSize单位KB，必须为2MB的倍数。PID对应进程名在黑名单中时参数错误。虚拟化内存水线场景下，迁出比例非精确的迁出比例，其含义为pid可迁出到远端NUMA的内存比例，SMAP会根据SetSmapRemoteNumaInfo接口传入的借用内存量进行调整；在多虚机场景也会根据虚机的冷热信息调整实际迁出比例。内存碎片场景下，migrateMode只能是按照memSize迁移。在保证迁出内存足够的情况下，迁出比例含义为pid总的实际使用内存的迁出比例，迁移大小为pid总的实际使用内存的迁出大小（KB）。 | 入参 | 详细如下 |
+| pidType | int | {0,1} | 入参 | int配置类型：0-进程（4K），1-虚机（2M） |
 
 ```c
 #define MAX_NR_MIGOUT 40 
@@ -220,7 +220,7 @@ struct GroupedMigrateOutMsg {
 
 | 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
 | --- | --- | --- | --- | --- |
-| msg | struct SetRemoteNumaInfoMsg\* | - srcNid为本地NUMA id或者为-1，其它返回异常。- destNid为本节点远端NUMA id，非本节点远端NUMA id返回异常。- size为本地srcNid对应在远端NUMA上借用的内存量，单位MB，若srcNid为-1，则代表所有本地NUMA可共享这段内存。 | 入参 | 详细如下 |
+| msg | struct SetRemoteNumaInfoMsg\* | srcNid为本地NUMA id或者为-1，其它返回异常。destNid为本节点远端NUMA id，非本节点远端NUMA id返回异常。size为本地srcNid对应在远端NUMA上借用的内存量，单位MB，若srcNid为-1，则代表所有本地NUMA可共享这段内存。 | 入参 | 详细如下 |
 
 ```c
 struct SetRemoteNumaInfoMsg {
@@ -260,7 +260,7 @@ struct SetRemoteNumaInfoMsg {
 
 | 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
 | --- | --- | --- | --- | --- |
-| msg | struct MigrateBackMsg\* | - 远端NUMA有效值范围为[0,9]，且是远端NUMA。- 远端NUMA和传入的地址段需要匹配。 | 入参 | 详细如下 |
+| msg | struct MigrateBackMsg\* | 远端NUMA有效值范围为[0,9]，且是远端NUMA。远端NUMA和传入的地址段需要匹配。 | 入参 | 详细如下 |
 
 ```c
 #define MAX_NR_MIGBACK 50
@@ -313,8 +313,8 @@ struct MigrateBackMsg {
 
 | 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
 | --- | --- | --- | --- | --- |
-| msg | struct RemoveMsg\* | * 单次最多移除的虚机/进程数量为40。 | 入参 | 详细如下|
-| pidType | int | {0,1} | 入参 | int配置类型：- 0-进程（4K）- 1-虚机（2M） |
+| msg | struct RemoveMsg\* | 单次最多移除的虚机/进程数量为40。 | 入参 | 详细如下|
+| pidType | int | {0,1} | 入参 | int配置类型：0-进程（4K），1-虚机（2M） |
 
 ```c
 #define MAX_NR_REMOVE 40
@@ -379,7 +379,7 @@ struct EnableNodeMsg {
 * SMAP初始化后才能调用。
 * 此接口与SmapMigrateBack接口配合使用，目的是在SmapMigrateBack接口调用后，恢复对应远端NUMA的冷热流动。
 
-## ubturbo_smap_freq_query
+## ubturbo_smap_vm_freq_query
 
 ### 函数定义
 
@@ -387,7 +387,7 @@ struct EnableNodeMsg {
 
 ### 实现方法
 
-<pre class="screen"><p class="p" id="p1897593015511">int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut);</p></pre>
+<pre class="screen"><p class="p" id="p1897593015511">int ubturbo_smap_vm_freq_query(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut);</p></pre>
 
 ### 参数说明
 
@@ -395,8 +395,8 @@ struct EnableNodeMsg {
 | --- | --- |--- | --- |--- |
 | pid | int | 对应pid需要存在。 | 入参 | 进程pid号。 |
 | data | uint16\_t\* | 非空。 | 入参 | 存放冷热信息的数组。 |
-| lengthIn | uint32\_t | 大于0 | 入参 | 指示data数组的大小。 |
-| lengthOut | uint32\_t\* | 非空。 | 入参 | 返回实际写入data数组的大小。 |
+| lengthIn | uint16\_t | 大于0 | 入参 | 指示data数组的大小。 |
+| lengthOut | uint16\_t\* | 非空。 | 入参 | 返回实际写入data数组的大小。 |
 
 ### 返回值
 
@@ -425,7 +425,7 @@ struct EnableNodeMsg {
 | - | - | - | - | - |
 | ------------------------------------------------ |
 
-| runMode | int | - 0：水线场景。- 1：内存碎片场景。- 其它值：返回错误。 | 入参 | 设置SMAP的运行模式，当前包括水线场景，内存碎片场景。 |
+| runMode | int | 0：水线场景。1：内存碎片场景。其它值：返回错误。 | 入参 | 设置SMAP的运行模式，当前包括水线场景，内存碎片场景。 |
 | - | - | - | - | - |
 
 ### 返回值
@@ -460,7 +460,7 @@ struct EnableNodeMsg {
 | pidArr | pid\_t \* | NA | 入参 | 虚机PID数组。 |
 | - | - | - | - | - |
 | len | int | 1-100的整数 | 入参 | 虚机PID数组长度。 |
-| enable | int | 0或1 | 入参 | - 0-禁用。- 1-启用。 |
+| enable | int | 0或1 | 入参 | 0-禁用。1-启用。 |
 | flags | int | NA | 入参 | 保留字段。 |
 
 ### 返回值
@@ -566,7 +566,7 @@ struct EnableNodeMsg {
 | scanTime | uint32_t \* | 50毫秒的倍数，最小值50毫秒，最大值为200毫秒。 | 入参 | 扫描周期数组。 |
 | duration | uint32_t \* | 与len长度相符的扫描周期数组，取值[1,300]，单位秒，在scanType=2时使用。 | 入参 | 访存数据统计时长。 |
 | len | int | 1-40整数。 | 入参 | PID数组长度。 |
-| scanType | int | {0,1,2} | 入参 | - 0：将进程设置为只扫描状态，此时调用[/proc/ {PID}_t/tracking_info](#proc-pid_tracking_info)获取扫描频次信息。- 1：将进程恢复为冷热扫描加迁移状态。- 2：表示进程设置为统计特定时长冷热信息状态。 |
+| scanType | int | {0,1,2} | 入参 | 0：将进程设置为只扫描状态，此时调用[/proc/ {PID}_t/tracking_info](#proc-pid_tracking_info)获取扫描频次信息。1：将进程恢复为冷热扫描加迁移状态。2：表示进程设置为统计特定时长冷热信息状态。 |
 
 ### 返回值
 
