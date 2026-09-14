@@ -379,7 +379,6 @@ struct ProcessAttribute {
     ProcessTargetConfig targetConfig;
     ProcessTargetConfig pendingTargetConfig;
     bool pendingTargetConfigValid;
-    uint32_t pendingTargetNumaNodes;
     ManagedLocalState managedLocalState;
     SeparateParam separateParam;
     NumaAttribute numaAttr;
@@ -598,7 +597,7 @@ int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
 int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate);
 void DiscardProcessManageCandidate(ProcessManageCandidate *candidate);
 void PublishProcessManageCandidate(ProcessManageCandidate *candidate);
-int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap);
+int ProcessAddManage(ProcessParam *param);
 int UpdateManagedProcessTrackingMode(ProcessAttr *attr, ScanType scanType, uint32_t scanTime, uint32_t duration);
 int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config);
 int ApplyPendingMigrationTargets(ProcessAttr *attr);

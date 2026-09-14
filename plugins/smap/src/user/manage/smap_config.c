@@ -668,9 +668,8 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
         const ProcessTargetConfig *effectiveConfig = attr->pendingTargetConfigValid ? &attr->pendingTargetConfig :
                                                                                       &attr->targetConfig;
         tmp->state = attr->state == PROC_MIGRATE ? PROC_IDLE : attr->state;
-        tmp->numaNodes = attr->pendingTargetConfigValid && attr->pendingTargetNumaNodes != 0 ?
-                             attr->pendingTargetNumaNodes :
-                             attr->numaAttr.numaNodes;
+        /* numaAttr.numaNodes is user-synthesized; persist the last read-back value. */
+        tmp->numaNodes = attr->numaAttr.numaNodes;
         tmp->scanTime = attr->scanTime;
         tmp->duration = attr->duration;
         int ret = WriteTargetConfigToPayload(tmp->migrateParam, &tmp->count, &tmp->migrateMode, effectiveConfig);

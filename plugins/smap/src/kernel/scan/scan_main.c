@@ -26,6 +26,7 @@
 
 #include "check.h"
 #include "iomem.h"
+#include "acpi_mem.h"
 #include "scan_ioctl.h"
 #include "access_tracking_wrapper.h"
 #include "access_pid.h"

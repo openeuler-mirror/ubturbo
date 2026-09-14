@@ -700,7 +700,6 @@ TEST_F(DriversAccessPidTest, InitApBm)
     int ret;
     struct access_pid ap;
 
-    ap.numa_nodes = 0x10;
     u64 node_page_count[SMAP_MAX_NUMNODES] = { 0 };
     ret = init_ap_bm(2, node_page_count, &ap);
     EXPECT_EQ(0, ret);
@@ -1589,4 +1588,58 @@ TEST_F(DriversAccessPidTest, CheckParametersAndStateStateNotMig)
     ap_data.state_flag = 0;
     int ret = check_parameters_and_state(1, &addr);
     EXPECT_EQ(-EAGAIN, ret);
+}
+
+/* init_access_pid：NORMAL_SCAN 初始化不消费 payload.numa_nodes
+ * （该字段仅供 HAM/STATISTIC 推导 l1/l2_node） */
+TEST_F(DriversAccessPidTest, InitAccessPidSuccess)
+{
+    struct access_pid *tmp = nullptr;
+    struct access_add_pid_payload payload = { 0 };
+    payload.pid = 100;
+    payload.numa_nodes = 0x21;
+
+    MOCKER(init_vm_mapping_info).stubs().will(returnValue(0));
+    MOCKER(access_walk_pagemap_prepare).stubs().will(returnValue(0));
+    MOCKER(create_procfs).stubs().will(returnValue(0));
+    int ret = init_access_pid(&payload, &tmp);
+    EXPECT_EQ(0, ret);
+    ASSERT_NE(nullptr, tmp);
+    destroy_access_pid(tmp);
+}
+
+/* 重复添加同一 pid：仅更新扫描参数，配置不触碰 */
+TEST_F(DriversAccessPidTest, AccessAddPidDuplicateKeepsScanParams)
+{
+    struct access_pid existing = {};
+    struct access_pid ap_new = {};
+    struct access_pid *tmp = &ap_new;
+    struct access_add_pid_payload payload = { 0 };
+
+    ap_test_reset_slots();
+
+    existing.pid = 200;
+    existing.type = NORMAL_SCAN;
+    existing.scan_time = 50;
+    ap_slot_add(&existing);
+
+    ap_new.pid = 200;
+    ap_new.type = NORMAL_SCAN;
+    ap_new.scan_time = 100;
+    ap_new.ntimes = 2;
+
+    payload.pid = 200;
+    payload.scan_time = 100;
+    payload.type = NORMAL_SCAN;
+    payload.ntimes = 2;
+
+    MOCKER(init_access_pid).stubs().with(&payload, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
+    MOCKER(submit_one_work).stubs();
+    MOCKER(destroy_access_pid).stubs();
+
+    int ret = access_add_pid(1, &payload);
+    EXPECT_EQ(0, ret);
+    /* 重复 ADD_PID 只更新扫描参数 */
+    EXPECT_EQ(100, existing.scan_time);
+    EXPECT_EQ(2, existing.ntimes);
 }

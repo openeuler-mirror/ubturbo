@@ -239,7 +239,6 @@ void destroy_access_pid(struct access_pid *elem)
 	if (!elem) {
 		return;
 	}
-	elem->numa_nodes = 0;
 	if (elem->proc_root)
 		proc_remove(elem->proc_root);
 	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
@@ -721,7 +720,6 @@ int init_access_pid(struct access_add_pid_payload *payload,
 		return -ENOMEM;
 	ap->pid = payload->pid;
 	ap->pid_type = payload->pid_type;
-	ap->numa_nodes = payload->numa_nodes;
 	ap->scan_time = payload->scan_time;
 	ap->ntimes = payload->ntimes;
 	ap->type = payload->type;
@@ -767,8 +765,8 @@ void print_access_pid_list(void)
 		if (!s)
 			continue;
 		pr_debug(
-			"pid %d, pid_type %d, numa_nodes %x, scan_time %d, type %d\n",
-			s->ap->pid, s->ap->pid_type, s->ap->numa_nodes,
+			"pid %d, pid_type %d, scan_time %d, type %d\n",
+			s->ap->pid, s->ap->pid_type,
 			s->ap->scan_time, s->ap->type);
 		ap_put_slot(s);
 	}
@@ -1177,19 +1175,14 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 		struct ap_slot *existing = ap_get_slot(ap->pid);
 
 		if (existing) {
-			/* duplicate pid: update existing config under its ap_lock */
-			u32 old_nodes;
-
+			/* duplicate pid: update scan params only. */
 			down_write(&existing->ap_lock);
-			old_nodes = existing->ap->numa_nodes;
-			existing->ap->numa_nodes = ap->numa_nodes;
 			existing->ap->scan_time = ap->scan_time;
 			existing->ap->ntimes = ap->ntimes;
 			existing->ap->type = ap->type;
 			existing->ap->pid_type = ap->pid_type;
 			up_write(&existing->ap_lock);
-			pr_info("set pid: %d NUMA mask from %#x to %#x\n",
-				ap->pid, old_nodes, ap->numa_nodes);
+			pr_info("set pid: %d scan params\n", ap->pid);
 			ap_put_slot(existing);
 			list_move_tail(&ap->node, &dup_head);
 			continue;
@@ -1242,7 +1235,6 @@ int access_add_pid(int len, struct access_add_pid_payload *payload)
 				continue;
 			down_read(&s->ap_lock);
 			match = (payload[j].pid == e->pid &&
-				 payload[j].numa_nodes == e->numa_nodes &&
 				 payload[j].scan_time == e->scan_time &&
 				 payload[j].type == e->type &&
 				 payload[j].ntimes == e->ntimes);

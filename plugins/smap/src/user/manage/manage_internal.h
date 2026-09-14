@@ -53,7 +53,6 @@ void ResetActcData(ActcData *actcData[], int len);
 /* manage_grouped.c 使用 */
 int DetectPidType(pid_t pid);
 int RefreshManagedLocalState(ProcessAttr *attr, bool fullReplacement);
-uint32_t BuildManagedTrackingNodes(const ProcessAttr *attr);
 int ConfigureMigrationTargetsWithCapacityPolicy(ProcessAttr *attr, const ProcessTargetConfig *config,
                                                 bool ignoreRemoteCapacity);
 int GetProcessNumaMapsObservation(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask, uint64_t numaPages[MAX_NODES]);
@@ -85,7 +84,7 @@ void CalRemoteMemUsed(void);
 void SetPidNrPages(ProcessAttr *attr, size_t *nrPages, int len);
 void CalcActcStats(ProcessAttr *attr);
 void DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf);
-int RefreshManagedLocalTrackingScope(ProcessAttr *attr);
+int RefreshManagedLocalStatePeriodic(ProcessAttr *attr);
 int BuildAllPidData(void);
 
 /* ========== manage_grouped.c 导出给其他文件的内部函数 ========== */

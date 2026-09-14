@@ -894,7 +894,6 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffe
     attr.pendingTargetConfig.migrateMode = MIG_MEMSIZE_MODE;
     attr.pendingTargetConfig.count = 1;
     attr.pendingTargetConfig.targets[0] = {8, 0, 8192};
-    attr.pendingTargetNumaNodes = 0x153;
     memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
@@ -905,7 +904,8 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffe
     ASSERT_NE(nullptr, payload);
     EXPECT_EQ(1, len);
     EXPECT_EQ(PROC_IDLE, payload[0].state);
-    EXPECT_EQ(0x153U, payload[0].numaNodes);
+    /* numaAttr.numaNodes is user-synthesized; persisted value is the last read-back result. */
+    EXPECT_EQ(0x53U, payload[0].numaNodes);
     EXPECT_EQ(MIG_MEMSIZE_MODE, payload[0].migrateMode);
     EXPECT_EQ(1, payload[0].count);
     EXPECT_EQ(8, payload[0].migrateParam[0].nid);
