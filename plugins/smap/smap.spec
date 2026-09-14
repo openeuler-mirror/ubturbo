@@ -44,9 +44,9 @@ mkdir -p -m755 ${RPM_BUILD_ROOT}/%{smap_dir}
 mkdir -p -m755 ${RPM_BUILD_ROOT}/%{ucache_dir}
 mkdir -p -m755 ${RPM_BUILD_ROOT}/%{smap_libsmap_dir}
 mkdir -p -m755 ${RPM_BUILD_ROOT}/%{udev_rules_dir}
-%{__install} -b -m 0500 %{_builddir}/smap/src/drivers/smap_tracking_core.ko ${RPM_BUILD_ROOT}/%{smap_dir}
-%{__install} -b -m 0500 %{_builddir}/smap/src/drivers/smap_access_tracking.ko ${RPM_BUILD_ROOT}/%{smap_dir}
-%{__install} -b -m 0500 %{_builddir}/smap/src/drivers/smap_histogram_tracking.ko ${RPM_BUILD_ROOT}/%{smap_dir}
+%{__install} -b -m 0500 %{_builddir}/smap/src/drivers/tracking-core.ko ${RPM_BUILD_ROOT}/%{smap_dir}
+%{__install} -b -m 0500 %{_builddir}/smap/src/drivers/access-tracking.ko ${RPM_BUILD_ROOT}/%{smap_dir}
+%{__install} -b -m 0500 %{_builddir}/smap/src/drivers/hist-tracking.ko ${RPM_BUILD_ROOT}/%{smap_dir}
 %{__install} -b -m 0500 %{_builddir}/smap/src/tiering/smap_tiering.ko ${RPM_BUILD_ROOT}/%{smap_dir}
 %{__install} -b -m 0500 %{_builddir}/smap/src/ucache/ucache.ko ${RPM_BUILD_ROOT}/%{ucache_dir}
 %{__install} -b -m 0500 %{_builddir}/smap/output/smap/lib/libsmap.so ${RPM_BUILD_ROOT}/%{smap_libsmap_dir}
@@ -57,9 +57,9 @@ rm -rf ${RPM_BUILD_ROOT}
 
 %files
 %defattr(-,ubturbo,ubturbo)
-%{smap_dir}/smap_tracking_core.ko
-%{smap_dir}/smap_access_tracking.ko
-%{smap_dir}/smap_histogram_tracking.ko
+%{smap_dir}/tracking-core.ko
+%{smap_dir}/access-tracking.ko
+%{smap_dir}/hist-tracking.ko
 %{smap_dir}/smap_tiering.ko
 %{ucache_dir}/ucache.ko
 %{smap_libsmap_dir}/libsmap.so
@@ -78,9 +78,9 @@ depmod -a
 %preun
 if [ "$1" = "0" ]; then
     modprobe -r smap_tiering
-    modprobe -r smap_histogram_tracking
-    modprobe -r smap_access_tracking
-    modprobe -r smap_tracking_core
+    modprobe -r access-tracking
+    modprobe -r hist-tracking
+    modprobe -r tracking-core
     modprobe -r ucache
 fi
 

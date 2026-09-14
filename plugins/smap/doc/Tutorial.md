@@ -108,9 +108,9 @@ make -C src/tiering -j
 
 编译成功后会生成以下文件:
 
-- src/drivers/smap_access_tracking.ko
-- src/drivers/smap_histogram_tracking.ko
-- src/drivers/smap_tracking_core.ko
+- src/drivers/access-tracking.ko
+- src/drivers/hist-tracking.ko
+- src/drivers/tracking-core.ko
 - src/tiering/smap_tiering.ko
 
 在项目根目录下执行下列命令来编译动态库:
@@ -126,12 +126,12 @@ sh build.sh
 
 ## Getting Started: Installation Guide
 
-SMAP的运行模式根据进程的页面大小, 分为4K模式和2M模式。模式由 ubturbo_smap_start(pageType) 入参控制（0=4K，1=2M），不再在插入ko时通过参数指定，与ko加载解耦，切换模式无需重插ko。smap_histogram_tracking.ko依赖硬件, 按实际需求插入。安装命令如下：
+SMAP的运行模式根据进程的页面大小, 分为4K模式和2M模式。模式由 ubturbo_smap_start(pageType) 入参控制（0=4K，1=2M），不再在插入ko时通过参数指定，与ko加载解耦，切换模式无需重插ko。hist-tracking.ko依赖硬件, 按实际需求插入。安装命令如下：
 
     ```shell
-    insmod src/drivers/smap_tracking_core.ko
-    insmod src/drivers/smap_histogram_tracking.ko
-    insmod src/drivers/smap_access_tracking.ko
+    insmod src/drivers/tracking-core.ko
+    insmod src/drivers/hist-tracking.ko
+    insmod src/drivers/access-tracking.ko
     insmod src/tiering/smap_tiering.ko
     ```
 
