@@ -115,9 +115,9 @@ static long ioctl_add_pid(void __user *argp)
 			ret = -EINVAL;
 			goto out_free_payload;
 		}
-		if (payload[i].ntimes == 0) {
-			pr_err("invalid scan times %d of message payload[%d]\n",
-			       payload[i].ntimes, i);
+		if (payload[i].ntimes == 0 || payload[i].scan_time == 0) {
+			pr_err("invalid scan times %d or scan time %u of message payload[%d]\n",
+			       payload[i].ntimes, payload[i].scan_time, i);
 			ret = -EINVAL;
 			goto out_free_payload;
 		}

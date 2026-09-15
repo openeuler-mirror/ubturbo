@@ -8,32 +8,32 @@
 
 #include <asm/pgtable.h>
 
-#include <linux/spinlock.h>
 #include <linux/hugetlb.h>
 #include <linux/list.h>
+#include <linux/spinlock.h>
 #include <linux/vmalloc.h>
 
-#include <linux/mmap_lock.h>
 #include <linux/errno.h>
-#include <linux/pid.h>
-#include <linux/mm_types.h>
-#include <linux/kvm_host.h>
 #include <linux/fdtable.h>
 #include <linux/fs.h>
-#include <linux/slab.h>
-#include <linux/proc_fs.h>
+#include <linux/kvm_host.h>
+#include <linux/mm_types.h>
+#include <linux/mmap_lock.h>
 #include <linux/pagewalk.h>
+#include <linux/pid.h>
+#include <linux/proc_fs.h>
+#include <linux/slab.h>
 
-#include "kvm_pgtable.h"
-#include "access_pid.h"
-#include "accessed_bit.h"
-#include "access_tracking_wrapper.h"
 #include "access_iomem.h"
+#include "access_pid.h"
+#include "access_tracking_wrapper.h"
+#include "accessed_bit.h"
 #include "hist_tracking.h"
+#include "kvm_pgtable.h"
 
 using namespace std;
 
-inline bool operator==(const pte_t& a, const pte_t& b)
+inline bool operator==(const pte_t &a, const pte_t &b)
 {
     return a.pte == b.pte;
 }
@@ -50,6 +50,7 @@ extern "C" void put_pid(struct pid *pid);
 extern "C" void put_task_struct(struct task_struct *t);
 extern "C" void *vzalloc(unsigned long size);
 extern "C" int calc_paddr_acidx_iomem_known_nid(u64 pa, int nid, u64 *index, int page_size);
+extern "C" struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr);
 
 class AccessedBitTest : public ::testing::Test {
 protected:
@@ -77,27 +78,12 @@ extern "C" bool is_kvm_file(struct file *filp);
 TEST_F(AccessedBitTest, is_kvm_file)
 {
     bool ret;
-    struct file_system_type anonFsType = {
-        .name = "anon_inodefs",
-        .fs_flags = 0
-    };
-    struct file_system_type normalFsType = {
-        .name = "inodefs",
-        .fs_flags = 0
-    };
-    struct super_block sb = {
-        .s_type = &anonFsType
-    };
-    struct inode inode = {
-        .i_sb = &sb
-    };
-    struct dentry dentry = {
-        .d_name = { .name = "kvm-vm" }
-    };
-    struct file file = {
-        .f_path = { .dentry = &dentry },
-        .f_inode = &inode
-    };
+    struct file_system_type anonFsType = {.name = "anon_inodefs", .fs_flags = 0};
+    struct file_system_type normalFsType = {.name = "inodefs", .fs_flags = 0};
+    struct super_block sb = {.s_type = &anonFsType};
+    struct inode inode = {.i_sb = &sb};
+    struct dentry dentry = {.d_name = {.name = "kvm-vm"}};
+    struct file file = {.f_path = {.dentry = &dentry}, .f_inode = &inode};
     ret = is_kvm_file(&file);
     EXPECT_TRUE(ret);
 
@@ -110,9 +96,7 @@ extern "C" struct file *get_kvm_file_from_task(struct task_struct *task);
 TEST_F(AccessedBitTest, get_kvm_file_from_task)
 {
     struct file *ret;
-    struct task_struct task = {
-        .files = nullptr
-    };
+    struct task_struct task = {.files = nullptr};
     ret = get_kvm_file_from_task(nullptr);
     EXPECT_EQ(nullptr, ret);
 
@@ -127,13 +111,9 @@ TEST_F(AccessedBitTest, get_kvm_file_from_task_two)
 {
     struct file *ret;
     struct file file;
-    struct fdtable fdtable = {
-        .max_fds = 0
-    };
+    struct fdtable fdtable = {.max_fds = 0};
     struct files_struct fs;
-    struct task_struct task = {
-        .files = &fs
-    };
+    struct task_struct task = {.files = &fs};
 
     MOCKER(files_fdtable).stubs().will(returnValue(&fdtable));
     ret = get_kvm_file_from_task(&task);
@@ -151,13 +131,9 @@ TEST_F(AccessedBitTest, get_kvm_file_from_task_three)
 {
     struct file *ret;
     struct file file;
-    struct fdtable fdtable = {
-        .max_fds = 0
-    };
+    struct fdtable fdtable = {.max_fds = 0};
     struct files_struct fs;
-    struct task_struct task = {
-        .files = &fs
-    };
+    struct task_struct task = {.files = &fs};
 
     MOCKER(files_fdtable).stubs().will(returnValue(&fdtable));
     fdtable.max_fds = 1;
@@ -295,7 +271,7 @@ extern "C" int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va);
 TEST_F(AccessedBitTest, hva_to_hpa_hugetlb)
 {
     int ret;
-    struct kvm kvm = { .mm = NULL };
+    struct kvm kvm = {.mm = NULL};
 
     MOCKER(huge_page_size).stubs().will(returnValue(PAGE_SIZE_2M));
     ret = hva_to_hpa_hugetlb(nullptr, 0);
@@ -306,8 +282,11 @@ extern "C" pte_t *huge_pte_offset(struct mm_struct *mm, unsigned long addr, unsi
 TEST_F(AccessedBitTest, hva_to_hpa_hugetlb_two)
 {
     int ret;
-    struct kvm kvm = { .mm = NULL };
+    struct kvm kvm = {.mm = NULL};
+    struct vm_area_struct vma;
 
+    MOCKER(find_vma).stubs().will(returnValue(&vma));
+    MOCKER(is_vm_hugetlb_page).stubs().will(returnValue(true));
     MOCKER(huge_page_size).stubs().will(returnValue(PAGE_SIZE_4K));
     ret = hva_to_hpa_hugetlb(&kvm, 0);
     EXPECT_EQ(-EINVAL, ret);
@@ -317,15 +296,20 @@ extern "C" pte_t smap_huge_ptep_get(pte_t *ptep);
 TEST_F(AccessedBitTest, hva_to_hpa_hugetlb_three)
 {
     int ret;
-    struct kvm kvm = { .mm = NULL };
-    pte_t pte = { .pte = 0 };
+    struct kvm kvm = {.mm = NULL};
+    struct vm_area_struct vma;
+    pte_t pte = {.pte = 0};
 
+    MOCKER(find_vma).stubs().will(returnValue(&vma));
+    MOCKER(is_vm_hugetlb_page).stubs().will(returnValue(true));
     MOCKER(huge_page_size).stubs().will(returnValue(PAGE_SIZE_2M));
     MOCKER(huge_pte_offset).stubs().will(returnValue((pte_t *)nullptr));
     ret = hva_to_hpa_hugetlb(&kvm, 0);
     EXPECT_EQ(-EFAULT, ret);
 
     GlobalMockObject::verify();
+    MOCKER(find_vma).stubs().will(returnValue(&vma));
+    MOCKER(is_vm_hugetlb_page).stubs().will(returnValue(true));
     MOCKER(huge_page_size).stubs().will(returnValue(PAGE_SIZE_2M));
     MOCKER(huge_pte_offset).stubs().will(returnValue(&pte));
     MOCKER(smap_huge_ptep_get).stubs().will(returnValue(pte));
@@ -337,7 +321,7 @@ extern "C" int hva_to_hpa(struct kvm *kvm, u64 host_va, struct access_pid *ap, b
 TEST_F(AccessedBitTest, hvaToHpaWithNullKvm)
 {
     int ret;
-    struct kvm kvm = { .mm = NULL };
+    struct kvm kvm = {.mm = NULL};
     struct access_pid ap;
     ap.type = NORMAL_SCAN;
     ap.pid = 1;
@@ -349,12 +333,11 @@ TEST_F(AccessedBitTest, hvaToHpaWithNullKvm)
     EXPECT_EQ(-EINVAL, ret);
 }
 
-extern "C" struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr);
 TEST_F(AccessedBitTest, hvaToHpaWithErrorVma)
 {
     int ret;
     struct mm_struct mm;
-    struct kvm kvm = { .mm = &mm };
+    struct kvm kvm = {.mm = &mm};
     struct vm_area_struct vma;
     struct access_pid ap;
     ap.type = NORMAL_SCAN;
@@ -370,7 +353,7 @@ TEST_F(AccessedBitTest, hvaToHpaTest)
 {
     int ret;
     struct mm_struct mm;
-    struct kvm kvm = { .mm = &mm };
+    struct kvm kvm = {.mm = &mm};
     struct vm_area_struct vma;
     struct access_pid ap;
     ap.type = HAM_SCAN;
@@ -388,12 +371,8 @@ TEST_F(AccessedBitTest, hvaToHpaTest)
     GlobalMockObject::verify();
     MOCKER(find_vma).stubs().will(returnValue(&vma));
     MOCKER(is_vm_hugetlb_page).stubs().will(returnValue(true));
-    MOCKER(hva_to_hpa_ham).stubs()
-        .will(returnValue(-EINVAL))
-        .then(returnValue(0));
-    MOCKER(hva_to_hpa_hugetlb).stubs()
-        .will(returnValue(-EINVAL))
-        .then(returnValue(0));
+    MOCKER(hva_to_hpa_ham).stubs().will(returnValue(-EINVAL)).then(returnValue(0));
+    MOCKER(hva_to_hpa_hugetlb).stubs().will(returnValue(-EINVAL)).then(returnValue(0));
     ret = hva_to_hpa(&kvm, 0, &ap, true);
     EXPECT_EQ(0, ret);
     ret = hva_to_hpa(&kvm, 0, &ap, true);
@@ -407,13 +386,8 @@ TEST_F(AccessedBitTest, scanKvmMemslotsWithNullKvm)
     int ret;
     struct mm_struct mm;
     struct kvm_pgtable pgt;
-    struct kvm_arch arch = {
-        .mmu = { 0 }
-    };
-    struct kvm kvm = {
-        .mm = &mm,
-        .arch = arch
-    };
+    struct kvm_arch arch = {.mmu = {0}};
+    struct kvm kvm = {.mm = &mm, .arch = arch};
     struct kvm_memslots slots;
 
     ret = scan_kvm_memslots(&kvm, 1, 0, STATISTIC_SCAN);
@@ -430,6 +404,7 @@ TEST_F(AccessedBitTest, hva_to_hpa_ham)
     EXPECT_EQ(-EINVAL, ret);
 
     struct kvm kvm;
+    struct vm_area_struct vma;
     pte_t ptep;
     struct ham_tracking_info info;
     u64 paddr1;
@@ -445,6 +420,8 @@ TEST_F(AccessedBitTest, hva_to_hpa_ham)
     info.freq[L2] = &freq2;
     info.len[L1] = info.len[L2] = 1;
     ptep.pte = 1;
+    MOCKER(find_vma).stubs().will(returnValue(&vma));
+    MOCKER(is_vm_hugetlb_page).stubs().will(returnValue(true));
     MOCKER(huge_page_size).stubs().will(returnValue(0x200000UL));
     MOCKER(huge_pte_offset).stubs().will(returnValue((pte_t *)&ptep));
     list_add(&info.node, &ham_pid_list);
@@ -498,15 +475,14 @@ TEST_F(AccessedBitTest, GetVmaNUmaNode)
     EXPECT_EQ(NUMA_NO_NODE, ret);
 }
 
-extern "C" int fill_vaddrs_info(struct kvm *kvm, struct hva_info *hva_vec, u64 len, u64 *l1_page_num,
-                                u64 *l2_page_num);
+extern "C" int fill_vaddrs_info(struct kvm *kvm, struct hva_info *hva_vec, u64 len, u64 *l1_page_num, u64 *l2_page_num);
 extern "C" int get_hva_info_by_scan_kvm_memslots(struct kvm *kvm, u64 *l1_page_num, u64 *l2_page_num,
                                                  u64 total_huge_page_num, u64 *vaddrs, struct hva_info *hva_vec);
 TEST_F(AccessedBitTest, getHvaInfoByScanKvmMemslots)
 {
     u64 len = 1024;
-    struct hva_info *hva_vec = static_cast<struct hva_info*>(malloc(len * sizeof(struct hva_info)));
-    u64 *vaddrs = static_cast<u64*>(malloc(len * sizeof(u64)));
+    struct hva_info *hva_vec = static_cast<struct hva_info *>(malloc(len * sizeof(struct hva_info)));
+    u64 *vaddrs = static_cast<u64 *>(malloc(len * sizeof(u64)));
     u64 l1_page_num;
     u64 l2_page_num;
     struct kvm kvm;
@@ -635,14 +611,13 @@ TEST_F(AccessedBitTest, check_pte_young)
     EXPECT_EQ(0, ret);
 }
 
-static int pte_entry_noop(pte_t *ptep, unsigned long addr, unsigned long next,
-                          struct mm_walk *walk)
+static int pte_entry_noop(pte_t *ptep, unsigned long addr, unsigned long next, struct mm_walk *walk)
 {
     return 0;
 }
 
 const struct mm_walk_ops pte_range_ops = {
-	.pte_entry = pte_entry_noop,
+    .pte_entry = pte_entry_noop,
 };
 
 extern "C" int small_vma_walk(struct mm_struct *mm, unsigned long start_vaddr, unsigned long end_vaddr,
@@ -701,8 +676,7 @@ TEST_F(AccessedBitTest, take_vma_snapshot)
 
 extern "C" bool IS_ERR(const void *ptr);
 extern "C" struct mm_struct *get_mm_by_pid(pid_t pid);
-extern "C" int take_vma_snapshot(struct mm_struct *mm,
-                                 struct smap_vma_struct **vma_arr, int *vma_count);
+extern "C" int take_vma_snapshot(struct mm_struct *mm, struct smap_vma_struct **vma_arr, int *vma_count);
 TEST_F(AccessedBitTest, scan_accessed_bit_forward_mm_fail)
 {
     struct mm_struct mm;
@@ -813,40 +787,40 @@ TEST_F(AccessedBitTest, MemslotIsMemValidMemslot)
 extern "C" int hva_cmp(const void *a, const void *b);
 TEST_F(AccessedBitTest, HvaCmpLocalBeforeRemote)
 {
-    struct hva_info x = { .va = 0x1000, .nid = 0 };
-    struct hva_info y = { .va = 0x2000, .nid = nr_local_numa };
+    struct hva_info x = {.va = 0x1000, .nid = 0};
+    struct hva_info y = {.va = 0x2000, .nid = nr_local_numa};
     int ret = hva_cmp(&x, &y);
     EXPECT_EQ(-1, ret);
 }
 
 TEST_F(AccessedBitTest, HvaCmpRemoteAfterLocal)
 {
-    struct hva_info x = { .va = 0x1000, .nid = nr_local_numa };
-    struct hva_info y = { .va = 0x2000, .nid = 0 };
+    struct hva_info x = {.va = 0x1000, .nid = nr_local_numa};
+    struct hva_info y = {.va = 0x2000, .nid = 0};
     int ret = hva_cmp(&x, &y);
     EXPECT_EQ(1, ret);
 }
 
 TEST_F(AccessedBitTest, HvaCmpSameNidAddrLess)
 {
-    struct hva_info x = { .va = 0x1000, .nid = 0 };
-    struct hva_info y = { .va = 0x2000, .nid = 0 };
+    struct hva_info x = {.va = 0x1000, .nid = 0};
+    struct hva_info y = {.va = 0x2000, .nid = 0};
     int ret = hva_cmp(&x, &y);
     EXPECT_EQ(-1, ret);
 }
 
 TEST_F(AccessedBitTest, HvaCmpSameNidAddrEqual)
 {
-    struct hva_info x = { .va = 0x1000, .nid = 0 };
-    struct hva_info y = { .va = 0x1000, .nid = 0 };
+    struct hva_info x = {.va = 0x1000, .nid = 0};
+    struct hva_info y = {.va = 0x1000, .nid = 0};
     int ret = hva_cmp(&x, &y);
     EXPECT_EQ(0, ret);
 }
 
 TEST_F(AccessedBitTest, HvaCmpSameNidAddrGreater)
 {
-    struct hva_info x = { .va = 0x2000, .nid = 0 };
-    struct hva_info y = { .va = 0x1000, .nid = 0 };
+    struct hva_info x = {.va = 0x2000, .nid = 0};
+    struct hva_info y = {.va = 0x1000, .nid = 0};
     int ret = hva_cmp(&x, &y);
     EXPECT_EQ(1, ret);
 }
@@ -893,7 +867,7 @@ TEST_F(AccessedBitTest, AllocVaddrInfoHvaVecFail)
 {
     struct hva_info *hva_vec;
     u64 *vaddrs;
-    MOCKER(vzalloc).stubs().will(returnValue((void*)nullptr));
+    MOCKER(vzalloc).stubs().will(returnValue((void *)nullptr));
     int ret = alloc_vaddr_info(&hva_vec, &vaddrs, 1);
     EXPECT_EQ(-ENOMEM, ret);
 }
@@ -902,9 +876,10 @@ TEST_F(AccessedBitTest, AllocVaddrInfoVaddrsFail)
 {
     struct hva_info *hva_vec_tmp;
     u64 *vaddrs;
-    MOCKER(vzalloc).stubs()
-        .will(returnValue(reinterpret_cast<void*>(&hva_vec_tmp)))
-        .then(returnValue((void*)nullptr));
+    MOCKER(vzalloc)
+        .stubs()
+        .will(returnValue(reinterpret_cast<void *>(&hva_vec_tmp)))
+        .then(returnValue((void *)nullptr));
     MOCKER(vfree).stubs().will(ignoreReturnValue());
     int ret = alloc_vaddr_info(&hva_vec_tmp, &vaddrs, 1);
     EXPECT_EQ(-ENOMEM, ret);
@@ -952,7 +927,7 @@ TEST_F(AccessedBitTest, GetNumaIdByPaddrInvalidPfn)
 TEST_F(AccessedBitTest, GetNumaIdByPaddrNoOnlinePage)
 {
     MOCKER(pfn_valid).stubs().will(returnValue(true));
-    MOCKER(pfn_to_online_page).stubs().will(returnValue((struct page*)nullptr));
+    MOCKER(pfn_to_online_page).stubs().will(returnValue((struct page *)nullptr));
     int ret = get_numa_id_by_paddr(0x1000);
     EXPECT_EQ(NUMA_NO_NODE, ret);
 }
@@ -1065,7 +1040,7 @@ TEST_F(AccessedBitTest, HamActcDataAddSuccess)
 extern "C" struct vm_area_struct *get_vma_if_huge_page(struct kvm *kvm, unsigned long host_va);
 TEST_F(AccessedBitTest, GetVmaIfHugePageNullMm)
 {
-    struct kvm kvm = { .mm = nullptr };
+    struct kvm kvm = {.mm = nullptr};
     struct vm_area_struct *ret = get_vma_if_huge_page(&kvm, 0);
     EXPECT_EQ(nullptr, ret);
 }
@@ -1073,8 +1048,8 @@ TEST_F(AccessedBitTest, GetVmaIfHugePageNullMm)
 TEST_F(AccessedBitTest, GetVmaIfHugePageNullVma)
 {
     struct mm_struct mm;
-    struct kvm kvm = { .mm = &mm };
-    MOCKER(find_vma).stubs().will(returnValue((struct vm_area_struct*)nullptr));
+    struct kvm kvm = {.mm = &mm};
+    MOCKER(find_vma).stubs().will(returnValue((struct vm_area_struct *)nullptr));
     struct vm_area_struct *ret = get_vma_if_huge_page(&kvm, 0);
     EXPECT_EQ(nullptr, ret);
 }
@@ -1082,7 +1057,7 @@ TEST_F(AccessedBitTest, GetVmaIfHugePageNullVma)
 TEST_F(AccessedBitTest, GetVmaIfHugePageNotHugetlb)
 {
     struct mm_struct mm;
-    struct kvm kvm = { .mm = &mm };
+    struct kvm kvm = {.mm = &mm};
     struct vm_area_struct vma;
     MOCKER(find_vma).stubs().will(returnValue(&vma));
     MOCKER(is_vm_hugetlb_page).stubs().will(returnValue(false));
@@ -1093,7 +1068,7 @@ TEST_F(AccessedBitTest, GetVmaIfHugePageNotHugetlb)
 TEST_F(AccessedBitTest, GetVmaIfHugePageIsHugetlb)
 {
     struct mm_struct mm;
-    struct kvm kvm = { .mm = &mm };
+    struct kvm kvm = {.mm = &mm};
     struct vm_area_struct vma;
     MOCKER(find_vma).stubs().will(returnValue(&vma));
     MOCKER(is_vm_hugetlb_page).stubs().will(returnValue(true));
@@ -1127,7 +1102,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmFindPidFail)
     struct access_pid ap;
     ap.pid = 1;
     ap.type = NORMAL_SCAN;
-    MOCKER(find_get_pid).stubs().will(returnValue((struct pid*)nullptr));
+    MOCKER(find_get_pid).stubs().will(returnValue((struct pid *)nullptr));
     int ret = scan_accessed_bit_forward_vm(&ap, PAGE_SIZE_2M);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -1139,7 +1114,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmGetTaskFail)
     ap.pid = 1;
     ap.type = NORMAL_SCAN;
     MOCKER(find_get_pid).stubs().will(returnValue(&pid_s));
-    MOCKER(get_pid_task).stubs().will(returnValue((struct task_struct*)nullptr));
+    MOCKER(get_pid_task).stubs().will(returnValue((struct task_struct *)nullptr));
     int ret = scan_accessed_bit_forward_vm(&ap, PAGE_SIZE_2M);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -1153,7 +1128,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmGetKvmFileFail)
     ap.type = NORMAL_SCAN;
     MOCKER(find_get_pid).stubs().will(returnValue(&pid_s));
     MOCKER(get_pid_task).stubs().will(returnValue(&task));
-    MOCKER(get_kvm_file_from_task).stubs().will(returnValue((struct file*)nullptr));
+    MOCKER(get_kvm_file_from_task).stubs().will(returnValue((struct file *)nullptr));
     int ret = scan_accessed_bit_forward_vm(&ap, PAGE_SIZE_2M);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -1166,7 +1141,7 @@ TEST_F(AccessedBitTest, FillPteVaSwapPte)
     pte_t pte;
     pte.pte = 0x1;
     struct mm_walk walk;
-    struct pte_walk pw = { .index = 0 };
+    struct pte_walk pw = {.index = 0};
     walk.private_data = &pw;
     int ret = fill_pte_va(&pte, 0x1000, 0x2000, &walk);
     EXPECT_EQ(0, ret);
@@ -1177,7 +1152,7 @@ TEST_F(AccessedBitTest, FillPteVaPaddrZero)
     pte_t pte;
     pte.pte = 0;
     struct mm_walk walk;
-    struct pte_walk pw = { .index = 0, .page_size = PAGE_SIZE_4K };
+    struct pte_walk pw = {.index = 0, .page_size = PAGE_SIZE_4K};
     walk.private_data = &pw;
     int ret = fill_pte_va(&pte, 0x1000, 0x2000, &walk);
     EXPECT_EQ(0, ret);
@@ -1227,8 +1202,7 @@ TEST_F(AccessedBitTest, FillPteVaIomemFallback)
 
 extern "C" int calc_paddr_acidx_acpi_known_nid(u64 paddr, int nid, u64 *pa_index, int page_size);
 extern "C" int calc_paddr_acidx_iomem_known_nid(u64 paddr, int nid, u64 *pa_index, int page_size);
-extern "C" void add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap,
-                                    struct page *page);
+extern "C" void add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap, struct page *page);
 extern "C" void process_scan_results(struct pte_walk *pte_walk);
 TEST_F(AccessedBitTest, ProcessScanResultsNullPteWalk)
 {
@@ -1237,7 +1211,7 @@ TEST_F(AccessedBitTest, ProcessScanResultsNullPteWalk)
 
 TEST_F(AccessedBitTest, ProcessScanResultsNullAp)
 {
-    struct pte_walk pw = { .ap = nullptr };
+    struct pte_walk pw = {.ap = nullptr};
     process_scan_results(&pw);
 }
 
@@ -1305,7 +1279,7 @@ TEST_F(AccessedBitTest, ProcessScanResultsLastScanAddToBm)
     ap.type = NORMAL_SCAN;
     ap.cur_times = 9;
     ap.ntimes = 10;
-    struct pte_walk pw = { .ap = &ap, .scan_results = entries, .scan_result_cnt = 1 };
+    struct pte_walk pw = {.ap = &ap, .scan_results = entries, .scan_result_cnt = 1};
 
     /* cur_times=9, ntimes=10 => cur_times+1 >= ntimes => is last scan */
     MOCKER(calc_paddr_acidx_acpi_known_nid).stubs().will(returnValue(0));
@@ -1315,7 +1289,8 @@ TEST_F(AccessedBitTest, ProcessScanResultsLastScanAddToBm)
 
 // ========== DT supplement: setup_statistic_scan ==========
 
-extern "C" int setup_statistic_scan(struct pte_walk *pte_walk, int pid, struct smap_vma_struct *vma_array, int vma_count);
+extern "C" int setup_statistic_scan(struct pte_walk *pte_walk, int pid, struct smap_vma_struct *vma_array,
+                                    int vma_count);
 TEST_F(AccessedBitTest, SetupStatisticScanNotStatisticType)
 {
     struct pte_walk pw;
@@ -1339,7 +1314,7 @@ TEST_F(AccessedBitTest, SetupStatisticScanVzallocFail)
     vma.start_vaddr = 0;
     vma.end_vaddr = 0x10000;
     pw.type = STATISTIC_SCAN;
-    MOCKER(vzalloc).stubs().will(returnValue((void*)nullptr));
+    MOCKER(vzalloc).stubs().will(returnValue((void *)nullptr));
     int ret = setup_statistic_scan(&pw, 1, &vma, 1);
     EXPECT_EQ(-ENOMEM, ret);
 }
@@ -1352,7 +1327,7 @@ TEST_F(AccessedBitTest, SetupStatisticScanSuccess)
     vma.start_vaddr = 0;
     vma.end_vaddr = 0x10000;
     pw.type = STATISTIC_SCAN;
-    MOCKER(vzalloc).stubs().will(returnValue(reinterpret_cast<void*>(&statistic_vaddr)));
+    MOCKER(vzalloc).stubs().will(returnValue(reinterpret_cast<void *>(&statistic_vaddr)));
     int ret = setup_statistic_scan(&pw, 1, &vma, 1);
     EXPECT_EQ(0, ret);
 }
@@ -1498,11 +1473,10 @@ TEST_F(AccessedBitTest, ProcessScanResultsBothFallbacksFail)
     GlobalMockObject::verify();
 }
 
-extern "C" void smap_on_pte_young_cb(u64 gpa, bool is_young, bool pte_valid,
-    void *arg);
+extern "C" void smap_on_pte_young_cb(u64 gpa, bool is_young, bool pte_valid, void *arg);
 extern "C" void smap_on_hole_cb(u64 gpa_start, u64 gpa_end, void *arg);
-extern "C" int process_memslot_pages(struct kvm *kvm,
-    struct kvm_memory_slot *memslot, struct access_pid *ap, int page_size);
+extern "C" int process_memslot_pages(struct kvm *kvm, struct kvm_memory_slot *memslot, struct access_pid *ap,
+                                     int page_size);
 
 TEST_F(AccessedBitTest, OnPteYoungCbNotYoungNotLastScanning)
 {
@@ -1768,4 +1742,3 @@ TEST_F(AccessedBitTest, ProcessMemslotPagesWalkError)
     EXPECT_EQ(-EAGAIN, ret);
     GlobalMockObject::verify();
 }
-

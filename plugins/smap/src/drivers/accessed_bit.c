@@ -472,6 +472,7 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 			      struct access_pid *ap, bool is_young)
 {
 	struct hstate *h;
+	struct vm_area_struct *vma;
 	unsigned long hmask;
 	unsigned long sz;
 	pte_t *ptep;
@@ -481,7 +482,12 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 	if (!kvm)
 		return -EINVAL;
 
-	h = hstate_vma(find_vma(kvm->mm, host_va));
+	vma = find_vma(kvm->mm, host_va);
+	if (!vma || !is_vm_hugetlb_page(vma)) {
+		pr_debug("invalid vma for hugetlb, host_va: %llu\n", host_va);
+		return -EFAULT;
+	}
+	h = hstate_vma(vma);
 	hmask = huge_page_mask(h);
 	sz = huge_page_size(h);
 	if (sz != g_pagesize_huge)
@@ -551,6 +557,7 @@ static void ham_actc_data_add(int pid, phys_addr_t paddr, u32 page_size)
 static int hva_to_hpa_ham(struct kvm *kvm, u64 host_va, pid_t pid)
 {
 	struct hstate *h;
+	struct vm_area_struct *vma;
 	unsigned long hmask;
 	unsigned long sz;
 	pte_t *ptep;
@@ -560,7 +567,12 @@ static int hva_to_hpa_ham(struct kvm *kvm, u64 host_va, pid_t pid)
 	if (!kvm)
 		return -EINVAL;
 
-	h = hstate_vma(find_vma(kvm->mm, host_va));
+	vma = find_vma(kvm->mm, host_va);
+	if (!vma || !is_vm_hugetlb_page(vma)) {
+		pr_debug("invalid vma for hugetlb, host_va: %llu\n", host_va);
+		return -EFAULT;
+	}
+	h = hstate_vma(vma);
 	hmask = huge_page_mask(h);
 	sz = huge_page_size(h);
 	if (sz != g_pagesize_huge) {
@@ -1693,6 +1705,7 @@ static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 	if (ret) {
 		pr_err("failed to setup statistic scan, ret: %d\n", ret);
 		vfree(pte_walk.scan_results);
+		kfree(vma_array);
 		mmput(mm);
 		return -EINVAL;
 	}

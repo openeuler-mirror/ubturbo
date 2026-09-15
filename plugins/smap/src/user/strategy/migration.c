@@ -1507,6 +1507,10 @@ static void ApplyUbBwStop(ProcessAttr *current, struct ProcessManager *manager)
 
     for (int i = 0; i < manager->ubBwMonitor.currentFluxMb.len; i++) {
         int nid = manager->ubBwMonitor.currentFluxMb.flux[i].numaId;
+        if (nid < 0 || nid >= MAX_NODES) {
+            SMAP_LOGGER_ERROR("UB BW: invalid numa id %d, skip.", nid);
+            continue;
+        }
         uint32_t totalBw =
             manager->ubBwMonitor.currentFluxMb.flux[i].readMb + manager->ubBwMonitor.currentFluxMb.flux[i].writeMb;
 
