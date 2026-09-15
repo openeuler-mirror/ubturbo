@@ -47,6 +47,7 @@ RUN printf '%s\n' \
         make gcc gcc-c++ cmake ninja-build dos2unix \
         chrpath patchelf findutils git bc \
         libboundscheck libvirt-devel \
+        gmock-devel rapidjson-devel \
         kernel-devel \
         kmod \
     && dnf clean all && rm -rf /var/cache/dnf \
