@@ -22,13 +22,13 @@
 
 - 如需与 UBS-Engine（UBSE）配合使用，建议先安装 UBTurbo，再将 UBSE 的 ubse 用户加入 ubturbo 用户组（见“安装注意事项”）。
 
-- 若使用 SMAP 分级内存或 RMRS 内存迁移能力，需提前规划对应前置依赖（见“（可选）安装SMAP”）。
+- SMAP 为必须安装的组件，需提前规划对应前置依赖（见“安装SMAP”）；RMRS 内存迁移能力为可选插件，如需使用请规划其前置依赖。
 
 ## 安装注意事项
 
   - UBTurbo RPM 包安装时会通过安装脚本自动创建 <code>ubturbo</code> 系统用户和用户组（登录shell为 <code>/sbin/nologin</code>），无需手动创建。
   - UBSE 需要调用 UBTurbo 接口，UBTurbo 接口有权限校验，需要将 ubse 用户加到 ubturbo 用户组中，该用户组由 UBTurbo 服务创建。如果 UBTurbo 服务未在 UBSE 前安装，ubse 用户可能无法加入 ubturbo 用户组，导致 UBSE 服务调用 UBTurbo 接口异常。待 UBTurbo 安装完成后，需手动执行 <code>sudo usermod -aG ubturbo ubse</code> 将 ubse 用户加入 ubturbo 用户组。
-  - 使用 SMAP（分级内存）能力时，需先安装 <code>ubturbo-smap</code> 包（该步骤只安装包，不插入驱动）。
+  - SMAP 为 UBTurbo 必须安装的组件，需安装 <code>ubturbo-smap</code> 包并按 SMAP 安装流程加载驱动，才能启动 ubturbo 服务（安装包只部署文件，不插入驱动，见“安装SMAP”）。
   - <code>/dev/shm/smap_config</code> 保存了 NUMA 和进程配置等信息，如果 UBTurbo 进程需要切换用户，则需要先删除该文件。
   - <code>/dev/shm/ubturbo_page_type.dat</code> 保存了 SMAP 的初始化类型信息，如果 UBTurbo 进程需要切换用户或者场景（例如虚拟化场景切换到大数据场景），则需要先删除该文件。
   - UBTurbo 默认不启用任何插件，需依据业务场景在 <code>ubturbo_plugin_admission.conf</code> 中打开插件（取消对应插件的注释）。打开插件前，需保证插件的动态库和配置文件已分别放置在 <code>/opt/ubturbo/lib</code> 和 <code>/opt/ubturbo/conf</code> 下，否则 UBTurbo 及对应插件将启动异常。
@@ -175,8 +175,55 @@ git submodule update --init --recursive
   | ------------------------------------ | ------------------------------------------------- |
   | `/usr/lib64/libubturbo_client.so`    | 客户端 SDK 动态库，供外部进程通过 IPC 访问 UBTurbo，属主 `ubturbo:ubturbo`，权限 `550` |
 
+- SMAP 安装结果（`ubturbo-smap` 为必须安装的组件包）：
+
+  | 路径                                  | 所属包 | 用途          |
+  |-------------------------------------| ------ | -------------|
+  | /usr/lib64/libsmap.so               | ubturbo-smap | SMAP 用户态库 |
+  | /lib/modules/smap/                  | ubturbo-smap | SMAP 内核模块目录（tracking、tiering 等） |
+  | /etc/udev/rules.d/99-smap.rules     | ubturbo-smap | 设备权限 udev 规则 |
+
   > [!NOTE]说明
   > 安装完成后，安装脚本已自动执行 <code>systemctl enable ubturbo.service</code>，服务已设置为开机自启，无需重复配置。
+
+## 安装SMAP
+
+SMAP（分级内存）为 UBTurbo 必须安装的组件，未安装 SMAP 包或未加载 SMAP 驱动时，UBTurbo 服务将启动失败（日志提示 `Start module failed, name:Smap`）。需在启动 ubturbo 服务前完成 SMAP 的安装与驱动加载。
+
+> [!NOTE]说明
+>
+> 安装 <code>ubturbo-smap</code> 包只部署内核模块与用户态库，不会自动插入 SMAP 驱动，需按 SMAP 安装流程手动加载内核模块，详见仓内 `plugins/smap/doc/`。
+
+1. 查询 SMAP 包是否已安装：
+
+```bash
+rpm -qa | grep ubturbo-smap
+```
+
+若返回如下信息，表示安装成功。
+
+```bash
+[root@controller ~]# rpm -qa | grep ubturbo-smap
+ubturbo-smap-*.aarch64
+```
+
+2. 如未安装，执行如下命令安装：
+
+```bash
+# 在线安装
+sudo dnf install -y ubturbo-smap
+
+# 或离线安装
+sudo rpm -ivh ubturbo-smap-<version>-<release>.aarch64.rpm
+```
+
+3. 安装完成后，按 SMAP 自身安装流程插入驱动（按顺序加载内核模块）。
+
+4. 若 ubturbo 服务已在运行，需重启服务使 SMAP 生效：
+
+```bash
+sudo systemctl restart ubturbo
+```
 
 ## （可选）修改配置
 
@@ -215,34 +262,16 @@ git submodule update --init --recursive
     sudo systemctl start ubturbo
     ```
 
-## （可选）安装SMAP
-
-使用 SMAP 分级内存能力时，需确保部署环境中已安装 <code>ubturbo-smap</code> 包，并按 SMAP 自身安装流程插入驱动。UBTurbo 安装步骤中只安装 SMAP 的包，不插入 SMAP 驱动。
-
-```bash
-# 查询 SMAP 包是否已安装
-rpm -qa | grep ubturbo-smap
-```
-
-若返回如下信息，表示安装成功。
-
-```bash
-[root@controller ~]# rpm -qa | grep ubturbo-smap
-ubturbo-smap-*.aarch64
-```
-
-如未安装，需先安装 SMAP。安装后重启 ubturbo 服务：
-
-    ```bash
-    sudo systemctl restart ubturbo
-    ```
+    > [!NOTE]说明
+    > 启动前需确保已完成“安装SMAP”章节中的包安装与驱动加载，否则服务将启动失败。
 
 ## 验证部署
 
 ### 检查安装结果
 
 ```bash
-rpm -qa | grep ubturbo  # 应输出 ubturbo-*.aarch64 与 ubturbo-rmrs-*.aarch64
+rpm -qa | grep ubturbo  # 应输出 ubturbo-*.aarch64、ubturbo-rmrs-*.aarch64 与 ubturbo-smap-*.aarch64
+lsmod | grep smap       # 应输出已加载的 SMAP 内核模块（如 smap_tracking_core、smap_tiering 等）
 ```
 
 ### 检查服务状态
@@ -293,7 +322,7 @@ cat /var/log/ubturbo/ubturbo.log | grep "loaded successfully"
 3. 卸载 RPM 包
 
    ```bash
-   sudo dnf remove -y ubturbo-rmrs ubturbo
+   sudo dnf remove -y ubturbo-smap ubturbo-rmrs ubturbo
    ```
 
 > [!NOTE]说明
