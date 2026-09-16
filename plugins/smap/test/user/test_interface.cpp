@@ -1,6 +1,7 @@
 /*
  * Description: smap5.0 user smap interface ut code
  */
+#include <errno.h>
 #include <malloc.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -546,6 +547,43 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgInvalidPidTypeAndMsgCount)
     EXPECT_EQ(-EINVAL, ret);
 }
 
+TEST_F(InterfaceTest, TestCheckMigrateOutMsgPidNotExist)
+{
+    struct MigrateOutMsg msg = {.count = 2};
+    msg.payload[0].pid = 1234;
+    msg.payload[0].count = 1;
+    msg.payload[1].pid = 5678;
+    msg.payload[1].count = 1;
+    int pidType = PAGETYPE_HUGE;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    g_pageSizeHuge = PAGESIZE_2M;
+
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    /* pid 1234 不存在：跳过其后续检查，pid 5678 正常完成检查，整体返回 -ESRCH */
+    MOCKER(IsMigParaValid).stubs().will(returnValue(true));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue(-ESRCH)).then(returnValue((int)VM_TYPE));
+    MOCKER(IsPidTypeCompatibleWithMode).expects(once()).will(returnValue(true));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)true));
+    int ret = CheckMigrateOutMsg(&msg, pidType);
+    EXPECT_EQ(-ESRCH, ret);
+
+    /* 类型识别失败（-EINVAL）同样按无效 PID 跳过，整体返回 -ESRCH */
+    GlobalMockObject::verify();
+    MOCKER(IsMigParaValid).stubs().will(returnValue(true));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue(-EINVAL));
+    ret = CheckMigrateOutMsg(&msg, pidType);
+    EXPECT_EQ(-ESRCH, ret);
+
+    /* numa_maps 打不开（进程退出，-ESRCH）同样并入部分进程不存在路径，不再整体拒绝 */
+    GlobalMockObject::verify();
+    MOCKER(IsMigParaValid).stubs().will(returnValue(true));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(-ESRCH));
+    ret = CheckMigrateOutMsg(&msg, pidType);
+    EXPECT_EQ(-ESRCH, ret);
+}
+
 TEST_F(InterfaceTest, TestCheckMigrateOutMsgMigOutCount)
 {
     struct MigrateOutMsg msg = {.count = 1};
@@ -558,6 +596,10 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgMigOutCount)
     // number of managed and non-managed PID beyond limit
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     g_processManager.nr[VM_TYPE] = MAX_2M_PROCESSES_CNT;
+    MOCKER(IsMigParaValid).stubs().will(returnValue(true));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)true));
     int ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(-EINVAL, ret);
 
@@ -566,7 +608,7 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgMigOutCount)
     ProcessAttr processes = {.pid = msg.payload[0].pid, .next = nullptr};
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &processes);
     MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
-    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)true));
     MOCKER(IsMigParaValid).stubs().will(returnValue(true));
     ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(0, ret);
@@ -584,7 +626,7 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgAllows4KMultiRemote)
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     MOCKER(IsMigParaValid).stubs().will(returnValue(true));
     MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)PROCESS_TYPE));
-    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(false));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)false));
 
     /* 进程多远端 NUMA 迁移已放开，不再返回 -EINVAL */
     EXPECT_EQ(0, CheckMigrateOutMsg(&msg, PAGETYPE_NORMAL));
@@ -602,7 +644,7 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgInvalidDestNid)
 
     MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
     MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
-    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)true));
 
     msg.payload[0].count = 1;
     msg.payload[0].pid = 1234;
@@ -638,7 +680,7 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgInvalidMigrateMode)
     MOCKER(IsNidInNumastat).stubs().will(returnValue(true));
     MOCKER(IsNodeForbidden).stubs().will(returnValue(true));
     MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
-    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)true));
     MOCKER(GetProcessAttr).stubs().will(returnValue(&processes));
 
     msg.payload[0].inner[0].migrateMode = (MigrateMode)-1;
@@ -662,7 +704,7 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgCheckMigrateMode)
 
     MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
-    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)true));
 
     msg.payload[0].count = 1;
     msg.payload[0].inner[0].destNid = 4;
@@ -686,7 +728,7 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgCheckMigrateMode)
     /* Test forbidden node: IsNodeForbidden is static inline, set g_forbiddenNodes directly */
     MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
-    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)true));
     EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
 
     ret = CheckMigrateOutMsg(&msg, pidType);
@@ -723,7 +765,7 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgAllowsZeroTargetOnDisabledRemote)
 
     MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
-    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)true));
     EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_USER);
 
     /* memSize=0 on forbidden node: targetIsZero=true, allowed */
@@ -787,7 +829,7 @@ TEST_F(InterfaceTest, TestSmapMigrateOut)
     MOCKER(IsPageTypeConsistent).stubs().will(returnValue(true));
     MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
     MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
-    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(true));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)true));
     MOCKER(IsMigParaValid).stubs().will(returnValue(true));
     MOCKER(BuildMigrateOutProcessParamWithCapacityPolicy).stubs().will(returnValue(-ENOMEM));
     ret = ubturbo_smap_migrate_out(&msg, PAGETYPE_HUGE);
@@ -845,6 +887,26 @@ TEST_F(InterfaceTest, TestSmapMigrateOutFive)
     MOCKER(PrepareMigrateOutCandidates).stubs().will(returnValue(-EINVAL));
     ret = ubturbo_smap_migrate_out(&msgc, PAGETYPE_HUGE + 1);
     EXPECT_EQ(-EINVAL, ret);
+    EnvAtomicSet(&g_status, 0);
+    EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.threadLock));
+}
+
+TEST_F(InterfaceTest, TestSmapMigrateOutPartialPidNotExist)
+{
+    int ret;
+    struct MigrateOutMsg msg = {.count = 1};
+    msg.payload[0].pid = 1234;
+    msg.payload[0].count = 1;
+
+    EnvAtomicSet(&g_status, 1);
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    /* CheckMigrateOutMsg 返回 -ESRCH（部分进程不存在）时接口不提前返回，
+     * 继续迁出其余进程，并以 prepareError 携带 -ESRCH 返回 */
+    MOCKER(CheckMigrateOutMsg).stubs().will(returnValue(-ESRCH));
+    MOCKER(PrepareMigrateOutCandidates).stubs().will(returnValue(-ESRCH));
+    ret = ubturbo_smap_migrate_out(&msg, PAGETYPE_HUGE);
+    EXPECT_EQ(-ESRCH, ret);
     EnvAtomicSet(&g_status, 0);
     EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.threadLock));
 }

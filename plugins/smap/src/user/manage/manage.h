@@ -751,7 +751,8 @@ int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg);
 bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid);
 FILE *OpenNumaMaps(pid_t pid);
 int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge);
-bool IsPidUsingHugePages(pid_t pid);
+/* 返回 1 表示使用大页，0 表示未使用大页，-ESRCH 表示进程不存在（numa_maps 打开为 ENOENT/ESRCH，或读取结束时已无法再次打开） */
+int IsPidUsingHugePages(pid_t pid);
 int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[MAX_NODES]);
 
 void UpdateRemoteNumaCriticalErr(void);

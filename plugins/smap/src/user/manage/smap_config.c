@@ -531,8 +531,10 @@ static int RecoverProcessConfig(char *processBase)
     nrPayload = header->len / CONFIG_PROC_LEN;
     struct ProcessPayload *payload = (struct ProcessPayload *)JumpToProcessPayload(processBase);
     for (uint32_t i = 0; i < nrPayload; i++, payload++) {
-        /* 页类型一致性校验：pid 实际页类型须与 smap 当前模式匹配，否则内核扫描返回 -EINVAL */
-        if (IsPidUsingHugePages(payload->pid) != IsHugeMode()) {
+        /* 页类型一致性校验：pid 实际页类型须与 smap 当前模式匹配，否则内核扫描返回 -EINVAL；
+         * 进程已退出（-ESRCH）同样跳过恢复 */
+        int hugeFlag = IsPidUsingHugePages(payload->pid);
+        if (hugeFlag == -ESRCH || (hugeFlag != 0) != IsHugeMode()) {
             SMAP_LOGGER_WARNING("pid %d page type mismatch smap mode, skip recover.", payload->pid);
             continue;
         }
