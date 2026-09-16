@@ -467,6 +467,7 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
             return -EINVAL;
         }
     }
+
     /* 仅存在进程不存在时返回 -ESRCH，其余参数均合法 */
     return hasPidNotExist ? -ESRCH : 0;
 }
@@ -917,6 +918,16 @@ static int PrepareMigrateOutCandidatesWithCapacityPolicy(struct MigrateOutMsg *m
     for (int i = 0; i < msg->count; i++) {
         ProcessParam param;
         int ret = BuildMigrateOutProcessParamWithCapacityPolicy(&msg->payload[i], &param, ignoreRemoteCapacity);
+        if (ret == 0) {
+            uint32_t residentLocalMask = 0;
+            uint64_t numaPages[MAX_NODES] = { 0 };
+            ret = GetProcessNumaMapsObservation(msg->payload[i].pid, IsHugeMode(), &residentLocalMask, numaPages);
+            if (ret) {
+                SMAP_LOGGER_ERROR("Observe pid %d numa maps failed during migrate out preparation: %d.",
+                                  msg->payload[i].pid, ret);
+                ret = -ESRCH;
+            }
+        }
         if (ret == 0) {
             PidType type = GetPidTypeFromComm(msg->payload[i].pid);
             ret = PrepareProcessManageCandidate(&param, type, &candidates[i]);

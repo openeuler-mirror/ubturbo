@@ -1114,11 +1114,11 @@ extern "C" int IsPidUsingHugePages(pid_t pid);
 
 TEST_F(ManageTest, TestIsPidUsingHugePagesOpenFailure)
 {
-    /* 打开失败但非 ENOENT/ESRCH（如权限问题）：保持原有 false 语义 */
+    /* numa_maps 不可读时，迁出接口将该 PID 视为无效并跳过 */
     errno = EACCES;
     MOCKER(OpenNumaMaps).expects(once()).will(returnValue((FILE *)nullptr));
     int ret = IsPidUsingHugePages(1234);
-    EXPECT_EQ(false, ret);
+    EXPECT_EQ(-ESRCH, ret);
 }
 
 TEST_F(ManageTest, TestIsPidUsingHugePagesPidNotExist)
