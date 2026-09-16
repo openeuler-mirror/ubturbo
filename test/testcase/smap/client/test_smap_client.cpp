@@ -1388,7 +1388,7 @@ TEST_F(TestSmapClient, SmapQueryNumaFreq)
         .stubs()
         .will(returnValue(0));
     MOCKER_CPP(&SmapQueryRemoteNumaFreqCodec::DecodeResponse,
-               int (*)(SmapQueryRemoteNumaFreqCodec *, TurboByteBuffer &, uint16_t *, uint16_t))
+               int (*)(SmapQueryRemoteNumaFreqCodec *, TurboByteBuffer &, uint64_t *, uint16_t, uint16_t &, int &))
         .stubs()
         .will(returnValue(IPC_ERROR));
     int ret = ubturbo_smap_remote_numa_freq_query(&numa, &freq, 1);
