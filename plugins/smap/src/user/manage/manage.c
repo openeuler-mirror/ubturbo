@@ -415,6 +415,10 @@ int GetPidTypeFromComm(pid_t pid)
     FILE *file = fopen(path, "r");
     if (!file) {
         SMAP_LOGGER_ERROR("Failed to open file, errno is %d.", errno);
+        /* 进程已退出时 /proc/<pid>/comm 不存在，按"进程不存在"语义返回 -ESRCH */
+        if (errno == ENOENT) {
+            return -ESRCH;
+        }
         return -EINVAL;
     }
     bool foundLine = false;
@@ -748,7 +752,8 @@ int DetectPidType(pid_t pid)
     int ret = GetPidTypeFromComm(pid);
     if (ret != VM_TYPE && ret != PROCESS_TYPE) {
         SMAP_LOGGER_ERROR("Pid %d type detect failed: %d.", pid, ret);
-        return -EINVAL;
+        /* 与入口 PidIsValid 保持一致：进程已退出时透传 -ESRCH，其余仍按 -EINVAL */
+        return (ret == -ESRCH) ? -ESRCH : -EINVAL;
     }
     return ret;
 }
@@ -1118,7 +1123,11 @@ FILE *OpenNumaMaps(pid_t pid)
     /* 进程内直读 /proc/<pid>/numa_maps，依赖 CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE，不再经 sudo cat.sh */
     FILE *fp = fopen(path, "r");
     if (!fp) {
-        SMAP_LOGGER_ERROR("OpenNumaMaps fopen failed: %d.", -errno);
+        /* 保存并恢复 errno：日志输出可能改写 errno，调用方（IsPidUsingHugePages）
+         * 依赖 fopen 的 errno 区分进程不存在（ENOENT） */
+        int saveErrno = errno;
+        SMAP_LOGGER_ERROR("OpenNumaMaps fopen failed: %d.", -saveErrno);
+        errno = saveErrno;
     }
     return fp;
 }
@@ -1177,24 +1186,42 @@ int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool o
     return ret;
 }
 
-bool IsPidUsingHugePages(pid_t pid)
+int IsPidUsingHugePages(pid_t pid)
 {
     char line[MAX_LINE_LENGTH];
     FILE *fp = OpenNumaMaps(pid);
     if (!fp) {
-        SMAP_LOGGER_ERROR("Open pid %d numa maps failed when probing page type.", pid);
-        return false;
+        /* 进程已退出（含退出后尚未被回收的僵尸态，内核 open numa_maps 返回 ESRCH；
+         * 完全回收后为 ENOENT）时按"进程不存在"语义返回 -ESRCH，
+         * 供调用方并入部分进程不存在路径，避免 2M 模式下误判为页类型不匹配而整体拒绝 */
+        int openErrno = errno;
+        SMAP_LOGGER_ERROR("Open pid %d numa maps failed when probing page type, errno: %d.", pid, openErrno);
+        if (openErrno == ENOENT || openErrno == ESRCH) {
+            return -ESRCH;
+        }
+        return 0;
     }
     while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
         if (IsNumaMapLineHuge(line)) {
             (void)fclose(fp);
-            return true;
+            return 1;
         }
     }
     if (fclose(fp)) {
         SMAP_LOGGER_WARNING("Close numa maps failed when probing page type, pid=%d.", pid);
     }
-    return false;
+    /* 读取阶段未发现大页：进程可能在读取过程中退出导致后续行丢失，
+     * 重新打开一次 numa_maps 复查：access 只校验节点存在性，对僵尸进程无效；
+     * 而重新打开需要内核实际读取，僵尸态（mm 已释放）与完全退出均会失败，
+     * 失败则按"进程不存在"语义返回 -ESRCH */
+    FILE *fpAgain = OpenNumaMaps(pid);
+    if (!fpAgain) {
+        SMAP_LOGGER_ERROR("Reopen pid %d numa maps failed when probing page type, process may have exited, errno: %d.",
+                          pid, errno);
+        return -ESRCH;
+    }
+    (void)fclose(fpAgain);
+    return 0;
 }
 
 static void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag)

@@ -699,7 +699,7 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfig)
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
     MOCKER(InitProcessMigrationTargetState).expects(exactly(nrProcess));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
-    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(false));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)false));
     ret = RecoverProcessConfig((char *)&header);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(nrProcess, manager.nr[PROCESS_TYPE]);
@@ -734,9 +734,37 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigTwo)
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
     MOCKER(calloc).stubs().will(returnValue(static_cast<void *>(nullptr)));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
-    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(false));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)false));
     ret = RecoverProcessConfig((char *)&header);
     EXPECT_EQ(-ENOMEM, ret);
+    ASSERT_EQ(nullptr, PmHeadAttr(&manager));
+}
+
+TEST_F(SmapConfigTest, TestRecoverProcessConfigPidNotExist)
+{
+    /* 进程已退出（-ESRCH）时同样跳过恢复，不进入纳管流程 */
+    int ret;
+    int nrProcess = 1;
+    struct PayloadHeader header = {.len = nrProcess * CONFIG_PROC_LEN};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessPayload payload[] = {{.pid = 1025,
+                                        .scanType = NORMAL_SCAN,
+                                        .type = PROCESS_TYPE,
+                                        .state = PROC_IDLE,
+                                        .migrateMode = MIG_RATIO_MODE,
+                                        .numaNodes = 0x11,
+                                        .scanTime = 200,
+                                        .count = 1,
+                                        .migrateParam = {{.nid = 4, .ratio = 25}}}};
+
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
+    MOCKER(InitProcessMigrationTargetState).expects(never());
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(-ESRCH));
+    ret = RecoverProcessConfig((char *)&header);
+    EXPECT_EQ(0, ret);
     ASSERT_EQ(nullptr, PmHeadAttr(&manager));
 }
 
@@ -760,6 +788,8 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigRestoresPairMultiRemoteTarget)
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetPageSize).stubs().will(returnValue(static_cast<uint32_t>(PAGESIZE_4K)));
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)&payload));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)false));
 
     EXPECT_EQ(0, RecoverProcessConfig((char *)&header));
     ASSERT_NE(nullptr, PmHeadAttr(&manager));

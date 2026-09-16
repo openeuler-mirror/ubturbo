@@ -379,6 +379,7 @@ static int BuildProcessTargetConfig(const struct MigrateOutPayload *payload, Pro
 static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
 {
     int i;
+    bool hasPidNotExist = false;
     if (!msg) {
         SMAP_LOGGER_ERROR("Smap mig out msg is null.");
         return -EINVAL;
@@ -439,6 +440,12 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
         int pidType = GetPidTypeFromComm(msg->payload[i].pid);
         if (!IsPidTypeValid(pidType)) {
             SMAP_LOGGER_ERROR("migrate out pid %d type detect failed: %d.", msg->payload[i].pid, pidType);
+            /* 进程不存在（-ESRCH）不阻断整体检查：该 pid 跳过后续检查，其余 pid 正常迁出，
+             * 检查通过后以 -ESRCH 返回，供调用方识别部分进程不存在 */
+            if (pidType == -ESRCH) {
+                hasPidNotExist = true;
+                continue;
+            }
             return -EINVAL;
         }
         if (!IsPidTypeCompatibleWithMode(pidType)) {
@@ -448,12 +455,20 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
             return -EINVAL;
         }
 
-        if (IsPidUsingHugePages(msg->payload[i].pid) != IsHugeMode()) {
+        int hugeFlag = IsPidUsingHugePages(msg->payload[i].pid);
+        if (hugeFlag == -ESRCH) {
+            /* numa_maps 打不开且进程已退出：并入部分进程不存在路径，跳过该 pid */
+            SMAP_LOGGER_ERROR("migrate out pid %d not found when probing page type.", msg->payload[i].pid);
+            hasPidNotExist = true;
+            continue;
+        }
+        if ((hugeFlag != 0) != IsHugeMode()) {
             SMAP_LOGGER_ERROR("migrate out pid %d page type mismatch smap mode.", msg->payload[i].pid);
             return -EINVAL;
         }
     }
-    return 0;
+    /* 仅存在进程不存在时返回 -ESRCH，其余参数均合法 */
+    return hasPidNotExist ? -ESRCH : 0;
 }
 
 static bool HasDuplicateInt(const int *arr, int count)
@@ -978,10 +993,12 @@ static int MigrateOutWithCapacityPolicy(struct MigrateOutMsg *msg, int pageType,
     }
 
     int ret = CheckMigrateOutMsg(msg, pageType);
-    if (ret) {
+    if (ret && ret != -ESRCH) {
         SMAP_LOGGER_ERROR("Migrate out msg check failed, ret: %d.", ret);
-        return -EINVAL;
+        return ret;
     }
+    /* 部分进程不存在（-ESRCH）时继续迁出其余进程：Prepare 阶段会跳过失败 pid 并以
+     * firstError 收集 -ESRCH，最终随 prepareError 返回给调用方 */
 
     uint32_t nodeBitmap[MAX_NR_MIGOUT] = { 0 };
     ProcessManageCandidate candidates[MAX_NR_MIGOUT] = { 0 };

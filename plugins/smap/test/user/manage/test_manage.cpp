@@ -834,6 +834,18 @@ TEST_F(ManageTest, TestGetPidTypeFromCommPath)
         .stubs()
         .will(returnValue(0));
     MOCKER(fopen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
+    /* 进程不存在（ENOENT）按 -ESRCH 返回 */
+    errno = ENOENT;
+    ret = GetPidTypeFromComm(1);
+    EXPECT_EQ(-ESRCH, ret);
+
+    GlobalMockObject::verify();
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(0));
+    MOCKER(fopen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
+    /* 其他打开失败场景仍按 -EINVAL 返回 */
+    errno = EACCES;
     ret = GetPidTypeFromComm(1);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -899,6 +911,13 @@ TEST_F(ManageTest, TestDetectPidType)
     MOCKER(GetPidTypeFromComm).stubs().will(returnValue(-EINVAL));
     ret = DetectPidType(pid);
     EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    /* TOCTOU 窗口内进程退出时透传 -ESRCH */
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue(-ESRCH));
+    ret = DetectPidType(pid);
+    EXPECT_EQ(-ESRCH, ret);
 }
 
 extern "C" ProcessAttr *GetProcessAttr(pid_t pid);
@@ -1091,13 +1110,33 @@ TEST_F(ManageTest, TestIsNumaMapLineHuge)
     EXPECT_EQ(ret, true);
 }
 
-extern "C" bool IsPidUsingHugePages(pid_t pid);
+extern "C" int IsPidUsingHugePages(pid_t pid);
 
 TEST_F(ManageTest, TestIsPidUsingHugePagesOpenFailure)
 {
+    /* 打开失败但非 ENOENT/ESRCH（如权限问题）：保持原有 false 语义 */
+    errno = EACCES;
     MOCKER(OpenNumaMaps).expects(once()).will(returnValue((FILE *)nullptr));
-    bool ret = IsPidUsingHugePages(1234);
+    int ret = IsPidUsingHugePages(1234);
     EXPECT_EQ(false, ret);
+}
+
+TEST_F(ManageTest, TestIsPidUsingHugePagesPidNotExist)
+{
+    /* 真实路径：pid 不存在时 /proc/<pid>/numa_maps 打开返回 ENOENT，应返回 -ESRCH */
+    pid_t notExistPid = (pid_t)0x7fffffff;
+    int ret = IsPidUsingHugePages(notExistPid);
+    EXPECT_EQ(-ESRCH, ret);
+}
+
+TEST_F(ManageTest, TestIsPidUsingHugePagesZombieProcess)
+{
+    /* 僵尸进程（退出后未被回收）：/proc/<pid> 节点仍在但 mm 已释放，
+     * 内核 open numa_maps 返回 ESRCH 而非 ENOENT，同样应按"进程不存在"返回 -ESRCH */
+    errno = ESRCH;
+    MOCKER(OpenNumaMaps).expects(once()).will(returnValue((FILE *)nullptr));
+    int ret = IsPidUsingHugePages(1234);
+    EXPECT_EQ(-ESRCH, ret);
 }
 
 TEST_F(ManageTest, TestIsPidUsingHugePagesHasHuge)
@@ -1115,12 +1154,26 @@ TEST_F(ManageTest, TestIsPidUsingHugePagesHasHuge)
 TEST_F(ManageTest, TestIsPidUsingHugePagesNoHuge)
 {
     const char *no_huge_data = "00100000 N0=1 N2=3 kernelpagesize_kB=4\n";
+    /* 读取结束复查会再次调用 OpenNumaMaps，需提供第二个独立流避免重复 fclose 同一流 */
     FILE *fp = fmemopen((void *)no_huge_data, strlen(no_huge_data), "r");
+    FILE *fpAgain = fmemopen((void *)no_huge_data, strlen(no_huge_data), "r");
     ASSERT_NE(nullptr, fp);
-    MOCKER(OpenNumaMaps).stubs().will(returnValue(fp));
-    /* IsPidUsingHugePages 内部 fclose(fp) 真实关闭 fmemopen 流，此处不再重复 fclose */
+    ASSERT_NE(nullptr, fpAgain);
+    MOCKER(OpenNumaMaps).stubs().will(returnValue(fp)).then(returnValue(fpAgain));
+    /* 复查时重新打开成功（进程仍存活），保持 false 语义 */
     bool ret = IsPidUsingHugePages(1234);
     EXPECT_EQ(false, ret);
+}
+
+TEST_F(ManageTest, TestIsPidUsingHugePagesMidReadExit)
+{
+    /* 读取结束未发现大页且重新打开失败：进程读取期间退出（含僵尸态），返回 -ESRCH */
+    const char *no_huge_data = "00100000 N0=1 N2=3 kernelpagesize_kB=4\n";
+    FILE *fp = fmemopen((void *)no_huge_data, strlen(no_huge_data), "r");
+    ASSERT_NE(nullptr, fp);
+    MOCKER(OpenNumaMaps).stubs().will(returnValue(fp)).then(returnValue(static_cast<FILE *>(nullptr)));
+    int ret = IsPidUsingHugePages(1234);
+    EXPECT_EQ(-ESRCH, ret);
 }
 
 extern "C" void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag);
