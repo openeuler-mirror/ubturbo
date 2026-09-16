@@ -567,12 +567,12 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgPidNotExist)
     int ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(-ESRCH, ret);
 
-    /* 其余类型识别失败仍为 -EINVAL */
+    /* 类型识别失败（-EINVAL）同样按无效 PID 跳过，整体返回 -ESRCH */
     GlobalMockObject::verify();
     MOCKER(IsMigParaValid).stubs().will(returnValue(true));
     MOCKER(GetPidTypeFromComm).stubs().will(returnValue(-EINVAL));
     ret = CheckMigrateOutMsg(&msg, pidType);
-    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ(-ESRCH, ret);
 
     /* numa_maps 打不开（进程退出，-ESRCH）同样并入部分进程不存在路径，不再整体拒绝 */
     GlobalMockObject::verify();
@@ -596,6 +596,10 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgMigOutCount)
     // number of managed and non-managed PID beyond limit
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     g_processManager.nr[VM_TYPE] = MAX_2M_PROCESSES_CNT;
+    MOCKER(IsMigParaValid).stubs().will(returnValue(true));
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
+    MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)true));
     int ret = CheckMigrateOutMsg(&msg, pidType);
     EXPECT_EQ(-EINVAL, ret);
 

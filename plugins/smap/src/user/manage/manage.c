@@ -1210,6 +1210,21 @@ int IsPidUsingHugePages(pid_t pid)
     if (fclose(fp)) {
         SMAP_LOGGER_WARNING("Close numa maps failed when probing page type, pid=%d.", pid);
     }
+    /* 被 kill 的进程在回收前可能仍保留 /proc 和 numa_maps，此时应视为无效 PID。 */
+    char statusPath[BUFFER_SIZE];
+    if (snprintf_s(statusPath, sizeof(statusPath), sizeof(statusPath) - 1, "/proc/%d/status", pid) >= 0) {
+        FILE *status = fopen(statusPath, "r");
+        if (status) {
+            char statusLine[MAX_LINE_LENGTH];
+            while (fgets(statusLine, sizeof(statusLine), status) != NULL) {
+                if (strncmp(statusLine, "State:", 6) == 0 && strchr(statusLine, 'Z') != NULL) {
+                    (void)fclose(status);
+                    return -ESRCH;
+                }
+            }
+            (void)fclose(status);
+        }
+    }
     /* 读取阶段未发现大页：进程可能在读取过程中退出导致后续行丢失，
      * 重新打开一次 numa_maps 复查：access 只校验节点存在性，对僵尸进程无效；
      * 而重新打开需要内核实际读取，僵尸态（mm 已释放）与完全退出均会失败，
