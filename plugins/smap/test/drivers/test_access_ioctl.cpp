@@ -2,24 +2,23 @@
  * Description: smap access ioctl module
  */
 
-
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include <linux/fs.h>
-#include <linux/ioctl.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
-#include <linux/vmalloc.h>
-#include <linux/slab.h>
+#include <linux/fs.h>
+#include <linux/ioctl.h>
 #include <linux/list.h>
+#include <linux/slab.h>
+#include <linux/vmalloc.h>
 
 #include "access_acpi_mem.h"
-#include "access_iomem.h"
-#include "check.h"
-#include "access_tracking.h"
-#include "access_pid.h"
 #include "access_ioctl.h"
+#include "access_iomem.h"
+#include "access_pid.h"
+#include "access_tracking.h"
+#include "check.h"
 
 using namespace std;
 
@@ -50,7 +49,7 @@ protected:
     static void write_bitmap_buffer_stub(char **buffer);
 };
 
-struct access_add_pid_msg AccessIoctlTestKernel::m_msg = {.count=0, .payload=NULL};
+struct access_add_pid_msg AccessIoctlTestKernel::m_msg = {.count = 0, .payload = NULL};
 
 extern "C" long ioctl_add_pid(void __user *argp);
 extern "C" int add_payload(int len, struct access_add_pid_payload *payload, int page_size);
@@ -59,7 +58,7 @@ extern "C" int check_msg_validity(struct access_add_pid_msg *msg);
 unsigned long AccessIoctlTestKernel::mockCopyFromUserSetMsg(void *to, const void *from, unsigned long n)
 {
     cout << "mockCopyFromUserSetMsg" << endl;
-    struct access_add_pid_msg *tmpMsg = (struct access_add_pid_msg*) to;
+    struct access_add_pid_msg *tmpMsg = (struct access_add_pid_msg *)to;
     *tmpMsg = m_msg;
     return 0UL;
 };
@@ -67,7 +66,7 @@ unsigned long AccessIoctlTestKernel::mockCopyFromUserSetMsg(void *to, const void
 unsigned long AccessIoctlTestKernel::mockCopyFromUserSetPayload(void *to, const void *from, unsigned long n)
 {
     cout << "mockCopyFromUserSetPayload" << endl;
-    struct access_add_pid_payload *tmpPayload = (struct access_add_pid_payload*) to;
+    struct access_add_pid_payload *tmpPayload = (struct access_add_pid_payload *)to;
     if (n / sizeof(struct access_add_pid_payload) != m_msg.count) {
         return n;
     }
@@ -144,7 +143,7 @@ TEST_F(AccessIoctlTestKernel, IoctlAddPidWithOnePid)
 
     // following tests will not run add_payload, since don't need add_payload mock
     // invalid scan_type case
-    msg.payload[0].type = (scan_type) - 1;
+    msg.payload[0].type = (scan_type)-1;
     ret = checkIoctlAddPid(msg);
     EXPECT_EQ(-EINVAL, ret);
 
@@ -170,7 +169,7 @@ TEST_F(AccessIoctlTestKernel, IoctlAddPidWithMultiPid)
         msg.payload[i].pid = 14587 + i;
         msg.payload[i].numa_nodes = 0x10;
         msg.payload[i].duration = 1;
-        if (i%2) {
+        if (i % 2) {
             msg.payload[i].scan_time = 50;
             msg.payload[i].ntimes = 40;
             msg.payload[i].type = HAM_SCAN;
@@ -181,9 +180,7 @@ TEST_F(AccessIoctlTestKernel, IoctlAddPidWithMultiPid)
         }
     }
     // set add_payload mock
-    MOCKER(add_payload).stubs()
-        .will(returnValue(0))
-        .then(returnValue(-EINVAL));
+    MOCKER(add_payload).stubs().will(returnValue(0)).then(returnValue(-EINVAL));
 
     // success case
     ret = checkIoctlAddPid(msg);
@@ -207,15 +204,9 @@ TEST_F(AccessIoctlTestKernel, AddPayloadTest)
 {
     int len = 1;
     struct access_add_pid_payload payload;
-    MOCKER(access_add_ham_pid).stubs()
-        .will(returnValue(-EINVAL))
-        .then(returnValue(0));
-    MOCKER(access_add_statistic_pid).stubs()
-        .will(returnValue(-EINVAL))
-        .then(returnValue(0));
-    MOCKER(access_add_pid).stubs()
-        .will(returnValue(-EINVAL))
-        .then(returnValue(0));
+    MOCKER(access_add_ham_pid).stubs().will(returnValue(-EINVAL)).then(returnValue(0));
+    MOCKER(access_add_statistic_pid).stubs().will(returnValue(-EINVAL)).then(returnValue(0));
+    MOCKER(access_add_pid).stubs().will(returnValue(-EINVAL)).then(returnValue(0));
 
     // test all case
     EXPECT_EQ(-EINVAL, add_payload(len, &payload, PAGE_SIZE_2M));
@@ -276,6 +267,7 @@ TEST_F(AccessIoctlTestKernel, IoctlAddPid)
     for (i = 0; i < msg.count; i++) {
         msg.payload[i].pid = i;
         msg.payload[i].numa_nodes = 0x10;
+        payload_data[i].scan_time = 50;
         payload_data[i].ntimes = 40;
     }
 
@@ -283,9 +275,7 @@ TEST_F(AccessIoctlTestKernel, IoctlAddPid)
     g_test_payload = payload_data;
     g_test_payload_size = sizeof(struct access_add_pid_payload) * msg.count;
 
-    MOCKER(copy_from_user)
-        .stubs()
-        .will(invoke(mock_copy_from_user));
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user));
 
     MOCKER(access_add_ham_pid).stubs().will(returnValue(0));
     MOCKER(access_add_pid).stubs().will(returnValue(0));
@@ -315,7 +305,7 @@ TEST_F(AccessIoctlTestKernel, IoctlAddPidTwo)
 
     MOCKER(copy_from_user)
         .stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
+        .with(outBoundP((void *)&msg, sizeof(msg)))
         .will(returnValue(0UL))
         .then(returnValue(1UL));
 
@@ -337,9 +327,7 @@ TEST_F(AccessIoctlTestKernel, IoctlAddPidThree)
     g_test_payload = nullptr;
     g_test_payload_size = 0;
 
-    MOCKER(copy_from_user)
-        .stubs()
-        .will(invoke(mock_copy_from_user));
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user));
 
     ret = ioctl_add_pid(NULL);
     EXPECT_EQ(-EINVAL, ret);
@@ -357,22 +345,25 @@ TEST_F(AccessIoctlTestKernel, IoctlAddPidThree)
         payload_data[i].numa_nodes = 0x10;
         payload_data[i].ntimes = 40;
         payload_data[i].type = HAM_SCAN;
-        payload_data[i].duration = 0;
-        payload_data[i].scan_time = 0;
+        payload_data[i].duration = 1;
+        payload_data[i].scan_time = 50;
     }
 
     g_test_msg = &msg;
     g_test_payload = payload_data;
     g_test_payload_size = sizeof(struct access_add_pid_payload) * msg.count;
 
-    MOCKER(copy_from_user)
-        .stubs()
-        .will(invoke(mock_copy_from_user));
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user));
 
     MOCKER(access_add_ham_pid).stubs().will(returnValue(1));
 
     ret = ioctl_add_pid(NULL);
     EXPECT_EQ(1, ret);
+
+    // scan_time == 0 should be rejected
+    payload_data[0].scan_time = 0;
+    ret = ioctl_add_pid(NULL);
+    EXPECT_EQ(-EINVAL, ret);
 
     vfree(payload_data);
 
@@ -393,10 +384,7 @@ TEST_F(AccessIoctlTestKernel, IoctlRemovePid)
 
     GlobalMockObject::verify();
     msg.count = 0;
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
-        .will(returnValue(0UL));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
     ret = ioctl_remove_pid(NULL);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -409,10 +397,7 @@ TEST_F(AccessIoctlTestKernel, IoctlRemovePidTwo)
     msg.count = 1;
     msg.payload = &payload;
     msg.payload[0].pid = 1;
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
-        .will(returnValue(0UL));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
     MOCKER(access_remove_pid).stubs();
     MOCKER(access_remove_ham_pid).stubs();
     int ret = ioctl_remove_pid(NULL);
@@ -456,7 +441,7 @@ TEST_F(AccessIoctlTestKernel, IoctlWalkPagemap)
 }
 
 extern "C" void update_tracking_data(u16 *tracking_data, struct statistics_tracking_info *stat_info,
-    struct tracking_info_payload *payload_info);
+                                     struct tracking_info_payload *payload_info);
 extern "C" long ioctl_get_tracking(void __user *argp);
 TEST_F(AccessIoctlTestKernel, IoctlGetTrackingError)
 {
@@ -474,20 +459,14 @@ TEST_F(AccessIoctlTestKernel, IoctlGetTrackingError)
     // invalid length case
     GlobalMockObject::verify();
     msg.length = 65536;
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
-        .will(returnValue(0UL));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
     ret = ioctl_get_tracking(NULL);
     EXPECT_EQ(-EINVAL, ret);
 
     // null data case
     GlobalMockObject::verify();
     msg.length = 1;
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
-        .will(returnValue(0UL));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
     ret = ioctl_get_tracking(NULL);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -520,10 +499,7 @@ TEST_F(AccessIoctlTestKernel, IoctlGetTracking)
         }
     }
     list_add(&tmp->node, &statistic_pid_list);
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
-        .will(returnValue(0UL));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
     MOCKER(copy_to_user).stubs().will(returnValue(0UL));
 
     ret = ioctl_get_tracking(NULL);
@@ -568,17 +544,14 @@ extern "C" void write_bitmap_buffer(char **buffer);
 TEST_F(AccessIoctlTestKernel, ReadBitmapZeroLoff)
 {
     int ret;
-    char buf[BITMAP_BUF_LEN] = { 0 };
+    char buf[BITMAP_BUF_LEN] = {0};
     char bitmapBuf[BITMAP_BUF_LEN] = "ABCDEFGHI";
     loff_t loff = 0;
     bool completed = false;
     constexpr int EXPECTED_LEN = BITMAP_BUF_LEN;
 
     MOCKER(calc_bitmap_len).stubs().will(returnValue(sizeof(buf)));
-    MOCKER(write_bitmap_buffer)
-        .stubs()
-        .with()
-        .will(invoke(write_bitmap_buffer_stub));
+    MOCKER(write_bitmap_buffer).stubs().with().will(invoke(write_bitmap_buffer_stub));
     ret = read_bitmap(buf, BITMAP_BUF_LEN, &loff, &completed);
     EXPECT_EQ(EXPECTED_LEN, ret);
     EXPECT_EQ(nullptr, smap_bitmap_buf);
@@ -591,7 +564,7 @@ TEST_F(AccessIoctlTestKernel, ReadBitmapNonZeroLoff)
 {
     constexpr int TEMP_LOFF = 4;
     int ret;
-    char buf[BITMAP_BUF_LEN - TEMP_LOFF] = { 0 };
+    char buf[BITMAP_BUF_LEN - TEMP_LOFF] = {0};
     char bitmapBuf[BITMAP_BUF_LEN] = "ABCDEFGHI";
     loff_t loff = TEMP_LOFF;
     bool completed = false;
@@ -600,7 +573,7 @@ TEST_F(AccessIoctlTestKernel, ReadBitmapNonZeroLoff)
     smap_buf_len = BITMAP_BUF_LEN;
 
     // alloc mem for smap_bitmap_buf and write 'ABCDEFGHI'
-    smap_bitmap_buf = (char*)vmalloc(BITMAP_BUF_LEN);
+    smap_bitmap_buf = (char *)vmalloc(BITMAP_BUF_LEN);
     ASSERT_NE(nullptr, smap_bitmap_buf);
     tmp = smap_bitmap_buf;
     write_bitmap_buffer_stub(&smap_bitmap_buf);
@@ -620,7 +593,7 @@ TEST_F(AccessIoctlTestKernel, ReadBitmapNonZeroLoffPartial)
 {
     constexpr int TEMP_LOFF = 4;
     int ret;
-    char buf[BITMAP_BUF_LEN - TEMP_LOFF] = { 0 };
+    char buf[BITMAP_BUF_LEN - TEMP_LOFF] = {0};
     char bitmapBuf[BITMAP_BUF_LEN] = "ABCDEFGHI";
     loff_t loff = TEMP_LOFF;
     bool completed = false;
@@ -631,7 +604,7 @@ TEST_F(AccessIoctlTestKernel, ReadBitmapNonZeroLoffPartial)
     smap_buf_len = BITMAP_BUF_LEN;
 
     // alloc mem for smap_bitmap_buf and write 'ABCDEFGHI'
-    smap_bitmap_buf = (char*)vmalloc(BITMAP_BUF_LEN);
+    smap_bitmap_buf = (char *)vmalloc(BITMAP_BUF_LEN);
     ASSERT_NE(nullptr, smap_bitmap_buf);
     tmp = smap_bitmap_buf;
     write_bitmap_buffer_stub(&smap_bitmap_buf);
@@ -655,7 +628,7 @@ TEST_F(AccessIoctlTestKernel, ReadBitmapNonZeroLoffBeyond)
 {
     constexpr int TEMP_LOFF = 4;
     int ret;
-    char buf[BITMAP_BUF_LEN - TEMP_LOFF] = { 0 };
+    char buf[BITMAP_BUF_LEN - TEMP_LOFF] = {0};
     char bitmapBuf[BITMAP_BUF_LEN] = "ABCDEFGHI";
     loff_t loff = TEMP_LOFF;
     bool completed = false;
@@ -665,7 +638,7 @@ TEST_F(AccessIoctlTestKernel, ReadBitmapNonZeroLoffBeyond)
     smap_buf_len = BITMAP_BUF_LEN;
 
     // alloc mem for smap_bitmap_buf and write 'ABCDEFGHI'
-    smap_bitmap_buf = (char*)vmalloc(BITMAP_BUF_LEN);
+    smap_bitmap_buf = (char *)vmalloc(BITMAP_BUF_LEN);
     ASSERT_NE(nullptr, smap_bitmap_buf);
     tmp = smap_bitmap_buf;
     write_bitmap_buffer_stub(&smap_bitmap_buf);
@@ -738,7 +711,7 @@ extern "C" ssize_t smap_access_read(struct file *file, char __user *buf, size_t 
 TEST_F(AccessIoctlTestKernel, SmapAccessReadNoPermission)
 {
     ssize_t ret;
-    char buf[BITMAP_BUF_LEN] = { 0 };
+    char buf[BITMAP_BUF_LEN] = {0};
     loff_t loff = 0;
 
     ap_data.state_flag = AP_STATE_WALK;
@@ -751,13 +724,15 @@ TEST_F(AccessIoctlTestKernel, SmapAccessReadNoPermission)
 TEST_F(AccessIoctlTestKernel, SmapAccessReadAll)
 {
     ssize_t ret;
-    char buf[BITMAP_BUF_LEN] = { 0 };
+    char buf[BITMAP_BUF_LEN] = {0};
     loff_t loff = 0;
     constexpr int EXPECTED_LEN = BITMAP_BUF_LEN;
     bool completed = true;
 
     ap_data.state_flag = AP_STATE_WALK | AP_STATE_READ;
-    MOCKER(read_bitmap).stubs().with(any(), any(), any(), outBoundP(&completed, sizeof(completed)))
+    MOCKER(read_bitmap)
+        .stubs()
+        .with(any(), any(), any(), outBoundP(&completed, sizeof(completed)))
         .will(returnValue((ssize_t)BITMAP_BUF_LEN));
     ret = smap_access_read(NULL, buf, BITMAP_BUF_LEN, &loff);
     EXPECT_EQ(EXPECTED_LEN, ret);
@@ -767,7 +742,7 @@ TEST_F(AccessIoctlTestKernel, SmapAccessReadAll)
 TEST_F(AccessIoctlTestKernel, SmapAccessReadPartial)
 {
     ssize_t ret;
-    char buf[BITMAP_BUF_LEN] = { 0 };
+    char buf[BITMAP_BUF_LEN] = {0};
     loff_t loff = 0;
 
     ap_data.state_flag = AP_STATE_WALK | AP_STATE_READ;
@@ -780,12 +755,14 @@ TEST_F(AccessIoctlTestKernel, SmapAccessReadPartial)
 TEST_F(AccessIoctlTestKernel, SmapAccessReadFinished)
 {
     ssize_t ret;
-    char buf[BITMAP_BUF_LEN] = { 0 };
+    char buf[BITMAP_BUF_LEN] = {0};
     loff_t loff = 0;
     bool completed = true;
 
     ap_data.state_flag = AP_STATE_WALK | AP_STATE_READ;
-    MOCKER(read_bitmap).stubs().with(any(), any(), any(), outBoundP(&completed, sizeof(completed)))
+    MOCKER(read_bitmap)
+        .stubs()
+        .with(any(), any(), any(), outBoundP(&completed, sizeof(completed)))
         .will(returnValue((ssize_t)0));
     ret = smap_access_read(NULL, buf, BITMAP_BUF_LEN, &loff);
     EXPECT_EQ(0, ret);
@@ -795,7 +772,7 @@ TEST_F(AccessIoctlTestKernel, SmapAccessReadFinished)
 TEST_F(AccessIoctlTestKernel, SmapAccessReadFailed)
 {
     ssize_t ret;
-    char buf[BITMAP_BUF_LEN] = { 0 };
+    char buf[BITMAP_BUF_LEN] = {0};
     loff_t loff = 0;
 
     ap_data.state_flag = AP_STATE_WALK | AP_STATE_READ;
