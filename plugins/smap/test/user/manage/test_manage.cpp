@@ -3032,6 +3032,29 @@ TEST_F(ManageTest, TestMigOutIsDoneSingleRemoteUsesRemotePages)
     EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
 }
 
+TEST_F(ManageTest, TestMigOutIsDoneZeroTargetWaitsForPairAccount)
+{
+    bool isMultiNumaPid = false;
+    ProcessAttr attr = {};
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    attr.migrateMode = MIG_MEMSIZE_MODE;
+    attr.numaAttr.numaNodes = 0b00010001;
+    attr.remoteNumaCnt = 1;
+    attr.migrateParam[0].nid = 4;
+    attr.migrateParam[0].memSize = 0;
+    attr.walkPage.nrPages[0] = 100;
+    attr.walkPage.nrPages[4] = 0;
+    attr.walkPage.nrPage = 100;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 64;
+
+    EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
+
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 0;
+    EXPECT_TRUE(MigOutIsDone(&attr, &isMultiNumaPid));
+}
+
 TEST_F(ManageTest, TestMigOutIsDonePendingTargetKeepsWaiting)
 {
     bool isMultiNumaPid = false;

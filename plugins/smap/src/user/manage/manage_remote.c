@@ -1326,7 +1326,10 @@ static bool IsRemoteTargetMigOutDone(ProcessAttr *attr, int remoteNid, uint64_t 
     SMAP_LOGGER_INFO("Pid: %d, remote node: %d, target pages: %llu, accounted pages: %llu, current remote pages: %llu.",
                      attr->pid, remoteNid, targetPages, accountedPages, remotePages);
 
-    if (targetPages > 0 && accountedPages == targetPages) {
+    if (targetPages == 0) {
+        return accountedPages == 0 && remotePages == 0;
+    }
+    if (accountedPages == targetPages) {
         return true;
     }
     return remotePages == targetPages;
