@@ -217,6 +217,8 @@ void InitProcessMigrationTargetState(ProcessAttr *attr)
     attr->pendingTargetConfigValid = false;
     attr->pendingIgnoreRemoteCapacity = false;
     attr->pendingTargetNumaNodes = 0;
+    attr->syncWaitRemoteEmpty = false;
+    attr->syncWaitRemoteEmptySnapshotValid = false;
     attr->managedLocalState = (ManagedLocalState){ 0 };
 }
 
@@ -612,6 +614,8 @@ void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *candida
     attr->remoteNumaCnt = candidate->remoteNumaCnt;
     attr->initLocalMemRatio = candidate->initLocalMemRatio;
     attr->autoRemoveWhenRemoteEmpty = candidate->autoRemoveWhenRemoteEmpty;
+    attr->syncWaitRemoteEmpty = candidate->syncWaitRemoteEmpty;
+    attr->syncWaitRemoteEmptySnapshotValid = candidate->syncWaitRemoteEmptySnapshotValid;
     attr->ignoreRemoteCapacity = candidate->ignoreRemoteCapacity;
     attr->numaAttr = candidate->numaAttr;
     attr->managedLocalState = candidate->managedLocalState;
@@ -722,6 +726,9 @@ int ApplyPendingMigrationTargets(ProcessAttr *attr)
     }
 
     PublishProcessTargetCandidate(attr, &candidate);
+    if (attr->syncWaitRemoteEmpty) {
+        attr->syncWaitRemoteEmptySnapshotValid = false;
+    }
 
     attr->ignoreRemoteCapacity = attr->pendingIgnoreRemoteCapacity;
     ClearProcessTargetConfig(&attr->pendingTargetConfig);
@@ -1326,7 +1333,10 @@ static bool IsRemoteTargetMigOutDone(ProcessAttr *attr, int remoteNid, uint64_t 
     SMAP_LOGGER_INFO("Pid: %d, remote node: %d, target pages: %llu, accounted pages: %llu, current remote pages: %llu.",
                      attr->pid, remoteNid, targetPages, accountedPages, remotePages);
 
-    if (targetPages > 0 && accountedPages == targetPages) {
+    if (targetPages == 0) {
+        return accountedPages == 0 && remotePages == 0;
+    }
+    if (accountedPages == targetPages) {
         return true;
     }
     return remotePages == targetPages;
@@ -1358,6 +1368,10 @@ bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid)
     if (attr->pendingTargetConfigValid) {
         *isMultiNumaPid = IsMultiNumaVm(attr);
         SMAP_LOGGER_INFO("Pid %d has a pending migration target, mig out is not done yet.", pid);
+        return false;
+    }
+    if (attr->syncWaitRemoteEmpty && !attr->syncWaitRemoteEmptySnapshotValid) {
+        SMAP_LOGGER_INFO("Pid %d is waiting for a fresh remote-empty page snapshot.", pid);
         return false;
     }
     if (IsMultiNumaVm(attr)) {

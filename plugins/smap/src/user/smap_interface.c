@@ -1584,6 +1584,13 @@ static bool HasRemotePages(ProcessAttr *attr)
             return true;
         }
     }
+    for (int local = 0; local < LOCAL_NUMA_NUM; local++) {
+        for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+            if (attr->strategyAttr.remoteNrPagesAfterMigrate[local][remote] != 0) {
+                return true;
+            }
+        }
+    }
     return false;
 }
 
@@ -2751,6 +2758,7 @@ static void SetSyncWaitRemoteEmpty(struct MigrateOutMsg *msg, bool enable)
             continue;
         }
         attr->syncWaitRemoteEmpty = enable;
+        attr->syncWaitRemoteEmptySnapshotValid = false;
         SMAP_LOGGER_INFO("Pid %d sync wait remote empty protection %s.", attr->pid, enable ? "enabled" : "disabled");
         PutProcessAttr(attr);
     }

@@ -4592,6 +4592,22 @@ TEST_F(InterfaceTest, TestIsAutoRemoveCandidateEligible)
     EXPECT_EQ(true, ret);
 }
 
+extern "C" bool HasRemotePages(ProcessAttr *attr);
+TEST_F(InterfaceTest, TestHasRemotePagesIncludesPairAccount)
+{
+    ProcessAttr attr = {};
+    g_processManager.nrLocalNuma = 4;
+
+    EXPECT_FALSE(HasRemotePages(&attr));
+
+    attr.walkPage.nrPages[4] = 1;
+    EXPECT_TRUE(HasRemotePages(&attr));
+
+    attr.walkPage.nrPages[4] = 0;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 1;
+    EXPECT_TRUE(HasRemotePages(&attr));
+}
+
 extern "C" bool IsPidAlreadyCollected(pid_t *pids, int count, pid_t pid);
 TEST_F(InterfaceTest, TestIsPidAlreadyCollected)
 {
@@ -4920,6 +4936,32 @@ TEST_F(InterfaceTest, TestSetSyncWaitRemoteEmptyInvalidCount)
     struct MigrateOutMsg msg = {};
     msg.count = 0;
     SetSyncWaitRemoteEmpty(&msg, true);
+}
+
+TEST_F(InterfaceTest, TestSetSyncWaitRemoteEmptyResetsSnapshotState)
+{
+    struct MigrateOutMsg msg = {};
+    ProcessAttr attr = {};
+    attr.pid = 1234;
+    attr.scanType = NORMAL_SCAN;
+    attr.syncWaitRemoteEmptySnapshotValid = true;
+    msg.count = 1;
+    msg.payload[0].pid = attr.pid;
+    msg.payload[0].count = 1;
+    msg.payload[0].inner[0].migrateMode = MIG_MEMSIZE_MODE;
+    msg.payload[0].inner[0].memSize = 0;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotAdd(&g_processManager, &attr);
+
+    SetSyncWaitRemoteEmpty(&msg, true);
+    EXPECT_TRUE(attr.syncWaitRemoteEmpty);
+    EXPECT_FALSE(attr.syncWaitRemoteEmptySnapshotValid);
+
+    attr.syncWaitRemoteEmptySnapshotValid = true;
+    SetSyncWaitRemoteEmpty(&msg, false);
+    EXPECT_FALSE(attr.syncWaitRemoteEmpty);
+    EXPECT_FALSE(attr.syncWaitRemoteEmptySnapshotValid);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
 extern "C" bool ubturbo_smap_is_running(void);
