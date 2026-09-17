@@ -21,12 +21,12 @@
 
 namespace turbo::smap::codec {
 
-static void SmapDeleteData(uint8_t *data)
+void SmapDeleteData(uint8_t *data)
 {
     delete[] data;
 }
 
-static void SmapResetBuf(TurboByteBuffer *buffer)
+void SmapResetBuf(TurboByteBuffer *buffer)
 {
     if (buffer->data) {
         delete[] buffer->data;
@@ -1246,8 +1246,8 @@ int SmapQueryRemoteNumaFreqCodec::EncodeResponse(TurboByteBuffer &buffer, uint64
     return ret;
 }
 
-int SmapQueryRemoteNumaFreqCodec::DecodeResponse(TurboByteBuffer &buffer, uint64_t *freq, uint16_t &outLen,
-                                                 int &returnValue)
+int SmapQueryRemoteNumaFreqCodec::DecodeResponse(TurboByteBuffer &buffer, uint64_t *freq, uint16_t length,
+                                                 uint16_t &outLen, int &returnValue)
 {
     int ret = IPC_OK;
     if (buffer.len < sizeof(int) + sizeof(uint16_t)) {
@@ -1255,15 +1255,16 @@ int SmapQueryRemoteNumaFreqCodec::DecodeResponse(TurboByteBuffer &buffer, uint64
     }
     returnValue = *static_cast<int *>(static_cast<void *>(buffer.data));
     uint16_t out = *static_cast<uint16_t *>(static_cast<void *>(buffer.data + sizeof(int)));
-    if (out > REMOTE_NUMA_BITS) {
-        IPC_CLIENT_LOGGER_ERROR("DecodeResponse: out value %d is invalid; must be between 0 and %d\n", out,
-                                REMOTE_NUMA_BITS);
+    if (out > REMOTE_NUMA_BITS || out > length) {
+        IPC_CLIENT_LOGGER_ERROR("DecodeResponse: out value %d is invalid; must be between 0 and %d and <= %d\n", out,
+                                REMOTE_NUMA_BITS, length);
         return IPC_ERROR;
     }
     if (buffer.len < sizeof(int) + sizeof(uint16_t) + out * sizeof(uint64_t)) {
         return IPC_ERROR;
     }
-    ret = memcpy_s(freq, out * sizeof(uint64_t), buffer.data + sizeof(int) + sizeof(uint16_t), out * sizeof(uint64_t));
+    ret =
+        memcpy_s(freq, length * sizeof(uint64_t), buffer.data + sizeof(int) + sizeof(uint16_t), out * sizeof(uint64_t));
     if (ret) {
         return IPC_ERROR;
     }
