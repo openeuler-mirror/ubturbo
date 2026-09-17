@@ -374,6 +374,8 @@ TEST_F(ManageTest, TestInitProcessMigrationTargetState)
     attr.pendingTargetConfigValid = true;
     attr.pendingIgnoreRemoteCapacity = true;
     attr.pendingTargetNumaNodes = 0x31;
+    attr.syncWaitRemoteEmpty = true;
+    attr.syncWaitRemoteEmptySnapshotValid = true;
     attr.managedLocalState.managedLocalMask = 0xf;
     attr.managedLocalState.accountLocalMask[0] = 0x1;
 
@@ -384,6 +386,8 @@ TEST_F(ManageTest, TestInitProcessMigrationTargetState)
     EXPECT_FALSE(attr.pendingTargetConfigValid);
     EXPECT_FALSE(attr.pendingIgnoreRemoteCapacity);
     EXPECT_EQ(0U, attr.pendingTargetNumaNodes);
+    EXPECT_FALSE(attr.syncWaitRemoteEmpty);
+    EXPECT_FALSE(attr.syncWaitRemoteEmptySnapshotValid);
     EXPECT_EQ(0U, attr.managedLocalState.managedLocalMask);
     EXPECT_EQ(0U, attr.managedLocalState.accountLocalMask[0]);
 
@@ -3032,7 +3036,7 @@ TEST_F(ManageTest, TestMigOutIsDoneSingleRemoteUsesRemotePages)
     EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
 }
 
-TEST_F(ManageTest, TestMigOutIsDoneZeroTargetWaitsForPairAccount)
+TEST_F(ManageTest, TestMigOutIsDoneZeroTargetRequiresFreshSnapshotAndEmptyAccount)
 {
     bool isMultiNumaPid = false;
     ProcessAttr attr = {};
@@ -3047,8 +3051,12 @@ TEST_F(ManageTest, TestMigOutIsDoneZeroTargetWaitsForPairAccount)
     attr.walkPage.nrPages[0] = 100;
     attr.walkPage.nrPages[4] = 0;
     attr.walkPage.nrPage = 100;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 64;
+    attr.syncWaitRemoteEmpty = true;
 
+    EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
+
+    attr.syncWaitRemoteEmptySnapshotValid = true;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 64;
     EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
 
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 0;
@@ -5511,6 +5519,7 @@ TEST_F(ManageTest, TestSetGroupedProcessConfigBasic)
     EXPECT_EQ(1, attr.groupPolicy.groupCount);
     EXPECT_EQ(false, attr.autoRemoveWhenRemoteEmpty);
     EXPECT_EQ(false, attr.syncWaitRemoteEmpty);
+    EXPECT_EQ(false, attr.syncWaitRemoteEmptySnapshotValid);
 }
 
 TEST_F(ManageTest, TestSetGroupedProcessConfigOverwritesAttr)

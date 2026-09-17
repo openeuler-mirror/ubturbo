@@ -380,6 +380,9 @@ int BuildAllPidData(void)
                     failedCount++;
                 }
                 CalibratePairAccount(current);
+                if (current->syncWaitRemoteEmpty) {
+                    current->syncWaitRemoteEmptySnapshotValid = true;
+                }
             }
         }
         PutProcessAttr(current);
