@@ -693,13 +693,11 @@ static int create_procfs(struct access_pid *ap)
 		return -EINVAL;
 
 	if (pid_procfs_exists(pid)) {
-		return 0;
+		pr_err("procfs for pid %d already exists\n", pid);
+		return -EEXIST;
 	}
 	root_pde = proc_mkdir(dirname, smap_procfs_root);
 	if (!root_pde) {
-		if (pid_procfs_exists(pid)) {
-			return 0;
-		}
 		pr_err("failed to create proc dir for %d\n", pid);
 		return -ENOMEM;
 	}
@@ -1132,22 +1130,6 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 	LIST_HEAD(dup_head);
 
 	list_for_each_entry_safe(ap, tmp, tmp_head, node) {
-		struct ap_slot *existing = ap_get_slot(ap->pid);
-
-		if (existing) {
-			/* duplicate pid: update scan params only. */
-			down_write(&existing->ap_lock);
-			existing->ap->scan_time = ap->scan_time;
-			existing->ap->ntimes = ap->ntimes;
-			existing->ap->type = ap->type;
-			existing->ap->pid_type = ap->pid_type;
-			up_write(&existing->ap_lock);
-			pr_info("set pid: %d scan params\n", ap->pid);
-			ap_put_slot(existing);
-			list_move_tail(&ap->node, &dup_head);
-			continue;
-		}
-		/* new pid: claim a slot (visible to readers once INUSE) */
 		ap->cur_times = 0;
 		if (ap_slot_add(ap) < 0) {
 			pr_err("ap_slot table full, pid %d rejected\n",
@@ -1166,42 +1148,51 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 	}
 }
 
+/*
+ * 已占用 slot 的配置更新：逐字段比较，仅更新不一致项。字段集与
+ * init_access_pid 的拷贝集一致(scan_time/ntimes/type/pid_type)，避免
+ * 对已存在 pid 走 init_access_pid 的无谓
+ * alloc/bitmap-prep/procfs/kvm-scan 开销。
+ */
+static void ap_slot_update_config(struct ap_slot *s,
+				  struct access_add_pid_payload *payload)
+{
+	struct access_pid *ap;
+
+	down_write(&s->ap_lock);
+	ap = s->ap;
+	if (ap->scan_time != payload->scan_time) {
+		pr_info("update pid %d scan_time from %u to %u\n", ap->pid,
+			ap->scan_time, payload->scan_time);
+		ap->scan_time = payload->scan_time;
+	}
+	if (ap->ntimes != payload->ntimes) {
+		pr_info("update pid %d ntimes from %u to %u\n", ap->pid,
+			ap->ntimes, payload->ntimes);
+		ap->ntimes = payload->ntimes;
+	}
+	if (ap->type != payload->type) {
+		pr_info("update pid %d type from %d to %d\n", ap->pid, ap->type,
+			payload->type);
+		ap->type = payload->type;
+	}
+	if (ap->pid_type != payload->pid_type) {
+		pr_info("update pid %d pid_type from %d to %d\n", ap->pid,
+			ap->pid_type, payload->pid_type);
+		ap->pid_type = payload->pid_type;
+	}
+	up_write(&s->ap_lock);
+}
+
 int access_add_pid(int len, struct access_add_pid_payload *payload)
 {
 	int i, ret;
 	struct access_pid *ap, *tmp;
 	LIST_HEAD(tmp_head);
 
-	/* Pre-check: mark completely duplicate pids (snapshot the table) */
-	for (i = 0; i < AP_MAX_SLOTS; i++) {
-		struct ap_slot *s = ap_get_slot_at(i);
-		struct access_pid *e;
-		int j;
-
-		if (!s)
-			continue;
-		e = s->ap;
-		for (j = 0; j < len; j++) {
-			bool match;
-
-			if (payload[j].pid < 0)
-				continue;
-			down_read(&s->ap_lock);
-			match = (payload[j].pid == e->pid &&
-				 payload[j].scan_time == e->scan_time &&
-				 payload[j].type == e->type &&
-				 payload[j].ntimes == e->ntimes);
-			up_read(&s->ap_lock);
-			if (match) {
-				pr_info("pid %d is completely duplicate, skip processing\n",
-					payload[j].pid);
-				payload[j].pid = DUPLICATE_PID;
-			}
-		}
-		ap_put_slot(s);
-	}
-
 	for (i = 0; i < len; i++) {
+		struct ap_slot *existing;
+
 		if (payload[i].pid < 0)
 			continue;
 		/* check if payload has duplicate pid */
@@ -1210,6 +1201,16 @@ int access_add_pid(int len, struct access_add_pid_payload *payload)
 				ret = -EINVAL;
 				goto err;
 			}
+		}
+		/*
+		 * pid 已占用 slot：原位更新配置，跳过 init_access_pid，
+		 * 无需重新 alloc/bitmap-prep/procfs/kvm-scan
+		 */
+		existing = ap_get_slot(payload[i].pid);
+		if (existing) {
+			ap_slot_update_config(existing, &payload[i]);
+			ap_put_slot(existing);
+			continue;
 		}
 		/* allocate memory for pid */
 		ret = init_access_pid(&payload[i], &ap);

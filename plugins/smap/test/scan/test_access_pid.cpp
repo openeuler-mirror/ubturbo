@@ -496,8 +496,8 @@ TEST_F(DriversAccessPidTest, AccessAddPidDuplicateCase)
     EXPECT_EQ(1, ap_data_len());
 
     GlobalMockObject::verify();
-    struct access_pid ap3 = {.pid=14587, .type=HAM_SCAN, .scan_time=100};
-    tmp = &ap3;
+    /* pid 已占用 slot：原位更新配置，不再调用 init_access_pid */
+    payload[0].scan_time = 200;
     MOCKER(init_access_pid).stubs().with(&payload[0], outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
     MOCKER(destroy_access_pid).stubs().will(returnValue(0));
     MOCKER(submit_one_work).stubs();
@@ -508,8 +508,8 @@ TEST_F(DriversAccessPidTest, AccessAddPidDuplicateCase)
     struct ap_slot *chk = ap_get_slot(14587);
     if (chk) {
         findFlag = true;
-        EXPECT_EQ(ap3.type, chk->ap->type);
-        EXPECT_EQ(ap3.scan_time, chk->ap->scan_time);
+        EXPECT_EQ(payload[0].type, chk->ap->type);
+        EXPECT_EQ(payload[0].scan_time, chk->ap->scan_time);
         ap_put_slot(chk);
     }
     EXPECT_EQ(true, findFlag);

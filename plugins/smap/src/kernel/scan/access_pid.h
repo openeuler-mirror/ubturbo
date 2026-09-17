@@ -22,7 +22,6 @@
 #define MAX_PATH_LENGTH 64
 #define AP_PROCFS_DIR_LEN 32
 #define SEC_TO_MS 1000
-#define DUPLICATE_PID (-2) /* completely duplicate, skip processing */
 extern int nr_local_numa;
 
 /* Upper bound of tracked pids. */
