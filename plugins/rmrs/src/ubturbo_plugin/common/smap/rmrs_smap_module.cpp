@@ -31,11 +31,6 @@ SmapQueryProcessConfigFunc SmapModule::smapQueryProcessConfigFunc = nullptr;
 
 RmrsResult SmapModule::Init()
 {
-    struct stat sb;
-    if (lstat(SMAP_LIBSMAPSO_PATH_RMRS, &sb) == 0 && S_ISLNK(sb.st_mode)) {
-        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[RmrsSmapModule] SMAP path is a symbolic link.";
-        return RMRS_ERROR;
-    }
     smapHandle = dlopen(SMAP_LIBSMAPSO_PATH_RMRS, RTLD_LAZY);
     if (smapHandle == nullptr) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[RmrsSmapModule] Load libsmap.so failed.";
