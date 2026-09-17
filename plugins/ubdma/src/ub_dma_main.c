@@ -505,6 +505,7 @@ int ub_dma_init(void)
 		ret = -ENOMEM;
 		goto err_exit_ub_dma_dev;
 	}
+	g_udev = udc;
 	udc->driver.owner = THIS_MODULE;
 	udc->driver.name = UB_DMA_KBUILD_MODNAME;
 	udc->vchan_num = UB_DMA_VCHAN_NUM;
@@ -567,8 +568,6 @@ int ub_dma_init(void)
 		goto err_unregister_urma_meta_sge;
 	}
 
-	g_udev = udc;
-
 	return 0;
 
 err_unregister_urma_meta_sge:
@@ -583,6 +582,7 @@ err_kill_tasklet:
 	ub_dma_free(udc);
 err_exit_ub_dma_dev:
 	ub_dma_dev_exit();
+	g_udev = NULL;
 	return ret;
 }
 
