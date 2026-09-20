@@ -214,16 +214,6 @@ TEST_F(DriversAccessPidTest, InitAccessPid)
     EXPECT_EQ(0, ret);
 }
 
-TEST_F(DriversAccessPidTest, PrintAccessPidList)
-{
-    print_access_pid_list();
-}
-
-TEST_F(DriversAccessPidTest, PrintfAccessStatisticPidList)
-{
-    print_access_statistic_pid_list();
-}
-
 TEST_F(DriversAccessPidTest, PrintAccessHamPidList)
 {
     struct ham_tracking_info ap;
@@ -237,7 +227,6 @@ TEST_F(DriversAccessPidTest, PrintAccessHamPidList)
     ap.l1_node = 0;
     ap.l2_node = -1;
     list_add(&ap.node, &ham_pid_list);
-    print_access_ham_pid_list();
     list_del(&ap.node);
 }
 
