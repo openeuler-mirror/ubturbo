@@ -50,13 +50,24 @@ static void release_migrate_task_inner(struct ham_migrate_task *mig_task)
 		}
 		for (j = 0; j < mig_task->ram_maps[i].page_num; j++) {
 			hpm = &mig_task->ram_maps[i].hpms[j];
+			/*
+			 * Release the src_folio reference pinned in fill_folios_hugetlb()
+			 * on every path. The migration framework (migrate_pages) only
+			 * drops its own isolate ref and the page-table mapping; it does
+			 * not put the caller-held reference taken at collection time, so
+			 * migrated and rolled-back entries must put it here as well.
+			 * For hugetlb the folio struct is never freed while refcount>0,
+			 * so the pointer stays valid even after a successful migration.
+			 */
+			if (hpm->src_folio) {
+				folio_put(hpm->src_folio);
+			}
 			if (hpm_test_migrate(hpm) || hpm_test_rollback(hpm)) {
 				continue;
 			}
-			if (!hpm->dst_folio) {
-				continue;
+			if (hpm->dst_folio) {
+				putback_hugetlb_folio(hpm->dst_folio);
 			}
-			putback_hugetlb_folio(hpm->dst_folio);
 		}
 	}
 free_buff:

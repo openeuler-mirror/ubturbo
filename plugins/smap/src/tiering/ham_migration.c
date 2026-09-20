@@ -330,6 +330,17 @@ static int fill_folios_hugetlb(pte_t *pte, unsigned long hmask,
 		return 0;
 	}
 
+	/*
+	 * Pin the folio before mmap_read_lock is dropped in fill_task_pages().
+	 * Otherwise the folio may be freed/migrated/reused between collection
+	 * and later lockless accessors (fill_freqs_to_rbm, construct_page_list),
+	 * causing use-after-free. The paired folio_put() is in
+	 * release_migrate_task_inner() for entries that never reach migration.
+	 */
+	if (!folio_try_get(folio)) {
+		return 0;
+	}
+
 	/* Save src_folio */
 	ram_map->hpms[index].src_folio = folio;
 	ram_map->hpms[index].src_numa_id = folio_nid(folio);
@@ -456,7 +467,7 @@ construct_page_list(struct list_head *hpm_list,
 
 	list_for_each_entry(hpm, hpm_list, list) {
 		folio = get_migration_folio(hpm);
-		if (!folio || !folio_try_get(folio))
+		if (!folio)
 			continue;
 
 		folios[i++] = folio;
@@ -744,6 +755,13 @@ static void fill_freqs_to_rbm(struct ram_block_map *rbm,
 	int j;
 	u64 hpa;
 	for (i = 0; i < rbm->page_num; i++) {
+		/* src_folio may be NULL for entries skipped in fill_folios_hugetlb
+		 * (pte not present or already migrated). folio_pfn(NULL) would
+		 * dereference NULL, so skip non-present hpm entries here.
+		 */
+		if (!hpm_test_present(&rbm->hpms[i])) {
+			continue;
+		}
 		hpa = PFN_PHYS(folio_pfn(rbm->hpms[i].src_folio));
 		for (j = 0; j < freq_info_num; j++) {
 			if (freq_info_array[j].hpa == hpa) {
@@ -839,6 +857,13 @@ static int check_migration_param(struct migration_param param,
 		pr_err("failed to get mm_struct of pid: %d\n", param.pid);
 		return ret;
 	}
+
+	/*
+	 * find_vma() walks the VMA tree which requires mmap_lock to be held,
+	 * otherwise concurrent munmap/mremap may corrupt the traversal. Pairs
+	 * with mmap_read_unlock() at exit_with_mmput so all goto paths release.
+	 */
+	mmap_read_lock(mm);
 	for (i = 0; i < param.cnt; i++) {
 		rbi = &param.ram_blocks[i];
 		vma = find_vma(mm, rbi->hva_start);
@@ -870,6 +895,7 @@ static int check_migration_param(struct migration_param param,
 	ret = 0;
 
 exit_with_mmput:
+	mmap_read_unlock(mm);
 	mmput(mm);
 	return ret;
 }
