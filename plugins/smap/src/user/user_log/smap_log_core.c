@@ -236,7 +236,7 @@ int SmapLogCoreWrite(int level, const char *prefix, const char *message)
         }
     }
 
-    if (fprintf(g_smapLogFile.fileHandle, logLine) != lineLen) {
+    if (fprintf(g_smapLogFile.fileHandle, "%s", logLine) != lineLen) {
         pthread_mutex_unlock(&g_smapLogFile.lock);
         return -EIO;
     }

@@ -468,14 +468,30 @@ static bool IsRecoveredTargetConfigZero(const ProcessTargetConfig *config)
 
 static int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayload *payload)
 {
+    /* 磁盘 payload 属于外部输入：type 会被用作 nr[] 数组下标，scanType 参与枚举比较，
+     * 越界值必须拒绝，防止恢复后越界写 */
+    if (payload->type >= TYPE_MAX || payload->scanType >= SCAN_TYPE_MAX) {
+        SMAP_LOGGER_ERROR("Invalid persisted process %d type %u scanType %u.", payload->pid, payload->type,
+                          payload->scanType);
+        return -EINVAL;
+    }
+
     ProcessTargetConfig activeConfig;
     int ret = RestoreProcessTargetConfig(&activeConfig, payload->migrateMode, payload->count, payload->migrateParam);
     if (ret) {
         return ret;
     }
 
+    /* numaNodes 净化：用户态访问器（InL1/InL2 等）只认 [0, MAX_NODES) 位域，
+     * 超出位属脏数据，掩掉后仅经 ADD_PID 下发内核，不拒绝恢复 */
+    const uint32_t validNumaMask = (1u << MAX_NODES) - 1;
+    if (payload->numaNodes & ~validNumaMask) {
+        SMAP_LOGGER_WARNING("pid %d recovered numaNodes %#x has invalid bits, sanitized.", payload->pid,
+                            payload->numaNodes);
+    }
+
     attr->pid = payload->pid;
-    attr->numaAttr.numaNodes = payload->numaNodes;
+    attr->numaAttr.numaNodes = payload->numaNodes & validNumaMask;
     attr->type = payload->type;
     attr->state = payload->state == PROC_MIGRATE ? PROC_IDLE : payload->state;
     attr->scanType = payload->scanType;

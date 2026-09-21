@@ -1653,8 +1653,17 @@ static int PreMigration(struct ProcessManager *manager, struct MigrateMsg *mMsg,
 ROLLBACK:
     for (size_t i = 0; i < candidateCnt; i++) {
         current = GetProcessAttr(candidatePids[i]);
+        /* state 翻转纳入 attrLock，与状态查询/SetPidArrState 等读端同步 */
+        struct PidSlot *slot = PidSlotGetRef(candidatePids[i]);
+        if (slot) {
+            EnvMutexLock(&slot->attrLock);
+        }
         if (current && current->state == PROC_MIGRATE) {
             current->state = PROC_IDLE;
+        }
+        if (slot) {
+            EnvMutexUnlock(&slot->attrLock);
+            PidSlotReleaseRefs(&slot, 1);
         }
         PutProcessAttr(current);
     }
@@ -1694,25 +1703,36 @@ static void PostMigration(struct ProcessManager *manager, struct MigrateMsg *mMs
     size_t postCnt = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
     for (size_t k = 0; k < postCnt; k++) {
         ProcessAttr *current = all[k]->attr;
+        bool migrating = false;
+        EnvMutexLock(&all[k]->attrLock);
         if (current->state == PROC_MIGRATE) {
-            /*
-             * The old migration result is now settled; it is safe to publish
-             * pending normal targets and grouped policy.
-             */
-            int ret = ApplyPendingMigrationTargets(current);
-            if (ret) {
-                SMAP_LOGGER_ERROR("Apply pending migration target after migration failed, "
-                                  "pid %d ret %d.",
-                                  current->pid, ret);
-            }
-            ret = ApplyPendingGroupedPolicy(current);
-            if (ret) {
-                SMAP_LOGGER_ERROR("Apply pending grouped policy after migration failed, pid %d ret %d.", current->pid,
-                                  ret);
-            }
-            SMAP_LOGGER_DEBUG("set pid %d state from migrate to idle.", current->pid);
+            migrating = true;
+        }
+        EnvMutexUnlock(&all[k]->attrLock);
+        if (!migrating) {
+            continue;
+        }
+        /*
+         * The old migration result is now settled; it is safe to publish
+         * pending normal targets and grouped policy.
+         */
+        int ret = ApplyPendingMigrationTargets(current);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Apply pending migration target after migration failed, "
+                              "pid %d ret %d.",
+                              current->pid, ret);
+        }
+        ret = ApplyPendingGroupedPolicy(current);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Apply pending grouped policy after migration failed, pid %d ret %d.", current->pid, ret);
+        }
+        SMAP_LOGGER_DEBUG("set pid %d state from migrate to idle.", current->pid);
+        /* state 翻转纳入 attrLock，与状态查询/SetPidArrState 等读端同步 */
+        EnvMutexLock(&all[k]->attrLock);
+        if (current->state == PROC_MIGRATE) {
             current->state = PROC_IDLE;
         }
+        EnvMutexUnlock(&all[k]->attrLock);
     }
     PidSlotReleaseRefs(all, postCnt);
 }

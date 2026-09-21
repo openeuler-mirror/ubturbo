@@ -217,6 +217,7 @@ void InitProcessMigrationTargetState(ProcessAttr *attr)
     attr->pendingTargetConfigValid = false;
     attr->pendingIgnoreRemoteCapacity = false;
     attr->pendingTargetNumaNodes = 0;
+    attr->pendingSeq = 0;
     attr->syncWaitRemoteEmpty = false;
     attr->syncWaitRemoteEmptySnapshotValid = false;
     attr->managedLocalState = (ManagedLocalState){ 0 };
@@ -660,10 +661,23 @@ int StagePendingMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *c
             trackingCandidate.managedLocalState.managedLocalMask = allLocalMask;
         }
     }
+    uint32_t pendingTargetNumaNodes = BuildManagedTrackingNodes(&trackingCandidate);
+
+    /* 加锁写 pending 字段，与扫描线程 ApplyPendingMigrationTargets 的快照/清除互斥；
+     * 单测场景 attr 未注册进槽位表（PidSlotGetRef 为空）时无并发写者，退化为直接写 */
+    struct PidSlot *slot = PidSlotGetRef(attr->pid);
+    if (slot) {
+        EnvMutexLock(&slot->attrLock);
+    }
     attr->pendingTargetConfig = targetConfig;
     attr->pendingTargetConfigValid = true;
     attr->pendingIgnoreRemoteCapacity = ignoreRemoteCapacity;
-    attr->pendingTargetNumaNodes = BuildManagedTrackingNodes(&trackingCandidate);
+    attr->pendingTargetNumaNodes = pendingTargetNumaNodes;
+    attr->pendingSeq++;
+    if (slot) {
+        EnvMutexUnlock(&slot->attrLock);
+        PidSlotReleaseRefs(&slot, 1);
+    }
     SMAP_LOGGER_INFO("Save pending migration target for pid %d.", attr->pid);
     return 0;
 }
@@ -698,16 +712,40 @@ int ApplyPendingMigrationTargets(ProcessAttr *attr)
         return 0;
     }
 
-    ProcessTargetConfig config = attr->pendingTargetConfig;
+    /* 快照阶段：加锁读取 pending，避免与 IPC 写端（Stage/Publish）并发撕裂；
+     * 慢操作（/proc 采集、ioctl）放在锁外执行 */
+    struct PidSlot *slot = PidSlotGetRef(attr->pid);
+    ProcessTargetConfig config;
+    bool ignoreRemoteCapacity = false;
+    uint32_t pendingSeq = 0;
+    if (slot) {
+        EnvMutexLock(&slot->attrLock);
+        if (!attr->pendingTargetConfigValid) {
+            EnvMutexUnlock(&slot->attrLock);
+            PidSlotReleaseRefs(&slot, 1);
+            return 0;
+        }
+        config = attr->pendingTargetConfig;
+        ignoreRemoteCapacity = attr->pendingIgnoreRemoteCapacity;
+        pendingSeq = attr->pendingSeq;
+        EnvMutexUnlock(&slot->attrLock);
+    } else {
+        /* 单测场景：attr 未注册进槽位表，无并发写者，直接快照 */
+        config = attr->pendingTargetConfig;
+        ignoreRemoteCapacity = attr->pendingIgnoreRemoteCapacity;
+    }
+
     ManagedLocalObservation observation;
     int ret = CollectProcessCandidateObservation(attr->pid, attr->type == VM_TYPE, &observation);
     if (ret) {
+        PidSlotReleaseRefs(&slot, 1);
         return ret;
     }
 
     ProcessAttr candidate = *attr;
     ret = PrepareProcessTargetCandidate(&candidate, &config, &observation, false);
     if (ret) {
+        PidSlotReleaseRefs(&slot, 1);
         return ret;
     }
 
@@ -722,19 +760,34 @@ int ApplyPendingMigrationTargets(ProcessAttr *attr)
     ret = AccessIoctlAddPid(1, &payload);
     if (ret) {
         SMAP_LOGGER_ERROR("Update pending pid %d tracking failed: %d.", attr->pid, ret);
+        PidSlotReleaseRefs(&slot, 1);
         return ret;
     }
 
+    /* 发布阶段：重新加锁。若应用期间写端再次 stage（seq 变化），保留新 pending
+     * 留待下一周期应用，避免丢更新 */
+    bool stageUnchanged = true;
+    if (slot) {
+        EnvMutexLock(&slot->attrLock);
+        stageUnchanged = attr->pendingSeq == pendingSeq;
+    }
     PublishProcessTargetCandidate(attr, &candidate);
     if (attr->syncWaitRemoteEmpty) {
         attr->syncWaitRemoteEmptySnapshotValid = false;
     }
-
-    attr->ignoreRemoteCapacity = attr->pendingIgnoreRemoteCapacity;
-    ClearProcessTargetConfig(&attr->pendingTargetConfig);
-    attr->pendingTargetConfigValid = false;
-    attr->pendingIgnoreRemoteCapacity = false;
-    attr->pendingTargetNumaNodes = 0;
+    if (stageUnchanged) {
+        attr->ignoreRemoteCapacity = ignoreRemoteCapacity;
+        ClearProcessTargetConfig(&attr->pendingTargetConfig);
+        attr->pendingTargetConfigValid = false;
+        attr->pendingIgnoreRemoteCapacity = false;
+        attr->pendingTargetNumaNodes = 0;
+    } else {
+        SMAP_LOGGER_INFO("Pending migration target of pid %d restaged during apply, defer to next cycle.", attr->pid);
+    }
+    if (slot) {
+        EnvMutexUnlock(&slot->attrLock);
+        PidSlotReleaseRefs(&slot, 1);
+    }
     ret = SyncAllProcessConfig();
     if (ret) {
         SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", attr->pid, ret);
@@ -1072,7 +1125,7 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
         }
     } else if (GetRunMode() == MEM_POOL_MODE) {
         uint64_t srcMemSize = 0;
-        int remoteNidIndex;
+        int remoteNidIndex = -1;
         for (int i = 0; i < attr->remoteNumaCnt; i++) {
             int srcNid = srcNodeIndex + nrLocalNuma;
             if (srcNid == attr->migrateParam[i].nid) {
@@ -1081,12 +1134,16 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
                 break;
             }
         }
-        if (memSize >= srcMemSize) {
-            ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
-            attr->migrateParam[remoteNidIndex].nid = 0;
-            attr->migrateParam[remoteNidIndex].memSize = 0;
-        } else {
-            attr->migrateParam[remoteNidIndex].memSize -= memSize;
+        /* src 节点不在该进程的迁移目标列表时，无 migrateParam 可改，
+         * 不清 numaNodes 位（本就无该远端页），仅调整下方账本 */
+        if (remoteNidIndex >= 0) {
+            if (memSize >= srcMemSize) {
+                ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
+                attr->migrateParam[remoteNidIndex].nid = 0;
+                attr->migrateParam[remoteNidIndex].memSize = 0;
+            } else {
+                attr->migrateParam[remoteNidIndex].memSize -= memSize;
+            }
         }
 
         for (int i = 0; i < GetProcessManager()->nrLocalNuma; i++) {
@@ -1362,11 +1419,11 @@ bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid)
     pid_t pid = attr->pid;
 
     attr->enableSwap = false;
+    *isMultiNumaPid = IsMultiNumaVm(attr);
     /* 新迁移目标已暂存未生效：migrateParam 仍是上一轮配置，用它判定完成会在上一次
      * sync 刚结束时误判成功（旧账本/旧远端页数恰好等于旧目标），导致上层提前
      * remove。等待迁移周期 ApplyPendingMigrationTargets 生效后再判定。 */
     if (attr->pendingTargetConfigValid) {
-        *isMultiNumaPid = IsMultiNumaVm(attr);
         SMAP_LOGGER_INFO("Pid %d has a pending migration target, mig out is not done yet.", pid);
         return false;
     }

@@ -769,7 +769,9 @@ TEST_F(PeriodConfigTest, PeriodConfigReviewTest)
     int32_t ret = StrategyConfigReview();
     EXPECT_EQ(-1, ret);
 
-    uint32_t num = 18;
+    /* g_strategyConfigRead 实际 17 项（与 src 内 sizeof 计算一致），
+     * 此前硬编码 18 会越界写一项，破坏相邻全局数据（曾把本文件 gcov 计数器清零） */
+    uint32_t num = 17;
     for (int i = 0; i < num; i++) {
         g_strategyConfigRead[i].needCfg = 2UL;
         g_strategyConfigRead[i].realCfg = 2UL;
@@ -798,6 +800,10 @@ TEST_F(PeriodConfigTest, PeriodConifgResetTest)
 extern "C" void InitStrategyConfig(void);
 TEST_F(PeriodConfigTest, InitPeriodConfigTest)
 {
+    /* mock fopen 失败，GetSystemCpuRange 走"读取失败用默认 0-0"回退路径，
+     * 使 scanCpu 初始化结果确定，不依赖运行环境的实际 CPU 拓扑 */
+    MOCKER(fopen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
+
     g_strategyConfig.scanPeriod = 10;
     g_strategyConfig.migratePeriod = 10;
     g_strategyConfig.migrateMode = 5;

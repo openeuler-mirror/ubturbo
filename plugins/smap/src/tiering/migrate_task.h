@@ -6,6 +6,9 @@
 #ifndef _SRC_TIERING_MIGRATE_TASK_H
 #define _SRC_TIERING_MIGRATE_TASK_H
 
+#include <linux/kref.h>
+#include <linux/list.h>
+
 enum migrate_back_task_status {
 	MB_TASK_CREATED,
 	MB_TASK_WAITING,
@@ -20,6 +23,9 @@ struct migrate_back_task {
 	enum migrate_back_task_status status;
 	struct list_head task_node;
 	struct list_head subtask;
+	/* 任务列表持有 1 份引用，每个打开的 debugfs fd 持有 1 份引用，
+	 * 归零时由 migrate_back_task_release 完成真正的清理与释放 */
+	struct kref ref;
 };
 extern struct list_head migrate_back_task_list;
 extern spinlock_t migrate_back_task_lock;
@@ -49,6 +55,7 @@ struct migrate_back_inner_payload {
 };
 
 struct migrate_back_task *init_migrate_back_task(unsigned long long task_id);
+void migrate_back_task_release(struct kref *ref);
 void free_all_migrate_back_task(void);
 void clear_migrate_back_task(void);
 

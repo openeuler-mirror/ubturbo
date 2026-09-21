@@ -383,6 +383,9 @@ struct ProcessAttribute {
     ProcessTargetConfig pendingTargetConfig;
     bool pendingTargetConfigValid;
     uint32_t pendingTargetNumaNodes;
+    /* pending 写端(Stage/Publish)在 slot->attrLock 内递增，Apply 端锁内快照比对，
+     * 应用期间若写端再次 stage(seq 变化)则保留新 pending 留待下一周期，避免丢更新 */
+    uint32_t pendingSeq;
     ManagedLocalState managedLocalState;
     SeparateParam separateParam;
     NumaAttribute numaAttr;
@@ -433,6 +436,9 @@ struct PidSlot {
 typedef struct {
     ProcessAttr *active;
     ProcessAttr *prepared;
+    /* Prepare 阶段解析并持引用的宿主槽位：Publish 阶段据此加 attrLock，保证锁与 active 绑定，
+     * 避免按 pid 重查到已摘除(REMOVING)或被复用的槽位；引用由 DiscardProcessManageCandidate 归还 */
+    struct PidSlot *slot;
     bool isNew;
     bool isPending;
 } ProcessManageCandidate;

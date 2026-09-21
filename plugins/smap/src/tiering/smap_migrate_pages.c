@@ -398,6 +398,7 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 	unsigned int nr_folios = 0;
 	unsigned int nr_folios_min = 0;
 	unsigned int cnt = 0;
+	unsigned int j;
 	unsigned long max_nr_folios =
 		(task->pa_end - task->pa_start + 1) / page_size;
 	struct folio **migrate_folios =
@@ -459,6 +460,16 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 		nr_folios -= nr_folios_min;
 		cnt++;
 	} while (nr_folios != 0);
+	/*
+	 * folio 引用在收集阶段由 smap_add_page_for_migration 获取，交给
+	 * smap_migrate 的部分由其消费；critical error 提前退出时，未移交的
+	 * folio 必须在此放回引用，否则页面泄漏。
+	 * 正常结束时 nr_folios 为 0，此循环为空。
+	 */
+	for (j = cnt * NR_BATCHED_MIGRATION;
+	     j < cnt * NR_BATCHED_MIGRATION + nr_folios; j++) {
+		folio_put(migrate_folios[j]);
+	}
 
 #ifdef DEBUG
 	end_time = ktime_get();
@@ -574,6 +585,15 @@ void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 			mig_pages_cnt[i] -= nr_folios_min;
 			cnt++;
 		} while (mig_pages_cnt[i] != 0);
+		/*
+		 * critical error 提前退出时，未移交的 folio 引用在此放回
+		 * （收集阶段由 smap_add_page_for_migrate_back 获取）。
+		 * 正常结束时 mig_pages_cnt[i] 为 0，此循环为空。
+		 */
+		for (j = cnt * NR_BATCHED_MIGRATION;
+		     j < cnt * NR_BATCHED_MIGRATION + mig_pages_cnt[i]; j++) {
+			folio_put(migrate_folios[i][j]);
+		}
 #ifdef DEBUG
 		end_time = ktime_get();
 		delta_time_ms = ktime_to_ms(ktime_sub(end_time, start_time));
@@ -972,6 +992,7 @@ static unsigned int smap_migrate_range(int nid, u64 start_pa, u64 end_pa)
 {
 	int nr_pre_migrate_cnt;
 	int cnt = 0;
+	int j;
 	unsigned nr_migrate_fail = 0;
 	unsigned long start_pfn = PHYS_PFN(start_pa);
 	unsigned long end_pfn = PHYS_PFN(end_pa);
@@ -1001,15 +1022,29 @@ static unsigned int smap_migrate_range(int nid, u64 start_pa, u64 end_pa)
 		nr_migrate_fail += smap_migrate(
 			&migrate_folios[cnt * NR_BATCHED_MIGRATION],
 			nr_folios_min, nid, MIGRATE_TYPE_REMOTE);
+		nr_pre_migrate_cnt -= nr_folios_min;
+		cnt++;
 		if (nr_migrate_fail) {
 			pr_err("migrate pre_migrate cnt: %d, mig failed %d pages in pfn range %#lx-%#lx\n",
 			       nr_folios_min, nr_migrate_fail, start_pfn,
 			       end_pfn);
+			/*
+			 * 提前退出时未移交的 folio 引用在此放回（仅 4K 模式，
+			 * 收集阶段 folio_try_get 持有引用；huge 模式收集时
+			 * 未持引用，由 isolate 流程自行获取与释放）。
+			 * 正常结束时 nr_pre_migrate_cnt 为 0。
+			 */
+			if (!is_smap_pg_huge()) {
+				for (j = cnt * NR_BATCHED_MIGRATION;
+				     j < cnt * NR_BATCHED_MIGRATION +
+						 nr_pre_migrate_cnt;
+				     j++) {
+					folio_put(migrate_folios[j]);
+				}
+			}
 			vfree(migrate_folios);
 			return nr_migrate_fail;
 		}
-		nr_pre_migrate_cnt -= nr_folios_min;
-		cnt++;
 	} while (nr_pre_migrate_cnt != 0);
 	vfree(migrate_folios);
 	return nr_migrate_fail;
@@ -1045,7 +1080,7 @@ unsigned int smap_migrate_numa(struct migrate_numa_inner_msg *msg)
 				return -EINVAL;
 			}
 		} while (retry--);
-		if (retry == 0)
+		if (retry < 0)
 			return ret;
 	}
 	return ret;

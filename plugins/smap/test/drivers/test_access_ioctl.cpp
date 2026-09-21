@@ -416,6 +416,7 @@ TEST_F(AccessIoctlTestKernel, IoctlRemoveAllPid)
 
 extern "C" long ioctl_walk_pagemap(void __user *argp);
 extern "C" size_t calc_bitmap_len(void);
+extern "C" size_t calc_bitmap_len_locked(void);
 extern "C" char *smap_bitmap_buf;
 extern "C" size_t smap_buf_len;
 TEST_F(AccessIoctlTestKernel, IoctlWalkPagemap)
@@ -551,6 +552,8 @@ TEST_F(AccessIoctlTestKernel, ReadBitmapZeroLoff)
     constexpr int EXPECTED_LEN = BITMAP_BUF_LEN;
 
     MOCKER(calc_bitmap_len).stubs().will(returnValue(sizeof(buf)));
+    /* read_bitmap 在读锁内会用 calc_bitmap_len_locked 二次校准长度 */
+    MOCKER(calc_bitmap_len_locked).stubs().will(returnValue(sizeof(buf)));
     MOCKER(write_bitmap_buffer).stubs().with().will(invoke(write_bitmap_buffer_stub));
     ret = read_bitmap(buf, BITMAP_BUF_LEN, &loff, &completed);
     EXPECT_EQ(EXPECTED_LEN, ret);

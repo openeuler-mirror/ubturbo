@@ -63,7 +63,7 @@ int smap_ioctl_migrate_back(struct migrate_back_inner_msg *msg)
 {
 	int i, ret, task_ret;
 	struct migrate_back_task *task;
-	struct migrate_back_subtask *subtask, *tmp;
+	struct migrate_back_subtask *subtask;
 
 	ret = 0;
 	if (msg->count == 0) {
@@ -85,7 +85,7 @@ int smap_ioctl_migrate_back(struct migrate_back_inner_msg *msg)
 		goto err_dup_task;
 	}
 	if (task_ret == RETRY_ID) {
-		kfree(task);
+		kref_put(&task->ref, migrate_back_task_release);
 		return 0;
 	}
 
@@ -105,15 +105,16 @@ int smap_ioctl_migrate_back(struct migrate_back_inner_msg *msg)
 	return start_migrate_back_work();
 
 err_subtask:
-	list_for_each_entry_safe(subtask, tmp, &task->subtask, task_list) {
-		list_del(&subtask->task_list);
-		kfree(subtask);
-	}
+	/* 引用释放交给 migrate_back_task_release：subtask 清理与 debugfs
+	 * 移除统一在其内完成（此时尚未创建 debugfs 文件，为 no-op） */
 	spin_lock(&migrate_back_task_lock);
 	list_del(&task->task_node);
 	spin_unlock(&migrate_back_task_lock);
+	kref_put(&task->ref, migrate_back_task_release);
+	return ret;
 err_dup_task:
-	kfree(task);
+	/* 任务从未入列表，引用计数为 1，put 即释放 */
+	kref_put(&task->ref, migrate_back_task_release);
 err_param:
 	return ret;
 }

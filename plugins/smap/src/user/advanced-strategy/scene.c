@@ -543,6 +543,10 @@ static void ConfigMultiVmRatioInGroups(struct ProcessManager *manager)
 
         int l1 = GetAttrL1(current);
         int l2 = GetAttrL2(current);
+        if (l1 < 0 || l1 > maxL1node || l2 < 0 ||
+            l2 > maxL2node) { // 越界防护，processed 数组下标必须落在 [0, max] 区间
+            continue;
+        }
         if (processed[l1][l2]) { // 如果这个近端-远端组处理过了则跳过
             continue;
         }

@@ -33,7 +33,7 @@ struct VmRatio {
 
 struct VmRatioMsg {
     int nrVm;
-    struct VmRatio vr[MAX_NR_MIGOUT];
+    struct VmRatio vr[MAX_2M_PROCESSES_CNT];
 };
 
 int SmapEnableAdaptMem(int flag);
