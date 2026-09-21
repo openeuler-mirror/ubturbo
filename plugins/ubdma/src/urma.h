@@ -7,6 +7,8 @@
 #define UB_UDMA_URMA_H
 
 #include <linux/err.h>
+#include <linux/spinlock.h>
+
 #include "ubcore_uapi.h"
 #include "ubcore_api.h"
 
@@ -41,7 +43,7 @@ struct urma_mem_trans {
 	struct ubcore_jfs *client_jfs;
 	struct ubcore_jfr *server_jfr;
 	struct ubcore_tjetty *tjetty;
-	struct mutex mutex_lock;
+	spinlock_t send_lock;
 };
 
 int init_urma_mem_trans(ubcore_comp_callback_t jfce_handler);

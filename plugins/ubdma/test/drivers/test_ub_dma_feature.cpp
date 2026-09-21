@@ -27,6 +27,7 @@ struct ub_dma_desc_full {
     uint64_t dest_addr;
     size_t len;
     struct tmp_urma_segment_info tmp_sge;
+    bool in_flight;
 };
 
 class TestUbDmaFeature : public ::testing::Test {
@@ -182,6 +183,7 @@ TEST_F(TestUbDmaFeature, test_ub_dma_client_comp_callback)
     device dev;
     txd.vd.tx.cookie = 2; // 2
     txd.vd.tx.chan = &vchan->vc.chan;
+    txd.in_flight = true; // descriptor is in flight before posting completes
     vchan->vc.desc_submitted.next = &vchan->vc.desc_submitted;
     vchan->vc.desc_submitted.prev = &vchan->vc.desc_submitted;
     vchan->vc.desc_completed.next = &vchan->vc.desc_completed;

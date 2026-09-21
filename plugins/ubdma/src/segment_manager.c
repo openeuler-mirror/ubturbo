@@ -180,6 +180,13 @@ int ub_dma_unregister_segment(u64 start_pa, u64 end_pa)
 	write_lock(&g_mgr->sge_meta_lock);
 	hash_for_each_possible_safe(g_mgr->sge_meta_hashtable, sge, tmp, node,
 				    key) {
+		if (sge->info.start_va != start_va ||
+		    sge->info.end_va != end_va) {
+			ub_dma_log_warn(
+				"skip another segment in same bucket, key %llu\n",
+				(unsigned long long)key);
+			continue;
+		}
 		unregister_urma_segment(&sge->info);
 		hash_del(&sge->node);
 		kfree(sge);

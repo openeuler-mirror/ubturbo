@@ -104,7 +104,7 @@ static inline struct ubcore_sge *init_sge(struct ubcore_target_seg *seg,
 					  uint64_t addr, uint64_t len)
 {
 	struct ubcore_sge *sge;
-	sge = kzalloc(sizeof(struct ubcore_sge), GFP_KERNEL);
+	sge = kzalloc(sizeof(struct ubcore_sge), GFP_NOWAIT);
 	if (!sge) {
 		ub_dma_log_err("fail to allocate sge\n");
 		return NULL;
@@ -124,7 +124,7 @@ static int init_wr_list(struct ubcore_tjetty *tjetty,
 	struct ubcore_jfs_wr *wr;
 	int ret = 0;
 
-	wr = kzalloc(sizeof(*wr), GFP_KERNEL);
+	wr = kzalloc(sizeof(*wr), GFP_NOWAIT);
 	if (!wr) {
 		ub_dma_log_err("failed to allocate wr.\n");
 		return -ENOMEM;
@@ -290,10 +290,11 @@ int urma_run_send(uint64_t src_va, uint64_t dst_va,
 		  struct ubcore_target_seg *dst_seg, uint32_t len)
 {
 	int ret = 0;
+	unsigned long flags;
 
-	mutex_lock(&g_urma_jetty->mutex_lock);
+	spin_lock_irqsave(&g_urma_jetty->send_lock, flags);
 	ret = post_client_jfs(src_seg, dst_seg, src_va, dst_va, len);
-	mutex_unlock(&g_urma_jetty->mutex_lock);
+	spin_unlock_irqrestore(&g_urma_jetty->send_lock, flags);
 	if (ret) {
 		ub_dma_log_err("fail to post jfs\n");
 	}
@@ -307,6 +308,11 @@ static inline struct ubcore_jfc *create_jfc(struct urma_mem_trans *trans,
 	struct ubcore_jfc_cfg cfg = default_jfc_cfg;
 
 	return ubcore_create_jfc(trans->dev, &cfg, jfce_handler, NULL, NULL);
+}
+
+static inline int urma_ptr_ret(const void *p)
+{
+	return IS_ERR(p) ? PTR_ERR(p) : -EFAULT;
 }
 
 static struct ubcore_jfs *create_client_jfs(struct urma_mem_trans *trans)
@@ -354,10 +360,8 @@ static int get_trans_entity(struct urma_mem_trans *trans)
 		if (IS_ERR_OR_NULL(eid_list)) {
 			continue;
 		}
-		if (eid_cnt < 1) {
-			continue;
-		}
 		if (eid_cnt < MIN_PORT_NUMA) {
+			ubcore_free_eid_list(eid_list);
 			continue;
 		}
 		trans->dev = dev_node->dev;
@@ -366,7 +370,6 @@ static int get_trans_entity(struct urma_mem_trans *trans)
 		return 0;
 	}
 
-	ubcore_free_eid_list(eid_list);
 	return -ENODEV;
 }
 
@@ -449,18 +452,18 @@ int init_urma_mem_trans(ubcore_comp_callback_t jfce_handler)
 		goto free_cr;
 	}
 
-	mutex_init(&g_urma_jetty->mutex_lock);
+	spin_lock_init(&g_urma_jetty->send_lock);
 	g_urma_jetty->server_jfc = create_jfc(g_urma_jetty, NULL);
 	if (IS_ERR_OR_NULL(g_urma_jetty->server_jfc)) {
 		ub_dma_log_err("fail to create server jfc\n");
-		ret = PTR_ERR(g_urma_jetty->server_jfc);
+		ret = urma_ptr_ret(g_urma_jetty->server_jfc);
 		goto free_cr;
 	}
 
 	g_urma_jetty->client_jfc = create_jfc(g_urma_jetty, jfce_handler);
 	if (IS_ERR_OR_NULL(g_urma_jetty->client_jfc)) {
 		ub_dma_log_err("fail to create client jfc\n");
-		ret = PTR_ERR(g_urma_jetty->client_jfc);
+		ret = urma_ptr_ret(g_urma_jetty->client_jfc);
 		goto delete_server_jfc;
 	}
 	ret = ubcore_rearm_jfc(g_urma_jetty->client_jfc, false);
@@ -472,19 +475,19 @@ int init_urma_mem_trans(ubcore_comp_callback_t jfce_handler)
 	g_urma_jetty->client_jfs = create_client_jfs(g_urma_jetty);
 	if (IS_ERR_OR_NULL(g_urma_jetty->client_jfs)) {
 		ub_dma_log_err("fail to create client jfs\n");
-		ret = PTR_ERR(g_urma_jetty->client_jfs);
+		ret = urma_ptr_ret(g_urma_jetty->client_jfs);
 		goto delete_client_jfc;
 	}
 	g_urma_jetty->server_jfr = create_server_jfr(g_urma_jetty);
 	if (IS_ERR_OR_NULL(g_urma_jetty->server_jfr)) {
 		ub_dma_log_err("fail to create server jfr\n");
-		ret = PTR_ERR(g_urma_jetty->server_jfr);
+		ret = urma_ptr_ret(g_urma_jetty->server_jfr);
 		goto delete_client_jfs;
 	}
 	g_urma_jetty->tjetty = import_server_jfr(g_urma_jetty);
 	if (IS_ERR_OR_NULL(g_urma_jetty->tjetty)) {
 		ub_dma_log_err("fail to import tjetty\n");
-		ret = PTR_ERR(g_urma_jetty->tjetty);
+		ret = urma_ptr_ret(g_urma_jetty->tjetty);
 		goto delete_server_jfr;
 	}
 
@@ -527,7 +530,6 @@ void release_urma_mem_trans(void)
 	ubcore_delete_jfs(g_urma_jetty->client_jfs);
 	ubcore_delete_jfc(g_urma_jetty->client_jfc);
 	ubcore_delete_jfc(g_urma_jetty->server_jfc);
-	mutex_destroy(&g_urma_jetty->mutex_lock);
 	kfree(g_urma_jetty->cr);
 	g_urma_jetty->cr = NULL;
 	kfree(g_urma_jetty);
