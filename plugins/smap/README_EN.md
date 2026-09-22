@@ -23,7 +23,7 @@ Key technologies and solutions:
 
    As shown in the preceding figure, hot and cold data identification is provided by the `smap.ko` module:
 
-   1. Module initialization creates `/dev/smap_scan_dev` and initializes software scanning. Setting `enable_hist=1` also initializes the hardware histogram subsystem (only supported on Kunpeng 950).
+   1. Module initialization creates `/dev/smap_scan_dev` and initializes software scanning. The remote hardware histogram subsystem is initialized on demand by the user-space configuration file (only supported on Kunpeng 950).
    2. The management layer sends PID management, page-table scanning, and frequency-query commands through the scan device.
    3. The scan subsystem performs software or hardware scanning and returns results to user space.
 

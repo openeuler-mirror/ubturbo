@@ -193,7 +193,7 @@ chmod +x ub_turbo_exec
 
 # SMAP插件安装与单元测试
 
-SMAP是UBTurbo的内部插件，源码位于`plugins/smap/`，通过页面扫描和迁移使能分级内存能力。SMAP由内核态驱动模块和用户态动态库组成，仅支持aarch64架构，支持软件扫描和硬件扫描两种冷热识别模式：软件扫描模式（`enable_hist=0`，默认）基于Linux内核页表AF位识别内存页冷热，不依赖特定硬件；硬件扫描模式（`enable_hist=1`）利用1650芯片HIST模块进行硬件判热加速，为可选增强。本章节说明SMAP的安装方式、运行模式以及单元测试的运行方式，完整文档参见`plugins/smap/doc/`。
+SMAP是UBTurbo的内部插件，源码位于`plugins/smap/`，通过页面扫描和迁移使能分级内存能力。SMAP由内核态驱动模块和用户态动态库组成，仅支持aarch64架构，支持三种远端扫描模式，由配置文件`period.config`的`smap.remote.scan.mode`控制：纯软模式（`0`）基于Linux内核页表AF位识别内存页冷热，不依赖特定硬件；软硬结合模式（`1`，默认）在软件扫描基础上叠加硬件判热；纯硬模式（`2`）仅使用硬件判热。硬件判热利用1650芯片HIST模块进行硬件判热加速，仅鲲鹏950机型支持，为可选增强；硬件不可用时自动降级为纯软扫描。本章节说明SMAP的安装方式、运行模式以及单元测试的运行方式，完整文档参见`plugins/smap/doc/`。
 
 ## SMAP安装方式
 
@@ -282,10 +282,10 @@ RPM安装会自动部署以下文件：
 
 ```bash
 cd /lib/modules/smap
-insmod smap.ko                                           # 硬件判热场景使用 enable_hist=1（仅鲲鹏950机型支持）
+insmod smap.ko                                           # 远端扫描模式由 period.config 的 smap.remote.scan.mode 控制（仅鲲鹏950机型支持硬件判热）
 ```
 
-页面类型由 `ubturbo_smap_start(pageType)` 选择：`0` 为 4K，`1` 为 2M；不再通过 `insmod` 参数设置。
+页面类型由 `ubturbo_smap_start(pageType)` 选择：`0` 为 4K，`1` 为 2M；远端扫描模式（`0`=纯软、`1`=软硬结合（默认）、`2`=纯硬）由配置文件 `/opt/ubturbo/conf/smap/period.config` 的 `smap.remote.scan.mode` 设置，运行期可切换，均不再通过 `insmod` 参数设置。
 加载后提供 `/dev/smap_scan_dev` 和 `/dev/smap_migrate_dev` 两个 SMAP 主设备节点，udev 将其设置为 `ubturbo:ubturbo`、0600。
 
 3. 启动 ubturbo 服务：

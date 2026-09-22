@@ -101,3 +101,34 @@ TEST_F(HistTrackingTest, hist_module_init_two)
     EXPECT_EQ(1, ret);
     free(dev);
 }
+
+extern "C" u8 remote_scan_mode;
+extern "C" bool hist_inited;
+extern "C" bool is_hist_tracking_node(int node);
+TEST_F(HistTrackingTest, is_hist_tracking_node)
+{
+    int savedNrLocalNuma = nr_local_numa;
+    nr_local_numa = 4;
+
+    /* 硬件未初始化时不参与远端扫描，等价纯软 */
+    hist_inited = false;
+    remote_scan_mode = SMAP_REMOTE_SCAN_HARD;
+    EXPECT_EQ(false, is_hist_tracking_node(4));
+
+    /* 纯软模式下硬件子系统不参与 */
+    hist_inited = true;
+    remote_scan_mode = SMAP_REMOTE_SCAN_SOFT;
+    EXPECT_EQ(false, is_hist_tracking_node(4));
+
+    remote_scan_mode = SMAP_REMOTE_SCAN_COMBINED;
+    EXPECT_EQ(true, is_hist_tracking_node(4));
+    EXPECT_EQ(false, is_hist_tracking_node(3));
+    EXPECT_EQ(false, is_hist_tracking_node(SMAP_MAX_NUMNODES));
+
+    remote_scan_mode = SMAP_REMOTE_SCAN_HARD;
+    EXPECT_EQ(true, is_hist_tracking_node(4));
+
+    hist_inited = false;
+    remote_scan_mode = SMAP_REMOTE_SCAN_COMBINED;
+    nr_local_numa = savedNrLocalNuma;
+}

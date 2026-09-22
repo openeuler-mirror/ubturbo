@@ -20,7 +20,7 @@
 #include "securec.h"
 #include "strategy_config.h"
 
-#define STRATEGY_CONFIG_ENTRY 18
+#define STRATEGY_CONFIG_ENTRY 19
 #define STRATEGY_CONFIG_BUFFSIZE 500
 
 #define RETURN_OK 0
@@ -67,6 +67,10 @@
 
 #define MAX_UB_BW_THRESHOLD 65535
 #define DEFAULT_UB_BW_THRESHOLD 0
+
+#define MAX_REMOTE_SCAN_MODE 2
+#define DEFAULT_REMOTE_SCAN_MODE 1 /* 软硬结合 */
+#define MIN_REMOTE_SCAN_MODE 0
 
 #define RADIX_10 10UL
 
@@ -127,6 +131,8 @@ typedef struct {
     uint32_t scanCpuMin;
     uint32_t scanCpuMax;
     uint32_t ubBwThreshold;
+    uint32_t remoteScanMode;
+    bool remoteScanModeChanged;
 } StrategyConfig;
 
 static StrategyConfig g_tmpStrategyConfig;
@@ -269,6 +275,21 @@ void SetMigratePeriodChanged(bool val)
 uint32_t GetUbBwThresholdConfig(void)
 {
     return g_strategyConfig.ubBwThreshold;
+}
+
+uint32_t GetRemoteScanModeConfig(void)
+{
+    return g_strategyConfig.remoteScanMode;
+}
+
+bool GetRemoteScanModeChanged(void)
+{
+    return g_strategyConfig.remoteScanModeChanged;
+}
+
+void SetRemoteScanModeChanged(bool val)
+{
+    g_strategyConfig.remoteScanModeChanged = val;
 }
 
 static int32_t ConfigReadValueToInt(char *pvalue, uint32_t *resultvalue)
@@ -587,6 +608,24 @@ static int32_t ConfigUbBwThreshold(char *substr, char *value)
     return RETURN_OK;
 }
 
+static int32_t ConfigRemoteScanMode(char *substr, char *value)
+{
+    SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
+    uint32_t remoteScanMode;
+    int32_t ret = ConfigReadValueToInt(value, &remoteScanMode);
+    if (ret != RETURN_OK) {
+        SMAP_LOGGER_ERROR("Config remote scan mode read failed, key:%s.", substr);
+        return ret;
+    }
+    if (remoteScanMode < MIN_REMOTE_SCAN_MODE || remoteScanMode > MAX_REMOTE_SCAN_MODE) {
+        SMAP_LOGGER_ERROR("Config remote scan mode(%u) invalid, range(%d-%d), key:%s.", remoteScanMode,
+                          MIN_REMOTE_SCAN_MODE, MAX_REMOTE_SCAN_MODE, substr);
+        return RETURN_ERROR;
+    }
+    g_tmpStrategyConfig.remoteScanMode = remoteScanMode;
+    return RETURN_OK;
+}
+
 static StrategyConfigReadElem g_strategyConfigRead[] = { {
                                                              "smap.scan.period",
                                                              ConfigScanPeriod,
@@ -686,6 +725,12 @@ static StrategyConfigReadElem g_strategyConfigRead[] = { {
                                                          {
                                                              "smap.scan.cpu",
                                                              ConfigScanCpu,
+                                                             1UL,
+                                                             0UL,
+                                                         },
+                                                         {
+                                                             "smap.remote.scan.mode",
+                                                             ConfigRemoteScanMode,
                                                              1UL,
                                                              0UL,
                                                          } };
@@ -850,6 +895,8 @@ static void InitStrategyConfig(void)
     g_strategyConfig.scanCpuMax = sysCpuMax;
     g_strategyConfig.scanCpuChanged = false;
     g_strategyConfig.ubBwThreshold = DEFAULT_UB_BW_THRESHOLD;
+    g_strategyConfig.remoteScanMode = DEFAULT_REMOTE_SCAN_MODE;
+    g_strategyConfig.remoteScanModeChanged = false;
 }
 
 static int32_t EnsureDirectoryExists(const char *dirPath)
@@ -941,10 +988,17 @@ static int32_t InitStrategyConfigFileBuffer(char strategyDefaultConfig[STRATEGY_
 
     uint32_t cpuMin, cpuMax;
     GetSystemCpuRange(&cpuMin, &cpuMax);
-    ret = snprintf_s(strategyDefaultConfig[idx], STRATEGY_CONFIG_BUFFSIZE, STRATEGY_CONFIG_BUFFSIZE - 1,
+    ret = snprintf_s(strategyDefaultConfig[idx++], STRATEGY_CONFIG_BUFFSIZE, STRATEGY_CONFIG_BUFFSIZE - 1,
                      "smap.scan.cpu = %u-%u\n", cpuMin, cpuMax);
     if (ret < 0) {
         SMAP_LOGGER_ERROR("Snprintf smap scan cpu range failed.");
+        return RETURN_ERROR;
+    }
+
+    ret = snprintf_s(strategyDefaultConfig[idx], STRATEGY_CONFIG_BUFFSIZE, STRATEGY_CONFIG_BUFFSIZE - 1,
+                     "smap.remote.scan.mode = %d\n", DEFAULT_REMOTE_SCAN_MODE);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("Snprintf smap remote scan mode failed.");
         return RETURN_ERROR;
     }
 
@@ -1029,6 +1083,13 @@ static void UpdateMigrateModeAndScanCpu(void)
         g_strategyConfig.scanCpuChanged = true;
         g_tmpStrategyConfig.scanCpuChanged = true;
         SMAP_LOGGER_INFO("Update scan cpu range %u-%u.", g_strategyConfig.scanCpuMin, g_strategyConfig.scanCpuMax);
+    }
+
+    if (g_strategyConfig.remoteScanMode != g_tmpStrategyConfig.remoteScanMode) {
+        uint32_t oldRemoteScanMode = g_strategyConfig.remoteScanMode;
+        g_strategyConfig.remoteScanMode = g_tmpStrategyConfig.remoteScanMode;
+        g_strategyConfig.remoteScanModeChanged = true;
+        SMAP_LOGGER_INFO("Update remote scan mode from %u to %u.", oldRemoteScanMode, g_strategyConfig.remoteScanMode);
     }
 }
 

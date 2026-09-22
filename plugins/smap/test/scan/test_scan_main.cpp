@@ -177,3 +177,96 @@ TEST_F(AccessTrackingTest, submit_one_work)
 
     GlobalMockObject::verify();
 }
+
+extern "C" u8 remote_scan_mode;
+extern "C" bool hist_inited;
+extern "C" int nr_local_numa;
+extern "C" int set_remote_scan_mode(u8 mode);
+extern "C" bool is_remote_scan_hist_active(void);
+extern "C" bool is_freq_hist_only_node(int node);
+extern "C" int hist_module_init(void);
+extern "C" int hist_tracking_set_page_size(u8 page_size_mode);
+extern "C" int hist_tracking_disable(void);
+
+TEST_F(AccessTrackingTest, set_remote_scan_mode_invalid)
+{
+    EXPECT_EQ(-EINVAL, set_remote_scan_mode(NR_REMOTE_SCAN_MODE));
+}
+
+TEST_F(AccessTrackingTest, set_remote_scan_mode_lazy_init_failed)
+{
+    hist_inited = false;
+    remote_scan_mode = SMAP_REMOTE_SCAN_COMBINED;
+    MOCKER(hist_module_init).stubs().will(returnValue(-ENODEV));
+
+    EXPECT_EQ(-ENODEV, set_remote_scan_mode(SMAP_REMOTE_SCAN_HARD));
+    EXPECT_EQ(false, hist_inited);
+    EXPECT_EQ(SMAP_REMOTE_SCAN_COMBINED, remote_scan_mode);
+}
+
+TEST_F(AccessTrackingTest, set_remote_scan_mode_lazy_init_success)
+{
+    hist_inited = false;
+    remote_scan_mode = SMAP_REMOTE_SCAN_SOFT;
+    MOCKER(hist_module_init).stubs().will(returnValue(0));
+    MOCKER(hist_tracking_set_page_size).stubs().will(returnValue(0));
+
+    EXPECT_EQ(0, set_remote_scan_mode(SMAP_REMOTE_SCAN_COMBINED));
+    EXPECT_EQ(true, hist_inited);
+    EXPECT_EQ(SMAP_REMOTE_SCAN_COMBINED, remote_scan_mode);
+
+    hist_inited = false;
+    remote_scan_mode = SMAP_REMOTE_SCAN_COMBINED;
+}
+
+TEST_F(AccessTrackingTest, set_remote_scan_mode_soft)
+{
+    hist_inited = true;
+    remote_scan_mode = SMAP_REMOTE_SCAN_HARD;
+    MOCKER(hist_tracking_disable).stubs().will(returnValue(0));
+
+    EXPECT_EQ(0, set_remote_scan_mode(SMAP_REMOTE_SCAN_SOFT));
+    EXPECT_EQ(SMAP_REMOTE_SCAN_SOFT, remote_scan_mode);
+
+    hist_inited = false;
+    remote_scan_mode = SMAP_REMOTE_SCAN_COMBINED;
+}
+
+TEST_F(AccessTrackingTest, is_remote_scan_hist_active)
+{
+    hist_inited = false;
+    remote_scan_mode = SMAP_REMOTE_SCAN_HARD;
+    EXPECT_EQ(false, is_remote_scan_hist_active());
+
+    hist_inited = true;
+    EXPECT_EQ(true, is_remote_scan_hist_active());
+
+    remote_scan_mode = SMAP_REMOTE_SCAN_SOFT;
+    EXPECT_EQ(false, is_remote_scan_hist_active());
+
+    hist_inited = false;
+    remote_scan_mode = SMAP_REMOTE_SCAN_COMBINED;
+}
+
+TEST_F(AccessTrackingTest, is_freq_hist_only_node)
+{
+    int savedNrLocalNuma = nr_local_numa;
+    nr_local_numa = 4;
+
+    hist_inited = false;
+    remote_scan_mode = SMAP_REMOTE_SCAN_HARD;
+    /* 硬件未初始化时不跳过软件累计 */
+    EXPECT_EQ(false, is_freq_hist_only_node(4));
+
+    hist_inited = true;
+    EXPECT_EQ(true, is_freq_hist_only_node(4));
+    EXPECT_EQ(false, is_freq_hist_only_node(3));
+    EXPECT_EQ(false, is_freq_hist_only_node(SMAP_MAX_NUMNODES));
+
+    remote_scan_mode = SMAP_REMOTE_SCAN_COMBINED;
+    EXPECT_EQ(false, is_freq_hist_only_node(4));
+
+    hist_inited = false;
+    remote_scan_mode = SMAP_REMOTE_SCAN_COMBINED;
+    nr_local_numa = savedNrLocalNuma;
+}

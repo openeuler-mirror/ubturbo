@@ -61,6 +61,8 @@ typedef struct {
     uint32_t scanCpuMin;
     uint32_t scanCpuMax;
     uint32_t ubBwThreshold;
+    uint32_t remoteScanMode;
+    bool remoteScanModeChanged;
 } StrategyConfig;
 
 typedef struct {
@@ -150,6 +152,54 @@ TEST_F(PeriodConfigTest, GetGroupSwapLocalWatermarkRatioConfigTest)
     g_strategyConfig.groupSwapLocalWatermarkRatio = 95;
     uint32_t ret = GetGroupSwapLocalWatermarkRatioConfig();
     EXPECT_EQ(95, ret);
+}
+
+extern "C" uint32_t GetRemoteScanModeConfig(void);
+TEST_F(PeriodConfigTest, GetRemoteScanModeConfigTest)
+{
+    g_strategyConfig.remoteScanMode = 2;
+    EXPECT_EQ(2, GetRemoteScanModeConfig());
+}
+
+extern "C" bool GetRemoteScanModeChanged(void);
+TEST_F(PeriodConfigTest, GetRemoteScanModeChangedTest)
+{
+    g_strategyConfig.remoteScanModeChanged = true;
+    EXPECT_EQ(true, GetRemoteScanModeChanged());
+    g_strategyConfig.remoteScanModeChanged = false;
+}
+
+extern "C" void SetRemoteScanModeChanged(bool val);
+TEST_F(PeriodConfigTest, SetRemoteScanModeChangedTest)
+{
+    g_strategyConfig.remoteScanModeChanged = false;
+    SetRemoteScanModeChanged(true);
+    EXPECT_EQ(true, g_strategyConfig.remoteScanModeChanged);
+    SetRemoteScanModeChanged(false);
+}
+
+extern "C" int32_t ConfigReadValueToInt(char *pvalue, uint32_t *resultvalue);
+extern "C" int32_t ConfigRemoteScanMode(char *substr, char *value);
+TEST_F(PeriodConfigTest, ConfigRemoteScanModeTest)
+{
+    char *substr = "smap.remote.scan.mode";
+
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
+    EXPECT_EQ(RETURN_ERROR, ConfigRemoteScanMode(substr, (char *)"1"));
+
+    GlobalMockObject::verify();
+    /* 超出取值上限，仅鲲鹏950支持纯硬模式，取值范围 0-2 */
+    EXPECT_EQ(RETURN_ERROR, ConfigRemoteScanMode(substr, (char *)"3"));
+
+    GlobalMockObject::verify();
+    EXPECT_EQ(0, ConfigRemoteScanMode(substr, (char *)"2"));
+    EXPECT_EQ(2, g_tmpStrategyConfig.remoteScanMode);
+
+    GlobalMockObject::verify();
+    EXPECT_EQ(0, ConfigRemoteScanMode(substr, (char *)"0"));
+    EXPECT_EQ(0, g_tmpStrategyConfig.remoteScanMode);
+
+    g_tmpStrategyConfig.remoteScanMode = 1;
 }
 
 extern "C" uint32_t GetMigrateModeConfig(void);
@@ -358,6 +408,25 @@ TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuScanCpuChanged)
     EXPECT_EQ(true, g_tmpStrategyConfig.scanCpuChanged);
 }
 
+TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuRemoteScanModeChanged)
+{
+    g_strategyConfig.migrateModeEnable = false;
+    g_strategyConfig.migrateModeChanged = false;
+    g_strategyConfig.scanCpuChanged = false;
+    g_strategyConfig.scanCpuMin = 1;
+    g_strategyConfig.scanCpuMax = 3;
+    g_strategyConfig.remoteScanMode = 1;
+    g_strategyConfig.remoteScanModeChanged = false;
+    g_tmpStrategyConfig.migrateModeEnable = false;
+    g_tmpStrategyConfig.scanCpuMin = 1;
+    g_tmpStrategyConfig.scanCpuMax = 3;
+    g_tmpStrategyConfig.remoteScanMode = 2;
+
+    UpdateMigrateModeAndScanCpu();
+    EXPECT_EQ(2, g_strategyConfig.remoteScanMode);
+    EXPECT_EQ(true, g_strategyConfig.remoteScanModeChanged);
+}
+
 TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuNoChange)
 {
     g_strategyConfig.migrateModeEnable = false;
@@ -365,13 +434,17 @@ TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuNoChange)
     g_strategyConfig.scanCpuChanged = false;
     g_strategyConfig.scanCpuMin = 1;
     g_strategyConfig.scanCpuMax = 3;
+    g_strategyConfig.remoteScanMode = 1;
+    g_strategyConfig.remoteScanModeChanged = false;
     g_tmpStrategyConfig.migrateModeEnable = false;
     g_tmpStrategyConfig.scanCpuMin = 1;
     g_tmpStrategyConfig.scanCpuMax = 3;
+    g_tmpStrategyConfig.remoteScanMode = 1;
 
     UpdateMigrateModeAndScanCpu();
     EXPECT_EQ(false, g_strategyConfig.migrateModeChanged);
     EXPECT_EQ(false, g_strategyConfig.scanCpuChanged);
+    EXPECT_EQ(false, g_strategyConfig.remoteScanModeChanged);
 }
 
 extern "C" int32_t ConfigReadValueToInt(char *pvalue, uint32_t *resultvalue);

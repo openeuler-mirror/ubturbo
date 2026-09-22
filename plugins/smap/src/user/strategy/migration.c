@@ -1897,6 +1897,11 @@ static void MigrationUpdateMigrateModeAndScanCpu(void)
         SMAP_LOGGER_INFO("Start update scan cpu (%u-%u).", GetScanCpuMinConfig(), GetScanCpuMaxConfig());
         SetScanCpuChanged(false);
     }
+
+    if (GetRemoteScanModeChanged()) {
+        IoctlSetRemoteScanMode(GetRemoteScanModeConfig());
+        SetRemoteScanModeChanged(false);
+    }
 }
 
 // 无管理进程时仅在tracking仍enable时关闭一次，之后直接跳过整个周期，

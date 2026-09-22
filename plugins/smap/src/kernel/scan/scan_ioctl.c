@@ -521,12 +521,17 @@ static long ioctl_tracking_page_size(unsigned long arg)
 	return access_tracking_set_page_size((u8)arg);
 }
 
+static long ioctl_tracking_scan_mode(unsigned long arg)
+{
+	return set_remote_scan_mode((u8)arg);
+}
+
 static long ioctl_tracking_ub_watch(void __user *argp)
 {
 	struct ub_flux_mb_statistic result = { 0 };
 	int ret;
 
-	if (!argp || !enable_hist)
+	if (!argp || !is_remote_scan_hist_active())
 		return -ENODEV;
 	ret = hist_tracking_ub_watch(&result);
 	if (ret)
@@ -538,7 +543,7 @@ static long ioctl_tracking_ub_watch_config(void __user *argp)
 {
 	struct ub_watch_config config;
 
-	if (!enable_hist)
+	if (!is_remote_scan_hist_active())
 		return -ENODEV;
 	if (copy_from_user(&config, argp, sizeof(config)))
 		return -EFAULT;
@@ -560,6 +565,8 @@ static long smap_scan_ioctl(struct file *file, unsigned int cmd,
 		return ioctl_tracking_cmd(arg);
 	case SMAP_IOCTL_PAGE_SIZE_SET_CMD:
 		return ioctl_tracking_page_size(arg);
+	case SMAP_IOCTL_SCAN_MODE_SET_CMD:
+		return ioctl_tracking_scan_mode(arg);
 	case SMAP_IOCTL_UB_WATCH_CMD:
 		return ioctl_tracking_ub_watch(argp);
 	case SMAP_IOCTL_UB_WATCH_CONFIG_CMD:

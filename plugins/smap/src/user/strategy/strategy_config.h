@@ -74,6 +74,12 @@ bool GetFileConfSwitchConfig(void);
 
 uint32_t GetUbBwThresholdConfig(void);
 
+uint32_t GetRemoteScanModeConfig(void);
+
+bool GetRemoteScanModeChanged(void);
+
+void SetRemoteScanModeChanged(bool val);
+
 int32_t GenerateStrategyConfigFile(const char *configFile);
 
 bool GetScanPeriodChanged(void);

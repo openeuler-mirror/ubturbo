@@ -34,7 +34,6 @@
 #include "access_pid.h"
 #include "access_mmu.h"
 #include "scan_main.h"
-#include "hist_tracking.h"
 #include "smap_page_flags.h"
 #include "accessed_bit.h"
 
@@ -442,7 +441,8 @@ static void actc_data_add_fast(phys_addr_t paddr, struct page *page,
 	if (unlikely(pa_index >= get_node_page_count(nid)))
 		return;
 
-	if (!is_hist_tracking_node(nid))
+	/* 纯硬模式下远端页频次由硬件独家提供，跳过软件累计；其余模式软硬叠加 */
+	if (!is_freq_hist_only_node(nid))
 		smap_page_freq_inc(page);
 }
 
@@ -1468,7 +1468,8 @@ static void process_scan_results(struct pte_walk *pte_walk)
 			continue;
 		entry->nid = nid;
 		if (entry->hot) {
-			if (!is_hist_tracking_node(entry->nid)) {
+			/* 纯硬模式下远端页频次由硬件独家提供，跳过软件累计；其余模式软硬叠加 */
+			if (!is_freq_hist_only_node(entry->nid)) {
 				struct page *pg =
 					smap_paddr_to_page(entry->paddr);
 

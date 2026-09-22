@@ -34,7 +34,8 @@
 
 bool is_hist_tracking_node(int node)
 {
-	return enable_hist && node >= nr_local_numa && node < SMAP_MAX_NUMNODES;
+	return is_remote_scan_hist_active() && node >= nr_local_numa &&
+	       node < SMAP_MAX_NUMNODES;
 }
 
 int hist_tracking_disable(void)
