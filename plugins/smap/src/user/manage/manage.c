@@ -944,6 +944,9 @@ void DiscardProcessManageCandidate(ProcessManageCandidate *candidate)
     }
 
     free(candidate->prepared);
+    if (candidate->slot) {
+        PidSlotReleaseRefs(&candidate->slot, 1);
+    }
     *candidate = (ProcessManageCandidate){ 0 };
 }
 
@@ -974,12 +977,20 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
         return ret;
     }
 
-    ProcessAttr *active = GetProcessAttr(param->pid);
+    /* 一次性解析宿主槽位并持引用：active 从该槽位派生，保证 Publish 阶段加锁的
+     * slot 与 active 绑定；attr 另持一次引用，沿用 PutProcessAttr 归还约定，
+     * 槽位引用由 DiscardProcessManageCandidate 归还 */
+    candidate->slot = PidSlotGetRef(param->pid);
+    ProcessAttr *active = PidSlotAttr(candidate->slot);
+    if (active) {
+        AtomicIncrease(&candidate->slot->refs, 1);
+    }
     ProcessAttr *prepared = NULL;
     if (active) {
         prepared = malloc(sizeof(ProcessAttr));
         if (!prepared) {
             PutProcessAttr(active);
+            DiscardProcessManageCandidate(candidate);
             return -ENOMEM;
         }
         *prepared = *active;
@@ -1049,10 +1060,23 @@ void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
 
     ProcessAttr *prepared = candidate->prepared;
     if (candidate->isPending) {
+        /* 加锁写 pending 字段，与扫描线程 ApplyPendingMigrationTargets 的快照/清除互斥；
+         * 锁用 Prepare 阶段持引用的宿主槽位，保证锁与 active 绑定：按 pid 重查在槽位已
+         * 摘除(REMOVING，PidSlotGetRef 返回空)时会退化为无锁写、在 pid 复用时可能锁错
+         * 槽位。单测场景 attr 未注册进槽位表（slot 为空）时无并发写者，退化为直接写。
+         * 槽位引用由末尾 DiscardProcessManageCandidate 归还 */
+        struct PidSlot *slot = candidate->slot;
+        if (slot) {
+            EnvMutexLock(&slot->attrLock);
+        }
         candidate->active->pendingTargetConfig = prepared->pendingTargetConfig;
         candidate->active->pendingTargetConfigValid = prepared->pendingTargetConfigValid;
         candidate->active->pendingIgnoreRemoteCapacity = prepared->pendingIgnoreRemoteCapacity;
         candidate->active->pendingTargetNumaNodes = prepared->pendingTargetNumaNodes;
+        candidate->active->pendingSeq++;
+        if (slot) {
+            EnvMutexUnlock(&slot->attrLock);
+        }
         int ret = SyncAllProcessConfig();
         if (ret) {
             SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", prepared->pid, ret);
@@ -1383,9 +1407,19 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
             PutProcessAttr(current);
             return ret;
         }
-        bool pending = current->pendingTargetConfigValid;
+        bool pending = false;
+        /* 与 ApplyPendingMigrationTargets 的快照/清除互斥 */
+        struct PidSlot *slot = PidSlotGetRef(param->pid);
+        if (slot) {
+            EnvMutexLock(&slot->attrLock);
+        }
+        pending = current->pendingTargetConfigValid;
         if (pending && nodeBitmap) {
             current->pendingTargetNumaNodes = *nodeBitmap;
+        }
+        if (slot) {
+            EnvMutexUnlock(&slot->attrLock);
+            PidSlotReleaseRefs(&slot, 1);
         }
         SMAP_LOGGER_INFO("Update pid %d migrate config, migrateMode: %d, remoteNumaCnt: %d.", current->pid,
                          current->migrateMode, current->remoteNumaCnt);

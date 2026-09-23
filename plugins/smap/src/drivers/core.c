@@ -188,12 +188,16 @@ ssize_t node_cdev_read_iter(struct kiocb *iocb, struct iov_iter *iov)
 {
 	struct file *filp = iocb->ki_filp;
 	struct tracking_node_dev *node_dev = filp->private_data;
-	u32 length = iov->kvec->iov_len;
-	void *buffer = iov->kvec->iov_base;
+	void *buffer;
+	u32 length;
 
-	if (iov->nr_segs != DEFAULT_NR_SEG) {
+	/* 仅接受内核态 kvec 迭代：tracking_read 直写 buffer，无 copy_to_user，
+	 * 用户态 read()（IOVEC/UBUF）的用户指针进入该通路属于错误用法 */
+	if (!iov_iter_is_kvec(iov) || iov->nr_segs != DEFAULT_NR_SEG) {
 		return -EINVAL;
 	}
+	buffer = iov->kvec->iov_base;
+	length = iov->kvec->iov_len;
 	return node_trk_data_read(node_dev, buffer, length);
 }
 

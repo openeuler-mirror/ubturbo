@@ -18,7 +18,9 @@
 #include "securec.h"
 #include "strategy_config.h"
 
-#define STRATEGY_CONFIG_ENTRY 18
+/* 与 g_strategyConfigRead[] 及默认配置模板行数严格一致：
+ * 曾误配为 18，导致模板多写一个空行、测试按 18 越界写读表 */
+#define STRATEGY_CONFIG_ENTRY 17
 #define STRATEGY_CONFIG_BUFFSIZE 500
 
 #define RETURN_OK 0
@@ -519,6 +521,15 @@ static int32_t ConfigScanCpu(char *substr, char *value)
     }
     if (scanCpuMin > scanCpuMax) {
         SMAP_LOGGER_ERROR("Config scan cpu min(%u) > max(%u), key:%s.", scanCpuMin, scanCpuMax, substr);
+        return RETURN_ERROR;
+    }
+    /* 与内核 ioctl_set_scan_cpu 的校验规则对齐：max 必须小于系统 possible cpu 数，
+     * 否则配置下发内核被 EINVAL 拒绝，迁移线程绑核也会落空 */
+    uint32_t sysCpuMin, sysCpuMax;
+    GetSystemCpuRange(&sysCpuMin, &sysCpuMax);
+    if (scanCpuMax > sysCpuMax) {
+        SMAP_LOGGER_ERROR("Config scan cpu max(%u) exceeds system possible cpu max(%u), key:%s.", scanCpuMax, sysCpuMax,
+                          substr);
         return RETURN_ERROR;
     }
     g_tmpStrategyConfig.scanCpuMin = scanCpuMin;

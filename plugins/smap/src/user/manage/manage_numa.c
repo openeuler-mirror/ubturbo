@@ -282,6 +282,9 @@ void CalRemoteNumaAllocPerPid(int i, int j, uint32_t tmpNrPagesToUse,
     // 根据比例计算每个PID的迁出比例，更新迁出的比例到l2RemoteMemRatio
     for (size_t k = 0; k < n; k++) {
         ProcessAttr *attr = all[k]->attr;
+        if (attr->strategyAttr.nrPagesPerLocalNuma[i] == 0) { // 无可支配内存不参与分摊，且防 0/0 产生 NaN 污染 ratio
+            continue;
+        }
         // 1）每个PID最大迁出量/总最大迁出量 = 最大迁出量比例
         tmpRatioPerPid =
             (double)attr->strategyAttr.nrPagesPerLocalNuma[i] *

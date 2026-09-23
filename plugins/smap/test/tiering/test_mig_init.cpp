@@ -83,20 +83,21 @@ TEST_F(MigInitTest, CreateMigrateList)
     free(msg.mig_list);
 }
 
-extern "C" int init_migrate_list_addr(int len, struct mig_list *mlist);
+extern "C" int init_migrate_list_addr(int len, struct mig_list *mlist, u64 **user_addrs);
 TEST_F(MigInitTest, InitMigrateListAddrInvalidParameter)
 {
     struct mig_list *mlist = nullptr;
-    int ret = init_migrate_list_addr(0, mlist);
+    int ret = init_migrate_list_addr(0, mlist, nullptr);
     EXPECT_EQ(-EINVAL, ret);
 
-    ret = init_migrate_list_addr(1, mlist);
+    ret = init_migrate_list_addr(1, nullptr, nullptr);
     EXPECT_EQ(-EINVAL, ret);
-    
+
     mlist = (struct mig_list *)malloc(sizeof(struct mig_list));
     ASSERT_NE(nullptr, mlist);
     mlist[0].nr = 0;
-    ret = init_migrate_list_addr(1, mlist);
+    u64 *user_addrs[1] = {nullptr};
+    ret = init_migrate_list_addr(1, mlist, user_addrs);
     EXPECT_EQ(-EINVAL, ret);
     free(mlist);
 }
@@ -117,7 +118,8 @@ TEST_F(MigInitTest, InitMigrateListAddrVzallocExceptionBranch)
     mlist[1].addr = addr2;
     MOCKER(vzalloc).stubs().will(returnValue((void *)tmp)).then(returnValue((void *)nullptr));
     MOCKER(copy_from_user).stubs().will(returnValue(0UL));
-    int ret = init_migrate_list_addr(2, mlist);
+    u64 *user_addrs[2] = {nullptr, nullptr};
+    int ret = init_migrate_list_addr(2, mlist, user_addrs);
     EXPECT_EQ(-ENOMEM, ret);
     EXPECT_EQ(nullptr, mlist[0].addr);
     free(mlist);
@@ -137,23 +139,27 @@ TEST_F(MigInitTest, InitMigrateListAddrCopyExceptionBranch)
     MOCKER(vzalloc).stubs().will(returnValue((void *)tmp));
     MOCKER(copy_from_user).stubs().will(returnValue(1UL));
     MOCKER(vfree).stubs().will(ignoreReturnValue());
-    int ret = init_migrate_list_addr(1, mlist);
+    u64 *user_addrs[1] = {nullptr};
+    int ret = init_migrate_list_addr(1, mlist, user_addrs);
     EXPECT_EQ(-EFAULT, ret);
     free(mlist);
 }
 
 extern "C" int convert_migrate_list(int len, struct mig_list *mlist);
-extern "C" int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist);
+extern "C" int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist, u64 ***user_addrs);
 TEST_F(MigInitTest, BuildMigrateListSuccess)
 {
     struct migrate_msg msg;
     struct mig_list *mlist;
+    u64 **user_addrs = nullptr;
 
+    msg.cnt = 1;
     MOCKER(create_migrate_list).stubs().will(returnValue(0));
     MOCKER(init_migrate_list_addr).stubs().will(returnValue(0));
     MOCKER(convert_migrate_list).stubs().will(returnValue(0));
-    int ret = build_migrate_list(&msg, &mlist);
+    int ret = build_migrate_list(&msg, &mlist, &user_addrs);
     EXPECT_EQ(0, ret);
+    free(user_addrs);
 }
 
 extern "C" unsigned long copy_from_user(void *to, const void *from, unsigned long n);
@@ -166,7 +172,7 @@ TEST_F(MigInitTest, __IoctlMigrateCopyFromUserError)
 }
 
 extern "C" bool is_migrate_msg_valid(struct migrate_msg *msg);
-extern "C" int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist);
+extern "C" int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist, u64 ***user_addrs);
 extern "C" void free_migrate_list_addr(int len, struct mig_list *mlist);
 extern "C" void free_migrate_list(struct mig_list **mlist);
 extern "C" unsigned int smap_pgtype;

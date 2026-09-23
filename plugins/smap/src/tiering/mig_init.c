@@ -73,13 +73,14 @@ static int create_migrate_list(struct migrate_msg *msg, struct mig_list **mlist)
 	return 0;
 }
 
-static int init_migrate_list_addr(int len, struct mig_list *mlist)
+static int init_migrate_list_addr(int len, struct mig_list *mlist,
+				  u64 **user_addrs)
 {
 	int ret;
 	int i, j;
 	struct mig_list *ml;
 
-	if (len <= 0 || !mlist) {
+	if (len <= 0 || !mlist || !user_addrs) {
 		return -EINVAL;
 	}
 	for (i = 0; i < len; i++) {
@@ -100,6 +101,7 @@ static int init_migrate_list_addr(int len, struct mig_list *mlist)
 		}
 
 		/* Currently, mlist[i].addr contains user space pointer */
+		user_addrs[i] = ml->addr;
 		if (copy_from_user(addr, ml->addr, ml->nr * sizeof(u64))) {
 			ret = -EFAULT;
 			vfree(addr);
@@ -118,7 +120,26 @@ out:
 			mlist[j].addr = NULL;
 		}
 	}
+	/* 未替换的条目 addr 仍指向用户空间，置空防止 free_migrate_list_addr 误 vfree */
+	for (j = i; j < len; j++) {
+		mlist[j].addr = NULL;
+	}
 	return ret;
+}
+
+/* 回拷前把 addr 字段还原为用户原本的地址数组指针：
+ * 1) 避免内核 vmalloc 地址随结构体回拷泄露给用户态；
+ * 2) 避免覆写用户态 struct MigList.addr 保存的自身地址数组指针 */
+static void restore_user_addr(int len, struct mig_list *mlist, u64 **user_addrs)
+{
+	int i;
+
+	if (!mlist || !user_addrs || len <= 0) {
+		return;
+	}
+	for (i = 0; i < len; i++) {
+		mlist[i].addr = user_addrs[i];
+	}
 }
 
 static int convert_migrate_list(int len, struct mig_list *mlist)
@@ -144,7 +165,8 @@ static int convert_migrate_list(int len, struct mig_list *mlist)
 	return 0;
 }
 
-static int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist)
+static int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist,
+			      u64 ***user_addrs)
 {
 	int ret;
 
@@ -153,23 +175,36 @@ static int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist)
 		return -EINVAL;
 	}
 
+	*user_addrs = NULL;
 	ret = create_migrate_list(msg, mlist);
 	if (ret) {
 		pr_err("failed to create migrate list, ret: %d\n", ret);
 		return ret;
 	}
-	ret = init_migrate_list_addr(msg->cnt, *mlist);
+	*user_addrs = kcalloc(msg->cnt, sizeof(**user_addrs), GFP_KERNEL);
+	if (!*user_addrs) {
+		pr_err("failed to alloc user addrs for migrate list\n");
+		free_migrate_list(mlist);
+		return -ENOMEM;
+	}
+	ret = init_migrate_list_addr(msg->cnt, *mlist, *user_addrs);
 	if (ret) {
 		pr_err("failed to init migrate list address, ret: %d\n", ret);
 		free_migrate_list(mlist);
-		return ret;
+		goto out_free_addrs;
 	}
 	ret = convert_migrate_list(msg->cnt, *mlist);
 	if (ret) {
 		pr_err("failed to convert migrate list, ret: %d\n", ret);
 		free_migrate_list_addr(msg->cnt, *mlist);
 		free_migrate_list(mlist);
+		goto out_free_addrs;
 	}
+	return ret;
+
+out_free_addrs:
+	kfree(*user_addrs);
+	*user_addrs = NULL;
 	return ret;
 }
 
@@ -195,7 +230,8 @@ static bool is_migrate_msg_valid(struct migrate_msg *msg)
 static int __ioctl_migrate(void __user *argp)
 {
 	struct migrate_msg msg;
-	struct mig_list *mig_list;
+	struct mig_list *mig_list = NULL;
+	u64 **user_addrs = NULL;
 	int ret;
 	if (copy_from_user(&msg, argp, sizeof(msg)))
 		return -EFAULT;
@@ -203,19 +239,24 @@ static int __ioctl_migrate(void __user *argp)
 		return -EINVAL;
 	}
 
-	ret = build_migrate_list(&msg, &mig_list);
+	ret = build_migrate_list(&msg, &mig_list, &user_addrs);
 	if (ret) {
 		return ret;
 	}
 
 	ret = do_migrate(&msg, mig_list);
+	/* 先释放内核侧地址数组，再把 addr 还原为用户原指针后回拷：
+	 * 防止内核 vmalloc 地址泄露给用户态、覆写用户态 addr 字段；
+	 * 还原后 free_migrate_list_addr 不可再调用（addr 已非内核指针） */
+	free_migrate_list_addr(msg.cnt, mig_list);
+	restore_user_addr(msg.cnt, mig_list, user_addrs);
 	if (copy_to_user(argp, &msg, sizeof(msg)))
 		pr_err("unable to copy migrate message to user space\n");
 	if (copy_to_user(msg.mig_list, mig_list,
 			 msg.cnt * sizeof(struct mig_list)))
 		pr_err("unable to copy migrate list to user space\n");
 
-	free_migrate_list_addr(msg.cnt, mig_list);
+	kfree(user_addrs);
 	free_migrate_list(&mig_list);
 	return ret;
 }
@@ -354,7 +395,13 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 							payloads[i].keep_ratio +
 						HALF_HUNDRED) /
 					       HUNDRED;
-				mig_cnt = pm.mig_info.mig_cnt - keep_cnt;
+				/* keep_cnt 可能大于可迁移页数（大量页不可迁移时），
+				 * 无符号减法下溢的回绕值会导致 4K 路径 folio_put
+				 * 循环下标非法越界，且语义反转为全量迁移，必须截 0 */
+				mig_cnt =
+					pm.mig_info.mig_cnt > keep_cnt
+						? pm.mig_info.mig_cnt - keep_cnt
+						: 0;
 			} else {
 				mig_cnt = smap_pgtype == HUGE_PAGE
 						  ? (payloads[i].mem_size >>
@@ -396,6 +443,16 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 				mig_cnt_backup -= mig_cnt_min;
 				cnt++;
 			} while (mig_cnt_backup != 0);
+			/*
+			 * folio 引用在 walk_pid_pagemap 中获取，交给 smap_migrate
+			 * 的部分由其消费；提前退出（critical error break）时，
+			 * 未移交的 folio 必须在此放回引用，否则页面泄漏。
+			 * 正常结束时 mig_cnt_backup 为 0，此循环为空。
+			 */
+			for (u64 j = mig_cnt - mig_cnt_backup; j < mig_cnt;
+			     j++) {
+				folio_put(pm.mig_info.folios[j]);
+			}
 			payloads[i].success_cnt += (mig_cnt - failed_cnt);
 			vfree(pm.mig_info.folios);
 			if (failed_cnt == 0) {

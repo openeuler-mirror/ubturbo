@@ -228,6 +228,7 @@ static ssize_t proc_file_read(struct file *file, char __user *buf, size_t count,
 {
 	int ret = 0;
 	struct ham_tracking_info *info = NULL;
+	struct ham_tracking_info *tmp;
 	u64 num = 0;
 	struct freq_info *freq_info_array;
 	int pid = get_pid_from_tracking_file(file);
@@ -235,9 +236,11 @@ static ssize_t proc_file_read(struct file *file, char __user *buf, size_t count,
 		return -EINVAL;
 
 	spin_lock(&ham_lock);
-	list_for_each_entry(info, &ham_pid_list, node) {
-		if (info->pid == pid)
+	list_for_each_entry(tmp, &ham_pid_list, node) {
+		if (tmp->pid == pid) {
+			info = tmp;
 			break;
+		}
 	}
 	spin_unlock(&ham_lock);
 
@@ -318,14 +321,17 @@ int get_ham_pages_freqs(pid_t pid, struct freq_info **freq_info_array,
 			uint64_t *freq_info_num)
 {
 	struct ham_tracking_info *info = NULL;
+	struct ham_tracking_info *tmp;
 	if (!access_pid_is_scanning(pid)) {
 		pr_info("the current access pid: %d is not scanning\n", pid);
 		return -EINVAL;
 	}
 	spin_lock(&ham_lock);
-	list_for_each_entry(info, &ham_pid_list, node) {
-		if (info->pid == pid)
+	list_for_each_entry(tmp, &ham_pid_list, node) {
+		if (tmp->pid == pid) {
+			info = tmp;
 			break;
+		}
 	}
 	spin_unlock(&ham_lock);
 

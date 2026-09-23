@@ -53,22 +53,26 @@ static bool page_task_one(struct folio *folio, struct vm_area_struct *vma,
 		return true;
 
 	rcu_read_lock();
-	task = vma->vm_mm->owner;
-	rcu_read_unlock();
-	if (!task)
+	task = rcu_dereference(vma->vm_mm->owner);
+	if (!task) {
+		rcu_read_unlock();
 		return true;
+	}
 
 	if (pta->type == PAGE_PID_TYPE) {
 		if (pta->pid == task->pid) {
 			pta->found = true;
+			rcu_read_unlock();
 			return false;
 		}
+		rcu_read_unlock();
 		return true;
 	}
 
 	pta->found = true;
 	pta->node = cpu_to_node(cpumask_first(&task->cpus_mask));
 	pta->nr_cpus_allowed = task->nr_cpus_allowed;
+	rcu_read_unlock();
 
 	return false;
 }

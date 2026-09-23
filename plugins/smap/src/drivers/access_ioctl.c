@@ -234,7 +234,13 @@ static long ioctl_create_smap_procfs(void __user *argp)
 #define BYTES_PER_LONG 8
 #endif
 
-static size_t calc_bitmap_len(void)
+/*
+ * 调用方必须持有 ap_data.lock 读锁。
+ * 与 fill（write_bitmap_buffer_locked）在同一临界区内完成，才能保证
+ * 填充条目数与返回长度一致——两次独立遍历之间 ADD/DEL_PID 插队时，
+ * 多则越界写、少则把 vmalloc 未清零内存泄露给用户态。
+ */
+static size_t calc_bitmap_len_locked(void)
 {
 	size_t buf_len = 0;
 	struct access_pid *ap;
@@ -248,7 +254,6 @@ static size_t calc_bitmap_len(void)
 	 * Note: bitmap/mapping data is not transmitted here since mem_freq_read
 	 * already assembles complete actc_data including freq, prior, and white_list.
 	 */
-	down_read(&ap_data.lock);
 	list_for_each_entry(ap, &ap_data.list, node) {
 		if (ap->type != NORMAL_SCAN) {
 			continue;
@@ -256,6 +261,16 @@ static size_t calc_bitmap_len(void)
 		buf_len += sizeof(pid_t);
 		buf_len += sizeof(size_t) * SMAP_MAX_NUMNODES;
 	}
+
+	return buf_len;
+}
+
+static size_t calc_bitmap_len(void)
+{
+	size_t buf_len;
+
+	down_read(&ap_data.lock);
+	buf_len = calc_bitmap_len_locked();
 	up_read(&ap_data.lock);
 
 	return buf_len;
@@ -304,7 +319,9 @@ static inline void write_bitmap_nrpage(char **buffer, struct access_pid *ap)
 	}
 }
 
-static void write_bitmap_buffer(char **buffer)
+/* 调用方必须持有 ap_data.lock 读锁（与 calc_bitmap_len_locked 同临界区）。
+ * 非静态导出以便 DT 通过 API hook mock */
+void write_bitmap_buffer(char **buffer)
 {
 	struct access_pid *ap;
 
@@ -312,7 +329,6 @@ static void write_bitmap_buffer(char **buffer)
 		pr_err("invalid buffer passed to write bitmap buffer\n");
 		return;
 	}
-	down_read(&ap_data.lock);
 	list_for_each_entry(ap, &ap_data.list, node) {
 		if (ap->type != NORMAL_SCAN)
 			continue;
@@ -320,13 +336,13 @@ static void write_bitmap_buffer(char **buffer)
 		write_bitmap_pid(buffer, ap);
 		write_bitmap_nrpage(buffer, ap);
 	}
-	up_read(&ap_data.lock);
 }
 
 static ssize_t read_bitmap(char __user *buf, size_t cnt, loff_t *loff,
 			   bool *completed)
 {
 	char *tmp_buf;
+	char *new_buf;
 	ssize_t len;
 
 	*completed = false;
@@ -345,16 +361,31 @@ static ssize_t read_bitmap(char __user *buf, size_t cnt, loff_t *loff,
 		return 0;
 	}
 
-	vfree(smap_bitmap_buf);
-	smap_bitmap_buf = vmalloc(smap_buf_len);
-	if (!smap_bitmap_buf) {
+	/*
+	 * calc 与 fill 必须在同一读临界区内完成（见 calc_bitmap_len_locked 注释）。
+	 * vmalloc 在 rwsem 读临界区内睡眠是合法用法。
+	 */
+	down_read(&ap_data.lock);
+	smap_buf_len = calc_bitmap_len_locked();
+	if (smap_buf_len == 0) {
+		up_read(&ap_data.lock);
+		*completed = true;
+		return 0;
+	}
+
+	new_buf = vmalloc(smap_buf_len);
+	if (!new_buf) {
+		up_read(&ap_data.lock);
 		pr_err("failed to alloc memory in read_bitmap\n");
 		return -ENOMEM;
 	}
 
-	tmp_buf = smap_bitmap_buf;
-	write_bitmap_buffer(&smap_bitmap_buf);
-	smap_bitmap_buf = tmp_buf;
+	tmp_buf = new_buf;
+	write_bitmap_buffer(&tmp_buf);
+	up_read(&ap_data.lock);
+
+	vfree(smap_bitmap_buf);
+	smap_bitmap_buf = new_buf;
 
 copy_data:
 	if (unlikely(*loff >= smap_buf_len)) {

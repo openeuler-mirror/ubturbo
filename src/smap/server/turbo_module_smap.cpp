@@ -10,8 +10,10 @@
 #include "turbo_module_smap.h"
 
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
-#include <filesystem>
+#include <cerrno>
 #include <fstream>
 
 #include "client/ulog.h"
@@ -23,8 +25,6 @@
 using namespace turbo::smap::codec;
 using namespace turbo::ipc::server;
 using namespace turbo::smap::ulog;
-
-namespace fs = std::filesystem;
 
 namespace turbo::smap {
 
@@ -351,6 +351,10 @@ RetCode SmapQueryFreqHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer
     int ret = codec.DecodeRequest(inputBuffer, pid, lengthIn, dataSource);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapQueryFreqHandler DecodeRequest error " << ret;
+        return TURBO_ERROR;
+    }
+    if (lengthIn == 0) {
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapQueryFreqHandler invalid lengthIn " << lengthIn;
         return TURBO_ERROR;
     }
     uint16_t *data = (uint16_t *)malloc(sizeof(uint16_t) * lengthIn);
@@ -801,48 +805,49 @@ std::string TurboModuleSmap::Name()
 
 RetCode TurboModuleSmap::SavePageType(uint32_t pageType)
 {
-    std::ofstream outFile(FILE_NAME, std::ios::binary);
-    if (outFile) {
-        outFile.write(reinterpret_cast<const char *>(&pageType), sizeof(pageType));
-        outFile.close();
+    /*
+     * 文件位于 world-writable 的 /dev/shm，必须走 fd 级安全写入：
+     * - O_NOFOLLOW: 目标是符号链接时直接失败（ELOOP），消除链接跟随攻击；
+     * - O_CREAT|0600: 创建即 600，消除"先 0644 后收紧"的权限窗口；
+     * - fchmod(fd): 对已存在的旧文件（历史版本可能遗留 0644）在 fd 上纠正权限，
+     *   不经过路径，免疫"检查后替换"竞态。
+     */
+    int fd = open(FILE_NAME.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, S_IRUSR | S_IWUSR);
+    if (fd < 0) {
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] Error opening file for writing: " << strerror(errno);
+        return TURBO_ERROR;
+    }
+    (void)fchmod(fd, S_IRUSR | S_IWUSR);
 
-        if (fs::is_symlink(FILE_NAME)) {
-            UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
-                << "[Smap] Cannot modify permissions of a symbolic link: " << FILE_NAME << ".";
-            return TURBO_ERROR;
-        }
-
-        // 设置权限为 600 (owner read + write)
-        std::error_code ec;
-        fs::permissions(FILE_NAME, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace, ec);
-        if (ec) {
-            UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] Failed to set file permissions: " << ec.message();
-            return TURBO_ERROR;
-        }
-
-        UBTURBO_LOG_INFO(MODULE_NAME, MODULE_CODE) << "[Smap] PageType saved to file with permissions 600.";
-    } else {
-        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] Error opening file for writing.";
+    ssize_t written = write(fd, &pageType, sizeof(pageType));
+    close(fd);
+    if (written != sizeof(pageType)) {
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] Error writing pageType.";
         return TURBO_ERROR;
     }
 
+    UBTURBO_LOG_INFO(MODULE_NAME, MODULE_CODE) << "[Smap] PageType saved to file with permissions 600.";
     return TURBO_OK;
 }
 
 RetCode TurboModuleSmap::LoadPageType(uint32_t &pageType)
 {
     pageType = 0;
-    std::ifstream inFile(FILE_NAME, std::ios::binary);
-    if (inFile) {
-        inFile.read(reinterpret_cast<char *>(&pageType), sizeof(pageType));
-        inFile.close();
-        UBTURBO_LOG_INFO(MODULE_NAME, MODULE_CODE) << "[Smap] PageType loaded from file: " << pageType << "\n";
-    } else {
-        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
-            << "[Smap] Error opening file for reading or file does not exist.\n";
+    /* 与写入侧一致：O_NOFOLLOW 拒绝符号链接，避免读取被替换的文件内容 */
+    int fd = open(FILE_NAME.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) {
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] Error opening file for reading or file does not exist.";
         return TURBO_ERROR;
     }
 
+    ssize_t bytesRead = read(fd, &pageType, sizeof(pageType));
+    close(fd);
+    if (bytesRead != sizeof(pageType)) {
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] Error reading pageType.";
+        return TURBO_ERROR;
+    }
+
+    UBTURBO_LOG_INFO(MODULE_NAME, MODULE_CODE) << "[Smap] PageType loaded from file: " << pageType;
     return TURBO_OK;
 }
 

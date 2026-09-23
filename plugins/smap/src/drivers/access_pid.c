@@ -103,6 +103,13 @@ static void add_kvm_seg(struct vm_mapping_info *info,
 {
 	int i = info->nr_segs;
 	int shift = __builtin_ctz(g_pagesize_huge);
+
+	if (i >= MAX_NODE_NUM) {
+		pr_warn_ratelimited(
+			"vm mapping segs full(%d), skip memslot base_gfn %llu\n",
+			i, memslot->base_gfn);
+		return;
+	}
 	info->segs[i].base_gfn = memslot->base_gfn + gfn_start;
 	info->segs[i].start =
 		memslot->userspace_addr + (gfn_start << PAGE_SHIFT);
