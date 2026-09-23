@@ -415,6 +415,12 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
             PutProcessAttr(attr);
             return -EINVAL;
         }
+        if (attr && attr->scanType != NORMAL_SCAN) {
+            SMAP_LOGGER_ERROR("pid %d is in tracking mode %d, migrate out is not allowed.", msg->payload[i].pid,
+                              attr->scanType);
+            PutProcessAttr(attr);
+            return -EINVAL;
+        }
         PutProcessAttr(attr);
         if (msg->payload[i].count < 0 || msg->payload[i].count > REMOTE_NUMA_NUM) {
             SMAP_LOGGER_ERROR("pid: %d, migrate out payload count:%d is invalid.", msg->payload[i].pid,

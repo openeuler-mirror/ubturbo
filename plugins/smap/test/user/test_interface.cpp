@@ -604,8 +604,10 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgMigOutCount)
     EXPECT_EQ(-EINVAL, ret);
 
     GlobalMockObject::verify();
-    // PID has been managed, so not beyond limit
-    ProcessAttr processes = {.pid = msg.payload[0].pid, .next = nullptr};
+    /* PID has been managed, so not beyond limit.
+     * scanType 须显式置为 NORMAL_SCAN：零初始化时为 HAM_SCAN，会被
+     * CheckMigrateOutMsg 的跟踪模式校验拒绝。 */
+    ProcessAttr processes = {.pid = msg.payload[0].pid, .scanType = NORMAL_SCAN, .next = nullptr};
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &processes);
     MOCKER(GetPidTypeFromComm).stubs().will(returnValue((int)VM_TYPE));
     MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)true));
