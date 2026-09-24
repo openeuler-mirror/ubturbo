@@ -793,6 +793,12 @@ RetCode TurboModuleSmap::Start()
 void TurboModuleSmap::Stop()
 {
     UnRegSmapHandler();
+    // 卸载 libsmap.so 前先停止 smap，join 掉内部扫描线程，避免残留线程跳进已解除映射的代码段导致 SIGSEGV
+    // 仅在 smap 已成功加载时调用；若之前已停止，ubturbo_smap_stop 返回 -EPERM 属正常情况
+    if (g_smapHandler != nullptr && g_smapStop != nullptr) {
+        int res = g_smapStop();
+        UBTURBO_LOG_INFO(MODULE_NAME, MODULE_CODE) << "[Smap] ubturbo_smap_stop on shutdown, ret: " << res;
+    }
     CloseSmapHandler();
 }
 
