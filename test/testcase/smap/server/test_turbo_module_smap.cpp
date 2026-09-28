@@ -903,6 +903,79 @@ TEST_F(TestTurboModuleSmap, SmapQueryRemoteNumaFreqHandler)
     EXPECT_EQ(result, TURBO_ERROR);
 }
 
+TEST_F(TestTurboModuleSmap, SmapQueryProcessConfigHandlerLenZero)
+{
+    TurboByteBuffer inputBuffer;
+    TurboByteBuffer outputBuffer;
+    int nid = 1;
+    int inLen = 0;
+
+    StubSmapPtr();
+    SmapQueryProcessConfigCodec codec;
+    codec.EncodeRequest(inputBuffer, nid, inLen);
+    RetCode result = SmapQueryProcessConfigHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(result, TURBO_ERROR);
+}
+
+TEST_F(TestTurboModuleSmap, SmapQueryProcessConfigHandlerLenTooLarge)
+{
+    // 服务端应拒绝超过客户端 SDK 上限(MAX_4K_PROCESSES_CNT)的inLen，防止VLA栈溢出
+    TurboByteBuffer inputBuffer;
+    TurboByteBuffer outputBuffer;
+    int nid = 1;
+    int inLen = MAX_4K_PROCESSES_CNT + 1;
+
+    StubSmapPtr();
+    SmapQueryProcessConfigCodec codec;
+    codec.EncodeRequest(inputBuffer, nid, inLen);
+    RetCode result = SmapQueryProcessConfigHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(result, TURBO_ERROR);
+}
+
+TEST_F(TestTurboModuleSmap, SmapQueryProcessConfigHandlerLenAtUpperBound)
+{
+    // inLen 等于上限时应正常放行
+    TurboByteBuffer inputBuffer;
+    TurboByteBuffer outputBuffer;
+    int nid = 1;
+    int inLen = MAX_4K_PROCESSES_CNT;
+
+    StubSmapPtr();
+    SmapQueryProcessConfigCodec codec;
+    codec.EncodeRequest(inputBuffer, nid, inLen);
+    RetCode result = SmapQueryProcessConfigHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(result, TURBO_OK);
+}
+
+TEST_F(TestTurboModuleSmap, SmapQueryRemoteNumaFreqHandlerLenZero)
+{
+    TurboByteBuffer inputBuffer;
+    TurboByteBuffer outputBuffer;
+    uint16_t numa;
+    uint16_t length = 0;
+
+    StubSmapPtr();
+    SmapQueryRemoteNumaFreqCodec codec;
+    codec.EncodeRequest(inputBuffer, &numa, length);
+    RetCode result = SmapQueryRemoteNumaFreqHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(result, TURBO_ERROR);
+}
+
+TEST_F(TestTurboModuleSmap, SmapQueryRemoteNumaFreqHandlerLenTooLarge)
+{
+    // 服务端应拒绝超过客户端 SDK 上限(REMOTE_NUMA_BITS)的len，防止VLA栈溢出
+    TurboByteBuffer inputBuffer;
+    TurboByteBuffer outputBuffer;
+    uint16_t numa[2] = {0, 1};
+    uint16_t length = REMOTE_NUMA_BITS + 1;
+
+    StubSmapPtr();
+    SmapQueryRemoteNumaFreqCodec codec;
+    codec.EncodeRequest(inputBuffer, numa, length);
+    RetCode result = SmapQueryRemoteNumaFreqHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(result, TURBO_ERROR);
+}
+
 TEST_F(TestTurboModuleSmap, OpenSmapHandlerTest)
 {
     MOCKER(dlopen).stubs().will(returnValue((void *)nullptr));
