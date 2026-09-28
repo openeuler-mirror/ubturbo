@@ -622,9 +622,18 @@ uint32_t OsHelper::GetPidCreatTime(ResourceExport *resourceCollect)
     pidCreatTimeMap->clear();
     vPidList->clear();
     for (auto &uuid : *uuidList) {
-        time_t timestamp;
-        auto pid = (*uuidPIDMap)[uuid];
-        GetProcessStartTime(pid, timestamp);
+        auto it = uuidPIDMap->find(uuid);
+        if (it == uuidPIDMap->end()) {
+            continue;
+        }
+        pid_t pid = it->second;
+        // 初始化为确定值，且查询失败时不将未初始化时间戳写入结果表
+        time_t timestamp = 0;
+        if (GetProcessStartTime(pid, timestamp) != RMRS_OK) {
+            UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+                << "[RmrsResourceExport] [OsHelper] Get process start time of pid = " << pid << " failed.";
+            continue;
+        }
         (*pidCreatTimeMap)[pid] = timestamp;
         vPidList->push_back(pid);
     }

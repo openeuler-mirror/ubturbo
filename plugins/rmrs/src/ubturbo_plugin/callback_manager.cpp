@@ -165,6 +165,11 @@ RmrsResult CallbackManager::MigrateExecuteRecvHandler(const TurboByteBuffer &req
     rmrs::serialization::MigrateStrategyResult migrateStrategyResult;
     RmrsInStream builder(req.data, req.len);
     builder >> migrateStrategyResult;
+    if (!builder.Check()) {
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[MemMigrate][MemMigrate] Deserialize MigrateStrategyResult failed.";
+        return RMRS_ERROR;
+    }
 
     for (auto &vm : migrateStrategyResult.vmInfoList) {
         if (vm.pid < 0) {
@@ -278,6 +283,10 @@ RmrsResult CallbackManager::MigrateStrategyRecvHandler(const TurboByteBuffer &re
     MigrateStrategyParamRMRS param;
     RmrsInStream builderIn(req.data, req.len);
     builderIn >> param;
+    if (!builderIn.Check()) {
+        LOG_ERROR << "[MemMigrate][Strategy] Deserialize MigrateStrategyParamRMRS failed.";
+        return RMRS_ERROR;
+    }
     std::vector<rmrs::serialization::VMMigrateOutParam> vmMigrateOutParam;
     uint32_t waitingTime;
 
@@ -330,6 +339,11 @@ RmrsResult CallbackManager::PidNumaInfoCollectRecvHandler(const TurboByteBuffer 
     PidNumaInfoCollectParam param;
     RmrsInStream builderIn(req.data, req.len);
     builderIn >> param;
+    if (!builderIn.Check()) {
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[ContainerNumaInfoCollect] Deserialize PidNumaInfoCollectParam failed.";
+        return RMRS_ERROR;
+    }
     std::vector<PidInfo> pidInfos;
 
     if (param.pidList.empty() || param.pidList.size() > maxPidNum) {
@@ -383,6 +397,11 @@ RmrsResult CallbackManager::NumaMemInfoCollectRecvHandler(const TurboByteBuffer 
     NumaMemInfoCollectParam param;
     RmrsInStream builderIn(req.data, req.len);
     builderIn >> param;
+    if (!builderIn.Check()) {
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[NodeMemInfoCollect] Deserialize NumaMemInfoCollectParam failed.";
+        return RMRS_ERROR;
+    }
     if (param.numaId < -1) {
         RMRSResponseInfoSimpo response;
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[NodeMemInfoCollect] Param numaId is invalided.";
@@ -534,6 +553,11 @@ RmrsResult CallbackManager::UCacheMigrateStrategyRecvHandler(const TurboByteBuff
     UCacheMigrationStrategyParam param;
     RmrsInStream builderIn(req.data, req.len);
     builderIn >> param;
+    if (!builderIn.Check()) {
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[ucache] Deserialize UCacheMigrationStrategyParam failed.";
+        return RMRS_ERROR;
+    }
     if (!ValidateMigrationStrategyParameter(param)) {
         UBTURBO_LOG_WARN(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
             << "[ucache] Invalid UCacheMigrationStrategy=" << param.ToString() << ".";
@@ -594,6 +618,11 @@ RmrsResult CallbackManager::UpdateUCacheRatioRecvHandler(const TurboByteBuffer &
     MigrationInfoParam param{};
     RmrsInStream builderIn(req.data, req.len);
     builderIn >> param;
+    if (!builderIn.Check()) {
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[ucache] Deserialize MigrationInfoParam failed.";
+        return RMRS_ERROR;
+    }
     UBTURBO_LOG_INFO(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
         << "[ucache] Recv UpdateUCacheRatio=" << param.ToString() << ".";
     if (!ValidatePidsParam(param.pids)) {

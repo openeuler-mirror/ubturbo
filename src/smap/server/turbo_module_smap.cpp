@@ -475,7 +475,8 @@ RetCode SmapQueryProcessConfigHandler(const TurboByteBuffer &inputBuffer, TurboB
             << "[Smap] SmapQueryProcessConfigHandler DecodeRequest error " << ret;
         return TURBO_ERROR;
     }
-    if (inLen <= 0) {
+    // inLen 上限与客户端 SDK 侧校验保持一致，防止超大值 VLA 导致栈溢出
+    if (inLen <= 0 || inLen > MAX_4K_PROCESSES_CNT) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
             << "[Smap] SmapQueryProcessConfigHandler DecodeRequest invalid inLen " << inLen;
         return TURBO_ERROR;
@@ -501,6 +502,13 @@ RetCode SmapQueryRemoteNumaFreqHandler(const TurboByteBuffer &inputBuffer, Turbo
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
             << "[Smap] SmapQueryRemoteNumaFreqHandler DecodeRequest error " << ret;
+        return TURBO_ERROR;
+    }
+    // len 上限与客户端 SDK 侧校验保持一致，防止超大值 VLA 导致栈溢出
+    if (len == 0 || len > REMOTE_NUMA_BITS) {
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
+            << "[Smap] SmapQueryRemoteNumaFreqHandler invalid len " << len;
+        delete[] numa;
         return TURBO_ERROR;
     }
     uint64_t freq[len];

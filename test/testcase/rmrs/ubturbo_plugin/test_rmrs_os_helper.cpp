@@ -45,6 +45,11 @@ std::vector<pid_t> vPidList{};
 std::vector<std::string> uuidList{};
 const pid_t mockPid = 1234;
 const time_t mockTimeStamp = 123456789;
+// 仅用于GetPidCreatTime跳过场景的pid，避免与其它用例(1234)冲突
+const pid_t mockFailedPid = 4321;
+// GetPidCreatTime 场景共享 invoker 的行为开关（用例内修改、用例末必须恢复默认值）
+static bool g_uuidPidMapEmpty = false;
+static pid_t g_uuidMockPid = mockPid;
 
 UuidNameMapType MockGetUuidNameMap()
 {
@@ -69,7 +74,20 @@ UuidListType MockGetUuidList()
 }
 UuidPIDMapType MockGetUuidPIDMap()
 {
-    uuidPIDMap["uuid1"] = mockPid;
+    // mockcpp 的 stub 跨用例累积且先注册者优先生效，
+    // 因此所有 GetPidCreatTime 场景统一走本 invoker，用全局开关控制行为，
+    // 用例结束时必须恢复默认值，避免影响其它用例。
+    if (g_uuidPidMapEmpty) {
+        uuidPIDMap.clear();
+    } else {
+        uuidPIDMap["uuid1"] = g_uuidMockPid;
+    }
+    return &uuidPIDMap;
+}
+
+UuidPIDMapType MockGetUuidPIDMapEmpty()
+{
+    uuidPIDMap.clear();
     return &uuidPIDMap;
 }
 
@@ -341,6 +359,56 @@ TEST(TestRmrsOsHelper, GetPidCreatTimeSuccess)
     auto result = OsHelper::GetPidCreatTime(resourceCollect);
     delete resourceCollect;
     EXPECT_EQ(result, RMRS_OK);
+}
+
+TEST(TestRmrsOsHelper, GetPidCreatTimeShouldSkipWhenGetProcessStartTimeFailed)
+{
+    // 查询进程启动时间失败时不应把未初始化时间戳写入结果表
+    ResourceExport *resourceCollect;
+    resourceCollect = new ResourceExport();
+    MOCKER_CPP(&ResourceExport::GetPidCreatTimeMap, PidCreatTimeMapType(*)())
+        .stubs()
+        .will(invoke(MockGetPidCreatTimeMap));
+    MOCKER_CPP(&ResourceExport::GetVPidList, VPidListType(*)()).stubs().will(invoke(MockGetVPidList));
+    MOCKER_CPP(&ResourceExport::GetUuidList, UuidListType(*)()).stubs().will(invoke(MockGetUuidList));
+    MOCKER_CPP(&ResourceExport::GetUuidPIDMap, UuidPIDMapType(*)()).stubs().will(invoke(MockGetUuidPIDMap));
+    // 带约束的stub需先于兜底stub注册，确保按优先级命中
+    MOCKER_CPP(&OsHelper::GetProcessStartTime, RmrsResult(*)(pid_t pid, time_t &timestamp))
+        .stubs()
+        .with(eq(mockFailedPid))
+        .will(returnValue(RMRS_ERROR));
+    MOCKER_CPP(&OsHelper::GetProcessStartTime, RmrsResult(*)(pid_t pid, time_t &timestamp))
+        .stubs()
+        .will(returnValue(RMRS_OK));
+
+    g_uuidMockPid = mockFailedPid;
+    auto result = OsHelper::GetPidCreatTime(resourceCollect);
+    g_uuidMockPid = mockPid;
+    delete resourceCollect;
+    EXPECT_EQ(result, RMRS_OK);
+    EXPECT_TRUE(pidCreatTimeMap.empty());
+    EXPECT_TRUE(vPidList.empty());
+}
+
+TEST(TestRmrsOsHelper, GetPidCreatTimeShouldSkipUuidNotInPidMap)
+{
+    // uuid 不在 uuidPIDMap 中时应跳过，不默认插入 pid=0
+    ResourceExport *resourceCollect;
+    resourceCollect = new ResourceExport();
+    MOCKER_CPP(&ResourceExport::GetPidCreatTimeMap, PidCreatTimeMapType(*)())
+        .stubs()
+        .will(invoke(MockGetPidCreatTimeMap));
+    MOCKER_CPP(&ResourceExport::GetVPidList, VPidListType(*)()).stubs().will(invoke(MockGetVPidList));
+    MOCKER_CPP(&ResourceExport::GetUuidList, UuidListType(*)()).stubs().will(invoke(MockGetUuidList));
+    MOCKER_CPP(&ResourceExport::GetUuidPIDMap, UuidPIDMapType(*)()).stubs().will(invoke(MockGetUuidPIDMap));
+
+    g_uuidPidMapEmpty = true;
+    auto result = OsHelper::GetPidCreatTime(resourceCollect);
+    g_uuidPidMapEmpty = false;
+    delete resourceCollect;
+    EXPECT_EQ(result, RMRS_OK);
+    EXPECT_TRUE(pidCreatTimeMap.empty());
+    EXPECT_TRUE(vPidList.empty());
 }
 
 TEST(TestRmrsOsHelper, GetSocketCpuRelationSuccessWithMockData)
