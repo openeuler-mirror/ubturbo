@@ -506,8 +506,7 @@ RetCode SmapQueryRemoteNumaFreqHandler(const TurboByteBuffer &inputBuffer, Turbo
     }
     // len 上限与客户端 SDK 侧校验保持一致，防止超大值 VLA 导致栈溢出
     if (len == 0 || len > REMOTE_NUMA_BITS) {
-        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
-            << "[Smap] SmapQueryRemoteNumaFreqHandler invalid len " << len;
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapQueryRemoteNumaFreqHandler invalid len " << len;
         delete[] numa;
         return TURBO_ERROR;
     }

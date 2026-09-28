@@ -373,11 +373,11 @@ TEST(TestRmrsOsHelper, GetPidCreatTimeShouldSkipWhenGetProcessStartTimeFailed)
     MOCKER_CPP(&ResourceExport::GetUuidList, UuidListType(*)()).stubs().will(invoke(MockGetUuidList));
     MOCKER_CPP(&ResourceExport::GetUuidPIDMap, UuidPIDMapType(*)()).stubs().will(invoke(MockGetUuidPIDMap));
     // 带约束的stub需先于兜底stub注册，确保按优先级命中
-    MOCKER_CPP(&OsHelper::GetProcessStartTime, RmrsResult(*)(pid_t pid, time_t &timestamp))
+    MOCKER_CPP(&OsHelper::GetProcessStartTime, RmrsResult(*)(pid_t pid, time_t & timestamp))
         .stubs()
         .with(eq(mockFailedPid))
         .will(returnValue(RMRS_ERROR));
-    MOCKER_CPP(&OsHelper::GetProcessStartTime, RmrsResult(*)(pid_t pid, time_t &timestamp))
+    MOCKER_CPP(&OsHelper::GetProcessStartTime, RmrsResult(*)(pid_t pid, time_t & timestamp))
         .stubs()
         .will(returnValue(RMRS_OK));
 

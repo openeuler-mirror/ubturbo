@@ -619,8 +619,7 @@ RmrsResult CallbackManager::UpdateUCacheRatioRecvHandler(const TurboByteBuffer &
     RmrsInStream builderIn(req.data, req.len);
     builderIn >> param;
     if (!builderIn.Check()) {
-        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[ucache] Deserialize MigrationInfoParam failed.";
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[ucache] Deserialize MigrationInfoParam failed.";
         return RMRS_ERROR;
     }
     UBTURBO_LOG_INFO(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
