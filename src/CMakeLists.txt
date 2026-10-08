@@ -56,6 +56,7 @@ target_include_directories(ub_turbo_exec PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/../include
     ${CMAKE_CURRENT_LIST_DIR}/include
     ${CMAKE_CURRENT_LIST_DIR}/config
+    ${CMAKE_CURRENT_LIST_DIR}/security
     ${CMAKE_CURRENT_LIST_DIR}/plugin
     ${CMAKE_CURRENT_LIST_DIR}/utils
     ${CMAKE_CURRENT_LIST_DIR}/ipc/client
@@ -73,6 +74,7 @@ target_link_libraries(ub_turbo_exec PRIVATE
 
 # 添加子目录
 add_subdirectory(config)
+add_subdirectory(security)
 add_subdirectory(plugin)
 add_subdirectory(utils)
 add_subdirectory(main)

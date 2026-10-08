@@ -68,7 +68,10 @@ char *TurboLoggerEntry::GetBuffer()
     return nullptr;
 }
 
-void TurboLoggerEntry::ResizeBuffer(size_t addSize) {}
+bool TurboLoggerEntry::ResizeBuffer(size_t addSize)
+{
+    return true;
+}
 
 TurboLoggerEntry &TurboLoggerEntry::operator<<(const std::string &data)
 {

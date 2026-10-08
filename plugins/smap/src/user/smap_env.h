@@ -54,9 +54,6 @@ typedef enum {
 
 #define MAX_NR_MIGOUT 40
 
-#define CAT_SCRIPT_CAT_PATH "sudo /usr/local/bin/cat.sh"
-#define CAT_SCRIPT_TAIL "2>&1"
-
 #ifdef __cplusplus
 typedef std::atomic<int> atomic_int;
 #endif

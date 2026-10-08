@@ -21,7 +21,7 @@ Demo1依次完成了以下动作：
 
 Demo1使用说明如下：
 
-1. 环境要求：已安装ubturbo-rmrs、ubturbo-devel、ubturbo-smap、libboundscheck。
+1. 环境要求：已安装ubturbo（主框架）、ubturbo-rmrs（插件）ubturbo-rmrs、ubturbo-devel、ubturbo-smap、libboundscheck。
 2. 编译指令如下：
 
     ```bash
@@ -262,32 +262,35 @@ sh build.sh
 
 - 在dist/release/conf下会生成以下配置文件：`ubturbo_plugin_admission.conf`、`ubturbo.conf`、`plugin_rmrs.conf`
 
-构建rpm包：
+构建rpm包（基于仓库根目录的 `ubturbo.spec`，通过 `rpmbuild` 构建，需先安装 `rpm-build`）：
 
 ```bash
-cd dist/release
-cpack
+# 在仓库根目录执行
+sh build.sh ubturbo        # 构建 ubturbo 主包
+sh build.sh ubturbo-rmrs   # 构建 ubturbo-rmrs 子包
 ```
 
-执行上述命令之后，rpm包（例如ubturbo-rmrs-1.1.1-1.oe2403sp1.aarch64.rpm）位于`dist/release/output`中。
+执行上述命令之后，rpm包（例如 `ubturbo-1.0.0-23.aarch64.rpm`、`ubturbo-rmrs-1.0.0-23.aarch64.rpm`）位于仓库根目录的 `output/` 中。
 
 ### 安装指南
 
 ```bash
-rpm -ivh ubturbo-rmrs-1.1.1-1.oe2403sp1.aarch64.rpm
+rpm -ivh ubturbo-1.0.0-23.aarch64.rpm
+rpm -ivh ubturbo-rmrs-1.0.0-23.aarch64.rpm
 ```
 
 检查ubturbo是否安装成功：
 
 ```bash
-rpm -qa | grep ubturbo-rmrs
+rpm -qa | grep ubturbo
 ```
 
-返回如下信息即表示安装成功：
+返回如下信息即表示安装成功（`ubturbo` 为主框架包，`ubturbo-rmrs` 为 RMRS 插件包）：
 
 ```bash
-[root@controller ~]# rpm -qa | grep ubturbo-rmrs
-ubturbo-rmrs*
+[root@controller ~]# rpm -qa | grep ubturbo
+ubturbo-1.0.0-23.aarch64
+ubturbo-rmrs-1.0.0-23.aarch64
 ```
 
 安装后的目录结构：
@@ -313,16 +316,7 @@ groups ubturbo
 # 输出内容示例：ubturbo : ubturbo libvirt
 ```
 
-配置免密sudo：创建文件/etc/sudoers.d/ubturbo，依次执行：
-
-```bash
-# 1. 打开
-visudo -f /etc/sudoers.d/ubturbo
-# 2. 新增
-ubturbo ALL=(root) NOPASSWD:/usr/local/bin/cat.sh
-```
-
-为需要与ubturbo交互的用户添加权限，例如ubse：
+为需要与ubturbo交互的用户添加权限，例如ubse:
 
 ```bash
 usermod -aG ubturbo ubse

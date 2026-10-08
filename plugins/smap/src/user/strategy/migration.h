@@ -24,6 +24,15 @@
 #define MAX_PER_PID_MIG_LIST_COUNT 8
 #define REMOTE_MIG_FAIL 92
 
+struct SubMigrateCtx {
+    struct MigrateMsg msg;
+    int *origIdx;
+    int fd;
+    int ret;
+    uint32_t cpuMin;
+    uint32_t cpuMax;
+};
+
 int AddMigList(struct MigrateMsg *mMsg, struct MigList *mList);
 
 void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager);

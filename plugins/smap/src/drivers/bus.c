@@ -94,7 +94,13 @@ int inner_tracking_driver_register(struct tracking_driver *tracking_drv,
 		return rc;
 	}
 
-	return driver_register(drv);
+	rc = driver_register(drv);
+	if (rc) {
+		mutex_lock(&tracking_bus_lock);
+		match_always_count -= tracking_drv->match_always;
+		mutex_unlock(&tracking_bus_lock);
+	}
+	return rc;
 }
 
 void tracking_driver_unregister(struct tracking_driver *tracking_drv)

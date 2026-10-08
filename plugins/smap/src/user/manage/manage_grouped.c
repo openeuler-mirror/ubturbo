@@ -54,6 +54,7 @@ void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeBitmap, 
     attr->pendingGroupPolicy.valid = false;
     attr->autoRemoveWhenRemoteEmpty = false;
     attr->syncWaitRemoteEmpty = false;
+    attr->syncWaitRemoteEmptySnapshotValid = false;
     if (time(&attr->scanStart) == (time_t)-1) {
         SMAP_LOGGER_ERROR("get time error");
     }

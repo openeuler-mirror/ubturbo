@@ -270,27 +270,49 @@ TurboLoggerEntry &TurboLoggerEntry::operator<<(const std::string &data)
     return *this;
 }
 
-void TurboLoggerEntry::ResizeBuffer(size_t addSize)
+bool TurboLoggerEntry::ResizeBuffer(size_t addSize)
 {
     size_t const newSize = currentSize + addSize;
     if (newSize <= maxSize)
-        return;
+        return true;
+    // 校验 newSize 合法性：防止整数溢出或过大导致内存分配异常 (G.RES.02-CPP)
+    static constexpr size_t MAX_LOG_ENTRY_SIZE = 32 * 1024 * 1024; // 32MB
+    if (newSize < currentSize || newSize > MAX_LOG_ENTRY_SIZE) {
+        std::cerr << "ResizeBuffer: invalid size " << newSize << std::endl;
+        return false;
+    }
     if (!heapBuffer) {
-        maxSize = std::max(static_cast<size_t>(512), newSize); // 缓冲区大小512
-        heapBuffer.reset(new (std::nothrow) char[maxSize]);
-        errno_t ret = memcpy_s(heapBuffer.get(), currentSize, logEntryBuffer, currentSize);
+        size_t newMaxSize = std::max(static_cast<size_t>(512), newSize); // 缓冲区大小512
+        if (newMaxSize > MAX_LOG_ENTRY_SIZE) {
+            return false;
+        }
+        std::unique_ptr<char[]> newBuffer(new (std::nothrow) char[newMaxSize]);
+        if (!newBuffer) {
+            std::cerr << "Failed to allocate heap buffer." << std::endl;
+            return false; // 分配失败，不更新 maxSize，避免后续 GetBuffer 越界写栈缓冲区
+        }
+        errno_t ret = memcpy_s(newBuffer.get(), newMaxSize, logEntryBuffer, currentSize);
         if (ret != EOK) {
             std::cerr << "Failed to copy heapBuffer." << std::endl;
+            return false;
         }
-        return;
+        maxSize = newMaxSize;
+        heapBuffer = std::move(newBuffer);
+        return true;
     } else {
-        maxSize = std::max(static_cast<size_t>(2 * maxSize), newSize); // 重新分配2倍大小buffer
-        std::unique_ptr<char[]> newHeapBuffer = std::make_unique<char[]>(maxSize);
-        errno_t ret = memcpy_s(newHeapBuffer.get(), currentSize, heapBuffer.get(), currentSize);
+        size_t newMaxSize = std::max(static_cast<size_t>(2 * maxSize), newSize); // 重新分配2倍大小buffer
+        if (newMaxSize > MAX_LOG_ENTRY_SIZE) {
+            return false;
+        }
+        std::unique_ptr<char[]> newHeapBuffer = std::make_unique<char[]>(newMaxSize);
+        errno_t ret = memcpy_s(newHeapBuffer.get(), newMaxSize, heapBuffer.get(), currentSize);
         if (ret != EOK) {
             std::cerr << "Failed to copy heapBuffer." << std::endl;
+            return false;
         }
+        maxSize = newMaxSize;
         heapBuffer.swap(newHeapBuffer);
+        return true;
     }
 }
 
@@ -307,7 +329,9 @@ void TurboLoggerEntry::EncodeString(const char *data, size_t length)
     if (length == 0) {
         return;
     }
-    ResizeBuffer(sizeof(TurboLoggerTypeId) + length + 1);
+    if (!ResizeBuffer(sizeof(TurboLoggerTypeId) + length + 1)) {
+        return; // 扩容失败，跳过写入，避免越界写栈缓冲区
+    }
     char *buffer = GetBuffer();
     *reinterpret_cast<TurboLoggerTypeId *>(buffer++) = TurboLoggerTypeId::CHARPTR;
 

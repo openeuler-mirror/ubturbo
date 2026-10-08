@@ -17,7 +17,6 @@ namespace turbo::common {
 using RetCode = uint32_t;
 
 constexpr auto CONFIG_DEFAULT_DIR = "conf";
-constexpr auto LIB_DEFAULT_DIR = "lib";
 
 constexpr inline auto MODULE_NAME = "ubturbo";
 constexpr inline auto MODULE_CODE = 1;

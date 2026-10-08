@@ -484,6 +484,8 @@ static int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayload *pay
     attr->enableSwap = true;
     attr->isFirstScan = true;
     ApplyRecoveredTargetConfig(attr, &activeConfig);
+    /* 恢复持久化的 sync 旁路容量标记：payload 存 uint8_t，非 0 视为 true */
+    attr->ignoreRemoteCapacity = (payload->ignoreRemoteCapacity == 1);
     attr->autoRemoveWhenRemoteEmpty = attr->scanType == NORMAL_SCAN && IsRecoveredTargetConfigZero(&activeConfig);
     if (time(&attr->scanStart) == (time_t)-1) {
         SMAP_LOGGER_ERROR("get time error.");
@@ -529,8 +531,10 @@ static int RecoverProcessConfig(char *processBase)
     nrPayload = header->len / CONFIG_PROC_LEN;
     struct ProcessPayload *payload = (struct ProcessPayload *)JumpToProcessPayload(processBase);
     for (uint32_t i = 0; i < nrPayload; i++, payload++) {
-        /* 页类型一致性校验：pid 实际页类型须与 smap 当前模式匹配，否则内核扫描返回 -EINVAL */
-        if (IsPidUsingHugePages(payload->pid) != IsHugeMode()) {
+        /* 页类型一致性校验：pid 实际页类型须与 smap 当前模式匹配，否则内核扫描返回 -EINVAL；
+         * 进程已退出（-ESRCH）同样跳过恢复 */
+        int hugeFlag = IsPidUsingHugePages(payload->pid);
+        if (hugeFlag == -ESRCH || (hugeFlag != 0) != IsHugeMode()) {
             SMAP_LOGGER_WARNING("pid %d page type mismatch smap mode, skip recover.", payload->pid);
             continue;
         }
@@ -678,6 +682,9 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
             PidSlotReleaseRefs(all, n);
             return ret;
         }
+        /* 与 effectiveConfig 选择一致：pending 生效时用 pending 的容量策略 */
+        tmp->ignoreRemoteCapacity =
+            (attr->pendingTargetConfigValid ? attr->pendingIgnoreRemoteCapacity : attr->ignoreRemoteCapacity) ? 1 : 0;
         tmp++;
     }
 

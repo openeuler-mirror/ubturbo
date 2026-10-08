@@ -23,8 +23,9 @@ dos2unix build.sh
 # Release with debug info
 ./build.sh -T RelWithDebInfo
 
-# Build and package as RPM (via CPack)
-./build.sh package
+# Build RPM packages (via rpmbuild + ubturbo.spec, artifacts -> output/)
+./build.sh ubturbo        # build the ubturbo RPM
+./build.sh ubturbo-rmrs   # build the ubturbo-rmrs RPM
 
 # Clean build directory
 ./build.sh -c
@@ -80,7 +81,7 @@ cd plugins/smap/test && sh run_dt.sh
 
 ## Dev Environment Tips
 
-- aarch64 only; build hard-depends on openEuler (`CMakeLists.txt` reads `/etc/openEuler-release`); recommended openEuler 24.03 LTS
+- aarch64 only; recommended openEuler 24.03 LTS (RPM packaging via `rpmbuild` uses `ubturbo.spec`)
 - Build uses Ninja if available, otherwise falls back to Unix Makefiles
 - `compile_commands.json` lives in the build directory (`dist/release/` or `dist/debug/`) — point your LSP/clangd there
 - Auto-generated headers are placed in the build directory's `include/` (referenced via `${CMAKE_BINARY_DIR}/include`)

@@ -38,7 +38,8 @@ TEST_F(TestRmrsStringUtil, SafeStopid_InvalidInput)
 
 TEST_F(TestRmrsStringUtil, SafeStopid_OutOfRange)
 {
-    EXPECT_EQ(RmrsStringUtil::SafeStopid(std::to_string(std::numeric_limits<pid_t>::max() + 1)), 0);
+    EXPECT_EQ(RmrsStringUtil::SafeStopid(std::to_string(static_cast<long long>(std::numeric_limits<pid_t>::max()) + 1)),
+              0);
 }
 
 // 测试 SafeStoul

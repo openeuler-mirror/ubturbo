@@ -50,11 +50,7 @@ public:
 
     static RmrsResult GetRemoteAvailableFlag(vector<NumaInfo> &numaInfos);
 
-    static std::string ExecCommand(const std::string &cmd);
-
     static RmrsResult ReadNumaMap(const std::string &pidStr, std::string &fileContent);
-
-    static RmrsResult checkUidEuid(const std::string &fileContent);
 
 private:
     static string cpuSocketPathPrefix;

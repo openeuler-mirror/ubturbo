@@ -178,7 +178,7 @@ public:
     int EncodeRequest(TurboByteBuffer &buffer, uint16_t *numa, uint16_t length);
     int DecodeRequest(const TurboByteBuffer &buffer, uint16_t *&numa, uint16_t &length);
     int EncodeResponse(TurboByteBuffer &buffer, uint64_t *freq, uint16_t len, int returnValue);
-    int DecodeResponse(TurboByteBuffer &buffer, uint64_t *freq, uint16_t &outLen, int &returnValue);
+    int DecodeResponse(TurboByteBuffer &buffer, uint64_t *freq, uint16_t length, uint16_t &outLen, int &returnValue);
 };
 
 } // namespace turbo::smap::codec

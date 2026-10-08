@@ -371,6 +371,7 @@ struct ProcessAttribute {
     bool isFirstScan; // 标记首次扫描，需要恢复扫描周期
     bool autoRemoveWhenRemoteEmpty; // 上层将远端目标调为0后，远端页清空时自动移除纳管
     bool syncWaitRemoteEmpty; // 同步迁移等待远端页清空时，临时保护进程不被自动移除
+    bool syncWaitRemoteEmptySnapshotValid; // 零目标发布后是否已完成新一轮页面快照和账本校准
     /* Runtime-only compatibility mode for migrate_out_sync targets. */
     bool ignoreRemoteCapacity;
     bool pendingIgnoreRemoteCapacity;
@@ -751,7 +752,8 @@ int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg);
 bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid);
 FILE *OpenNumaMaps(pid_t pid);
 int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge);
-bool IsPidUsingHugePages(pid_t pid);
+/* 返回 1 表示使用大页，0 表示未使用大页，-ESRCH 表示进程不存在（numa_maps 打开为 ENOENT/ESRCH，或读取结束时已无法再次打开） */
+int IsPidUsingHugePages(pid_t pid);
 int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[MAX_NODES]);
 
 void UpdateRemoteNumaCriticalErr(void);

@@ -608,7 +608,7 @@ int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t
         return ipcRet;
     }
 
-    int result = handler.DecodeResponse(recv, freq, outLen, ret);
+    int result = handler.DecodeResponse(recv, freq, length, outLen, ret);
     if (result == IPC_ERROR || outLen != length) {
         IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_remote_numa_freq_query Decode response error %d.\n", result);
         ret = IPC_ERROR;

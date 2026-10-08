@@ -166,7 +166,7 @@ public:
     }
 
 private:
-    void ResizeBuffer(size_t addSize);
+    bool ResizeBuffer(size_t addSize);
 
     char *GetBuffer();
 
@@ -182,7 +182,9 @@ private:
     template <typename T>
     void EncodeData(TurboLoggerTypeId id, T data)
     {
-        ResizeBuffer(sizeof(TurboLoggerTypeId) + sizeof(T));
+        if (!ResizeBuffer(sizeof(TurboLoggerTypeId) + sizeof(T))) {
+            return;
+        }
         EncodeData<TurboLoggerTypeId>(id);
         EncodeData<T>(data);
     }

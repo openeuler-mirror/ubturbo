@@ -212,6 +212,9 @@ int ub_hist_query_ba_tags(uint64_t *p_tags, int count)
 	int ret = 0, ba_count = 0;
 	struct ub_hist_ba_device *ba_dev;
 
+	if (!p_tags)
+		return -EINVAL;
+
 	spin_lock(&ub_hist_ba_list_lock);
 	list_for_each_entry(ba_dev, &ub_hist_ba_list, list) {
 		if (ba_count >= count) {

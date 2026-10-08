@@ -146,7 +146,7 @@ int memory_notifier_init(void)
 		alloc_workqueue("my_queue", WQ_CPU_INTENSIVE, WQ_MAX_THREADS);
 	if (!mem_nf_wq) {
 		ub_dma_log_err("alloc mem_nf_wq failed\n");
-		ret = -ENOMEM;
+		return -ENOMEM;
 	}
 
 	ret = register_memory_notifier(&ub_dma_nb);

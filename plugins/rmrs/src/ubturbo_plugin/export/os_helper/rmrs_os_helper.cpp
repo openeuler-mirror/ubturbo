@@ -10,7 +10,6 @@
 #include "rmrs_os_helper.h"
 
 #include <dirent.h>
-#include <array>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
@@ -24,7 +23,6 @@
 #include "rmrs_config.h"
 #include "rmrs_file_util.h"
 #include "rmrs_string_util.h"
-#include "securec.h"
 #include "turbo_logger.h"
 
 namespace rmrs {
@@ -62,10 +60,6 @@ const int MAX_LOCAL_NUMA_NODES = 4;
 const int HEX_BASE = 16;
 const int STANDARD_PAGESIZE = 4;
 constexpr uint64_t HUGE_PAGE_NUM_TO_KB = 2 * 1024;
-constexpr int CMD_BUFFER_SIZE = 256;
-constexpr const char *CAT_SCRIPT_CAT_PATH = "sudo /usr/local/bin/cat.sh";
-constexpr const char *CAT_SCRIPT_TAIL = "2>&1";
-constexpr const char *UID_EUID_ZERO = "UID=0, EUID=0";
 
 /**
  * 读取/proc目录下指定PID的进程信息, 获取启动时间
@@ -460,26 +454,6 @@ vector<uint16_t> OsHelper::ParseCPUList(const string &line)
     return cpus;
 }
 
-std::string OsHelper::ExecCommand(const std::string &cmd)
-{
-    UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[RmrsResourceExport] [OsHelper] ExecCommand start.";
-    std::array<char, CMD_BUFFER_SIZE> buffer;
-    std::string result;
-    UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-        << "[RmrsResourceExport] [OsHelper] ExecCommand cmd = " << cmd << ".";
-    FILE *pipe = popen(cmd.c_str(), "r");
-    if (!pipe) {
-        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[RmrsResourceExport] [OsHelper] Failed to popen!";
-        return "";
-    }
-    while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
-        result += buffer.data();
-    }
-    pclose(pipe);
-    UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE) << "[RmrsResourceExport] [OsHelper] ExecCommand end.";
-    return result;
-}
-
 RmrsResult OsHelper::GetVmPageSizeFromNumaMaps(const std::string &uuid, const std::string &path,
                                                ResourceExport *resourceCollect)
 {
@@ -510,62 +484,28 @@ RmrsResult OsHelper::GetVmPageSizeFromNumaMaps(const std::string &uuid, const st
     return RMRS_OK;
 }
 
-RmrsResult OsHelper::checkUidEuid(const std::string &fileContent)
-{
-    std::istringstream stream(fileContent);
-    std::string firstLine;
-
-    // 获取第一行
-    if (!std::getline(stream, firstLine)) {
-        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[RmrsResourceExport] [OsHelper] Could not read the first line of fileContent.";
-        return RMRS_ERROR;
-    }
-
-    // 判断第一行是否为 "UID=0, EUID=0"
-    if (firstLine != UID_EUID_ZERO) {
-        UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[RmrsResourceExport] [OsHelper] First line= " << firstLine << ".";
-        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[RmrsResourceExport] [OsHelper] Executing the cat.sh failed due to insufficient permission.";
-        return RMRS_ERROR;
-    }
-    return RMRS_OK;
-}
-
 RmrsResult OsHelper::ReadNumaMap(const std::string &pidStr, std::string &fileContent)
 {
-    char cmdBuf[CMD_BUFFER_SIZE];
-    int ret = snprintf_s(cmdBuf, sizeof(cmdBuf), sizeof(cmdBuf) - 1, "%s %s %s", CAT_SCRIPT_CAT_PATH, pidStr.c_str(),
-                         CAT_SCRIPT_TAIL);
-    if (ret == -1) {
-        cmdBuf[0] = '\0';
-        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[RmrsResourceExport] [OsHelper] The snprintf_s operation has failed.";
-        return RMRS_ERROR;
-    }
-    std::string cmd(cmdBuf);
+    // 进程内直读 /proc/<pid>/numa_maps：依赖 systemd 授予并由安全模块收敛的
+    // CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE，不再通过 sudo cat.sh 提权
+    std::string numaMapsPath = procPathPrefix + "/" + pidStr + "/numa_maps";
 
     UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
         << "[RmrsResourceExport] [OsHelper] Input Param pid=" << pidStr << ".";
 
-    // 调用脚本
-    try {
-        fileContent = ExecCommand(cmd);
-    } catch (...) {
-        UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[RmrsResourceExport] [OsHelper] Cannot execute cat.sh for pid=" << pidStr << ".";
+    std::vector<std::string> lines;
+    auto ret = RmrsFileUtil::GetFileInfo(numaMapsPath, lines);
+    if (ret != RMRS_OK) {
         UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[RmrsResourceExport] [OsHelper] Failed to read numa_maps file.";
+            << "[RmrsResourceExport] [OsHelper] Failed to read numa_maps file for pid=" << pidStr << ".";
         return RMRS_ERROR;
     }
 
-    auto checkRet = checkUidEuid(fileContent);
-    if (checkRet != RMRS_OK) {
-        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
-            << "[RmrsResourceExport] [OsHelper] Executing the cat.sh script Failed.";
-        return RMRS_ERROR;
+    std::ostringstream oss;
+    for (const auto &line : lines) {
+        oss << line << '\n';
     }
+    fileContent = oss.str();
 
     return RMRS_OK;
 }

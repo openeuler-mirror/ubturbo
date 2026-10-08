@@ -12,6 +12,9 @@
 ###
 ### Options:
 ###     <target>                Build target used by Make
+###                             RPM packaging targets (rpmbuild + ubturbo.spec):
+###                                 `ubturbo`       build the ubturbo RPM into output/
+###                                 `ubturbo-rmrs`  build the ubturbo-rmrs RPM into output/
 ###     -h | --help             Show help message
 ###     -D | --debug            Build debug version
 ###     -C | --coverage         Generate coverage report files
@@ -359,6 +362,21 @@ START_TIME=$(date +%s.%N)
 cd "${PROJECT_ROOT_DIR}"
 
 parse_args "$@" # 解析脚本参数
+
+# RPM 打包目标：build.sh ubturbo / build.sh ubturbo-rmrs
+# 基于 ubturbo.spec 通过 scripts/rpm/package.sh 调用 rpmbuild，产物收集到 output/
+if [[ $build_target == 'ubturbo' || $build_target == 'ubturbo-rmrs' ]]; then
+    bash "${PROJECT_ROOT_DIR}/scripts/rpm/package.sh" "$build_target"
+    exit $?
+fi
+
+# 旧的 CPack 打包方式（build.sh package）已废弃
+if [[ $build_target == 'package' ]]; then
+    echo "Error: 'build.sh package' (CPack) 已移除。" >&2
+    echo "请改用 'bash build.sh ubturbo' 或 'bash build.sh ubturbo-rmrs' 构建 RPM 包。" >&2
+    exit 1
+fi
+
 build_cmake     # 执行 CMake 构建
 
 END_TIME=$(date +%s.%N)

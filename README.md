@@ -61,28 +61,28 @@ UBTURBO/
 3. **进程通信**：通过unix domain socket机制，进行节点内进程间通信，提供面向连接的可靠数据传输功能。使用Reactor模式，server端启动线程监听指定socket文件，接受client端连接后创建一个新线程，调用指定回调函数，将结果发送给client端。
 4. **日志管理**：
    
-  - 1）**异步环形缓冲区**：使用异步环形缓冲区实现异步日志记录，避免阻塞主线程；
-  - 2）**锁机制**：采用适当的锁机制确保多线程环境下的线程安全性；
-  - 3）**时间戳处理**：利用系统时间函数获取时间戳信息；
-  - 4）**文件操作**：使用文件操作相关的API实现日志文件的写入和管理。UBTurbo框架和各插件日志独立，各自单个日志最大200MB，绕接进行记录，各自最多存储10个文件。
+   - **异步环形缓冲区**：使用异步环形缓冲区实现异步日志记录，避免阻塞主线程；
+   - **锁机制**：采用适当的锁机制确保多线程环境下的线程安全性；
+   - **时间戳处理**：利用系统时间函数获取时间戳信息；
+   - **文件操作**：使用文件操作相关的API实现日志文件的写入和管理。UBTurbo框架和各插件日志独立，各自单个日志最大200MB，绕接进行记录，各自最多存储10个文件。
 
 # 快速入门
 
 ## 前置条件
 
-- UBTurbo集成了SMAP能力，如需使用SMAP相关能力，需提前安装SMAP. SMAP的安装方式、运行模式与单元测试运行方式详见下文[SMAP插件安装与单元测试](#SMAP插件安装与单元测试)章节，完整文档位于`plugins/smap/doc/`.
+- UBTurbo集成了SMAP能力，如需使用SMAP相关能力，需提前安装SMAP. SMAP的安装方式、运行模式与单元测试运行方式详见下文[SMAP插件安装与单元测试](#SMAP插件安装与单元测试)章节，完整文档位于`plugins/smap/doc/`。
 
-- /dev/shm/smap_config保存了NUMA和进程配置等信息，如果UBTurbo进程需要切换用户，则需要先删除该文件.
+- /dev/shm/smap_config保存了NUMA和进程配置等信息，如果UBTurbo进程需要切换用户，则需要先删除该文件。
 
-- /dev/shm/ubturbo_page_type.dat保存了SMAP的初始化类型信息，如果UBTurbo进程需要切换用户或者场景（例如虚拟化场景切换到大数据场景），则需要先删除该文件.
+- /dev/shm/ubturbo_page_type.dat保存了SMAP的初始化类型信息，如果UBTurbo进程需要切换用户或者场景（例如虚拟化场景切换到大数据场景），则需要先删除该文件。
 
-- UBTurbo默认不启用任何插件，请依据业务场景在ubturbo_plugin_admission.conf中打开插件（取消对应插件的注释）.
+- UBTurbo默认不启用任何插件，请依据业务场景在ubturbo_plugin_admission.conf中打开插件（取消对应插件的注释）。
 
-- 在ubturbo_plugin_admission.conf中打开插件前，需保证对应插件已安装且配置完成，否则UBTurbo及对应插件将启动异常.
+- 在ubturbo_plugin_admission.conf中打开插件前，需保证对应插件已安装且配置完成，否则UBTurbo及对应插件将启动异常。
 
 ## 构建依赖
 
-> **架构与操作系统要求**：UBTurbo仅支持aarch64架构，构建强依赖openEuler（`CMakeLists.txt`读取`/etc/openEuler-release`），推荐在openEuler 24.03 LTS上构建。SMAP插件同样仅支持aarch64。
+> **架构与操作系统要求**：UBTurbo仅支持aarch64架构，推荐在openEuler 24.03 LTS上构建与打包（RPM 打包基于仓库根目录的 `ubturbo.spec`，通过 `rpmbuild` 构建）。SMAP插件同样仅支持aarch64。
 
 编译UBTurbo需要安装以下依赖（以openEuler为例）：
 
@@ -122,6 +122,26 @@ sh build.sh
 - 在dist/release/lib下会有以下库文件: `libubturbo_client.so`
 
 - 在dist/release/conf下会有以配置文件: `ubturbo_plugin_admission.conf`、`ubturbo.conf`
+
+### 构建 RPM 包
+
+RPM 打包基于仓库根目录的 `ubturbo.spec`，通过 `rpmbuild` 构建（不再使用 CPack），需先安装 `rpm-build`：
+
+```bash
+sudo dnf install -y rpm-build
+```
+
+在根目录下执行：
+
+```bash
+sh build.sh ubturbo        # 构建 ubturbo 主包
+sh build.sh ubturbo-rmrs   # 构建 ubturbo-rmrs 子包
+```
+
+构建产物位于根目录 `output/`：
+
+- `ubturbo-*.aarch64.rpm`：UBTurbo 主框架（`ub_turbo_exec`、`libubturbo_client.so`、框架配置与 systemd 服务）
+- `ubturbo-rmrs-*.aarch64.rpm`：rmrs 插件（`librmrs_ubturbo_plugin.so`）及其配置
 
 ## 单元测试
 
@@ -224,20 +244,16 @@ sudo dnf install -y rpm-build cmake make gcc gcc-c++ ninja-build \
     mkdir -p "$RPMBUILD_DIR"/{SOURCES,SPECS,RPMS,SRPMS,BUILD,BUILDROOT}
     ```
 
-2. 构建 ubturbo-rmrs RPM（打包 UBTurbo 源码并执行 rpmbuild）：
+2. 构建 ubturbo / ubturbo-rmrs RPM（推荐使用仓库封装的入口，基于 `ubturbo.spec` 自动打包源码并执行 rpmbuild）：
 
     ```bash
     cd <SOURCE_DIR>
-    tar -czf "$RPMBUILD_DIR/SOURCES/ubturbo.tar.gz" \
-        --exclude='.git' --exclude='.gitignore' --exclude='.gitmodules' \
-        --exclude='dist' --exclude='output' --exclude='*.tar.gz' --exclude='*.rpm' .
-    cp ubturbo.spec "$RPMBUILD_DIR/SPECS/"
-    rpmbuild -ba "$RPMBUILD_DIR/SPECS/ubturbo.spec" \
-        --define "_topdir $RPMBUILD_DIR" \
-        --define "_sourcedir $RPMBUILD_DIR/SOURCES" \
-        --define "ubturbo_version 1.1.1" \
-        --define "release_version 1"
+    bash build.sh ubturbo        # 构建 ubturbo 主包
+    bash build.sh ubturbo-rmrs   # 构建 ubturbo-rmrs 子包
     ```
+
+    产物位于 `<SOURCE_DIR>/output/`（`ubturbo-*.aarch64.rpm`、`ubturbo-rmrs-*.aarch64.rpm`）。
+    SMAP 相关的 rpmbuild 工作目录 `$RPMBUILD_DIR` 仅用于下面的 SMAP 步骤。
 
 3. 构建 ubturbo-smap RPM（打包 `plugins/smap/` 源码并执行 rpmbuild，传入 `KERNEL_VERSION` 宏）：
 
@@ -257,7 +273,7 @@ sudo dnf install -y rpm-build cmake make gcc gcc-c++ ninja-build \
 
     `KERNEL_VERSION` 默认 `openeuler`，可选值：`openeuler` | `ocos` | `velinux`。
 
-4. 收集 RPM 产物到输出目录：
+4. 收集 SMAP RPM 产物到输出目录（ubturbo / ubturbo-rmrs 已在上一步生成于 `<SOURCE_DIR>/output/`）：
 
     ```bash
     mkdir -p <OUTPUT_DIR>
@@ -268,7 +284,8 @@ sudo dnf install -y rpm-build cmake make gcc gcc-c++ ninja-build \
 
 **构建产物**
 
-- `ubturbo-rmrs-*.aarch64.rpm`：UBTurbo 主框架
+- `ubturbo-*.aarch64.rpm`：UBTurbo 主框架（`ub_turbo_exec`、`libubturbo_client.so`、框架配置与 systemd 服务）
+- `ubturbo-rmrs-*.aarch64.rpm`：RMRS 插件（`librmrs_ubturbo_plugin.so`）及其配置
 - `ubturbo-smap-*.aarch64.rpm`：SMAP 内核驱动与用户态库
 
 #### 安装RPM包

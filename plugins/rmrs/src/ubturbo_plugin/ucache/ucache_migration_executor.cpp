@@ -236,7 +236,8 @@ void UcacheMigrationExecutor::MigrateToRemoteNode(const uint16_t desNid, const M
         return;
     }
     uint32_t ret = RMRS_OK;
-    for (const auto &pid : pidsToMigrate_) {
+    for (size_t i = 0; i < pidsToMigrate_.size();) {
+        pid_t pid = pidsToMigrate_[i];
         // srcNid小于零表示从所有本地numa节点迁移
         if (strategy.srcNid < 0) {
             ret = MigrateFromMultipleSrcNids(desNid, pid);
@@ -249,7 +250,10 @@ void UcacheMigrationExecutor::MigrateToRemoteNode(const uint16_t desNid, const M
         } else if (ret == RMRS_WARN) { // 没有冷页的进程从迁移进程组里删除
             UBTURBO_LOG_WARN(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
                 << "[ucache] Failed to scan migrate folios from pid=" << pid << ".";
-            pidsToMigrate_.erase(std::remove(pidsToMigrate_.begin(), pidsToMigrate_.end(), pid), pidsToMigrate_.end());
+            pidsToMigrate_.erase(pidsToMigrate_.begin() + static_cast<ptrdiff_t>(i));
+            // 不递增 i，删除后下一个元素移到当前位置
+        } else {
+            ++i;
         }
     }
 }

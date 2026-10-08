@@ -374,6 +374,8 @@ TEST_F(ManageTest, TestInitProcessMigrationTargetState)
     attr.pendingTargetConfigValid = true;
     attr.pendingIgnoreRemoteCapacity = true;
     attr.pendingTargetNumaNodes = 0x31;
+    attr.syncWaitRemoteEmpty = true;
+    attr.syncWaitRemoteEmptySnapshotValid = true;
     attr.managedLocalState.managedLocalMask = 0xf;
     attr.managedLocalState.accountLocalMask[0] = 0x1;
 
@@ -384,6 +386,8 @@ TEST_F(ManageTest, TestInitProcessMigrationTargetState)
     EXPECT_FALSE(attr.pendingTargetConfigValid);
     EXPECT_FALSE(attr.pendingIgnoreRemoteCapacity);
     EXPECT_EQ(0U, attr.pendingTargetNumaNodes);
+    EXPECT_FALSE(attr.syncWaitRemoteEmpty);
+    EXPECT_FALSE(attr.syncWaitRemoteEmptySnapshotValid);
     EXPECT_EQ(0U, attr.managedLocalState.managedLocalMask);
     EXPECT_EQ(0U, attr.managedLocalState.accountLocalMask[0]);
 
@@ -833,7 +837,19 @@ TEST_F(ManageTest, TestGetPidTypeFromCommPath)
     MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
         .stubs()
         .will(returnValue(0));
-    MOCKER(popen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
+    MOCKER(fopen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
+    /* 进程不存在（ENOENT）按 -ESRCH 返回 */
+    errno = ENOENT;
+    ret = GetPidTypeFromComm(1);
+    EXPECT_EQ(-ESRCH, ret);
+
+    GlobalMockObject::verify();
+    MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
+        .stubs()
+        .will(returnValue(0));
+    MOCKER(fopen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
+    /* 其他打开失败场景仍按 -EINVAL 返回 */
+    errno = EACCES;
     ret = GetPidTypeFromComm(1);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -867,9 +883,9 @@ TEST_F(ManageTest, TestGetPidTypeFromCommFile)
         .stubs()
         .will(returnValue(0));
     static FILE fake_file;
-    MOCKER(popen).stubs().will(returnValue(&fake_file));
+    MOCKER(fopen).stubs().will(returnValue(&fake_file));
     MOCKER(fgets).stubs().will(returnValue(static_cast<char *>(nullptr)));
-    MOCKER(pclose).stubs().will(returnValue(0));
+    MOCKER(fclose).stubs().will(returnValue(0));
     ret = GetPidTypeFromComm(1);
     EXPECT_EQ(-1, ret);
 
@@ -877,9 +893,9 @@ TEST_F(ManageTest, TestGetPidTypeFromCommFile)
     MOCKER((int (*)(char *, unsigned long, unsigned long, char const *, void *))snprintf_s)
         .stubs()
         .will(returnValue(0));
-    MOCKER(popen).stubs().will(returnValue(&fake_file));
+    MOCKER(fopen).stubs().will(returnValue(&fake_file));
     MOCKER(fgets).stubs().will(invoke(FakeFgetsProcessComm));
-    MOCKER(pclose).stubs().will(returnValue(0));
+    MOCKER(fclose).stubs().will(returnValue(0));
     ret = GetPidTypeFromComm(1);
     EXPECT_EQ(0, ret);
 }
@@ -899,6 +915,13 @@ TEST_F(ManageTest, TestDetectPidType)
     MOCKER(GetPidTypeFromComm).stubs().will(returnValue(-EINVAL));
     ret = DetectPidType(pid);
     EXPECT_EQ(-EINVAL, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    /* TOCTOU 窗口内进程退出时透传 -ESRCH */
+    MOCKER(GetPidTypeFromComm).stubs().will(returnValue(-ESRCH));
+    ret = DetectPidType(pid);
+    EXPECT_EQ(-ESRCH, ret);
 }
 
 extern "C" ProcessAttr *GetProcessAttr(pid_t pid);
@@ -1025,7 +1048,7 @@ TEST_F(ManageTest, TestSetProcessConfig)
     EXPECT_EQ(attr.numaAttr.numaNodes, 17);
 }
 
-TEST_F(ManageTest, TestSetProcessConfigRejectsUnexpectedRemoteResidency)
+TEST_F(ManageTest, TestSetProcessConfigTracksUnexpectedRemoteResidencyForDrain)
 {
     g_processManager.nrLocalNuma = 4;
     ProcessAttr attr = {};
@@ -1040,7 +1063,9 @@ TEST_F(ManageTest, TestSetProcessConfigRejectsUnexpectedRemoteResidency)
     MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
     MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddUnexpectedRemoteResidentForTest));
     int ret = SetProcessConfig(&attr, &param, false);
-    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ(0, ret);
+    EXPECT_TRUE(InAttrL2(&attr, 5));
+    EXPECT_EQ(nullptr, FindProcessRemoteTarget(&attr.targetConfig, 5));
 }
 
 TEST_F(ManageTest, TestSetProcessConfigSkipsUnexpectedRemoteResidencyWhenStatScan)
@@ -1059,6 +1084,7 @@ TEST_F(ManageTest, TestSetProcessConfigSkipsUnexpectedRemoteResidencyWhenStatSca
     MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddUnexpectedRemoteResidentForTest));
     int ret = SetProcessConfig(&attr, &param, true);
     EXPECT_EQ(0, ret);
+    EXPECT_FALSE(InAttrL2(&attr, 5));
 }
 
 extern "C" FILE *OpenNumaMaps(pid_t pid);
@@ -1088,13 +1114,33 @@ TEST_F(ManageTest, TestIsNumaMapLineHuge)
     EXPECT_EQ(ret, true);
 }
 
-extern "C" bool IsPidUsingHugePages(pid_t pid);
+extern "C" int IsPidUsingHugePages(pid_t pid);
 
 TEST_F(ManageTest, TestIsPidUsingHugePagesOpenFailure)
 {
+    /* numa_maps 不可读时，迁出接口将该 PID 视为无效并跳过 */
+    errno = EACCES;
     MOCKER(OpenNumaMaps).expects(once()).will(returnValue((FILE *)nullptr));
-    bool ret = IsPidUsingHugePages(1234);
-    EXPECT_EQ(false, ret);
+    int ret = IsPidUsingHugePages(1234);
+    EXPECT_EQ(-ESRCH, ret);
+}
+
+TEST_F(ManageTest, TestIsPidUsingHugePagesPidNotExist)
+{
+    /* 真实路径：pid 不存在时 /proc/<pid>/numa_maps 打开返回 ENOENT，应返回 -ESRCH */
+    pid_t notExistPid = (pid_t)0x7fffffff;
+    int ret = IsPidUsingHugePages(notExistPid);
+    EXPECT_EQ(-ESRCH, ret);
+}
+
+TEST_F(ManageTest, TestIsPidUsingHugePagesZombieProcess)
+{
+    /* 僵尸进程（退出后未被回收）：/proc/<pid> 节点仍在但 mm 已释放，
+     * 内核 open numa_maps 返回 ESRCH 而非 ENOENT，同样应按"进程不存在"返回 -ESRCH */
+    errno = ESRCH;
+    MOCKER(OpenNumaMaps).expects(once()).will(returnValue((FILE *)nullptr));
+    int ret = IsPidUsingHugePages(1234);
+    EXPECT_EQ(-ESRCH, ret);
 }
 
 TEST_F(ManageTest, TestIsPidUsingHugePagesHasHuge)
@@ -1104,22 +1150,34 @@ TEST_F(ManageTest, TestIsPidUsingHugePagesHasHuge)
     FILE *fp = fmemopen((void *)huge_data, strlen(huge_data), "r");
     ASSERT_NE(nullptr, fp);
     MOCKER(OpenNumaMaps).stubs().will(returnValue(fp));
-    MOCKER(pclose).stubs().will(returnValue(0));
+    /* IsPidUsingHugePages 内部 fclose(fp) 真实关闭 fmemopen 流，此处不再重复 fclose */
     bool ret = IsPidUsingHugePages(1234);
     EXPECT_EQ(true, ret);
-    fclose(fp);
 }
 
 TEST_F(ManageTest, TestIsPidUsingHugePagesNoHuge)
 {
     const char *no_huge_data = "00100000 N0=1 N2=3 kernelpagesize_kB=4\n";
+    /* 读取结束复查会再次调用 OpenNumaMaps，需提供第二个独立流避免重复 fclose 同一流 */
     FILE *fp = fmemopen((void *)no_huge_data, strlen(no_huge_data), "r");
+    FILE *fpAgain = fmemopen((void *)no_huge_data, strlen(no_huge_data), "r");
     ASSERT_NE(nullptr, fp);
-    MOCKER(OpenNumaMaps).stubs().will(returnValue(fp));
-    MOCKER(pclose).stubs().will(returnValue(0));
+    ASSERT_NE(nullptr, fpAgain);
+    MOCKER(OpenNumaMaps).stubs().will(returnValue(fp)).then(returnValue(fpAgain));
+    /* 复查时重新打开成功（进程仍存活），保持 false 语义 */
     bool ret = IsPidUsingHugePages(1234);
     EXPECT_EQ(false, ret);
-    fclose(fp);
+}
+
+TEST_F(ManageTest, TestIsPidUsingHugePagesMidReadExit)
+{
+    /* 读取结束未发现大页且重新打开失败：进程读取期间退出（含僵尸态），返回 -ESRCH */
+    const char *no_huge_data = "00100000 N0=1 N2=3 kernelpagesize_kB=4\n";
+    FILE *fp = fmemopen((void *)no_huge_data, strlen(no_huge_data), "r");
+    ASSERT_NE(nullptr, fp);
+    MOCKER(OpenNumaMaps).stubs().will(returnValue(fp)).then(returnValue(static_cast<FILE *>(nullptr)));
+    int ret = IsPidUsingHugePages(1234);
+    EXPECT_EQ(-ESRCH, ret);
 }
 
 extern "C" void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag);
@@ -1342,7 +1400,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateRejectsNoObservation)
     EXPECT_EQ(BIT(0), active.numaAttr.numaNodes);
 }
 
-TEST_F(ManageTest, TestPrepareProcessManageCandidateRejectsUnexpectedRemote)
+TEST_F(ManageTest, TestPrepareProcessManageCandidateTracksUnexpectedRemoteForDrain)
 {
     ProcessAttr active = {};
     ProcessParam param = InitCandidateTest(&active);
@@ -1355,8 +1413,11 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateRejectsUnexpectedRemote)
     MOCKER(SetLocalNumaByCpu).expects(once()).will(invoke(AddAffinityLocalForTest));
     MOCKER(GetProcessNumaMapsObservation).expects(once()).will(invoke(AddUnexpectedRemoteResidentForTest));
 
-    EXPECT_EQ(-EINVAL, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
-    EXPECT_EQ(nullptr, candidate.prepared);
+    ASSERT_EQ(0, PrepareProcessManageCandidate(&param, PROCESS_TYPE, &candidate));
+    ASSERT_NE(nullptr, candidate.prepared);
+    EXPECT_TRUE(InAttrL2(candidate.prepared, 5));
+    EXPECT_EQ(nullptr, FindProcessRemoteTarget(&candidate.prepared->targetConfig, 5));
+    DiscardProcessManageCandidate(&candidate);
 }
 
 TEST_F(ManageTest, TestPrepareProcessManageCandidateKeepsPairAccountFor4KMultiNuma)
@@ -1453,6 +1514,8 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
     MOCKER(SyncAllProcessConfig).stubs().will(returnValue(0));
     MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
+    MOCKER(SetLocalNumaByCpu).stubs().will(invoke(AddAffinityLocalForTest));
+    MOCKER(GetProcessNumaMapsObservation).stubs().will(invoke(AddEmptyCandidateResidentForTest));
     MOCKER(SetProcessLocalNuma).stubs().will(returnValue(0));
 
     ret = ProcessAddManage(&param, nullptr);
@@ -2583,6 +2646,136 @@ TEST_F(ManageTest, TestChangePidRemoteByPidDedupSamePid)
     free(msg.payloads);
 }
 
+extern "C" void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destNodeIndex,
+                                      uint64_t memSize, int ratio);
+extern "C" int SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRemoteNumaIoctlMsg *msg, int len);
+
+/* WATERLINE + MIG_MEMSIZE_MODE：部分量迁移后源节点 L2 位必须保留，否则同源节点
+ * 二次迁移会在 IsPidArrRemoteNumaMatch 处因 NotInAttrL2 返回 -ENXIO。
+ * 判据为扣减后的 strategyAttr.memSize[l1node][srcNodeIndex]，非零即视为仍有剩余。 */
+TEST_F(ManageTest, TestChangePidRemoteMemoryMemsizePartialKeepsSrcL2)
+{
+    g_runMode = WATERLINE_MODE;
+    g_processManager.nrLocalNuma = 4;
+    const int srcNid = 8;
+    const int destNid = 9;
+    int srcNodeIndex = srcNid - g_processManager.nrLocalNuma;
+    int destNodeIndex = destNid - g_processManager.nrLocalNuma;
+    const uint64_t srcTotal = 1024 * 1024; /* 1GB，单位 KB */
+
+    ProcessAttr attr = {};
+    attr.pid = 100;
+    attr.migrateMode = MIG_MEMSIZE_MODE;
+    attr.numaAttr.numaNodes = BIT(0); /* 本地 numa0 */
+    AddAttrL2(&attr, srcNid);
+    attr.strategyAttr.memSize[0][srcNodeIndex] = srcTotal;
+
+    /* 迁 512MB < 1GB：扣减后源仍非零 → migOutAll=false → 源 L2 位保留，目的 L2 位新增。 */
+    ChangePidRemoteMemory(&attr, srcNodeIndex, destNodeIndex, srcTotal / 2, 0);
+    EXPECT_TRUE(InAttrL2(&attr, srcNid));
+    EXPECT_TRUE(InAttrL2(&attr, destNid));
+}
+
+TEST_F(ManageTest, TestChangePidRemoteMemoryMemsizeFullClearsSrcL2)
+{
+    g_runMode = WATERLINE_MODE;
+    g_processManager.nrLocalNuma = 4;
+    const int srcNid = 8;
+    const int destNid = 9;
+    int srcNodeIndex = srcNid - g_processManager.nrLocalNuma;
+    int destNodeIndex = destNid - g_processManager.nrLocalNuma;
+    const uint64_t srcTotal = 1024 * 1024;
+
+    ProcessAttr attr = {};
+    attr.pid = 100;
+    attr.migrateMode = MIG_MEMSIZE_MODE;
+    attr.numaAttr.numaNodes = BIT(0);
+    AddAttrL2(&attr, srcNid);
+    attr.strategyAttr.memSize[0][srcNodeIndex] = srcTotal;
+
+    /* 全量迁出：扣减后源归零 → migOutAll=true → 源 L2 位清除，目的 L2 位新增。 */
+    ChangePidRemoteMemory(&attr, srcNodeIndex, destNodeIndex, srcTotal, 0);
+    EXPECT_FALSE(InAttrL2(&attr, srcNid));
+    EXPECT_TRUE(InAttrL2(&attr, destNid));
+}
+
+/* SetPayloadValue 构建 ioctl 用 transient payload 的 numaNodes，WATERLINE 下
+ * MIG_MEMSIZE_MODE 需按 memSize >= strategyAttr.memSize 判定是否清除源位（与
+ * ChangePidRemoteMemory 的持久位图语义保持一致）。 */
+TEST_F(ManageTest, TestSetPayloadValueMemsizePartialKeepsSrcL2)
+{
+    g_runMode = WATERLINE_MODE;
+    g_processManager.nrLocalNuma = 4;
+    const int srcNid = 8;
+    const int destNid = 9;
+    int srcNodeIndex = srcNid - g_processManager.nrLocalNuma;
+    const uint64_t srcTotal = 1024 * 1024;
+    int offset = LOCAL_NUMA_BITS - g_processManager.nrLocalNuma;
+
+    ProcessAttr attr = {};
+    attr.pid = 100;
+    attr.migrateMode = MIG_MEMSIZE_MODE;
+    attr.numaAttr.numaNodes = BIT(0);
+    AddAttrL2(&attr, srcNid);
+    attr.strategyAttr.memSize[0][srcNodeIndex] = srcTotal;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotAdd(&g_processManager, &attr);
+    EnvMutexInit(&g_processManager.threadLock);
+
+    struct MigPidRemoteNumaIoctlMsg msg = {.pidCnt = 1};
+    msg.payloads = (struct MigPayload *)malloc(sizeof(struct MigPayload));
+    msg.payloads[0].pid = attr.pid;
+    msg.payloads[0].srcNid = srcNid;
+    msg.payloads[0].destNid = destNid;
+    msg.payloads[0].memSize = srcTotal / 2; /* 部分量 */
+    msg.payloads[0].ratio = 0;
+
+    struct AccessAddPidPayload payload[1] = {{0}};
+    int ret = SetPayloadValue(payload, &msg, 1);
+    EXPECT_EQ(1, ret);
+    /* 部分量：源位保留，目的位新增。 */
+    EXPECT_TRUE(InL2(payload[0].numaNodes, srcNid + offset));
+    EXPECT_TRUE(InL2(payload[0].numaNodes, destNid + offset));
+    free(msg.payloads);
+}
+
+TEST_F(ManageTest, TestSetPayloadValueMemsizeFullClearsSrcL2)
+{
+    g_runMode = WATERLINE_MODE;
+    g_processManager.nrLocalNuma = 4;
+    const int srcNid = 8;
+    const int destNid = 9;
+    int srcNodeIndex = srcNid - g_processManager.nrLocalNuma;
+    const uint64_t srcTotal = 1024 * 1024;
+    int offset = LOCAL_NUMA_BITS - g_processManager.nrLocalNuma;
+
+    ProcessAttr attr = {};
+    attr.pid = 100;
+    attr.migrateMode = MIG_MEMSIZE_MODE;
+    attr.numaAttr.numaNodes = BIT(0);
+    AddAttrL2(&attr, srcNid);
+    attr.strategyAttr.memSize[0][srcNodeIndex] = srcTotal;
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotAdd(&g_processManager, &attr);
+    EnvMutexInit(&g_processManager.threadLock);
+
+    struct MigPidRemoteNumaIoctlMsg msg = {.pidCnt = 1};
+    msg.payloads = (struct MigPayload *)malloc(sizeof(struct MigPayload));
+    msg.payloads[0].pid = attr.pid;
+    msg.payloads[0].srcNid = srcNid;
+    msg.payloads[0].destNid = destNid;
+    msg.payloads[0].memSize = srcTotal; /* 全量 */
+    msg.payloads[0].ratio = 0;
+
+    struct AccessAddPidPayload payload[1] = {{0}};
+    int ret = SetPayloadValue(payload, &msg, 1);
+    EXPECT_EQ(1, ret);
+    /* 全量：源位清除，目的位新增。 */
+    EXPECT_FALSE(InL2(payload[0].numaNodes, srcNid + offset));
+    EXPECT_TRUE(InL2(payload[0].numaNodes, destNid + offset));
+    free(msg.payloads);
+}
+
 TEST_F(ManageTest, TestEnableProcessMigrateDisableInvalid)
 {
     pid_t pidArr[] = {1};
@@ -2841,6 +3034,72 @@ TEST_F(ManageTest, TestMigOutIsDoneSingleRemoteUsesRemotePages)
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 499;
     attr.walkPage.nrPages[4] = 499;
     EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
+}
+
+TEST_F(ManageTest, TestMigOutIsDoneZeroTargetRequiresFreshSnapshotAndEmptyAccount)
+{
+    bool isMultiNumaPid = false;
+    ProcessAttr attr = {};
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    attr.migrateMode = MIG_MEMSIZE_MODE;
+    attr.numaAttr.numaNodes = 0b00010001;
+    attr.remoteNumaCnt = 1;
+    attr.migrateParam[0].nid = 4;
+    attr.migrateParam[0].memSize = 0;
+    attr.walkPage.nrPages[0] = 100;
+    attr.walkPage.nrPages[4] = 0;
+    attr.walkPage.nrPage = 100;
+    attr.syncWaitRemoteEmpty = true;
+
+    EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
+
+    attr.syncWaitRemoteEmptySnapshotValid = true;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 64;
+    EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
+
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 0;
+    EXPECT_TRUE(MigOutIsDone(&attr, &isMultiNumaPid));
+}
+
+TEST_F(ManageTest, TestMigOutIsDonePendingTargetKeepsWaiting)
+{
+    bool isMultiNumaPid = false;
+    ProcessAttr attr = {};
+
+    g_pageSizeHuge = PAGESIZE_2M;
+    g_processManager.nrLocalNuma = 4;
+    attr.migrateMode = MIG_MEMSIZE_MODE;
+    attr.numaAttr.numaNodes = 0b00010001;
+    attr.remoteNumaCnt = 1;
+    /* 上一轮迁出遗留的旧目标：500 页。 */
+    attr.migrateParam[0].nid = 4;
+    attr.migrateParam[0].memSize = 1024 * 1000;
+    attr.walkPage.nrPages[0] = 200;
+    attr.walkPage.nrPages[4] = 500;
+    attr.walkPage.nrPage = 1000;
+    /* 旧账本恰好等于旧目标：若无 pending 守卫，这里会被误判为迁移完成。 */
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 500;
+    /* 新 memSize=0 配置因 PROC_MIGRATE 进入 pending，尚未生效。 */
+    attr.pendingTargetConfigValid = true;
+
+    EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
+    EXPECT_FALSE(isMultiNumaPid);
+
+    /* 多 NUMA 虚机同样被 pending 拦截，且 isMultiNumaPid 标志保持正确。 */
+    isMultiNumaPid = false;
+    attr.type = VM_TYPE;
+    attr.remoteNumaCnt = 2;
+    attr.migrateParam[1].nid = 5;
+    attr.migrateParam[1].memSize = 0;
+    EXPECT_FALSE(MigOutIsDone(&attr, &isMultiNumaPid));
+    EXPECT_TRUE(isMultiNumaPid);
+
+    /* 无 pending 时保持原判定行为：旧账本 == 旧目标 → 完成。 */
+    attr.pendingTargetConfigValid = false;
+    attr.remoteNumaCnt = 1;
+    EXPECT_TRUE(MigOutIsDone(&attr, &isMultiNumaPid));
 }
 
 // Helper function to convert KB to pages for testing
@@ -5260,6 +5519,7 @@ TEST_F(ManageTest, TestSetGroupedProcessConfigBasic)
     EXPECT_EQ(1, attr.groupPolicy.groupCount);
     EXPECT_EQ(false, attr.autoRemoveWhenRemoteEmpty);
     EXPECT_EQ(false, attr.syncWaitRemoteEmpty);
+    EXPECT_EQ(false, attr.syncWaitRemoteEmptySnapshotValid);
 }
 
 TEST_F(ManageTest, TestSetGroupedProcessConfigOverwritesAttr)

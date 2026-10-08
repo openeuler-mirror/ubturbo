@@ -19,7 +19,7 @@ Requires:      kernel >= 5.10.0-136.12.0.86
 Requires:      ubs_engine
 
 %define debug_package %{nil}
-%define ubturbo_lib_dir /opt/ubturbo/lib
+%define ubturbo_lib_dir /usr/lib64
 %define ubturbo_conf_dir /opt/ubturbo/conf
 
 %description
