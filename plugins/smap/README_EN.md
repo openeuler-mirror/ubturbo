@@ -1,6 +1,6 @@
 # Project Introduction
 
-<p> English | <a href="README.md">简体中文</a>
+<p> English | <a href="README.md">简体中文</a></p>
 
 SMAP migrates page data based on the local spatiotemporal characteristics of application access patterns, combined with the hardware-assisted hot and cold data identification capabilities provided by the chip (the chip must support hot and cold data identification for remote memory). Hot data is stored in local memory while cold data is placed in remote memory, thereby delivering end-to-end performance acceleration for applications.
 
@@ -10,7 +10,7 @@ SMAP migrates page data based on the local spatiotemporal characteristics of app
 
 ## Project Architecture
 
-![Project architecture](./doc/images/SMAP_ARCHITECTURE_EN.png)
+![Project architecture](./doc/images/SMAP_ARCHITECTURE_EN.PNG)
 
 Key technologies and solutions:
 
@@ -21,7 +21,7 @@ Key technologies and solutions:
    - Software-based cold data identification: It is known that the ARM CPU can automatically set the Access Flag (AF) for page table entries (PTEs) that have been accessed by processes. Therefore, the access status of a memory page can be obtained by reading the AF of the PTE.
    - Hardware-based hot data identification: When the CPU delivers a memory access request, the hot data identification module uses a statistical array to measure the number of times the address of the accessed page is accessed, thereby obtaining the page's popularity information. As the scanning range of the hot data identification module is limited in a single scan, the result of remote memory scanning using software is referenced before the hot data identification module performs scanning to improve its scanning efficiency.
 
-   ![ARCH](./doc/images/ARCH_EN.png)
+   ![ARCH](./doc/images/ARCH_EN.PNG)
 
    As shown in the preceding figure, the device driver creation and working processes related to hot and cold data identification are as follows:
 
@@ -36,7 +36,7 @@ Key technologies and solutions:
 
    Data migration is mainly implemented by the data migration policy module and page migration module. Two key points are involved: how to determine the pages to be migrated and how to design the migration interface. The data migration policy module selects cold pages in the local memory and hot pages in the remote memory based on the number of page accesses and the sizes of the local and remote memory allocated to a single process. Then, the module sends the physical addresses of these pages and the destination node for migration to the page migration module, which then performs the migration.
 
-   ![ARCH2](./doc/images/ARCH2_EN.png)
+   ![ARCH2](./doc/images/ARCH2_EN.PNG)
 
    As shown in the preceding figure, data migration involves the kernel-mode scanning and migration subsystem and the user-mode management and policy subsystem. The working process is as follows:
 
@@ -61,7 +61,7 @@ Key technologies and solutions:
 
    Optionally, the resource management module periodically obtains information such as whether the CPU of the current VM is idle and whether an I/O bottleneck occurs at the OS layer and pipeline layer. A hierarchical policy design is used to decouple borrowed memory allocation within a single server and hot and cold page exchange within a VM. In addition, per-VM memory ratio configuration is allowed to maintain system flexibility and scalability, supporting the adjustment of VM-level local-remote memory resource ratios for external interconnection.
 
-   ![Process resource allocation](./doc/images/RESOURCE_ALLOCATE_EN.png)
+   ![Process resource allocation](./doc/images/RESOURCE_ALLOCATE_EN.PNG)
 
 ## Application Adaptation Method
 

@@ -2,8 +2,8 @@
 
 当前 UBTurbo 提供两种环境部署方式：RPM 包安装、容器镜像部署。环境部署流程包含以下主要步骤：
 
-1. 环境准备与安装
-2. 构建项目与单元测试
+1. 环境准备与安装。
+2. 构建项目与单元测试。
 
 ## 环境要求
 
@@ -26,18 +26,18 @@
 
 ## 安装注意事项
 
-  - UBTurbo RPM 包安装时会通过安装脚本自动创建 <code>ubturbo</code> 系统用户和用户组（登录shell为 <code>/sbin/nologin</code>），无需手动创建。
-  - UBSE 需要调用 UBTurbo 接口，UBTurbo 接口有权限校验，需要将 ubse 用户加到 ubturbo 用户组中，该用户组由 UBTurbo 服务创建。如果 UBTurbo 服务未在 UBSE 前安装，ubse 用户可能无法加入 ubturbo 用户组，导致 UBSE 服务调用 UBTurbo 接口异常。待 UBTurbo 安装完成后，需手动执行 <code>sudo usermod -aG ubturbo ubse</code> 将 ubse 用户加入 ubturbo 用户组。
-  - 使用 SMAP（分级内存）能力时，需先安装 <code>ubturbo-smap</code> 包（该步骤只安装包，不插入驱动）。
-  - <code>/dev/shm/smap_config</code> 保存了 NUMA 和进程配置等信息，如果 UBTurbo 进程需要切换用户，则需要先删除该文件。
-  - <code>/dev/shm/ubturbo_page_type.dat</code> 保存了 SMAP 的初始化类型信息，如果 UBTurbo 进程需要切换用户或者场景（例如虚拟化场景切换到大数据场景），则需要先删除该文件。
-  - UBTurbo 默认不启用任何插件，需依据业务场景在 <code>ubturbo_plugin_admission.conf</code> 中打开插件（取消对应插件的注释）。打开插件前，需保证插件的动态库和配置文件已分别放置在 <code>/opt/ubturbo/lib</code> 和 <code>/opt/ubturbo/conf</code> 下，否则 UBTurbo 及对应插件将启动异常。
+- UBTurbo RPM 包安装时会通过安装脚本自动创建 <code>ubturbo</code> 系统用户和用户组（登录shell为 <code>/sbin/nologin</code>），无需手动创建。
+- UBSE 需要调用 UBTurbo 接口，UBTurbo 接口有权限校验，需要将 ubse 用户加到 ubturbo 用户组中，该用户组由 UBTurbo 服务创建。如果 UBTurbo 服务未在 UBSE 前安装，ubse 用户可能无法加入 ubturbo 用户组，导致 UBSE 服务调用 UBTurbo 接口异常。待 UBTurbo 安装完成后，需手动执行 <code>sudo usermod -aG ubturbo ubse</code> 将 ubse 用户加入 ubturbo 用户组。
+- 使用 SMAP（分级内存）能力时，需先安装 <code>ubturbo-smap</code> 包（该步骤只安装包，不插入驱动）。
+- <code>/dev/shm/smap_config</code> 保存了 NUMA 和进程配置等信息，如果 UBTurbo 进程需要切换用户，则需要先删除该文件。
+- <code>/dev/shm/ubturbo_page_type.dat</code> 保存了 SMAP 的初始化类型信息，如果 UBTurbo 进程需要切换用户或者场景（例如虚拟化场景切换到大数据场景），则需要先删除该文件。
+- UBTurbo 默认不启用任何插件，需依据业务场景在 <code>ubturbo_plugin_admission.conf</code> 中打开插件（取消对应插件的注释）。打开插件前，需保证插件的动态库和配置文件已分别放置在 <code>/opt/ubturbo/lib</code> 和 <code>/opt/ubturbo/conf</code> 下，否则 UBTurbo 及对应插件将启动异常。
 
 ## 执行安装
 
 - 在线安装
 
-  > [!NOTE]说明
+  > [!NOTE] 说明
   >
   > 在线安装过程中，所需依赖会自动进行安装。
   > 需要系统已配置包含 ubturbo 组件的 openEuler 镜像源。
@@ -49,7 +49,7 @@
 
 - 离线安装
 
-  > [!WARNING]说明
+  > [!NOTE] 说明
   >
   > 离线安装需要提前安装所需依赖。
   > UBTurbo 运行依赖信息记录在 spec 文件（ubturbo.spec）中。
@@ -63,13 +63,12 @@
   sudo rpm -ivh ubturbo-rmrs-<version>-<release>.aarch64.rpm --force
   ```
 
-
 ### 容器镜像部署（可选）
 
 容器环境部署有两种方式：
 
-- 基于镜像构建容器环境
-- 基于 openEuler 基础环境从零安装
+- 基于镜像构建容器环境。
+- 基于 openEuler 基础环境从零安装。
 
 #### 方式一：基于镜像构建容器环境
 
@@ -101,7 +100,7 @@ cd ubturbo
 docker build -f docker/ubturbo.Dockerfile -t ubturbo-build:24.03-lts .
 ```
 
-> [!NOTE]说明
+> [!NOTE] 说明
 >
 > 构建依赖与 <code>ubturbo.spec</code> 的 <code>BuildRequires</code> 保持一致；googletest 与 mockcpp 为源码子模块，随源码编译，无需预装。
 > aarch64 主机直接构建即可；x86_64 主机可加 <code>--platform linux/arm64</code> 构建镜像（仅用于验证 Dockerfile，容器内交叉编译极慢，不推荐）。
@@ -153,11 +152,11 @@ git submodule update --init --recursive
 ./build.sh -t test      # 编译并运行全部 UT，生成覆盖率报告
 ```
 
-详细用法见仓内 `README.md`。
+详细用法见仓内 [README](../README.md)。
 
 ## 安装结果
 
-  UBTurbo 主程序安装结果：
+- UBTurbo 主程序安装结果
 
   | 路径                                  | 用途          |
   |-------------------------------------| -------------|
@@ -172,19 +171,20 @@ git submodule update --init --recursive
   | /var/run/ubturbo/                   | 运行时目录    |
   | ubturbo 用户/用户组                  | 系统用户与用户组（安装脚本自动创建） |
 
-- UBTurbo 客户端运行库安装结果：
+- UBTurbo 客户端运行库安装结果
 
   | 文件                                 | 其它说明                                          |
   | ------------------------------------ | ------------------------------------------------- |
   | `/usr/lib64/libubturbo_client.so`    | 客户端 SDK 动态库，供外部进程通过 IPC 访问 UBTurbo，属主 `ubturbo:ubturbo`，权限 `550` |
 
-- 辅助脚本安装结果：
+- 辅助脚本安装结果
 
   | 文件                                 | 其它说明                                          |
   | ------------------------------------ | ------------------------------------------------- |
   | `/usr/local/bin/cat.sh`              | root 属主辅助脚本，权限 `500` |
 
-  > [!NOTE]说明
+  > [!NOTE] 说明
+  >
   > 安装完成后，安装脚本已自动执行 <code>systemctl enable ubturbo.service</code>，服务已设置为开机自启，无需重复配置。
 
 ## （可选）修改配置
@@ -213,12 +213,13 @@ git submodule update --init --recursive
     #turbo_ucache=778
     ```
 
-    > [!NOTE]说明
-    > 只有在该准入配置中配置的插件才会被加载并初始化，未配置的插件不予加载。
-    > 配置中 key 对应插件的插件名称，value 为插件初始化时使用的 moduleCode（唯一值）。
-    > RMRS 插件自身的详细配置见 <code>plugin_rmrs.conf</code>，参数说明参见 RMRS 插件用户指南。
+    > [!NOTE] 说明
+    >
+    > - 只有在该准入配置中配置的插件才会被加载并初始化，未配置的插件不予加载。
+    > - 配置中 key 对应插件的插件名称，value 为插件初始化时使用的 moduleCode（唯一值）。
+    > - RMRS 插件自身的详细配置见 <code>plugin_rmrs.conf</code>，参数说明参见 RMRS 插件用户指南。
 
-4. 启动 ubturbo 服务
+4. 启动 ubturbo 服务：
 
     ```bash
     sudo systemctl start ubturbo
@@ -242,9 +243,9 @@ ubturbo-smap-*.aarch64
 
 如未安装，需先安装 SMAP。安装后重启 ubturbo 服务：
 
-    ```bash
-    sudo systemctl restart ubturbo
-    ```
+```bash
+sudo systemctl restart ubturbo
+```
 
 ## 验证部署
 
@@ -275,7 +276,7 @@ ps -ef | grep ub_turbo_exec  # 观察进程是否存在
   /var/log/ubturbo/ubturbo.log
   ```
 
-  启动成功的标志：日志中出现 `TurboMain::Run end.`
+  启动成功的标志：日志中出现 `TurboMain::Run end.`。
 
 ### 检查插件加载
 
@@ -287,24 +288,24 @@ cat /var/log/ubturbo/ubturbo.log | grep "loaded successfully"
 
 1. 停止并删除容器
 
-```bash
-docker ps -a
-docker stop ubturbo-build
-docker rm ubturbo-build
-```
+    ```bash
+    docker ps -a
+    docker stop ubturbo-build
+    docker rm ubturbo-build
+    ```
 
 2. 删除镜像
 
-```bash
-docker rmi ubturbo-build:24.03-lts
-```
+    ```bash
+    docker rmi ubturbo-build:24.03-lts
+    ```
 
 3. 卸载 RPM 包
 
-```bash
-sudo dnf remove -y ubturbo-rmrs
-```
+    ```bash
+    sudo dnf remove -y ubturbo-rmrs
+    ```
 
-> [!NOTE]说明
->
-> 卸载 RPM 包不会自动删除 `/opt/ubturbo` 数据目录与 `/var/log/ubturbo` 日志目录，如需彻底清理请手动删除。
+    > [!NOTE] 说明
+    >
+    > 卸载 RPM 包不会自动删除 `/opt/ubturbo` 数据目录与 `/var/log/ubturbo` 日志目录，如需彻底清理请手动删除。

@@ -72,7 +72,7 @@ SMAP自动发现并维护该 PID 的受管本地 NUMA 集合，再按 local -> r
 | msg | struct MigrateOutMsg\* | 单次最多配置 40 个 PID；同一请求中的 PID 不能重复。每个 `payload` 的 `count` 取值为 0 到 `REMOTE_NUMA_NUM`，各 `inner[].destNid` 必须是在线且互不重复的远端 NUMA。一个 PID 的所有目标必须使用同一种 `migrateMode`；ratio 模式下各 remote 的 ratio 总和不超过 100；memSize 单位为 KB，必须按当前页型对齐（4K 或 2M）。 | 入参 | 普通迁出配置，详细语义见下文。 |
 | pageType | int | {0,1}，且必须与 `ubturbo_smap_start` 的当前页型一致 | 入参 | 0：4K 普通进程；1：2M 虚机。 |
 
-```
+```c
 #define MAX_NR_MIGOUT 40 
 
 struct MigrateOutPayloadInner {
@@ -145,7 +145,7 @@ struct MigrateOutMsg {
 | msg.payload[].groups[].targets[].size | uint64\_t | 单位KB，至少为2MB。 | 入参 | 当前target remote NUMA的最大驻留容量quota。 |
 | pageType | int | 1 | 入参 | 进程pid类型，仅支持虚机2M页类型。 |
 
-```
+```c
 #define MAX_NR_GROUPED_MIGOUT MAX_NR_MIGOUT
 #define MAX_MIGRATION_GROUP_NUM 8
 #define MAX_GROUP_LOCAL_NUMA 4
@@ -225,7 +225,7 @@ struct GroupedMigrateOutMsg {
 | --- | --- | --- | --- | --- |
 | msg | struct SetRemoteNumaInfoMsg\* | `srcNid` 为本地 NUMA ID 或 -1；`destNid` 为在线远端 NUMA ID；`size` 单位为 MB。 | 入参 | 配置一份 private 或 shared 远端容量。 |
 
-```
+```c
 struct SetRemoteNumaInfoMsg {
     int srcNid;
     int destNid;
@@ -264,7 +264,7 @@ struct SetRemoteNumaInfoMsg {
 | --- | --- | --- | --- | --- |
 | msg | struct MigrateBackMsg\* | `count` 为 1 到 `MAX_NR_MIGBACK`（当前为 50）。每个 payload 的 `srcNid` 必须是当前机器的远端 NUMA；`destNid` 必须是有效本地 NUMA，或为 -1 以由内核按任务 affinity/轮询选择本地 NUMA；`memid` 必须能解析为属于 `srcNid` 的已登记远端内存段。 | 入参 | 详细如下 |
 
-```
+```c
 #define MAX_NR_MIGBACK 50
 
 struct MigrateBackPayload { 
@@ -319,7 +319,7 @@ struct MigrateBackMsg {
 | msg | struct RemoveMsg\* | `msg.count` 为 1 到 `MAX_NR_REMOVE`（当前为 40），同一请求中的 PID 不能重复。每个 `payload.count` 为 0 到 `REMOTE_NUMA_NUM`；大于 0 时 `nid[]` 中的项必须是互不重复的有效远端 NUMA。 | 入参 | 详细语义见下文。 |
 | pageType | int | {0,1}，且必须与 `ubturbo_smap_start` 的当前页型一致 | 入参 | 0：4K 普通进程；1：2M 虚机。 |
 
-```
+```c
 #define MAX_NR_REMOVE 40
 
 struct RemovePayload {
@@ -366,7 +366,7 @@ struct RemoveMsg {
 | --- | --- | --- | --- | --- |
 | msg | struct EnableNodeMsg\* | `nid` 必须是当前机器的远端 NUMA，即位于 `[nrLocalNuma, MAX_NODES)`；`enable` 仅允许 `DISABLE_NUMA_MIG`（0）或 `ENABLE_NUMA_MIG`（1）。 | 入参 | 详细如下 |
 
-```
+```c
 struct EnableNodeMsg { 
     int enable; // 0：禁用迁移，1：启用迁移
     int nid;    // 远端 NUMA ID
@@ -432,12 +432,11 @@ struct EnableNodeMsg {
 
 #### 参数说明
 
-**表1 ​**参数说明| 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
-| - | - | - | - | - |
-| ------------------------------------------------ |
+**表1 ​**
 
-| runMode | int | * 0：水线场景。* 1：内存碎片场景。* 其它值：返回错误。 | 入参 | 兼容已有场景配置。普通 `ubturbo_smap_migrate_out` 不再使用该值解释 ratio/memSize，也不按该值选择单 NUMA 或多 NUMA 路径。 |
-| - | - | - | - | - |
+|参数说明| 参数名|数据类型 | 有效性规格 | 参数类型 | 描述 |
+|---|---|---|---|---|---|
+|-| runMode | int | *0：水线场景。* 1：内存碎片场景。* 其它值：返回错误。 | 入参 | 兼容已有场景配置。普通 `ubturbo_smap_migrate_out` 不再使用该值解释 ratio/memSize，也不按该值选择单 NUMA 或多 NUMA 路径。 |
 
 #### 返回值
 
@@ -466,14 +465,13 @@ struct EnableNodeMsg {
 
 #### 参数说明
 
-**表1 ​**参数说明| 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
-| - | - | - | - | - |
-| ------------------------------------------------ |
+**表1 ​**
 
+|参数说明| 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
+|---|---|---|---|---|---|
 | pidArr | pid\_t \* | NA | 入参 | 虚机PID数组。 |
-| - | - | - | - | - |
 | len | int | 1-100的整数 | 入参 | 虚机PID数组长度。 |
-| enable | int | 0或1 | 入参 | * 0-禁用。* 1-启用。 |
+| enable | int | 0或1 | 入参 | <ul><li>0-禁用。</li><li>1-启用。</li></ul> |
 | flags | int | NA | 入参 | 保留字段。 |
 
 #### 返回值
@@ -580,7 +578,7 @@ struct EnableNodeMsg {
 | scanTime | uint32_t \* | 50毫秒的倍数，最小值50毫秒，最大值为200毫秒。 | 入参 | 扫描周期数组。 |
 | duration | uint32_t \* | 与len长度相符的扫描周期数组，取值[1,300]，单位秒，在scanType=2时使用。 | 入参 | 访存数据统计时长。 |
 | len | int | 1-40整数。 | 入参 | PID数组长度。 |
-| scanType | int | {0,1,2} | 入参 | * 0：将进程设置为只扫描状态，此时调用[/proc/ {PID}_t/tracking_info](#proc-pid_tracking_info)获取扫描频次信息。* 1：将进程恢复为冷热扫描加迁移状态。* 2：表示进程设置为统计特定时长冷热信息状态。 |
+| scanType | int | {0,1,2} | 入参 | <ul><li>0：将进程设置为只扫描状态，此时调用[/proc/ {PID}_t/tracking_info](#proc-pid_tracking_info)获取扫描频次信息。</li><li> 1：将进程恢复为冷热扫描加迁移状态。</li><li> 2：表示进程设置为统计特定时长冷热信息状态。</li></ul> |
 
 #### 返回值
 
@@ -641,8 +639,9 @@ struct EnableNodeMsg {
 <pre class="screen"><p class="p" id="p863415451833">// 第一次调用读取数量</p><p class="p" id="p1663494510312">int fread(int *num, sizeof(int), int n, FILE *file)</p><p class="p" id="p156343451733">// 第二次调用读取物理地址和频次信息</p><p class="p" id="p1863420453318">int fread(struct FreqInfo *info, sizeof(FreqInfo), int n, FILE *file)</p></pre>
 
 **表1 ​**参数说明
+
 | 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
-| - | - | - | - | - |
+|---|---|---|---|---|
 | FreqInfo | struct FreqInfo {u64 paddr;u16 freq;} | NA | 入参 | 存储频次信息结构体。 |
 
 #### 返回值

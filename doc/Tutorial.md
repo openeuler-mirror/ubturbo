@@ -1,33 +1,44 @@
-# Tutorial
- 
-## Best Practices
+# 开发指南
 
-在灵衢超节点架构中，UBTurbo作为节点内自研开源的资源管理框架，通过封装SMAP冷热页面调度能力并提供标准IPC通信接口，为上层内存管理工具提供统一服务接入点。RMRS节点内内存调度工具基于UBTurbo插件化框架开发，通过框架内置的配置读取、插件管理、日志管理和IPC通信能力，实现与外部组件的指令交互与消息传递。当节点需要进行内存资源调度时，外部进程通过UBTurbo客户端发起请求，RMRS进行决策并调用SMAP的内存迁移相关接口，动态调整进程内存布局。
- 
-## Demo1
- 
-使用UBTurbo的一个典型场景是：虚拟化场景下，某节点借用到了其它节点的内存，借用内存形成了一个新的NUMA，并分配了足够的大页；该节点的本地NUMA上启动了一个2M页虚拟机。首先，用户打开RMRS插件并启动UBTurbo进程，通过SDK访问UBTurbo为虚拟机制定迁移策略。基于迁移策略结果，再次向UBTurbo发送内存迁移执行命令，将虚拟机的部分本地内存到远端NUMA上。下面的demo1依次完成了以下动作：
- 
-1. 设置迁出策略的入参信息；
-2. 执行内存迁移策略，获取策略结果；
-3. 基于策略结果将虚机本地内存迁移到远端NUMA上；
+## 最佳实践
 
-Demo1使用说明：
+在灵衢超节点架构中，UBTurbo作为节点内自研开源的资源管理框架，通过封装SMAP冷热页面调度能力并提供标准IPC通信接口，为上层内存管理工具提供统一服务接入点。
 
-```bash
-# 环境要求：已安装ubturbo-rmrs、ubturbo-devel、ubturbo-smap、libboundscheck
+RMRS节点内内存调度工具基于UBTurbo插件化框架开发，通过框架内置的配置读取、插件管理、日志管理和IPC通信能力，实现与外部组件的指令交互与消息传递。
 
-# 编译
-g++ -lboundscheck -lubturbo_client demo1.cpp -o demo1
+当节点需要进行内存资源调度时，外部进程通过UBTurbo客户端发起请求，RMRS进行决策并调用SMAP的内存迁移相关接口，动态调整进程内存布局。
 
-# 运行
-# 参数说明
-# pid: 虚拟机对应pid
-# borrowRemoteNuma: 借用过来的内存呈现的远端numa
-./demo1 <pid> <borrowRemoteNuma>
-```
+## 典型场景1（Demo1）
 
-Demo1源码：
+虚拟化场景下，某节点借用到了其它节点的内存，借用内存形成了一个新的NUMA，并分配了足够的大页；该节点的本地NUMA上启动了一个2M页虚拟机。首先，用户打开RMRS插件并启动UBTurbo进程，通过SDK访问UBTurbo为虚拟机制定迁移策略。基于迁移策略结果，再次向UBTurbo发送内存迁移执行命令，将虚拟机的部分本地内存迁移到远端NUMA上。
+Demo1依次完成了以下动作：
+
+1. 设置迁出策略的入参信息。
+2. 执行内存迁移策略，获取策略结果。
+3. 基于策略结果将虚拟机本地内存迁移到远端NUMA上。
+
+**Demo1使用说明**
+
+Demo1使用说明如下：
+
+1. 环境要求：已安装ubturbo-rmrs、ubturbo-devel、ubturbo-smap、libboundscheck。
+2. 编译指令如下：
+
+    ```bash
+    g++ -lboundscheck -lubturbo_client demo1.cpp -o demo1
+    ```
+
+3. 运行指令如下：
+
+    ```bash
+    ./demo1 <pid> <borrowRemoteNuma>
+    ```
+
+    参数说明：
+    * pid：虚拟机对应pid。
+    * borrowRemoteNuma：借用过来的内存呈现的远端numa。
+
+**Demo1源码**
 
 ```C++
 // demo1.cpp
@@ -111,18 +122,18 @@ int main(int argc, char* argv[])
 
 ```
 
-## Demo2
+## 典型场景2（Demo2）
 
-使用UBTurbo的一个典型场景是：虚拟化/容器场景下，查询进程的冷热信息
+虚拟化/容器场景下，查询进程的冷热信息。
 
-1. 根据虚拟机或者容器场景，插入smap的ko；
-2. 创建相应的虚拟机或者容器；
-3. 根据实际的情况修改demo2代码对应参数，编译执行；
+1. 根据虚拟机或者容器场景，插入smap的ko。
+2. 创建相应的虚拟机或者容器。
+3. 根据实际的情况修改示例2代码对应参数，编译执行。
 
-Demo2使用说明：
+**Demo2使用说明**
 
 ```bash
-# 环境要求：已安装ubturbo-rmrs、ubturbo-devel、ubturbo-smap、libboundscheck
+# 环境要求：已安装ubturbo（主框架）、ubturbo-rmrs（插件）、ubturbo-devel、ubturbo-smap、libboundscheck
 
 # 编译
 g++ -lboundscheck -lubturbo_client demo2.cpp -o demo2
@@ -134,7 +145,7 @@ g++ -lboundscheck -lubturbo_client demo2.cpp -o demo2
 ./demo2
 ```
 
-Demo2源码：
+**Demo2源码**
 
 ```C++
 // demo2.cpp
@@ -231,9 +242,11 @@ int main(int argc, char* argv[])
 
 ```
 
-## Getting Started: Compilation Guide
- 
-在项目根目录执行:
+## 快速入门
+
+### 编译指南
+
+在项目根目录执行：
 
 ```bash
 git submodule update --init
@@ -243,11 +256,11 @@ sh build.sh
 
 主要编译产物：
 
-- 在dist/release/bin下会生成以下二进制文件: `ub_turbo_exec`
+- 在dist/release/bin下会生成以下二进制文件：`ub_turbo_exec`
 
-- 在dist/release/lib下会生成以下库文件: `libubturbo_client.so`、`librmrs_ubturbo_plugin.so`
+- 在dist/release/lib下会生成以下库文件：`libubturbo_client.so`、`librmrs_ubturbo_plugin.so`
 
-- 在dist/release/conf下会生成以下配置文件: `ubturbo_plugin_admission.conf`、`ubturbo.conf`、`plugin_rmrs.conf`
+- 在dist/release/conf下会生成以下配置文件：`ubturbo_plugin_admission.conf`、`ubturbo.conf`、`plugin_rmrs.conf`
 
 构建rpm包：
 
@@ -258,7 +271,7 @@ cpack
 
 执行上述命令之后，rpm包（例如ubturbo-rmrs-1.1.1-1.oe2403sp1.aarch64.rpm）位于`dist/release/output`中。
 
-## Getting Started: Installation Guide
+### 安装指南
 
 ```bash
 rpm -ivh ubturbo-rmrs-1.1.1-1.oe2403sp1.aarch64.rpm
@@ -300,7 +313,7 @@ groups ubturbo
 # 输出内容示例：ubturbo : ubturbo libvirt
 ```
 
-配置免密sudo: 创建文件/etc/sudoers.d/ubturbo，依次执行：
+配置免密sudo：创建文件/etc/sudoers.d/ubturbo，依次执行：
 
 ```bash
 # 1. 打开
@@ -309,7 +322,7 @@ visudo -f /etc/sudoers.d/ubturbo
 ubturbo ALL=(root) NOPASSWD:/usr/local/bin/cat.sh
 ```
 
-为需要与ubturbo交互的用户添加权限，例如ubse:
+为需要与ubturbo交互的用户添加权限，例如ubse：
 
 ```bash
 usermod -aG ubturbo ubse
@@ -327,10 +340,10 @@ systemctl start ubturbo
 systemctl status ubturbo
 ```
 
-## Getting Started: Test Guide
- 
+### 测试指南
+
 测试代码在项目根目录的test目录下，如果你想针对某个函数进行测试开发，只需要在对应目录下编写新的UT代码即可，该目录下主要文件如下所示：
- 
+
 ```plaintext
 test/
 ├── 3rdparty/                # 单元测试三方依赖
@@ -346,6 +359,6 @@ test/
 ├── run_ut.sh                # 单元测试执行脚本
 ```
 
-## Getting Started: Contribution Guide
- 
+### 贡献指南
+
 我们非常欢迎新贡献者加入到项目中来，也非常高兴能为新加入贡献者提供指导和帮助，如果您有任何的意见、建议、问题，可以创建issue。

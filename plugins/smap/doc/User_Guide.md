@@ -1,3 +1,5 @@
+# 用户指南
+
 ## SMAP简介
 
 SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使用其他节点内存资源，可以将进程的热页留在本地, 冷页迁往远端, 达到扩容的目的。
@@ -8,6 +10,7 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 当NUMA内的内存使用率下降到一定水线时, SMAP支持按照借用的内存迁回虚机数据。
 
 > 多 NUMA 迁出说明：
+> 
 > * `pageType` 由 `ubturbo_smap_start` 启动时传入，决定本次跟踪的页面类型：4K 普通进程使用 0，2M 虚机使用 1；调用迁出接口时必须与启动页型一致。
 > * 普通 `ubturbo_smap_migrate_out` 支持一个 PID 同时配置多个远端 NUMA。调用方只配置 remote 聚合目标，不指定本地 NUMA；SMAP 会根据 CPU affinity、页面驻留和既有迁移账本自动管理多个 local NUMA。
 > * 每次普通 migrate-out 配置均全量替换该 PID 的远端目标；未包含的 remote 会清零，`payload.count == 0` 表示清空全部普通迁出目标。`srcNid` 仅为 ABI 兼容保留，普通迁出中不生效。
@@ -15,7 +18,7 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 
 ## SMAP安装&部署
 
-#### 前提条件
+### 前提条件
 
 * 安装前先创建ubturbo用户和用户组，配置免密登录，命令如下。
 
@@ -31,7 +34,7 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 * /dev/shm/smap\_config保存了NUMA和进程配置等信息，使用SMAP动态库的进程如果需要切换用户，则需要先删除该文件。
 * smap的period.config文件依赖ubturbo-rmrs组件，若环境上未安装ubturbo-rmrs，则需要手动创建目录/opt/ubturbo/conf，且确保目录权限和smap二进制文件权限一致。
 
-#### 安装步骤
+### 安装步骤
 
 1. 安装SMAP。
    
@@ -40,7 +43,6 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 2. 载入扫描驱动。
    
    <pre class="screen" id="screen8274308918"><p class="p" id="p1958548202716">cd /lib/modules/smap</p><p class="p" id="p295820488271">insmod smap_tracking_core.ko</p></pre>
-   
    
    * 安装smap_histogram_tracking.ko。
      

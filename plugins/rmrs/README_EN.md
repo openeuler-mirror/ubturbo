@@ -1,6 +1,6 @@
 # RMRS
 
-<p > English | <a href="README.md">简体中文</a>
+<p > English | <a href="README.md">简体中文</a></p>
 
 ## Project Introduction
 
@@ -55,7 +55,7 @@ The **RMRS** is deployed in the UBTurbo of each compute node. Based on its own r
 
 ## RMRS Compilation
 
-The RMRS plugin is integrated in UBTurbo by default. For details about how to install, deploy, and use the plugin, see [UBTurbo Doc](../../../doc/).
+The RMRS plugin is integrated in UBTurbo by default. For details about how to install, deploy, and use the plugin, see [UBTurbo Doc](./doc/).
 
 ## RMRS Activation
 
