@@ -36,12 +36,12 @@
 
 ### 更新说明
 
-* 支持主机场景下Redis进程借用远端内存借用性能优化。
+* 支持主机场景下Redis进程借用远端内存性能优化。
 * SMAP支持大虚机场景多NUMA分级内存的冷热数据流动。
 * RMRS提供接口支持大虚机场景使能虚机多NUMA内存冷热流动。
 * RMRS支持大虚机场景大页资源采集及借用策略。
 * RMRS提供虚机内存碎片故障场景内存借用和迁移并行处理能力。
-  
+
 ### 已解决问题
 
 无
@@ -60,3 +60,6 @@
 |《[SMAP 性能测试指南](./smap_performance_testing_guide.md)》|本文档描述了SMAP性能测试指南，包括内存分级、虚拟化约束及Redis/MySQL参数配置与测试步骤。|
 |《[用户指南](./User_Guide.md)》|本文档描述了UBTurbo简介、安装部署及常用命令，涵盖用户组创建、配置修改及服务启停操作。|
 |《[参考实践](./Tutorial.md)》|本文档描述了UBTurbo资源管理框架及RMRS内存调度工具的实现机制与应用实践。|
+|《[配置说明](ubturbo_configuration_instructions.md)》|本文档描述了UBTurbo配置说明，包含主进程、插件、策略及扫描迁移等配置项与示例。|
+|《[安装指南](ubturbo_installation.md)》|本文档介绍了UBTurbo安装指南，包含环境要求、节点规划、部署、测试及配置等内容。|
+|《[安全说明](ubturbo_security_description.md)》|本文档描述了UBTurbo安全说明，涵盖信任模型、架构、权限及账号管理等核心内容。|

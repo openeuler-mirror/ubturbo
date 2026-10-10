@@ -170,19 +170,19 @@ HUGETLB_ELFMAP=RW runcpu --config=speccpu-gcc-best.cfg --iteration=1 --copies=4 
 
 此SMAP性能保证需要满足以下条件：
 
-1. 计算虚机内部内存使用
+1. 计算虚机内部内存使用。
 
     执行**free -h**命令查看剩余内存量，那么虚机内部内存使用比例计算如下：
 
     虚机内部内存使用比例 = 1 - 剩余内存量 / 虚机规格
 
-2. 外部计算本地内存占比
+2. 外部计算本地内存占比。
 
     本地内存占比 = 本地内存 / 虚机规格
 
 3. SMAP保证性能需满足以下条件：
 
-    虚机内部内存使用比例  <= 本地内存占比
+    虚机内部内存使用比例 <= 本地内存占比
 
 ## 容器场景SMAP性能约束
 
@@ -225,7 +225,7 @@ HUGETLB_ELFMAP=RW runcpu --config=speccpu-gcc-best.cfg --iteration=1 --copies=4 
     ps -ef | grep vhost
     ```
 
-    通过taskset -cp命令对服务端虚机和客户端虚机的vhost线程手动绑核，注意需要规避虚机占用的核。
+    通过taskset -cp命令对服务端虚机和客户端虚机的vhost线程手动绑核，注意需要避免虚机占用的核。
 
 - 服务端虚机网卡基础性能优化
 
@@ -284,13 +284,13 @@ HUGETLB_ELFMAP=RW runcpu --config=speccpu-gcc-best.cfg --iteration=1 --copies=4 
     LD_PRELOAD=/usr/lib64/libksal_libc.so taskset -c 0 /home/redis-6.0.5/src/redis-server /home/redis-6.0.5/redis.conf --port 6379
     ```
     
-    >[!IMPORTANT] 须知
+    > [!IMPORTANT] 须知
     >
     > libksal_libc.so文件需要额外获取。
 
 ## MySQL场景额外约束
 
-以K8S容器测试为例，基于K8S启动一个8U40G的容器，容器配置文件参考如下，启动mysqld使通过numactl绑定NUMA的CPU和内存：
+以K8S容器测试为例，基于K8S启动一个8U40G的容器，容器配置文件参考如下，启动mysqld时通过numactl绑定NUMA的CPU和内存。
 
 ```shell
 apiVersion: v1
@@ -444,7 +444,7 @@ numactl -C 70-101 -m 1 sysbench --db-driver=mysql --mysql-host=[mysql_host] --my
 
 ## 规格说明
 
-**表 1**  规格说明
+**表 1** 规格说明
 
 |规格项|规格（虚拟化2M场景）|-|
 |:----|:----|:----|
@@ -454,15 +454,16 @@ numactl -C 70-101 -m 1 sysbench --db-driver=mysql --mysql-host=[mysql_host] --my
 |最大借用远端NUMA数|18|每个socket呈现1个远端NUMA。|
 |本地最大NUMA数|4|-|
 |迁出最大比例|100%|-|
-|性能跌落|5%|同解决方案对齐性能指标：<ol><li>虚机使用远端内存3:1场景VS虚机全部使用本地内存，使用membench测试性能劣化<5%。</li><li>虚机使用远端内存3:1场景下虚机应用（Redis，MySQL，UnixBench、Nginx，Tomcat）性能劣化<5%。</li><li>容器MySQL场景（详见需求描述）。</li></ol>|
+|性能跌落|5%|同解决方案对齐性能指标：<ol><li>虚机使用远端内存3:1场景VS虚机全部使用本地内存，使用membench测试性能劣化<5%。</li><li>虚机使用远端内存3:1场景下虚机应用（Redis、MySQL、UnixBench、Nginx、Tomcat）性能劣化<5%。</li><li>容器MySQL场景（详见需求描述）。</li></ol>|
 |可管理的最大进程数量|100（容器场景为300个进程）|-|
 
 ## 迁移周期和扫描周期配置
 
 在SMAP用户态初始化完成后，会在/etc/smap/目录下生成period.config配置文件。
 
->[!NOTE] 说明 
->若之前已生成或手动生成period.config配置文件，则初始化完成后不会覆盖，将继续沿用之前生成的配置文件。
+> [!NOTE] 说明
+>
+> 若之前已生成或手动生成period.config配置文件，则初始化完成后不会覆盖，将继续沿用之前生成的配置文件。
 
 ### 配置文件说明
 
@@ -490,7 +491,7 @@ smap.migrate.mode = 1
 smap.scan.cpu = 0-127
 ```
 
->[!NOTE] 说明
+> [!NOTE] 说明
 >
 > - `smap.scan.cpu` 的默认值由SMAP初始化时从 `/sys/devices/system/cpu/possible` 读取系统有效CPU范围得到，不同服务器的取值不同（例如 `0-127`）。
 > - `smap.scan.cpu.enable` 配置项已移除，扫描CPU范围配置后直接生效，无需再通过开关开启。
@@ -519,10 +520,10 @@ smap.scan.cpu = 0-127
 |16|smap.ub.bw.threshold|默认值：0<br>单位：MB/s<br>取值范围：[0,65535]|UB带宽阈值，0表示不开启迁移限制。|
 |17|smap.scan.cpu|默认值：系统有效CPU范围（如0-127）<br>取值格式：min-max，且min不能大于max|扫描CPU范围，左值为最小CPU编号，右值为最大CPU编号。默认值由SMAP初始化时从/sys/devices/system/cpu/possible读取系统有效CPU范围得到。|
 
-> [!NOTE] 说明 
+> [!NOTE] 说明
 >
 > - 如果配置文件中缺任何一项，或者有一项出现配置错误，此处配置将不会生效，系统将会沿用上一次有效值（如果配置过，未配置将会用上述中的默认配置）。
-> - 在不同场景下推荐调整配置以达到最佳效果：对于页面数量少的进程如果想要提升扫描精度，可以适当增大每次迁移的扫描次数，通过减小扫描周期并增大迁移周期来实现；对于页面数量多的进程，为了减少每次迁移的扫描开销，减少每次迁移周期的扫描次数，推荐增大扫描周期并减小迁移周期，例如可以进行如下配置：
+> - 在不同场景下推荐调整配置以达到最优效果：对于页面数量少的进程如果想要提升扫描精度，可以适当增大每次迁移的扫描次数，通过减小扫描周期并增大迁移周期来实现；对于页面数量多的进程，为了减少每次迁移的扫描开销，减少每次迁移周期的扫描次数，推荐增大扫描周期并减小迁移周期，例如可以进行如下配置：
 > 
 >    smap.scan.period = 200<br>
 >    smap.migrate.period = 2000
@@ -555,7 +556,7 @@ SMAP内存迁移支持两种底层迁移方式，通过配置参数`smap.migrate
    - 若配置为0（LD/ST），直接采用LD/ST方式。
    - 若配置为1（URMA），系统自动检测硬件是否支持UB DMA：支持则采用URMA方式，不支持则自动回退为LD/ST方式。
 
->[!NOTE] 说明
+> [!NOTE] 说明
 >
 > - 修改迁移方式配置后，SMAP会在下一次迁移周期生效，无需重启服务。
 > - URMA方式仅在硬件支持UB DMA offloading时才能生效，否则将自动回退。

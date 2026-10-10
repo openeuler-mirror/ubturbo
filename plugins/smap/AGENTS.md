@@ -75,7 +75,7 @@ cd test/build && cmake -DCMAKE_BUILD_TYPE=Debug .. && make -j$(nproc)
 
 ## Architecture
 
-```
+```text
 src/
 ├── drivers/              # Kernel tracking drivers (smap_tracking_core.ko, smap_access_tracking.ko, smap_histogram_tracking.ko)
 │   ├── core.c/bus.c      # Tracking core and bus infrastructure

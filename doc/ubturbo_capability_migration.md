@@ -5,7 +5,7 @@
 
 ---
 
-## 一、改造前后对比
+## 1 改造前后对比
 
 ### 1.1 提权机制总览
 
@@ -44,16 +44,19 @@
 ### 1.3 RMRS 读取路径对比（`plugins/rmrs/.../rmrs_os_helper.cpp`）
 
 **改造前** `ReadNumaMap()`：
+
 1. 用 `snprintf_s` 拼接命令 `sudo /usr/local/bin/cat.sh <pid> 2>&1`
 2. `ExecCommand()` 内 `popen()` 派生子进程执行脚本，`fgets` 逐行读取，`pclose()` 关闭
 3. `checkUidEuid()` 校验首行是否为 `UID=0, EUID=0`，否则判定提权失败返回 `RMRS_ERROR`
 
 **改造后** `ReadNumaMap()`：
+
 1. 直接拼接路径 `/proc/<pid>/numa_maps`
 2. 调用 `RmrsFileUtil::GetFileInfo(path, lines)` 进程内直读
 3. 拼接 `lines` 为 `fileContent` 返回，保持原有按行解析契约不变
 
 **被删除的代码**：
+
 - 常量：`CMD_BUFFER_SIZE`、`CAT_SCRIPT_CAT_PATH`、`CAT_SCRIPT_TAIL`、`UID_EUID_ZERO`
 - 函数：`ExecCommand()`、`checkUidEuid()`（含 `.h` 中声明）
 - 头文件：`<array>`、`securec.h`（不再需要）
@@ -68,6 +71,7 @@
 | 文件关闭 | 所有 `pclose(fp)` | 全部改为 `fclose(fp)` |
 
 **关键点**：
+
 - `ReadCmdlineByPid` 原先需 `fgets(skip,...)` 跳过脚本输出的 `UID=..., EUID=...` 首行；直读 `/proc` 后无此前缀行，故删除跳过逻辑，直接读取 cmdline 内容。
 - `smap_env.h` 删除宏 `CAT_SCRIPT_CAT_PATH`、`CAT_SCRIPT_TAIL`。
 - **保持不变**：`smap_interface.c` 的 `popen("numastat -cvm")`（非提权路径，numastat 为普通程序，`NoNewPrivileges=yes` 下不受影响）。
@@ -92,7 +96,7 @@
 
 ---
 
-## 二、当前权限控制方案
+## 2 当前权限控制方案
 
 改造后采用 **systemd 授权 + 进程内收敛** 的双层最小权限设计（对齐 ubs-engine）。
 
@@ -129,10 +133,12 @@ graph TD
 - `src/security/turbo_security_manager.cpp`：能力管理实现
 
 `Init()` 执行顺序：
+
 1. `GetCapabilities()`：`syscall(SYS_capget)` 读取当前能力（**必须先获取一次，否则无法成功设置**）。
 2. `SetInitialCapabilities()`：`syscall(SYS_capset)` 将 `permitted` + `effective` 设置为 `{CAP_DAC_READ_SEARCH, CAP_SYS_PTRACE}`。
 
 实现要点：
+
 - 使用 `_LINUX_CAPABILITY_VERSION_3`、`__user_cap_data_struct[2]`（覆盖 64 位能力）、`CAP_TO_INDEX`/`CAP_TO_MASK` 宏。
 - `memset_s` 清零能力数据结构，`std::nothrow` 分配并成对 `delete[]` 释放，失败返回 `TURBO_ERROR` 并记录错误。
 
@@ -176,9 +182,10 @@ const std::vector<std::shared_ptr<TurboModule>> g_modules = {
 
 ---
 
-## 三、相关文件清单
+## 3 相关文件清单
 
 **新增**：
+
 - `src/include/turbo_module_security.h`
 - `src/security/turbo_security_manager.h`
 - `src/security/turbo_security_manager.cpp`
@@ -186,6 +193,7 @@ const std::vector<std::shared_ptr<TurboModule>> g_modules = {
 - `src/security/CMakeLists.txt`
 
 **修改**：
+
 - `build/rpm/ubturbo.service`（能力配置）
 - `src/main/turbo_main.cpp`（security 模块置首位）
 - `src/CMakeLists.txt`（接线 security 子目录）
@@ -196,4 +204,5 @@ const std::vector<std::shared_ptr<TurboModule>> g_modules = {
 - 文档：`doc/ubturbo_security_description.md`、`doc/Tutorial.md`、`doc/ubturbo_installation.md`、`plugins/smap/doc/User_Guide.md`
 
 **删除**：
-- `build/rpm/cat.sh`
+
+`build/rpm/cat.sh`

@@ -97,7 +97,7 @@ cd plugins/smap/test && sh run_dt.sh
 
 ## Architecture
 
-```
+```text
 src/
 ├── include/        # Internal shared headers
 ├── config/         # Config module (parses ubturbo.conf etc.)
