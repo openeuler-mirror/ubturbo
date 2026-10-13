@@ -11,6 +11,7 @@
 #include <linux/cache.h>
 #include <linux/refcount.h>
 #include <linux/mutex.h>
+#include <linux/wait.h>
 
 #include "check.h"
 #include "scan_ioctl.h"
@@ -28,13 +29,6 @@ extern int nr_local_numa;
 #ifndef AP_MAX_SLOTS
 #define AP_MAX_SLOTS MAX_4K_PROCESSES_CNT
 #endif
-
-enum ap_state {
-	AP_STATE_WALK = (1UL << 0),
-	AP_STATE_READ = (1UL << 1),
-	AP_STATE_FREQ = (1UL << 2),
-	AP_STATE_MIG = (1UL << 3),
-};
 
 /*
  * Slot lifecycle: FREE -> RESERVED -> INUSE -> REMOVING -> FREE.
@@ -69,8 +63,6 @@ struct ap_slot {
 
 struct access_pid_struct {
 	struct ap_slot slots[AP_MAX_SLOTS]; /* replaces ap_data.list */
-	spinlock_t state_lock; /* protects global scan-phase state_flag */
-	unsigned long state_flag;
 };
 extern struct access_pid_struct ap_data;
 
@@ -97,6 +89,8 @@ struct access_pid {
 	u32 cur_times;
 	struct delayed_work scan_work;
 	struct completion work_done;
+	wait_queue_head_t wq; /* per-pid scan-complete poll wait queue */
+	bool freq_ready; /* window data ready for user-space consumption */
 	u32 scan_count[SMAP_MAX_NUMNODES];
 	size_t page_num[SMAP_MAX_NUMNODES];
 	size_t bm_len[SMAP_MAX_NUMNODES];
@@ -175,27 +169,6 @@ static inline void clear_vm_mapping(u8 *priors, u32 len)
 {
 	if (priors)
 		memset(priors, 0xff, len * sizeof(u8));
-}
-
-static inline void set_ap_whole_state(struct access_pid_struct *aps,
-				      unsigned long state)
-{
-	spin_lock(&aps->state_lock);
-	aps->state_flag = state;
-	spin_unlock(&aps->state_lock);
-}
-
-static inline bool check_and_clear_ap_state(struct access_pid_struct *aps,
-					    enum ap_state state)
-{
-	spin_lock(&aps->state_lock);
-	if (!(aps->state_flag & state)) {
-		spin_unlock(&aps->state_lock);
-		return false;
-	}
-	aps->state_flag = 0;
-	spin_unlock(&aps->state_lock);
-	return true;
 }
 
 #endif /* _SRC_ACCESS_PID_H */

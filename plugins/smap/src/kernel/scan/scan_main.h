@@ -37,8 +37,7 @@ enum remote_scan_mode {
 void cancel_ap_scan_work(struct access_pid *ap);
 int scan_init(void);
 void scan_exit(void);
-void access_tracking_enable(void);
-int access_tracking_disable(void);
+int access_tracking_restart_pid(pid_t pid);
 int access_tracking_set_page_size(u8 page_size_index);
 int set_remote_scan_mode(u8 mode);
 bool is_remote_scan_hist_active(void);
@@ -46,7 +45,6 @@ bool is_freq_hist_only_node(int node);
 int set_scan_cpus(u32 cpu_start, u32 cpu_end);
 void submit_one_work(struct access_pid *ap);
 ktime_t calc_time_us(ktime_t start_time);
-bool access_scan_enabled(void);
 u8 get_scan_page_mode(void);
 int get_scan_page_size(void);
 bool is_access_hugepage(void);

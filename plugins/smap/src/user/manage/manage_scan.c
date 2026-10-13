@@ -217,103 +217,6 @@ static int FillPidData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
     return 0;
 }
 
-static int BuildBitmapBuf(size_t *len, char **buf)
-{
-    char *tmpBuf;
-    size_t tmpLen;
-    int ret = AccessIoctlWalkPagemap(&tmpLen);
-    if (ret) {
-        SMAP_LOGGER_ERROR("access ioctl walk pagemap error: %d.", ret);
-        return ret;
-    }
-    SMAP_LOGGER_INFO("AccessIoctlWalkPagemap bufLen %zu.", tmpLen);
-    if (tmpLen == 0) {
-        SMAP_LOGGER_ERROR("Access ioctl walk pagemap len invalid: %zu.", tmpLen);
-        return -EINVAL;
-    }
-
-    tmpBuf = malloc(tmpLen);
-    if (!tmpBuf) {
-        tmpLen = 0;
-        return -ENOMEM;
-    }
-
-    *len = tmpLen;
-    *buf = tmpBuf;
-
-    return 0;
-}
-
-static int ParseBitmapPid(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
-{
-    int ret;
-    size_t pidSize = sizeof(pmb->pid);
-
-    ret = memcpy_s(&pmb->pid, pidSize, buf, pidSize);
-    if (ret) {
-        return -ret;
-    }
-    *offset += pidSize;
-    return 0;
-}
-
-static int ParseBitmapNrPages(struct ProcessMemBitmap *pmb, char *buf, size_t *offset)
-{
-    int ret;
-    size_t pageNumSize = sizeof(pmb->nrPages[0]);
-    size_t tmpOffset = 0;
-
-    for (int nid = 0; nid < MAX_NODES; nid++) {
-        ret = memcpy_s(&pmb->nrPages[nid], pageNumSize, buf + tmpOffset, pageNumSize);
-        if (ret) {
-            return -ret;
-        }
-        tmpOffset += pageNumSize;
-    }
-    *offset += tmpOffset;
-    return 0;
-}
-
-static int ParseBitmap(size_t bufLen, char *buf, size_t *offset, struct ProcessMemBitmap *pmb)
-{
-    size_t newOffset = *offset;
-
-    int ret = ParseBitmapPid(pmb, buf + newOffset, &newOffset);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ParseBitmapPid err: %d.", ret);
-        return ret;
-    }
-
-    ret = ParseBitmapNrPages(pmb, buf + newOffset, &newOffset);
-    if (ret) {
-        SMAP_LOGGER_ERROR("ParseBitmapNrPages err: %d.", ret);
-        return ret;
-    }
-
-    SMAP_LOGGER_INFO("read continue %zu %zu.", newOffset, bufLen);
-
-    *offset = newOffset;
-    return 0;
-}
-
-static int BuildAndFillBitmapBuf(size_t *len, char **buf)
-{
-    int ret;
-    ret = BuildBitmapBuf(len, buf);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Access ioctl walk pagemap error: %d.", ret);
-        return ret;
-    }
-    SMAP_LOGGER_INFO("Build bitmap buffer done.");
-    ret = AccessRead(*len, *buf);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Access read pagemap error: %d.", ret);
-        free(*buf);
-        return ret;
-    }
-    return 0;
-}
-
 int RefreshManagedLocalStatePeriodic(ProcessAttr *attr)
 {
     ProcessAttr candidate = *attr;
@@ -330,74 +233,72 @@ int RefreshManagedLocalStatePeriodic(ProcessAttr *attr)
     return 0;
 }
 
-int BuildAllPidData(void)
+int BuildPidData(ProcessAttr *attr)
 {
-    int ret, failedCount = 0;
-    char *buf;
-    size_t bufLen;
-    ret = BuildAndFillBitmapBuf(&bufLen, &buf);
+    int ret;
+    struct ProcessMemBitmap pmb;
+
+    if (!attr) {
+        return -EINVAL;
+    }
+    if (attr->scanType != NORMAL_SCAN) {
+        return 0;
+    }
+    /* per-pid查询页数元数据；-ESRCH表示本周期内核未跟踪该pid，静默跳过 */
+    ret = AccessIoctlWalkPagemap(attr->pid, &pmb);
+    if (ret == -ESRCH) {
+        return 0;
+    }
     if (ret) {
-        SMAP_LOGGER_ERROR("BuildAllPidData: build and fill BitmapBuf error: %d.", ret);
         return ret;
     }
-    for (size_t offset = 0; offset < bufLen;) {
-        struct ProcessMemBitmap pmb = { 0 };
-        SMAP_LOGGER_INFO("Parse bitmap from %zu.", offset);
-        ret = ParseBitmap(bufLen, buf, &offset, &pmb);
-        if (ret < 0) {
-            SMAP_LOGGER_ERROR("parse bitmap failed.");
-            failedCount++;
-            break;
+    /* Combine observed local pages with configured remote targets in user space. */
+    uint32_t numaNodes = 0;
+    int nrLocalNuma = GetProcessManager()->nrLocalNuma;
+    for (int nid = 0; nid < nrLocalNuma; nid++) {
+        if (pmb.nrPages[nid] != 0) {
+            AddL1(&numaNodes, nid);
         }
-        ProcessAttr *current = GetProcessAttr(pmb.pid);
-        if (current && current->scanType == NORMAL_SCAN) {
-            SetPidNrPages(current, pmb.nrPages, MAX_NODES);
-            /*
-             * 本地位直接由回读的各节点页数构造（nrPages[nid] != 0 即置位），
-             * 如实反映本轮实际内存分布；远端位以接口配置的迁移目标
-             * （targetConfig）为准，不随内核观测波动。
-             */
-            uint32_t numaNodes = 0;
-            int nrLocalNuma = GetProcessManager()->nrLocalNuma;
-            for (int nid = 0; nid < nrLocalNuma; nid++) {
-                if (pmb.nrPages[nid] != 0) {
-                    AddL1(&numaNodes, nid);
-                }
-            }
-            for (uint32_t i = 0; i < current->targetConfig.count; i++) {
-                AddL2ByNid(&numaNodes, current->targetConfig.targets[i].remoteNid);
-            }
-            /*
-             * 本地位为空有两种情况：首个 walk 尚未完成（全零快照），或
-             * 进程页已全部迁到远端。两种情况都保留现有本地位（纳管预置
-             * 的观测过渡值/迁移前的分布），保证 GetAttrL1 始终返回合法
-             * L1；待进程重新产生本地页后自然收敛到实际分布。
-             */
-            if ((numaNodes & BuildAllLocalNumaMask()) == 0) {
-                numaNodes |= current->numaAttr.numaNodes & BuildAllLocalNumaMask();
-            }
-            current->numaAttr.numaNodes = numaNodes;
-            SMAP_LOGGER_INFO("Pid %d, numaNodes %#x, nrLocalNuma %u.", current->pid, current->numaAttr.numaNodes,
-                             GetProcessManager()->nrLocalNuma);
-            ret = FillPidData(current, &pmb);
-            if (ret) {
-                SMAP_LOGGER_ERROR("Fill pid %d actc data failed.", current->pid);
-                failedCount++;
-                PutProcessAttr(current);
-                continue;
-            }
-            if (!current->groupPolicy.enabled) {
-                ret = RefreshManagedLocalStatePeriodic(current);
-                if (ret) {
-                    SMAP_LOGGER_ERROR("Refresh pid %d managed local state failed: %d.", current->pid, ret);
-                    failedCount++;
-                }
-                CalibratePairAccount(current);
-            }
-        }
-        PutProcessAttr(current);
     }
-    CalcMigrateNrPagesPerPIDMuiltNuma();
-    free(buf);
+    for (uint32_t i = 0; i < attr->targetConfig.count; i++) {
+        AddL2ByNid(&numaNodes, attr->targetConfig.targets[i].remoteNid);
+    }
+    if ((numaNodes & BuildAllLocalNumaMask()) == 0) {
+        numaNodes |= attr->numaAttr.numaNodes & BuildAllLocalNumaMask();
+    }
+    attr->numaAttr.numaNodes = numaNodes;
+    SMAP_LOGGER_INFO("Pid %d, numaNodes %#x, nrLocalNuma %u.", attr->pid, numaNodes, nrLocalNuma);
+    SetPidNrPages(attr, pmb.nrPages, MAX_NODES);
+    ret = FillPidData(attr, &pmb);
+    if (ret) {
+        return ret;
+    }
+    if (!attr->groupPolicy.enabled) {
+        ret = RefreshManagedLocalStatePeriodic(attr);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Refresh pid %d managed local state failed: %d.", attr->pid, ret);
+        }
+        CalibratePairAccount(attr);
+    }
+    return ret;
+}
+
+int RefreshAllPidData(void)
+{
+    int ret, failedCount = 0;
+    struct ProcessManager *manager = GetProcessManager();
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+
+    for (size_t k = 0; k < n; k++) {
+        /* 非NORMAL_SCAN类型由BuildPidData内部过滤（返回0跳过） */
+        ret = BuildPidData(all[k]->attr);
+        if (ret) {
+            SMAP_LOGGER_ERROR("Fill pid %d actc data failed.", all[k]->attr->pid);
+            failedCount++;
+        }
+    }
+    PidSlotReleaseRefs(all, n);
+    CalcMigrateNrPagesPerPidMultiNuma();
     return failedCount;
 }

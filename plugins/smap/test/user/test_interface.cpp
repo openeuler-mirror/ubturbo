@@ -228,6 +228,10 @@ TEST_F(InterfaceTest, TestIsLocalNidValid)
 extern "C" void EnvMutexLock(EnvMutex *mutex);
 extern "C" void EnvMutexUnlock(EnvMutex *mutex);
 extern "C" int ScanMigrateWork(struct ProcessManager *manager);
+extern "C" int ThreadPoolInit(struct ProcessManager *manager, int workers);
+extern "C" void ThreadPoolDestroy(struct ProcessManager *manager);
+extern "C" int InitEventLoop(struct ProcessManager *manager);
+extern "C" int DestroyEventLoop(struct ProcessManager *manager);
 extern "C" int InitAllThreads(struct ProcessManager *manager);
 extern "C" int InitScanMigrateThread(struct ProcessManager *manager, uint32_t period);
 TEST_F(InterfaceTest, TestIsRatioValidTwo)
@@ -251,6 +255,10 @@ TEST_F(InterfaceTest, TestInitAllThreads)
 
     EnvMutexInit(&pm.threadLock);
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(ThreadPoolInit).stubs().will(returnValue(0));
+    MOCKER(InitEventLoop).stubs().will(returnValue(0));
+    MOCKER(DestroyEventLoop).stubs().will(ignoreReturnValue());
+    MOCKER(ThreadPoolDestroy).stubs().will(ignoreReturnValue());
     MOCKER(InitScanMigrateThread).stubs().will(returnValue(-EPERM));
     // InitScanMigrateThread 失败时 scanMigrateThread 已清零，无需再销毁
     MOCKER(DestroyScanMigrateThread).expects(never());
@@ -268,6 +276,8 @@ TEST_F(InterfaceTest, TestInitAllThreadsHugeMode)
     EnvMutexInit(&pm.threadLock);
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
+    MOCKER(ThreadPoolInit).stubs().will(returnValue(0));
+    MOCKER(InitEventLoop).stubs().will(returnValue(0));
     MOCKER(InitScanMigrateThread).stubs().will(returnValue(0));
     ret = InitAllThreads(&pm);
     EXPECT_EQ(0, ret);
@@ -281,6 +291,8 @@ TEST_F(InterfaceTest, TestInitAllThreadsProcessMode)
     EnvMutexInit(&pm.threadLock);
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
+    MOCKER(ThreadPoolInit).stubs().will(returnValue(0));
+    MOCKER(InitEventLoop).stubs().will(returnValue(0));
     MOCKER(InitScanMigrateThread).stubs().will(returnValue(0));
     ret = InitAllThreads(&pm);
     EXPECT_EQ(0, ret);
@@ -2419,6 +2431,18 @@ TEST_F(InterfaceTest, TestSmapEnableProcessMigrateNormal)
     EXPECT_EQ(-ENOENT, ret);
 }
 
+TEST_F(InterfaceTest, TestSmapEnableProcessMigrateRejectsDuplicatePid)
+{
+    pid_t pidArr[] = { 1, 1 };
+    EnvAtomicSet(&g_status, RUNNING);
+    MOCKER(IsPidArrValid).stubs().will(returnValue(true));
+    MOCKER(EnableProcessMigrate).expects(never());
+
+    int ret = ubturbo_smap_process_migrate_enable(pidArr, 2, ENABLE_PROCESS_MIGRATE, 0);
+
+    EXPECT_EQ(-EINVAL, ret);
+}
+
 TEST_F(InterfaceTest, TestIsPidArrValid)
 {
     pid_t pidArr[] = { 1 };
@@ -4214,13 +4238,6 @@ TEST_F(InterfaceTest, TestSameRemoteNumaMigrateSuccess)
     EnvAtomicSet(&g_status, 0);
 }
 
-extern "C" void SmapAutoRemoveRemoteEmptyProcessesWithFreshData(void);
-TEST_F(InterfaceTest, TestSmapAutoRemoveRemoteEmptyProcesses)
-{
-    MOCKER(GetCurrentMaxNrPid).stubs().will(returnValue(0));
-    SmapAutoRemoveRemoteEmptyProcessesWithFreshData();
-}
-
 extern "C" bool IsScanTypeValid(pid_t *pidArr, int len);
 TEST_F(InterfaceTest, TestIsScanTypeValidHam)
 {
@@ -4472,59 +4489,6 @@ TEST_F(InterfaceTest, TestIsMigrateBackSourceNid)
     EXPECT_EQ(false, ret);
 
     ret = IsMigrateBackSourceNid(&msg, 6);
-    EXPECT_EQ(false, ret);
-}
-
-extern "C" bool IsAutoRemoveCandidate(ProcessAttr *attr);
-TEST_F(InterfaceTest, TestIsAutoRemoveCandidateNull)
-{
-    bool ret = IsAutoRemoveCandidate(nullptr);
-    EXPECT_EQ(false, ret);
-}
-
-TEST_F(InterfaceTest, TestIsAutoRemoveCandidateNotEligible)
-{
-    ProcessAttr attr = {};
-    attr.autoRemoveWhenRemoteEmpty = true;
-    bool ret = IsAutoRemoveCandidate(&attr);
-    EXPECT_EQ(false, ret);
-
-    attr.autoRemoveWhenRemoteEmpty = false;
-    attr.groupPolicy.enabled = true;
-    ret = IsAutoRemoveCandidate(&attr);
-    EXPECT_EQ(false, ret);
-
-    attr.groupPolicy.enabled = false;
-    attr.scanType = STATISTIC_SCAN;
-    ret = IsAutoRemoveCandidate(&attr);
-    EXPECT_EQ(false, ret);
-
-    attr.scanType = NORMAL_SCAN;
-    attr.syncWaitRemoteEmpty = true;
-    ret = IsAutoRemoveCandidate(&attr);
-    EXPECT_EQ(false, ret);
-}
-
-TEST_F(InterfaceTest, TestIsAutoRemoveCandidateEligible)
-{
-    ProcessAttr attr = {};
-    attr.autoRemoveWhenRemoteEmpty = true;
-    attr.syncWaitRemoteEmpty = false;
-    attr.groupPolicy.enabled = false;
-    attr.scanType = NORMAL_SCAN;
-    attr.walkPage.nrPage = 100;
-    bool ret = IsAutoRemoveCandidate(&attr);
-    EXPECT_EQ(true, ret);
-}
-
-extern "C" bool IsPidAlreadyCollected(pid_t *pids, int count, pid_t pid);
-TEST_F(InterfaceTest, TestIsPidAlreadyCollected)
-{
-    pid_t pids[] = { 123, 456 };
-    bool ret = IsPidAlreadyCollected(pids, 2, 123);
-    EXPECT_EQ(true, ret);
-
-    ret = IsPidAlreadyCollected(pids, 2, 789);
     EXPECT_EQ(false, ret);
 }
 

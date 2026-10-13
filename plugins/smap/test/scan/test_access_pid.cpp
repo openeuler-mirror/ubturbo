@@ -31,7 +31,6 @@ static void ap_test_reset_slots(void)
         ap_data.slots[i].ap = nullptr;
         refcount_set(&ap_data.slots[i].refs, 0);
     }
-    ap_data.state_flag = AP_STATE_WALK;
 }
 
 class DriversAccessPidTest : public ::testing::Test {
@@ -457,50 +456,6 @@ TEST_F(DriversAccessPidTest, AccessAddPid)
     MOCKER(init_access_pid).stubs().with(&payload, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
     MOCKER(submit_one_work).stubs();
     ret = access_add_pid(1, &payload);
-    EXPECT_EQ(0, ret);
-}
-
-/* 扫描模块未 enable（disable/migrate 期间）时，add_pid 不应立即提交扫描任务，
- * pid 仅入 ap_data.list 等下次 enable 由 submit_scan_works 拉起。 */
-int ap_data_len();
-TEST_F(DriversAccessPidTest, AccessAddPidScanDisabledNoSubmit)
-{
-    int ret;
-    struct access_pid ap;
-    struct access_pid *tmp;
-    struct access_add_pid_payload payload = {0};
-
-    ap.pid = 1;
-    tmp = &ap;
-
-    ap_test_reset_slots();
-    EXPECT_EQ(0, access_tracking_disable());
-
-    MOCKER(init_access_pid).stubs().with(&payload, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
-    MOCKER(submit_one_work).expects(never());
-    ret = access_add_pid(1, &payload);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(1, ap_data_len());
-
-    GlobalMockObject::verify();
-}
-
-/* disable 时，disable 期新加的 pid 因 complete(work_done) 使
- * completion_done() 返回 true，不会误判 -EBUSY，disable 成功。 */
-extern "C" int access_tracking_disable(void);
-TEST_F(DriversAccessPidTest, AccessDisableSkipsUnsubmittedPid)
-{
-    int ret;
-    struct access_pid ap = {};
-
-    ap_test_reset_slots();
-
-    ap.pid = 1;
-    init_completion(&ap.work_done);
-    ap.work_done.done = 1; /* 模拟 disable 期新加 pid 的 complete */
-    ap_slot_add(&ap);
-
-    ret = access_tracking_disable();
     EXPECT_EQ(0, ret);
 }
 
@@ -975,7 +930,6 @@ TEST_F(DriversAccessPidTest, CalcAbsolutePosCurrHasLast)
     EXPECT_EQ(69, absPos.pos);
 }
 
-extern "C" int check_parameters_and_state(u64 len, u64 *addr);
 TEST_F(DriversAccessPidTest, ConvertPosToPaddrSortedInvalidParams)
 {
     int ret;
@@ -1024,7 +978,6 @@ TEST_F(DriversAccessPidTest, ConvertPosToPaddrSortedInvalidAddr)
     ap_slot_add(&ap);
     u64 addr[] = { 4 };
 
-    MOCKER(check_parameters_and_state).stubs().with().will(returnValue(0));
     ret = convert_pos_to_paddr_sorted(pid, nid, 1, addr);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(0, addr[0]);
@@ -1048,7 +1001,6 @@ TEST_F(DriversAccessPidTest, ConvertPosToPaddrSortedPartialFailure)
     u64 pa2 = 0x30000200000;
 
     nr_local_numa = 4;
-    MOCKER(check_parameters_and_state).stubs().with().will(returnValue(0));
     MOCKER(calc_acidx_paddr_acpi)
         .stubs()
         .with(nid, static_cast<u64>(5), outBoundP(&pa1, sizeof(pa1)))
@@ -1081,7 +1033,6 @@ TEST_F(DriversAccessPidTest, ConvertPosToPaddrSortedOK)
     u64 pa2 = 0x30000200000;
 
     nr_local_numa = 4;
-    MOCKER(check_parameters_and_state).stubs().with().will(returnValue(0));
     MOCKER(calc_acidx_paddr_acpi)
         .stubs()
         .with(nid, static_cast<u64>(5), outBoundP(&pa1, sizeof(pa1)))
@@ -1319,14 +1270,16 @@ TEST_F(DriversAccessPidTest, CompressFreqSqrt)
 extern "C" ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
                                   loff_t *ppos);
 extern "C" void *kvmalloc(size_t size, gfp_t flags);
-TEST_F(DriversAccessPidTest, MemFreqReadStateNotFreq)
+extern "C" void *kvzalloc(size_t size, gfp_t flags);
+TEST_F(DriversAccessPidTest, MemFreqReadNoSlot)
 {
     struct file filp;
-    struct access_pid ap;
+    struct access_pid ap = {};
     char buf[64];
     loff_t ppos = 0;
     filp.private_data = &ap;
-    ap_data.state_flag = 0;
+    ap.pid = 1234;
+    ap_test_reset_slots();
     ssize_t ret = mem_freq_read(&filp, buf, sizeof(buf), &ppos);
     EXPECT_EQ(-EAGAIN, ret);
 }
@@ -1342,10 +1295,44 @@ TEST_F(DriversAccessPidTest, MemFreqReadKvmallocFail)
     ap_slot_add(&ap);
     filp.private_data = &ap;
     ap.page_num[0] = 10;
-    ap_data.state_flag = AP_STATE_FREQ;
     MOCKER(kvzalloc).stubs().will(returnValue((void *)nullptr));
     ssize_t ret = mem_freq_read(&filp, buf, sizeof(buf), &ppos);
     EXPECT_EQ(-ENOMEM, ret);
+}
+
+TEST_F(DriversAccessPidTest, MemFreqReadSuccess)
+{
+    struct file filp;
+    struct access_pid ap = {};
+    struct page test_page = {};
+    char buf[128];
+    loff_t ppos = 0;
+    unsigned long bitmap_val = 0b11;
+    u64 fake_paddr = 0x1000;
+    ap.pid = 1234;
+    ap_test_reset_slots();
+    ap_slot_add(&ap);
+    ap.page_num[0] = 2;
+    ap.page_num[1] = 0;
+    ap.paddr_bm[0] = &bitmap_val;
+    ap.bm_len[0] = 1;
+    ap.info.vm_size = 0;
+    ap.info.priors = nullptr;
+    filp.private_data = &ap;
+    nr_local_numa = 1;
+    set_node_page_count(0, 64);
+    size_t expected_len = 2 * sizeof(struct actc_data);
+    MOCKER(kvmalloc).stubs().will(returnValue((void *)malloc(1024)));
+    MOCKER(kvfree).stubs();
+    MOCKER(copy_to_user).stubs().will(returnValue((unsigned long)0));
+    /* acidx -> paddr -> page (zeroed page: freq_try_get fails, freq = 0) */
+    MOCKER(calc_acidx_paddr_acpi)
+        .stubs()
+        .with(any(), any(), outBoundP(&fake_paddr, sizeof(fake_paddr)), any())
+        .will(returnValue(0));
+    MOCKER(pfn_to_online_page).stubs().will(returnValue(&test_page));
+    ssize_t ret = mem_freq_read(&filp, buf, expected_len, &ppos);
+    EXPECT_EQ((ssize_t)expected_len, ret);
 }
 
 extern "C" int create_procfs(struct access_pid *ap);
@@ -1557,78 +1544,16 @@ TEST_F(DriversAccessPidTest, InitAccessHamPidKzallocFail)
     }
 }
 
-extern "C" int check_parameters_and_state(u64 len, u64 *addr);
-TEST_F(DriversAccessPidTest, CheckParametersAndStateInvalidLen)
+extern "C" int check_migrate_params(u64 len, u64 *addr);
+TEST_F(DriversAccessPidTest, CheckMigrateParamsInvalidLen)
 {
     u64 addr = 1;
-    int ret = check_parameters_and_state(0, &addr);
+    int ret = check_migrate_params(0, &addr);
     EXPECT_EQ(-EINVAL, ret);
 }
 
-TEST_F(DriversAccessPidTest, CheckParametersAndStateNullAddr)
+TEST_F(DriversAccessPidTest, CheckMigrateParamsNullAddr)
 {
-    int ret = check_parameters_and_state(1, nullptr);
+    int ret = check_migrate_params(1, nullptr);
     EXPECT_EQ(-EINVAL, ret);
-}
-
-TEST_F(DriversAccessPidTest, CheckParametersAndStateStateNotMig)
-{
-    u64 addr = 1;
-    ap_data.state_flag = 0;
-    int ret = check_parameters_and_state(1, &addr);
-    EXPECT_EQ(-EAGAIN, ret);
-}
-
-/* init_access_pid：NORMAL_SCAN 初始化不消费 payload.numa_nodes
- * （该字段仅供 HAM/STATISTIC 推导 l1/l2_node） */
-TEST_F(DriversAccessPidTest, InitAccessPidSuccess)
-{
-    struct access_pid *tmp = nullptr;
-    struct access_add_pid_payload payload = { 0 };
-    payload.pid = 100;
-    payload.numa_nodes = 0x21;
-
-    MOCKER(init_vm_mapping_info).stubs().will(returnValue(0));
-    MOCKER(access_walk_pagemap_prepare).stubs().will(returnValue(0));
-    MOCKER(create_procfs).stubs().will(returnValue(0));
-    int ret = init_access_pid(&payload, &tmp);
-    EXPECT_EQ(0, ret);
-    ASSERT_NE(nullptr, tmp);
-    destroy_access_pid(tmp);
-}
-
-/* 重复添加同一 pid：仅更新扫描参数，配置不触碰 */
-TEST_F(DriversAccessPidTest, AccessAddPidDuplicateKeepsScanParams)
-{
-    struct access_pid existing = {};
-    struct access_pid ap_new = {};
-    struct access_pid *tmp = &ap_new;
-    struct access_add_pid_payload payload = { 0 };
-
-    ap_test_reset_slots();
-
-    existing.pid = 200;
-    existing.type = NORMAL_SCAN;
-    existing.scan_time = 50;
-    ap_slot_add(&existing);
-
-    ap_new.pid = 200;
-    ap_new.type = NORMAL_SCAN;
-    ap_new.scan_time = 100;
-    ap_new.ntimes = 2;
-
-    payload.pid = 200;
-    payload.scan_time = 100;
-    payload.type = NORMAL_SCAN;
-    payload.ntimes = 2;
-
-    MOCKER(init_access_pid).stubs().with(&payload, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
-    MOCKER(submit_one_work).stubs();
-    MOCKER(destroy_access_pid).stubs();
-
-    int ret = access_add_pid(1, &payload);
-    EXPECT_EQ(0, ret);
-    /* 重复 ADD_PID 只更新扫描参数 */
-    EXPECT_EQ(100, existing.scan_time);
-    EXPECT_EQ(2, existing.ntimes);
 }

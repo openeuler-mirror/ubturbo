@@ -1571,6 +1571,10 @@ int hist_init(u32 pgsize)
 	if (ret)
 		goto deinit_thread;
 
+	/* The hist thread stays paused until enabled; it is resumed by
+	 * set_remote_scan_mode() when user-space configures a mode that
+	 * requires the hardware subsystem (lazy init/enable). */
+
 	pr_info("histogram tracking device init successfully\n");
 	return 0;
 

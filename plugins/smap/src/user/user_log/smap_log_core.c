@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
+#include "securec.h"
 #include "smap_log_core.h"
 
 static SmapLogFile g_smapLogFile;

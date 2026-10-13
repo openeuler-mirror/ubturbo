@@ -25,13 +25,17 @@
 #define MORE_MIG_OUT_HUGE_PAGE_THRE 400
 #define REMOTE_MIG_FAIL 92
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 int AddMigList(struct MigrateMsg *mMsg, struct MigList *mList);
 
 void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager);
 
 int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager);
 
-int ScanMigrateWork(struct ProcessManager *manager);
+int ManagerDaemonWork(struct ProcessManager *manager);
+void PidMigrationWork(struct ProcessManager *manager, struct PidSlot *slot, pid_t pid);
 
 int MigrateRemoteNuma(struct ProcessManager *manager, struct MigrateNumaIoctlMsg *msg);
 
@@ -42,4 +46,7 @@ int BuildPairSwapPlans(struct ProcessManager *manager, PairPlan plans[], size_t 
                        PairPidBudget pidBudgets[], size_t pidBudgetCnt);
 int ApplyPairPlansForState(struct ProcessManager *manager, const PairPlan plans[], size_t planCnt);
 int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt);
+#ifdef __cplusplus
+}
+#endif
 #endif /* __MIGRATION_H__ */

@@ -25,10 +25,6 @@
 #define SCAN_TIME_2M VM_LIGHT_STABLE_SCAN_CYCLE
 #define SCAN_PERIOD_UNIT_MS 50
 
-int EnableTracking(struct ProcessManager *manager);
-
-int DisableTracking(struct ProcessManager *manager);
-
 int RefreshRemoteRam(struct ProcessManager *manager);
 
 int InitTrackingDev(struct ProcessManager *manager);

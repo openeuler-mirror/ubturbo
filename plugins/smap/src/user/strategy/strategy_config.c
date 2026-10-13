@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include "smap_user_log.h"
 #include "securec.h"
+#include "manage/thread_pool.h"
 #include "strategy_config.h"
 
 #define STRATEGY_CONFIG_ENTRY 19
@@ -108,32 +109,7 @@ static void GetSystemCpuRange(uint32_t *cpuMin, uint32_t *cpuMax)
     SMAP_LOGGER_DEBUG("System cpu range: %u-%u.", *cpuMin, *cpuMax);
 }
 
-typedef struct {
-    uint32_t scanPeriod;
-    uint32_t migratePeriod;
-    uint32_t remoteFreqPercentile;
-    uint32_t slowThreshold;
-    uint64_t freqWt;
-    uint32_t remoteHotThreshold;
-    uint32_t groupSwapRatio;
-    uint32_t groupSwapMinRemoteFreq;
-    uint32_t groupSwapMinFreqGain;
-    uint32_t groupSwapLocalWatermarkRatio;
-    uint32_t migrateMode;
-    bool migrateModeChanged;
-    bool migrateModeEnable;
-    bool zeroFreqMigrateEnable;
-    bool adaptiveRatioEnable;
-    bool fileConfSwitch;
-    bool scanPeriodChanged;
-    bool migratePeriodChanged;
-    bool scanCpuChanged;
-    uint32_t scanCpuMin;
-    uint32_t scanCpuMax;
-    uint32_t ubBwThreshold;
-    uint32_t remoteScanMode;
-    bool remoteScanModeChanged;
-} StrategyConfig;
+/* struct StrategyConfig 定义见 strategy_config.h（单一来源，UT 共用） */
 
 static StrategyConfig g_tmpStrategyConfig;
 

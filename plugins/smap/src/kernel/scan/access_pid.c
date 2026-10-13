@@ -11,6 +11,7 @@
 #include <linux/limits.h>
 #include <linux/kernel.h>
 #include <linux/fs.h>
+#include <linux/poll.h>
 #include <linux/pid.h>
 #include <linux/namei.h>
 #include <linux/sizes.h>
@@ -34,8 +35,6 @@ struct access_pid_struct ap_data = {
 	.slots = { [0 ... AP_MAX_SLOTS - 1] = {
 		.state = ATOMIC_INIT(AP_SLOT_FREE),
 	} },
-	.state_lock = __SPIN_LOCK_UNLOCKED(ap_data.state_lock),
-	.state_flag = AP_STATE_WALK,
 };
 
 /*
@@ -207,6 +206,14 @@ void ap_slot_remove(pid_t pid)
 	    AP_SLOT_INUSE)
 		return;
 	s->pid = 0;
+	/* Keep the initial ref while proc_remove waits for in-flight proc callbacks.
+	 * Otherwise the last mem_freq_read can reclaim this slot and wait for
+	 * its own procfs callback to finish.
+	 */
+	if (s->ap->proc_root) {
+		proc_remove(s->ap->proc_root);
+		s->ap->proc_root = NULL;
+	}
 	/* drop the initial reference held by ap_slot_add */
 	ap_slot_release(s);
 }
@@ -574,15 +581,9 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 	u32 actc_len[SMAP_MAX_NUMNODES];
 
 	pr_debug("enter mem_freq_read\n");
-	if (!check_and_clear_ap_state(&ap_data, AP_STATE_FREQ)) {
-		len = -EAGAIN;
-		goto out;
-	}
-
 	slot = ap_get_slot(ap->pid);
 	if (!slot) {
-		len = -EAGAIN;
-		goto out;
+		return -EAGAIN;
 	}
 	ap = slot->ap;
 
@@ -593,7 +594,7 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 		len = -ENOMEM;
 		up_read(&slot->ap_lock);
 		ap_put_slot(slot);
-		goto out;
+		return len;
 	}
 
 	len = -EINVAL;
@@ -618,26 +619,31 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 	}
 	if (*ppos + cnt <= total_len)
 		*ppos += len;
+	/* Full window consumed: stop signaling readability until the next
+	 * completed window (per-pid restart) re-arms freq_ready. */
+	if (*ppos >= total_len)
+		WRITE_ONCE(ap->freq_ready, false);
 out_free:
 	kvfree(actc);
 	up_read(&slot->ap_lock);
 	ap_put_slot(slot);
-out:
-	if (len < 0) {
-		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ |
-						     AP_STATE_FREQ);
-	} else {
-		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ |
-						     AP_STATE_FREQ |
-						     AP_STATE_MIG);
-	}
 	return len;
+}
+
+/* Signal readability after this PID's scan window completes. */
+static __poll_t mem_freq_poll(struct file *file, poll_table *wait)
+{
+	struct access_pid *ap = file->private_data;
+
+	poll_wait(file, &ap->wq, wait);
+	return READ_ONCE(ap->freq_ready) ? (POLLIN | POLLRDNORM) : 0;
 }
 
 static const struct proc_ops ap_mem_freq_fops = {
 	.proc_open = mem_freq_open,
 	.proc_release = mem_freq_release,
 	.proc_read = mem_freq_read,
+	.proc_poll = mem_freq_poll,
 };
 
 static int create_procfs_freq(struct access_pid *ap)
@@ -724,6 +730,7 @@ int init_access_pid(struct access_add_pid_payload *payload,
 	ap->ntimes = payload->ntimes;
 	ap->type = payload->type;
 	init_completion(&ap->work_done);
+	init_waitqueue_head(&ap->wq);
 	for (int i = 0; i < SMAP_MAX_NUMNODES; i++) {
 		ap->scan_count[i] = 0;
 		ap->page_num[i] = 0;
@@ -1148,17 +1155,10 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 			list_move_tail(&ap->node, &dup_head);
 			continue;
 		}
-		if (access_scan_enabled()) {
-			submit_one_work(ap);
-		} else {
-			/* Disable/migrate 窗口内新加的 pid 不提交扫描，留在
-			 * 槽位中等下次 enable 由 submit_scan_works 拉起，
-			 * 避免扫描与 migrate 的 paddr_bm 重分配竞态。
-			 * 同时 complete(work_done) 使 completion_done() 返回
-			 * true，避免 disable 误判 -EBUSY。
-			 */
-			complete(&ap->work_done);
-		}
+		/* event-driven flow: a tracked pid starts scanning right away;
+		 * per-pid bitmap reallocation races are serialized by the
+		 * slot's ap_lock (see access_work_func). */
+		submit_one_work(ap);
 	}
 	list_for_each_entry_safe(ap, tmp, &dup_head, node) {
 		list_del(&ap->node);
@@ -1475,15 +1475,11 @@ static int calc_absolute_pos(unsigned long *paddr_bm, size_t bm_len,
 #define INITIAL_POS ULONG_MAX
 #define INITIAL_POS_INDEX (-1)
 
-static int check_parameters_and_state(u64 len, u64 *addr)
+static int check_migrate_params(u64 len, u64 *addr)
 {
 	if (len == 0 || !addr) {
 		pr_err("invalid length or address passed to check\n");
 		return -EINVAL;
-	}
-	if (!check_and_clear_ap_state(&ap_data, AP_STATE_MIG)) {
-		pr_err("ap_data is a state that not allowed to migrate\n");
-		return -EAGAIN;
 	}
 	return 0;
 }
@@ -1533,8 +1529,9 @@ int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr)
 					.last_index = INITIAL_POS_INDEX,
 					.index = INITIAL_POS_INDEX };
 	int page_size = is_access_hugepage() ? g_pagesize_huge : PAGE_SIZE;
-	int ret = check_parameters_and_state(len, addr);
+	int ret;
 
+	ret = check_migrate_params(len, addr);
 	if (ret) {
 		return ret;
 	}
@@ -1543,9 +1540,6 @@ int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr)
 	if (!slot) {
 		pr_err("invalid pid: %d passed to convert position to PA\n",
 		       pid);
-		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ |
-						     AP_STATE_FREQ |
-						     AP_STATE_MIG);
 		return -EINVAL;
 	}
 	ap = slot->ap;
@@ -1559,8 +1553,6 @@ int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr)
 	up_read(&slot->ap_lock);
 
 	ap_put_slot(slot);
-	set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ |
-					     AP_STATE_FREQ | AP_STATE_MIG);
 	return 0;
 }
 EXPORT_SYMBOL(convert_pos_to_paddr_sorted);

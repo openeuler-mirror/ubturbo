@@ -75,9 +75,14 @@ void SetMultiNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
 /* ========== manage_numa.c 导出给其他文件的内部函数 ========== */
 
 void CalRemoteNumaSizeAllocPerNuma(void);
-void CalcMigrateNrPagesPerPIDMuiltNuma(void);
 void ClearRemoteMemUsed(void);
 void CalRemoteMemUsed(void);
+/* 事件驱动流水的在线账本（manage_numa.c）：快照与预扣须由调用方持账本锁调用，
+ * 与锁内剪辑配合实现「快照→剪辑→预扣」原子化，杜绝并发超卖 */
+void SnapshotRemoteCapacityLocked(uint64_t privateAvail[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
+                                  uint64_t sharedAvail[REMOTE_NUMA_NUM]);
+void LedgerPlanInFlightLocked(const uint32_t nrMigratePages[MAX_NODES][MAX_NODES], int nrLocalNuma);
+void LedgerSettleInFlight(const uint32_t planned[MAX_NODES][MAX_NODES], int nrLocalNuma);
 
 /* ========== manage_scan.c 导出给其他文件的内部函数 ========== */
 
@@ -85,7 +90,7 @@ void SetPidNrPages(ProcessAttr *attr, size_t *nrPages, int len);
 void CalcActcStats(ProcessAttr *attr);
 void DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf);
 int RefreshManagedLocalStatePeriodic(ProcessAttr *attr);
-int BuildAllPidData(void);
+/* BuildPidData/RefreshAllPidData 已在 manage.h 中声明 */
 
 /* ========== manage_grouped.c 导出给其他文件的内部函数 ========== */
 

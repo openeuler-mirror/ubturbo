@@ -6,6 +6,8 @@
 #include <linux/spinlock_types.h>
 
 #define wake_up_interruptible(x) (x)
+#define wake_up_interruptible_all(x) (x)
+#define wake_up_all(x) (x)
 #define init_waitqueue_head(x) (x)
 
 #define wait_event_interruptible_timeout(wq_head, condition, timeout) (0)

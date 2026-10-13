@@ -127,6 +127,23 @@ protected:
     }
 };
 
+TEST_F(ManageTest, TestPidSlotGetRefByAttr)
+{
+    ProcessAttr attr = {};
+    ProcessAttr other = {};
+    ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
+
+    EXPECT_EQ(nullptr, PidSlotGetRefByAttr(nullptr));
+    EXPECT_EQ(nullptr, PidSlotGetRefByAttr(&other));
+    EXPECT_EQ(1, EnvAtomicRead(&g_processManager.slots[0].refs));
+
+    struct PidSlot *slot = PidSlotGetRefByAttr(&attr);
+    ASSERT_EQ(&g_processManager.slots[0], slot);
+    EXPECT_EQ(2, EnvAtomicRead(&slot->refs));
+    PidSlotReleaseRefs(&slot, 1);
+    EXPECT_EQ(1, EnvAtomicRead(&g_processManager.slots[0].refs));
+}
+
 TEST_F(ManageTest, TestRemoteNumaInfoInit)
 {
     g_processManager.remoteNumaInfo.usedInfo[0].size = 10;
@@ -1967,6 +1984,23 @@ TEST_F(ManageTest, TestClearRemoteMemUsed)
     EXPECT_EQ(0, g_processManager.remoteNumaInfo.usedInfo[1].used);
 }
 
+extern "C" void CalRemoteMemUsed(void);
+TEST_F(ManageTest, TestCalRemoteMemUsedUsesRemoteNrPagesAfterMigrate)
+{
+    ProcessAttr attr = {};
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotAdd(&g_processManager, &attr);
+    PmHeadAttr(&g_processManager)->next = nullptr;
+    g_processManager.nrLocalNuma = 1;
+    // 迁回结算值=0（已迁回），allocRemoteNrPages 仍=旧快照派生值
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 0;
+    attr.strategyAttr.allocRemoteNrPages[0][0] = 18048;
+    ClearRemoteMemUsed();
+    CalRemoteMemUsed();
+    // used 必须取结算值 0，而非滞后的快照派生值 18048
+    EXPECT_EQ(0, g_processManager.remoteNumaInfo.privateUsedInfo[0][0].used);
+}
+
 extern "C" uint64_t MBToPage(uint64_t size);
 TEST_F(ManageTest, TestCalcRemoteBorrowPages)
 {
@@ -2064,6 +2098,24 @@ TEST_F(ManageTest, TestCalNrPagesLocalTotalPerPidTwo)
     EXPECT_EQ(4, attr.strategyAttr.nrPagesPerLocalNuma[3]);
 }
 
+TEST_F(ManageTest, TestCalNrPagesLocalTotalPerPidKeepsSettledAccountBeforeNextScan)
+{
+    ProcessAttr attr = {};
+    g_processManager.nrLocalNuma = 2;
+    attr.numaAttr.numaNodes = BIT(0) | BIT(3);
+    attr.state = PROC_IDLE;
+
+    // 迁出已成功结算，但 walkPage 仍是迁出前的旧快照。
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][1] = 512;
+    attr.walkPage.nrPages[3] = 0;
+
+    CalNrPagesLocalTotalPerPid(&attr);
+
+    // daemon 周期计算不得用旧快照清掉刚结算的账本；下次
+    // BuildPidData 会在获得新 pagemap 后由 CalibratePairAccount 校准。
+    EXPECT_EQ(512U, attr.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
+}
+
 extern "C" void CalNrPagesLocalTotal(void);
 TEST_F(ManageTest, TestCalNrPagesLocalTotal)
 {
@@ -2113,8 +2165,8 @@ TEST_F(ManageTest, TestCalRemoteNumaSizeAllocPerNuma)
     EXPECT_EQ(50, PmHeadAttr(&g_processManager)->strategyAttr.l2RemoteMemRatio[0][0]);
 }
 
-extern "C" void CalcMigrateNrPagesPerPIDMuiltNuma(void);
-TEST_F(ManageTest, TestCalcMigrateNrPagesPerPIDMuiltNuma)
+extern "C" void CalcMigrateNrPagesPerPidMultiNuma(void);
+TEST_F(ManageTest, TestCalcMigrateNrPagesPerPidMultiNuma)
 {
     g_runMode = WATERLINE_MODE;
     ProcessAttr attr = {};
@@ -2126,7 +2178,7 @@ TEST_F(ManageTest, TestCalcMigrateNrPagesPerPIDMuiltNuma)
     attr.strategyAttr.nrPagesPerLocalNuma[0] = 10;
     attr.strategyAttr.initRemoteMemRatio[0][0] = 50;
 
-    CalcMigrateNrPagesPerPIDMuiltNuma();
+    CalcMigrateNrPagesPerPidMultiNuma();
     EXPECT_EQ(0, PmHeadAttr(&g_processManager)->strategyAttr.l2RemoteMemRatio[0][0]);
 }
 
@@ -2153,6 +2205,21 @@ TEST_F(ManageTest, TestSetRemoteNumaInfo)
     EXPECT_EQ(0, ret);
     EXPECT_EQ(100 << 8, borrowMem->usedInfo[1].size);
     borrowMem->usedInfo[1].size = 0;
+}
+
+TEST_F(ManageTest, TestSetRemoteNumaInfoRefreshesFresh)
+{
+    // SetRemoteNumaInfo 设 fresh=false 后应同步重算置 fresh=true，否则
+    // migrate_back 紧接着 CheckPrivateBorrowUsed 会因 fresh=false 死等异步
+    // 重算（daemon migPeriod / per-pid 下次扫描）而超时
+    struct RemoteNumaInfo *borrowMem = &g_processManager.remoteNumaInfo;
+    g_processManager.nrLocalNuma = 4;
+    MOCKER(SyncOneNumaConfig).stubs().will(returnValue(0));
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    int ret = SetRemoteNumaInfo(0, 5, 100); // column = 5 - 4 = 1
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(true, borrowMem->usedInfo[1].ifUsedFreshed);
+    EXPECT_EQ(true, borrowMem->privateUsedInfo[0][1].ifUsedFreshed);
 }
 
 TEST_F(ManageTest, TestSetRemoteNumaInfoError)
@@ -2297,9 +2364,52 @@ TEST_F(ManageTest, TestCheckReadyMigrateBackTwo)
 {
     bool ret;
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    g_processManager.nrLocalNuma = 4;
     MOCKER(CheckBorrowUsed).stubs().will(returnValue(true));
     ret = CheckReadyMigrateBack(5);
     EXPECT_EQ(true, ret);
+}
+
+TEST_F(ManageTest, TestCheckReadyMigrateBackInvalidNode)
+{
+    g_processManager.nrLocalNuma = 4;
+    EXPECT_FALSE(CheckReadyMigrateBack(3));
+    EXPECT_FALSE(CheckReadyMigrateBack(MAX_NODES));
+}
+
+TEST_F(ManageTest, TestCheckPrivateBorrowUsedSizeZeroAllowsMigrateBack)
+{
+    g_processManager.nrLocalNuma = 1;
+    g_processManager.remoteNumaInfo.privateUsedInfo[0][1].used = 18048;
+    g_processManager.remoteNumaInfo.privateUsedInfo[0][1].size = 0;
+    g_processManager.remoteNumaInfo.privateUsedInfo[0][1].ifUsedFreshed = true;
+    MOCKER(EnvMsleep).stubs();
+    bool ret = CheckPrivateBorrowUsed(2); // column = 2 - 1 = 1
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(ManageTest, TestCheckBorrowUsedSizeZeroAllowsMigrateBack)
+{
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.remoteNumaInfo.usedInfo[0].used = 18048;
+    g_processManager.remoteNumaInfo.usedInfo[0].size = 0;
+    g_processManager.remoteNumaInfo.usedInfo[0].ifUsedFreshed = true;
+    MOCKER(EnvMsleep).stubs();
+    bool ret = CheckBorrowUsed(4); // column = 4 - 4 = 0
+    EXPECT_EQ(true, ret);
+}
+
+TEST_F(ManageTest, TestCalcMigrateNrPagesPerPidMultiNumaClearsUsedWhenNoPid)
+{
+    // SetUp 已 memset slots -> nr == 0，验证残留 used 被清零
+    g_processManager.nrLocalNuma = 4;
+    g_processManager.remoteNumaInfo.privateUsedInfo[0][0].used = 18048;
+    g_processManager.remoteNumaInfo.privateUsedInfo[0][0].ifUsedFreshed = true;
+    g_processManager.remoteNumaInfo.usedInfo[0].used = 18048;
+    g_processManager.remoteNumaInfo.usedInfo[0].ifUsedFreshed = true;
+    CalcMigrateNrPagesPerPidMultiNuma();
+    EXPECT_EQ(0, g_processManager.remoteNumaInfo.privateUsedInfo[0][0].used);
+    EXPECT_EQ(0, g_processManager.remoteNumaInfo.usedInfo[0].used);
 }
 
 extern "C" int IsPidArrInState(pid_t *pidArr, int len, enum ProcessState state);
@@ -5177,11 +5287,7 @@ TEST_F(ManageTest, TestIsAllL2NodePidInStateNoL2Pid)
 
 extern "C" int ReadPidActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb);
 extern "C" int FillPidData(ProcessAttr *attr, struct ProcessMemBitmap *pmb);
-extern "C" int BuildAndFillBitmapBuf(size_t *len, char **buf);
-extern "C" int ParseBitmapPid(struct ProcessMemBitmap *pmb, char *buf, size_t *offset);
-extern "C" int ParseBitmapNrPages(struct ProcessMemBitmap *pmb, char *buf, size_t *offset);
-extern "C" int ParseBitmap(size_t bufLen, char *buf, size_t *offset, struct ProcessMemBitmap *pmb);
-extern "C" int BuildAllPidData(void);
+extern "C" int RefreshAllPidData(void);
 
 TEST_F(ManageTest, TestReadPidActcDataOpenFail)
 {
@@ -5223,122 +5329,122 @@ TEST_F(ManageTest, TestFillPidDataSuccess)
     EXPECT_EQ(0, ret);
 }
 
-TEST_F(ManageTest, TestParseBitmapPid)
+static int StubWalkPagemapFillPages(int fd, unsigned long cmd, void *arg)
 {
-    struct ProcessMemBitmap pmb = {};
-    char buf[sizeof(pid_t)] = {};
-    pid_t testPid = 42;
-    memcpy(buf, &testPid, sizeof(pid_t));
-    size_t offset = 0;
-    int ret = ParseBitmapPid(&pmb, buf, &offset);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ((pid_t)42, pmb.pid);
-    EXPECT_EQ(sizeof(pid_t), offset);
+    (void)fd;
+    struct ProcessMemBitmap *pmb = (struct ProcessMemBitmap *)arg;
+    EXPECT_EQ((unsigned long)SMAP_ACCESS_WALK_PAGEMAP, cmd);
+    if (pmb == nullptr) {
+        return -1;
+    }
+    pmb->nrPages[0] = 5;
+    return 0;
 }
 
-TEST_F(ManageTest, TestParseBitmapNrPages)
+static int StubWalkPagemapEsrch(int fd, unsigned long cmd, void *arg)
 {
-    struct ProcessMemBitmap pmb = {};
-    size_t totalSize = sizeof(size_t) * MAX_NODES;
-    char *buf = (char *)calloc(1, totalSize);
-    ASSERT_NE(nullptr, buf);
-    size_t pages0 = 10;
-    size_t pages1 = 20;
-    memcpy(buf, &pages0, sizeof(size_t));
-    memcpy(buf + sizeof(size_t), &pages1, sizeof(size_t));
-    size_t offset = 0;
-    int ret = ParseBitmapNrPages(&pmb, buf, &offset);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ((size_t)10, pmb.nrPages[0]);
-    EXPECT_EQ((size_t)20, pmb.nrPages[1]);
-    EXPECT_EQ(totalSize, offset);
-    free(buf);
+    (void)fd;
+    (void)arg;
+    EXPECT_EQ((unsigned long)SMAP_ACCESS_WALK_PAGEMAP, cmd);
+    errno = ESRCH;
+    return -1;
 }
 
-TEST_F(ManageTest, TestParseBitmapSuccess)
+TEST_F(ManageTest, TestAccessIoctlWalkPagemapPerPid)
 {
-    struct ProcessMemBitmap pmb = {};
-    size_t totalSize = sizeof(pid_t) + sizeof(size_t) * MAX_NODES;
-    char *buf = (char *)calloc(1, totalSize);
-    ASSERT_NE(nullptr, buf);
-    pid_t testPid = 99;
-    size_t pages0 = 7;
-    memcpy(buf, &testPid, sizeof(pid_t));
-    memcpy(buf + sizeof(pid_t), &pages0, sizeof(size_t));
-    size_t offset = 0;
-    int ret = ParseBitmap(totalSize, buf, &offset, &pmb);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ((pid_t)99, pmb.pid);
-    EXPECT_EQ((size_t)7, pmb.nrPages[0]);
-    EXPECT_EQ(totalSize, offset);
-    free(buf);
+    struct ProcessMemBitmap pmb = {.pid = 100};
+
+    /* 成功：ioctl回填nrPages */
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl))
+        .stubs()
+        .will(invoke(StubWalkPagemapFillPages));
+    EXPECT_EQ(0, AccessIoctlWalkPagemap(100, &pmb));
+    EXPECT_EQ(100, pmb.pid);
+    EXPECT_EQ(5U, pmb.nrPages[0]);
+
+    /* 未跟踪pid：内核返回ESRCH，映射为-ESRCH */
+    GlobalMockObject::verify();
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl))
+        .stubs()
+        .will(invoke(StubWalkPagemapEsrch));
+    EXPECT_EQ(-ESRCH, AccessIoctlWalkPagemap(200, &pmb));
+
+    /* 参数为空 */
+    EXPECT_EQ(-EINVAL, AccessIoctlWalkPagemap(100, nullptr));
 }
 
-TEST_F(ManageTest, TestBuildAndFillBitmapBufBuildFail)
-{
-    size_t len = 0;
-    char *buf = nullptr;
-    MOCKER(AccessIoctlWalkPagemap).stubs().will(returnValue(-EINVAL));
-    int ret = BuildAndFillBitmapBuf(&len, &buf);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
-TEST_F(ManageTest, TestBuildAndFillBitmapBufReadFail)
-{
-    size_t len = 0;
-    char *buf = nullptr;
-    MOCKER(AccessIoctlWalkPagemap).stubs().will(returnValue(0));
-    MOCKER(malloc).stubs().will(returnValue((void *)nullptr));
-    int ret = BuildAndFillBitmapBuf(&len, &buf);
-    EXPECT_EQ(-ENOMEM, ret);
-}
-
-TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicRefreshFail)
+TEST_F(ManageTest, TestRefreshAllPidDataWalkFail)
 {
     ProcessAttr attr = {.pid = 100};
-    MOCKER(RefreshManagedLocalState).stubs().will(returnValue(-EINVAL));
-    int ret = RefreshManagedLocalStatePeriodic(&attr);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
-TEST_F(ManageTest, TestRefreshManagedLocalStatePeriodicKeepsNumaNodes)
-{
-    ProcessAttr attr = {.pid = 100};
-    attr.numaAttr.numaNodes = 0x0F;
     attr.scanType = NORMAL_SCAN;
-    attr.scanTime = 100;
-    attr.duration = 200;
-    MOCKER(RefreshManagedLocalState).stubs().will(returnValue(0));
-    /* numaNodes is synthesized in user-state; periodic refresh must not touch it. */
-    MOCKER(AccessIoctlAddPid).expects(never());
-    int ret = RefreshManagedLocalStatePeriodic(&attr);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ((uint32_t)0x0F, attr.numaAttr.numaNodes);
-}
 
-TEST_F(ManageTest, TestBuildAllPidDataBuildBufFail)
-{
     EnvMutexInit(&g_processManager.threadLock);
-    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
-    MOCKER(AccessIoctlWalkPagemap).stubs().will(returnValue(-ENOMEM));
-    int ret = BuildAllPidData();
-    EXPECT_EQ(-ENOMEM, ret);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotAdd(&g_processManager, &attr);
+    g_processManager.nrLocalNuma = 4;
+
+    MOCKER(AccessIoctlWalkPagemap).stubs().will(returnValue(-EBADF));
+    MOCKER(CalcMigrateNrPagesPerPidMultiNuma).stubs().will(ignoreReturnValue());
+    /* 单pid查询失败仅计数，RefreshAllPidData返回失败pid数 */
+    int ret = RefreshAllPidData();
+    EXPECT_EQ(1, ret);
 }
 
-TEST_F(ManageTest, TestBuildAllPidDataSuccessNoProcess)
+TEST_F(ManageTest, TestRefreshAllPidDataSuccessNoProcess)
 {
     EnvMutexInit(&g_processManager.threadLock);
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     g_processManager.nrLocalNuma = 4;
 
-    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
-    MOCKER(AccessIoctlWalkPagemap).stubs().will(returnValue(0));
-    MOCKER(AccessRead).stubs().will(returnValue(0));
-    MOCKER(CalcMigrateNrPagesPerPIDMuiltNuma).stubs().will(ignoreReturnValue());
-    MOCKER(malloc).stubs().will(returnValue((void *)nullptr));
-    int ret = BuildAllPidData();
-    // malloc fails in BuildBitmapBuf → returns -ENOMEM
-    EXPECT_EQ(-ENOMEM, ret);
+    MOCKER(CalcMigrateNrPagesPerPidMultiNuma).stubs().will(ignoreReturnValue());
+    EXPECT_EQ(0, RefreshAllPidData());
+}
+
+static int StubAccessWalkFillPages(pid_t pid, struct ProcessMemBitmap *pmb)
+{
+    (void)pid;
+    memset(pmb, 0, sizeof(*pmb));
+    pmb->nrPages[0] = 5;
+    return 0;
+}
+
+static int StubAccessWalkEsrch(pid_t pid, struct ProcessMemBitmap *pmb)
+{
+    (void)pid;
+    (void)pmb;
+    return -ESRCH;
+}
+
+TEST_F(ManageTest, TestBuildPidDataSuccess)
+{
+    ProcessAttr attr = {.pid = 100};
+    attr.scanType = NORMAL_SCAN;
+
+    /* nrPages[0]=5：走真实read路径，统计被mock；验证walk结果写入walkPage */
+    MOCKER(AccessIoctlWalkPagemap).stubs().will(invoke(StubAccessWalkFillPages));
+    MOCKER(open).stubs().will(returnValue(1));
+    MOCKER(read).stubs().will(returnValue(static_cast<ssize_t>(5 * sizeof(ActcData))));
+    MOCKER(close).stubs().will(returnValue(0));
+    MOCKER(CalcActcStats).stubs().will(ignoreReturnValue());
+    MOCKER(RefreshManagedLocalStatePeriodic).stubs().will(returnValue(0));
+    int ret = BuildPidData(&attr);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(5U, attr.walkPage.nrPages[0]);
+    EXPECT_EQ(5U, attr.walkPage.nrPage);
+    EXPECT_EQ(5U, attr.scanAttr.actcLen[0]);
+}
+
+TEST_F(ManageTest, TestBuildPidDataUntrackedPid)
+{
+    ProcessAttr attr = {.pid = 200};
+    attr.scanType = NORMAL_SCAN;
+
+    /* 内核未跟踪该pid：静默跳过，不读频次 */
+    MOCKER(AccessIoctlWalkPagemap).stubs().will(invoke(StubAccessWalkEsrch));
+    EXPECT_EQ(0, BuildPidData(&attr));
+}
+
+TEST_F(ManageTest, TestBuildPidDataNullAttr)
+{
+    EXPECT_EQ(-EINVAL, BuildPidData(nullptr));
 }

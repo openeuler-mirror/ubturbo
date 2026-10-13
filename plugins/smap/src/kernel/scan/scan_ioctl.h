@@ -94,12 +94,20 @@ extern kuid_t procfs_kuid;
 extern kgid_t procfs_kgid;
 extern struct proc_dir_entry *smap_procfs_root;
 
+/* Keep this ioctl payload layout aligned with user-space ProcessMemBitmap. */
+struct smap_pid_page_num {
+	pid_t pid;
+	size_t page_num[SMAP_MAX_NUMNODES];
+};
+
+#define SMAP_ACCESS_MAGIC 0xBB
 #define SMAP_ACCESS_ADD_PID \
 	_IOW(SMAP_ACCESS_MAGIC, 1, struct access_add_pid_msg)
 #define SMAP_ACCESS_REMOVE_PID \
 	_IOW(SMAP_ACCESS_MAGIC, 2, struct access_remove_pid_msg)
 #define SMAP_ACCESS_REMOVE_ALL_PID _IOW(SMAP_ACCESS_MAGIC, 3, int)
-#define SMAP_ACCESS_WALK_PAGEMAP _IOW(SMAP_ACCESS_MAGIC, 4, size_t)
+#define SMAP_ACCESS_WALK_PAGEMAP \
+	_IOWR(SMAP_ACCESS_MAGIC, 4, struct smap_pid_page_num)
 #define SMAP_ACCESS_GET_TRACKING \
 	_IOW(SMAP_ACCESS_MAGIC, 5, struct tracking_info_payload)
 #define SMAP_ACCESS_CREATE_PROCFS _IOW(SMAP_ACCESS_MAGIC, 6, struct user_info)
@@ -108,7 +116,7 @@ extern struct proc_dir_entry *smap_procfs_root;
 #define SMAP_ACCESS_SET_SCAN_CPU \
 	_IOW(SMAP_ACCESS_MAGIC, 9, struct smap_scan_cpu_range)
 
-#define SMAP_IOCTL_TRACKING_CMD _IOW(SMAP_ACCESS_MAGIC, 0, unsigned long)
+#define SMAP_IOCTL_TRACKING_CMD _IOW(SMAP_ACCESS_MAGIC, 0, unsigned long)/* arg = pid: restart that pid's next scan window */
 #define SMAP_IOCTL_PAGE_SIZE_SET_CMD _IOW(SMAP_ACCESS_MAGIC, 10, unsigned long)
 #define SMAP_IOCTL_UB_WATCH_CMD \
 	_IOR(SMAP_ACCESS_MAGIC, 11, struct ub_flux_mb_statistic)
@@ -121,11 +129,6 @@ struct ub_watch_config {
 	_IOW(SMAP_ACCESS_MAGIC, 12, struct ub_watch_config)
 
 #define SMAP_IOCTL_SCAN_MODE_SET_CMD _IOW(SMAP_ACCESS_MAGIC, 13, unsigned long)
-
-enum node_tracking_cmd {
-	TRACKING_DISABLED,
-	TRACKING_ENABLED,
-};
 
 void scan_ioctl_exit(void);
 int scan_ioctl_init(void);
