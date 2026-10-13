@@ -1902,6 +1902,16 @@ TEST_F(InterfaceTest, TestSmapStopOne)
     EXPECT_EQ(0, ret);
 }
 
+static int StubIoctlSetErrnoTimeout(int fd, unsigned long cmd, void *arg)
+{
+    (void)fd;
+    (void)cmd;
+    (void)arg;
+    /* 内核对迁回的 -ETIMEDOUT/-EAGAIN 是真实结果，经 errno 上抛 */
+    errno = ETIMEDOUT;
+    return -1;
+}
+
 TEST_F(InterfaceTest, TestIoctlHandlerOne)
 {
     int ret;
@@ -1924,9 +1934,10 @@ TEST_F(InterfaceTest, TestIoctlHandlerThree)
 {
     int ret;
     const void *msg = nullptr;
-    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-1));
+    /* IoctlHandler 失败时返回 -errno，与 TestIoctlHandlerIoctlFailed 共用 invoke 桩 */
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(invoke(StubIoctlSetErrnoTimeout));
     ret = IoctlHandler(0, msg);
-    EXPECT_EQ(-EBADF, ret);
+    EXPECT_EQ(-ETIMEDOUT, ret);
 }
 
 extern "C" void ubturbo_smap_urgent_migrate_out(uint64_t size);
@@ -4349,9 +4360,10 @@ TEST_F(InterfaceTest, TestIoctlHandlerIoctlFailed)
 {
     int ret;
     struct MigrateBackMsg msg = {};
-    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-1));
+    /* IoctlHandler 失败时返回 -errno，需用 invoke 桩同时设置 errno */
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(invoke(StubIoctlSetErrnoTimeout));
     ret = IoctlHandler(0, &msg);
-    EXPECT_EQ(-EBADF, ret);
+    EXPECT_EQ(-ETIMEDOUT, ret);
 }
 
 TEST_F(InterfaceTest, TestIoctlHandlerSuccess)

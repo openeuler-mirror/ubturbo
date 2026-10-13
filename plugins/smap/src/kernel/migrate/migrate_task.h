@@ -7,6 +7,8 @@
 #ifndef _SRC_TIERING_MIGRATE_TASK_H
 #define _SRC_TIERING_MIGRATE_TASK_H
 
+#include <linux/completion.h>
+
 enum migrate_back_task_status {
 	MB_TASK_CREATED,
 	MB_TASK_WAITING,
@@ -19,6 +21,8 @@ struct migrate_back_task {
 	int subtask_cnt;
 	int progress;
 	enum migrate_back_task_status status;
+	/* SMAP_MIGRATE_BACK ioctl 同步等待任务完成用的通知 */
+	struct completion done;
 	struct list_head task_node;
 	struct list_head subtask;
 };

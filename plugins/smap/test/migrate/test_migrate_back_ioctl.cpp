@@ -103,7 +103,9 @@ TEST_F(PidIoctlTest, SmapIoctlMigrateBack)
     MOCKER(dup_task).stubs().will(returnValue((int)RETRY_ID));
     MOCKER(kfree).stubs().will(ignoreReturnValue());
     ret = smap_ioctl_migrate_back(&mb_msg);
-    EXPECT_EQ(0, ret);
+    /* RETRY_ID 分支在新实现里同步等待实际结果；mock 环境残留任务不在链表
+     * （dup_task 被打桩），同步等待查无任务返回 -EAGAIN */
+    EXPECT_EQ(-EAGAIN, ret);
 
     GlobalMockObject::verify();
     MOCKER(init_migrate_back_task).stubs().will(returnValue(&task));

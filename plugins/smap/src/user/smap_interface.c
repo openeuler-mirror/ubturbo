@@ -65,8 +65,9 @@ static int IoctlHandler(int fd, const void *msg)
     }
     int ret = ioctl(fd, SMAP_MIGRATE_BACK, msg);
     if (ret < 0) {
-        SMAP_LOGGER_ERROR("ioctl failed, result: %d.", ret);
-        ret = -EBADF;
+        SMAP_LOGGER_ERROR("ioctl failed, result: %d, errno: %d. (kernel returns -ETIMEDOUT/-EAGAIN are real results)",
+                          ret, errno);
+        return -errno;
     }
     return ret;
 }

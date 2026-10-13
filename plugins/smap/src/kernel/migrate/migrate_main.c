@@ -127,6 +127,8 @@ next:
 		task->status = MB_TASK_DONE;
 		task->progress = HUNDRED;
 	}
+	/* 唤醒 SMAP_MIGRATE_BACK 同步等待者（含 ERR 任务被 RETRY_ID 重置的场景） */
+	complete(&task->done);
 	goto next;
 }
 
