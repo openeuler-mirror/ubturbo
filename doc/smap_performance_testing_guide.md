@@ -352,10 +352,10 @@ echo 3 > /proc/sys/vm/drop_caches
 echo 39495 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages
 ```
 
-插SMAP ko时指定enable\_hist参数为0：
+插SMAP ko时无需指定远端扫描模式参数，纯软扫描由配置文件设置（`smap.remote.scan.mode = 0`）：
 
 ```shell
-insmod smap.ko enable_hist=0
+insmod smap.ko
 ```
 
 MySQL的配置文件my.cnf的内容如下：
@@ -488,6 +488,7 @@ smap.period.file.config.switch = false
 smap.migrate.mode.enable = false
 smap.migrate.mode = 1
 smap.scan.cpu = 0-127
+smap.remote.scan.mode = 1
 ```
 
 >[!NOTE] 说明
@@ -518,10 +519,11 @@ smap.scan.cpu = 0-127
 |15|smap.group.swap.local.watermark.ratio|默认值：95<br>取值范围：[0,100]|大虚机场景，本地内存水位线比例，用于判断本地内存是否处于稳定状态。|
 |16|smap.ub.bw.threshold|默认值：0<br>单位：MB/s<br>取值范围：[0,65535]|UB带宽阈值，0表示不开启迁移限制。|
 |17|smap.scan.cpu|默认值：系统有效CPU范围（如0-127）<br>取值格式：min-max，且min不能大于max|扫描CPU范围，左值为最小CPU编号，右值为最大CPU编号。默认值由SMAP初始化时从/sys/devices/system/cpu/possible读取系统有效CPU范围得到。|
+|18|smap.remote.scan.mode|默认值：1<br>取值范围：[0,2]|远端节点扫描模式。0：纯软扫描，远端页频次仅由软件扫描提供；1：软硬结合扫描，远端页频次由软件与硬件扫描叠加；2：纯硬扫描，远端页频次仅由硬件扫描提供。硬件扫描仅鲲鹏950机型支持，硬件不可用时自动降级为纯软扫描；修改后下个迁移周期生效，无需重插内核模块。|
 
 > [!NOTE] 说明 
 >
-> - 如果配置文件中缺任何一项，或者有一项出现配置错误，此处配置将不会生效，系统将会沿用上一次有效值（如果配置过，未配置将会用上述中的默认配置）。
+> - 如果配置文件中缺任何一项，或者有一项出现配置错误，此处配置将不会生效，系统将会沿用上一次有效值（如果配置过，未配置将会用上述中的默认配置）；同时SMAP会在下一个迁移周期检测到非法配置后，自动将该文件文本恢复为上一次有效配置，保证磁盘上始终是可用配置。
 > - 在不同场景下推荐调整配置以达到最佳效果：对于页面数量少的进程如果想要提升扫描精度，可以适当增大每次迁移的扫描次数，通过减小扫描周期并增大迁移周期来实现；对于页面数量多的进程，为了减少每次迁移的扫描开销，减少每次迁移周期的扫描次数，推荐增大扫描周期并减小迁移周期，例如可以进行如下配置：
 > 
 >    smap.scan.period = 200<br>

@@ -48,6 +48,8 @@ struct UbWatchConfig {
 
 #define SMAP_IOCTL_UB_WATCH_CONFIG_CMD _IOW(SMAP_ACCESS_MAGIC, 12, struct UbWatchConfig)
 
+#define SMAP_IOCTL_SCAN_MODE_SET_CMD _IOW(SMAP_ACCESS_MAGIC, 13, unsigned long)
+
 #define SMAP_MIG_MIGRATE _IOW(SMAP_MIGRATE_MAGIC, 0, struct MigrateMsg)
 #define SMAP_SET_PAGETYPE _IOW(SMAP_MIGRATE_MAGIC, 1, uint32_t)
 #define SMAP_MIG_MIGRATE_NUMA \

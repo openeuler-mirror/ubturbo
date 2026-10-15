@@ -40,7 +40,7 @@ sh build.sh
 
 ## Installation
 
-SMAP的运行模式根据进程页面大小分为4K和2M模式，由`ubturbo_smap_start(pageType)`入参控制（0=4K，1=2M），无需重插模块切换。SMAP仅加载一个内核模块；硬件判热场景在加载时设置`enable_hist=1`（仅鲲鹏950机型支持）。安装命令如下：
+SMAP的运行模式根据进程页面大小分为4K和2M模式，由`ubturbo_smap_start(pageType)`入参控制（0=4K，1=2M），无需重插模块切换。SMAP仅加载一个内核模块；远端扫描模式（纯软/软硬结合/纯硬）由配置文件`period.config`中的`smap.remote.scan.mode`控制，硬件判热仅鲲鹏950机型支持，运行期可切换。安装命令如下：
 
     ```shell
     insmod src/kernel/smap.ko

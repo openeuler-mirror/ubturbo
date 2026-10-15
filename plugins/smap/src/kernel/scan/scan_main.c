@@ -57,10 +57,6 @@ static void access_work_func(struct work_struct *work);
 #undef pr_fmt
 #define pr_fmt(fmt) "scan_main: " fmt
 
-unsigned int enable_hist = DISABLE_HIST;
-module_param(enable_hist, uint, S_IRUGO);
-MODULE_PARM_DESC(enable_hist, "smap hist disable: 0, smap hist enable: 1");
-
 struct access_scan_state {
 	struct workqueue_struct *scanq;
 	struct rw_semaphore lock;
@@ -72,8 +68,68 @@ struct access_scan_state {
 static struct access_scan_state scan_state;
 static u64 node_page_count[SMAP_MAX_NUMNODES];
 
+/* 远端扫描模式由用户态配置文件下发，缺省软硬结合；硬件子系统按需懒初始化 */
+static u8 remote_scan_mode = SMAP_REMOTE_SCAN_COMBINED;
+static bool hist_inited;
+static DEFINE_MUTEX(remote_scan_mode_lock);
+
 u32 g_pagesize_huge;
 EXPORT_SYMBOL(g_pagesize_huge);
+
+bool is_remote_scan_hist_active(void)
+{
+	return READ_ONCE(hist_inited) &&
+	       READ_ONCE(remote_scan_mode) != SMAP_REMOTE_SCAN_SOFT;
+}
+
+bool is_freq_hist_only_node(int node)
+{
+	return READ_ONCE(hist_inited) &&
+	       READ_ONCE(remote_scan_mode) == SMAP_REMOTE_SCAN_HARD &&
+	       node >= nr_local_numa && node < SMAP_MAX_NUMNODES;
+}
+
+/*
+ * 设置远端扫描模式：纯软模式暂停硬件子系统；软硬结合/纯硬模式按需懒初始化
+ * 硬件子系统（仅鲲鹏950机型支持），初始化失败时保持原模式并返回 -ENODEV，
+ * 由用户态感知并降级为纯软行为。
+ */
+int set_remote_scan_mode(u8 mode)
+{
+	int ret = 0;
+
+	if (mode >= NR_REMOTE_SCAN_MODE)
+		return -EINVAL;
+
+	mutex_lock(&remote_scan_mode_lock);
+	if (mode != SMAP_REMOTE_SCAN_SOFT && !hist_inited) {
+		ret = hist_module_init();
+		if (ret) {
+			pr_err("unable to init hist tracking for scan mode %u, ret: %d\n", mode, ret);
+			mutex_unlock(&remote_scan_mode_lock);
+			return -ENODEV;
+		}
+		hist_inited = true;
+		hist_tracking_set_page_size(get_scan_page_mode());
+	}
+
+	/*
+	 * 先启动硬件扫描线程再切模式，避免切换瞬间出现远端频次空窗；
+	 * 切到纯软时先切模式再暂停线程，保证软件累计不中断。
+	 */
+	if (mode == SMAP_REMOTE_SCAN_SOFT) {
+		WRITE_ONCE(remote_scan_mode, mode);
+		if (hist_inited)
+			hist_tracking_disable();
+	} else {
+		hist_tracking_enable();
+		WRITE_ONCE(remote_scan_mode, mode);
+	}
+	mutex_unlock(&remote_scan_mode_lock);
+
+	pr_info("set remote scan mode to %u, hist inited: %d\n", mode, hist_inited);
+	return 0;
+}
 
 bool access_scan_enabled(void)
 {
@@ -382,7 +438,7 @@ static void access_tracking_set_page_size_scan(u8 page_size_index)
 void access_tracking_enable(void)
 {
 	access_tracking_enable_scan();
-	if (enable_hist)
+	if (is_remote_scan_hist_active())
 		hist_tracking_enable();
 }
 
@@ -393,7 +449,7 @@ int access_tracking_disable(void)
 	ret = access_tracking_disable_scan();
 	if (ret)
 		return ret;
-	if (enable_hist)
+	if (is_remote_scan_hist_active())
 		return hist_tracking_disable();
 	return 0;
 }
@@ -404,7 +460,7 @@ int access_tracking_set_page_size(u8 page_size_index)
 		return -EINVAL;
 
 	access_tracking_set_page_size_scan(page_size_index);
-	return enable_hist ? hist_tracking_set_page_size(page_size_index) : 0;
+	return is_remote_scan_hist_active() ? hist_tracking_set_page_size(page_size_index) : 0;
 }
 
 static void scan_state_init(void)
@@ -557,16 +613,9 @@ int scan_init(void)
 
 	scan_state_init();
 
-	if (enable_hist) {
-		ret = hist_module_init();
-		if (ret) {
-			pr_err("unable to init hist tracking\n");
-			goto err_scan_ioctl;
-		}
-	}
 	ret = create_scan_workqueue();
 	if (ret) {
-		goto err_hist;
+		goto err_scan_ioctl;
 	}
 
 	access_print_acpi_mem();
@@ -574,9 +623,6 @@ int scan_init(void)
 	pr_info("scan subsystem initialized successfully\n");
 	return ret;
 
-err_hist:
-	if (enable_hist)
-		hist_deinit();
 err_scan_ioctl:
 	scan_ioctl_exit();
 err_ioctl:
@@ -590,8 +636,10 @@ void scan_exit(void)
 {
 	scan_ioctl_exit();
 	destroy_scan_workqueue();
-	if (enable_hist)
+	if (hist_inited) {
 		hist_deinit();
+		hist_inited = false;
+	}
 	memset(node_page_count, 0, sizeof(node_page_count));
 	release_remote_ram();
 	reset_acpi_mem();

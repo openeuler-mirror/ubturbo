@@ -178,3 +178,16 @@ void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax)
 
     SMAP_LOGGER_INFO("ioctl set scan cpu range=%u-%u", cpuMin, cpuMax);
 }
+
+void IoctlSetRemoteScanMode(uint32_t mode)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    int ret = ioctl(manager->fds.access, SMAP_IOCTL_SCAN_MODE_SET_CMD, mode);
+
+    if (ret < 0) {
+        ret = -errno;
+        SMAP_LOGGER_ERROR("ioctl set remote scan mode failed: %s.", strerror(-ret));
+        return;
+    }
+    SMAP_LOGGER_INFO("Set remote scan mode to %u success.", mode);
+}

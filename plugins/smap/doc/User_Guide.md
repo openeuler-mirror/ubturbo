@@ -37,7 +37,7 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
    
    安装smap软件包。
    <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen5971151198"><p class="p" id="p39578483278">rpm -ivh smap-x.x.x-x.oe2403sp1.aarch64.rpm</p></pre>
-2. 载入SMAP内核模块。硬件判热场景在加载时增加`enable_hist=1`（仅鲲鹏950机型支持）；该参数为0时不初始化直方图子系统。
+2. 载入SMAP内核模块。远端扫描模式由配置文件`/opt/ubturbo/conf/smap/period.config`中的`smap.remote.scan.mode`控制（0=纯软，1=软硬结合（默认），2=纯硬），硬件判热需该值非0且机型为鲲鹏950，其余场景自动降级为纯软扫描。insmod阶段不再通过模块参数控制。
 
    <pre class="screen" id="screen8274308918"><p class="p" id="p1958548202716">cd /lib/modules/smap</p><p class="p" id="p295820488271">insmod smap.ko</p></pre>
 

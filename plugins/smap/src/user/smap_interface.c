@@ -1898,6 +1898,7 @@ static void MigrateAndCpuConfig(void)
     }
 
     IoctlSetScanCpuRange(GetScanCpuMinConfig(), GetScanCpuMaxConfig());
+    IoctlSetRemoteScanMode(GetRemoteScanModeConfig());
 }
 
 int ubturbo_smap_start(uint32_t pageType, Logfunc extlog)

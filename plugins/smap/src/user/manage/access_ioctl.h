@@ -86,5 +86,6 @@ int AccessIoctlCreateProcfs(struct UserInfo *ui);
 int AccessRead(size_t len, char *buf);
 void IoctlUpdateUbDmaAvail(uint32_t value);
 void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax);
+void IoctlSetRemoteScanMode(uint32_t mode);
 
 #endif /* __ACCESS_IOCTL_H__ */

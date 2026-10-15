@@ -94,6 +94,19 @@ TEST_F(AccessIoctlTest, TestIoctlSetScanCpuRangeFailed)
     IoctlSetScanCpuRange(1, 3);
 }
 
+extern "C" void IoctlSetRemoteScanMode(uint32_t mode);
+TEST_F(AccessIoctlTest, TestIoctlSetRemoteScanModeSuccess)
+{
+    MOCKER((int (*)(int, unsigned long, void *))ioctl).stubs().will(returnValue(0));
+    IoctlSetRemoteScanMode(1);
+}
+
+TEST_F(AccessIoctlTest, TestIoctlSetRemoteScanModeFailed)
+{
+    MOCKER((int (*)(int, unsigned long, void *))ioctl).stubs().will(returnValue(-1));
+    IoctlSetRemoteScanMode(2);
+}
+
 extern "C" ssize_t read(int fd, void *buf, size_t count);
 TEST_F(AccessIoctlTest, TestAccessReadAllInOneTime)
 {
