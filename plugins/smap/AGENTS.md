@@ -62,7 +62,7 @@ cd test/build && cmake -DCMAKE_BUILD_TYPE=Debug .. && make -j$(nproc)
 - User-space library builds into `build/`, outputs to `output/smap/` (lib, bin, include)
 - Unified SMAP module is `src/kernel/smap.ko`; ucache remains `src/ucache/ucache.ko`
 - Main output: `libsmap.so` shared library (from `src/user/`)
-- Kernel version support via `KERNEL_VERSION` variable: `openeuler` (default, enables HAM), `ocos`, `velinux`
+- Kernel version support via `KERNEL_VERSION` variable: `openeuler` (default, enables HAM), `V1`, `T1`
 - `libboundscheck` is a required dependency; build script auto-builds it from `3rdparty/` if not installed
 - Test framework uses GoogleTest + mockcpp; `run_dt.sh` performs source transformations (removes `static`/`inline`, renames symbols) before building tests
 - Coverage reports generated via `lcov` + `genhtml` in `test/build/gcovr_report/`

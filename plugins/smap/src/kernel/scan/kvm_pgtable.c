@@ -48,7 +48,7 @@ static u32 kvm_pgtable_idx(struct kvm_pgtable_walk_data *data, u32 level)
 
 static bool kvm_pte_table(kvm_pte_t pte, u32 level)
 {
-#ifdef KERNEL_VELINUX
+#ifdef OS_VENDOR_V1
 	if (level == KVM_PGTABLE_LAST_LEVEL || !kvm_pte_valid(pte))
 #else
 	if (level == KVM_PGTABLE_MAX_LEVELS - 1 || !kvm_pte_valid(pte))
@@ -170,7 +170,7 @@ static int __kvm_pgtable_walk(struct kvm_pgtable_walk_data *data,
 	u32 idx;
 	int ret = 0;
 
-#ifdef KERNEL_VELINUX
+#ifdef OS_VENDOR_V1
 	if (WARN_ON_ONCE(level > KVM_PGTABLE_LAST_LEVEL))
 #else
 	if (WARN_ON_ONCE(level >= KVM_PGTABLE_MAX_LEVELS))
@@ -379,7 +379,7 @@ static int smap_stage2_range_walker(const struct kvm_pgtable_visit_ctx *ctx,
 	bool pte_valid;
 	bool is_young;
 
-#ifdef KERNEL_VELINUX
+#ifdef OS_VENDOR_V1
 	if (ctx->level < KVM_PGTABLE_LAST_LEVEL - 1) {
 #else
 	if (ctx->level < KVM_PGTABLE_MAX_LEVELS - 2) {
