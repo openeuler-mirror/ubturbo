@@ -46,6 +46,7 @@ struct ub_dma_desc {
 	uint64_t dest_addr;
 	size_t len;
 	struct tmp_urma_segment_info tmp_sge;
+	bool in_flight;
 };
 
 struct ub_dma_vchan {
@@ -197,49 +198,68 @@ static inline void ub_dma_free_tmp_segment(struct ub_dma_desc *txd)
 	}
 }
 
+static bool ub_dma_get_inflight_desc_locked(struct dma_chan *chan,
+					    struct ub_dma_desc **out_txd)
+{
+	struct ub_dma_vchan *vchan = to_ub_dma_vchan(chan);
+	struct ub_virt_dma_desc *desc;
+	struct ub_dma_desc *txd;
+
+	desc = vchan_next_desc(&vchan->vc);
+	if (!desc) {
+		return false;
+	}
+	txd = to_ub_dma_desc(&desc->tx);
+	if (txd->in_flight) {
+		return false;
+	}
+	txd->in_flight = true;
+	*out_txd = txd;
+	return true;
+}
+
 static void ub_dma_issue_pending(struct dma_chan *chan)
 {
 	struct ub_dma_vchan *vchan = to_ub_dma_vchan(chan);
 	unsigned long flags;
-	int ret;
+	int ret = 0;
+	struct ub_dma_desc *txd = NULL;
 	struct ub_virt_dma_desc *desc;
-	struct ub_dma_desc *txd;
 	struct urma_trans_segment_info src_info;
 	struct urma_trans_segment_info dst_info;
 
 	spin_lock_irqsave(&vchan->vc.lock, flags);
-	if (vchan_issue_pending(&vchan->vc)) {
-		if (list_empty(&vchan->node)) {
-			desc = vchan_next_desc(&vchan->vc);
-			txd = to_ub_dma_desc(&desc->tx);
-			buid_urma_segment_info(txd, &src_info, &dst_info);
-			ret = get_trans_segment(txd, &src_info, &dst_info);
-			if (ret) {
-				list_del(&desc->node);
-				desc->tx_result.result = DMA_TRANS_WRITE_FAILED;
-				goto complete_dma_pending;
-			}
-			ret = urma_run_send(txd->src_addr, txd->dest_addr,
-					    src_info.sge, dst_info.sge,
-					    txd->len);
-			if (ret) {
-				list_del(&desc->node);
-				ub_dma_log_err("urma send failed\n");
-				desc->tx_result.result = DMA_TRANS_WRITE_FAILED;
-				goto err_free_tmp_segment;
-			}
-		}
-	} else {
-		ub_dma_log_info("vchan %p: no pending txd.\n", &vchan->vc);
+	vchan_issue_pending(&vchan->vc);
+	if (!ub_dma_get_inflight_desc_locked(chan, &txd)) {
+		spin_unlock_irqrestore(&vchan->vc.lock, flags);
+		ub_dma_log_info(
+			"vchan %p: no pending txd or previous txd active.\n",
+			&vchan->vc);
+		return;
 	}
 	spin_unlock_irqrestore(&vchan->vc.lock, flags);
-	return;
 
-err_free_tmp_segment:
-	ub_dma_free_tmp_segment(txd);
-complete_dma_pending:
-	vchan_cookie_complete(desc);
-	spin_unlock_irqrestore(&vchan->vc.lock, flags);
+	desc = &txd->vd;
+	buid_urma_segment_info(txd, &src_info, &dst_info);
+	ret = get_trans_segment(txd, &src_info, &dst_info);
+	if (ret) {
+		ub_dma_log_err("failed to get trans segment\n");
+	} else {
+		ret = urma_run_send(txd->src_addr, txd->dest_addr, src_info.sge,
+				    dst_info.sge, txd->len);
+		if (ret) {
+			ub_dma_log_err("urma send failed\n");
+		}
+	}
+	if (ret) {
+		ub_dma_free_tmp_segment(txd);
+		spin_lock_irqsave(&vchan->vc.lock, flags);
+		list_del(&desc->node);
+		desc->tx_result.result = DMA_TRANS_WRITE_FAILED;
+		txd->in_flight = false;
+		vchan_cookie_complete(desc);
+		spin_unlock_irqrestore(&vchan->vc.lock, flags);
+	}
 }
 
 static enum dma_status ub_dma_tx_status(struct dma_chan *chan,
@@ -389,6 +409,7 @@ void urma_callback_free_desc(struct ubcore_jfc *jfc,
 	struct ub_dma_vchan *vchan;
 	struct ub_dma_desc *txd;
 	int i;
+	unsigned long flags;
 
 	ret = ubcore_rearm_jfc(jfc, false);
 	if (ret) {
@@ -399,8 +420,12 @@ void urma_callback_free_desc(struct ubcore_jfc *jfc,
 		if (list_empty(&vchan->vc.desc_issued)) {
 			continue;
 		}
-		spin_lock(&vchan->vc.lock);
+		spin_lock_irqsave(&vchan->vc.lock, flags);
 		desc = vchan_next_desc(&vchan->vc);
+		if (!desc || !to_ub_dma_desc(&desc->tx)->in_flight) {
+			spin_unlock_irqrestore(&vchan->vc.lock, flags);
+			continue;
+		}
 		list_del(&desc->node);
 		desc->tx_result = res;
 		vchan->status = (res.result == DMA_TRANS_NOERROR) ? DMA_COMPLETE
@@ -415,8 +440,9 @@ void urma_callback_free_desc(struct ubcore_jfc *jfc,
 			ubcore_unregister_seg(txd->tmp_sge.seg);
 			txd->tmp_sge.seg = NULL;
 		}
+		txd->in_flight = false;
 		vchan_cookie_complete(desc);
-		spin_unlock(&vchan->vc.lock);
+		spin_unlock_irqrestore(&vchan->vc.lock, flags);
 		ub_dma_log_debug(
 			"ub_dma_client_comp_callback, vchan %p, status %d\n",
 			vchan, vchan->status);
