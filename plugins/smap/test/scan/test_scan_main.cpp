@@ -68,7 +68,59 @@ TEST_F(AccessTrackingTest, node_page_count)
 }
 
 extern "C" void access_work_func(struct work_struct *work);
+extern "C" int access_walk_pagemap_prepare(struct access_pid *ap);
+extern "C" int scan_accessed_bit_forward_vm(struct access_pid *ap, int page_size);
+extern "C" int scan_accessed_bit_forward_mm(struct access_pid *ap, int page_size);
+extern "C" void ap_put_slot(struct ap_slot *slot);
 extern "C" int __init scan_init(void);
+TEST_F(AccessTrackingTest, scan_prepare_failure_stops_without_retry)
+{
+    struct access_pid ap = {};
+    struct ap_slot slot = {};
+    ap.pid = 123;
+    ap.type = NORMAL_SCAN;
+    ap.ntimes = 1;
+    ap.slot = &slot;
+    ap.freq_ready = true;
+    atomic_set(&slot.state, AP_SLOT_INUSE);
+
+    MOCKER(access_walk_pagemap_prepare).expects(once()).will(returnValue(-ENOMEM));
+    MOCKER(queue_delayed_work).expects(never());
+    MOCKER(complete).expects(once()).with(&ap.work_done);
+    MOCKER(ap_put_slot).expects(once());
+    access_work_func(&ap.scan_work.work);
+
+    EXPECT_EQ(0, ap.cur_times);
+    EXPECT_FALSE(ap.freq_ready);
+}
+
+TEST_F(AccessTrackingTest, scan_failure_stops_without_retry)
+{
+    MOCKER(scan_accessed_bit_forward_vm).expects(once()).will(returnValue(-EINVAL));
+    MOCKER(scan_accessed_bit_forward_mm).expects(once()).will(returnValue(-ENOMEM));
+    MOCKER(access_walk_pagemap_prepare).expects(never());
+    MOCKER(queue_delayed_work).expects(never());
+    MOCKER(complete).expects(exactly(2));
+    MOCKER(ap_put_slot).expects(exactly(2));
+
+    for (smap_pid_type pid_type : {SMAP_PID_VM, SMAP_PID_PROCESS}) {
+        struct access_pid ap = {};
+        struct ap_slot slot = {};
+        ap.pid = 123;
+        ap.pid_type = pid_type;
+        ap.type = NORMAL_SCAN;
+        ap.ntimes = 2;
+        ap.slot = &slot;
+        ap.freq_ready = true;
+        atomic_set(&slot.state, AP_SLOT_INUSE);
+
+        access_work_func(&ap.scan_work.work);
+
+        EXPECT_EQ(0, ap.cur_times);
+        EXPECT_FALSE(ap.freq_ready);
+    }
+}
+
 TEST_F(AccessTrackingTest, scan_init)
 {
     int ret;

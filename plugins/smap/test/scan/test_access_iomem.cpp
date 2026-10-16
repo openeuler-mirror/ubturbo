@@ -9,6 +9,7 @@
 #include <linux/errno.h>
 #include <linux/ioport.h>
 #include <linux/list.h>
+#include <linux/err.h>
 #include <linux/memory.h>
 #include <linux/pfn.h>
 #include <linux/slab.h>
@@ -203,17 +204,11 @@ TEST_F(AccessIomemTest, get_node_page_cnt_iomem)
 {
     u64 ret;
     u64 len = 0;
-    struct ram_segment seg1 = {.numa_node = 0};
-    struct ram_segment seg2 = {
-        .numa_node = 1,
-        .start = 0x0,
-        .end = 0xfffff,
-    };
-    struct ram_segment seg3 = {
-        .numa_node = 1,
-        .start = 0x200000,
-        .end = 0x3fffff,
-    };
+    u32 old_huge_size = g_pagesize_huge;
+    g_pagesize_huge = PMD_SIZE;
+    struct ram_segment seg1 = { .numa_node = 0 };
+    struct ram_segment seg2 = { .numa_node = 1, .start = 0x0, .end = 0xfffff, };
+    struct ram_segment seg3 = { .numa_node = 1, .start = 0x200000, .end = 0x3fffff, };
 
     nr_local_numa = 1;
     ret = get_node_page_cnt_iomem(0, PMD_SIZE);
@@ -232,6 +227,7 @@ TEST_F(AccessIomemTest, get_node_page_cnt_iomem)
     list_del(&seg1.node);
     list_del(&seg2.node);
     list_del(&seg3.node);
+    g_pagesize_huge = old_huge_size;
 }
 
 extern "C" int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
@@ -254,6 +250,70 @@ TEST_F(AccessIomemTest, CalcPaddrAcidxIomemTest)
     ret = calc_paddr_acidx_iomem(pa, &nid, &index, pagesize);
     EXPECT_EQ(0, ret);
     list_del(&seg.node);
+}
+
+static struct ram_segment g_snapshot_added_segment;
+static struct remote_ram_snapshot g_snapshot_buffer;
+
+static void *GrowRemoteRamListOnSnapshotAlloc(size_t size, gfp_t flags)
+{
+    (void)size;
+    (void)flags;
+    list_add_tail(&g_snapshot_added_segment.node, &remote_ram_list);
+    return &g_snapshot_buffer;
+}
+
+extern "C" long PTR_ERR(const void *ptr);
+TEST_F(AccessIomemTest, RemoteSnapshotListGrowthFailsWithoutRetry)
+{
+    ASSERT_TRUE(list_empty(&remote_ram_list));
+    MOCKER(kvzalloc).expects(once()).will(invoke(GrowRemoteRamListOnSnapshotAlloc));
+    MOCKER(kvfree).expects(once()).with((void *)&g_snapshot_buffer);
+
+    struct remote_ram_snapshot *snapshot = remote_ram_snapshot_create();
+
+    list_del(&g_snapshot_added_segment.node);
+    EXPECT_TRUE(IS_ERR_VALUE(snapshot));
+    EXPECT_EQ(-EAGAIN, PTR_ERR(snapshot));
+    GlobalMockObject::verify();
+}
+
+TEST_F(AccessIomemTest, RemoteSnapshotKeepsIndexAfterListRefresh)
+{
+    ASSERT_TRUE(list_empty(&remote_ram_list));
+    u32 old_huge_size = g_pagesize_huge;
+    g_pagesize_huge = PMD_SIZE;
+    struct ram_segment first = { .numa_node = 1, .start = 0x200000, .end = 0x3fffff };
+    struct ram_segment second = { .numa_node = 1, .start = 0x600000, .end = 0x7fffff };
+    struct ram_segment added = { .numa_node = 1, .start = 0, .end = 0x1fffff };
+    list_add_tail(&first.node, &remote_ram_list);
+    list_add_tail(&second.node, &remote_ram_list);
+
+    struct remote_ram_snapshot *snapshot = remote_ram_snapshot_create();
+    ASSERT_FALSE(IS_ERR_VALUE(snapshot));
+    EXPECT_EQ(2U, snapshot->nr_ranges);
+    EXPECT_EQ(1024U, remote_ram_snapshot_page_count(snapshot, 1, PAGE_SIZE));
+    EXPECT_EQ(2U, remote_ram_snapshot_page_count(snapshot, 1, PMD_SIZE));
+
+    list_add(&added.node, &remote_ram_list);
+    list_del(&first.node);
+    list_del(&second.node);
+
+    int nid = -1;
+    u64 index = 0;
+    u64 paddr = 0;
+    EXPECT_EQ(0, remote_ram_snapshot_paddr_acidx(snapshot, 0x601000, &nid, &index, PAGE_SIZE));
+    EXPECT_EQ(1, nid);
+    EXPECT_EQ(513U, index);
+    EXPECT_EQ(0, remote_ram_snapshot_paddr_acidx_known_nid(snapshot, 0x601000, 1, &index, PAGE_SIZE));
+    EXPECT_EQ(513U, index);
+    EXPECT_EQ(0, remote_ram_snapshot_acidx_paddr(snapshot, 1, index, &paddr, PAGE_SIZE));
+    EXPECT_EQ(0x601000U, paddr);
+    EXPECT_EQ(-ERANGE, remote_ram_snapshot_paddr_acidx(snapshot, 0x1000, &nid, &index, PAGE_SIZE));
+
+    remote_ram_snapshot_free(snapshot);
+    list_del(&added.node);
+    g_pagesize_huge = old_huge_size;
 }
 
 extern "C" int smap_is_remote_addr_valid(int nid, u64 pa_start, u64 pa_end);

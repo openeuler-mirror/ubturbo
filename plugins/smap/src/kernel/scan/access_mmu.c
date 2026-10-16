@@ -16,6 +16,7 @@
 #include "scan_main.h"
 #include "access_tracking_wrapper.h"
 #include "access_mmu.h"
+#include "iomem.h"
 
 #define PAGEMAP_WALK_SIZE (PMD_SIZE)
 #define PAGEMAP_WALK_MASK (PMD_MASK)
@@ -52,12 +53,14 @@ static inline pagemap_entry_t make_pme(u64 frame, u64 flags)
 	return (pagemap_entry_t){ .pme = (frame & PM_PFRAME_MASK) | flags };
 }
 
-static int calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
+static int calc_paddr_acidx(u64 paddr, struct access_pid *ap, int *nid,
+			    u64 *index)
 {
 	int page_size = is_access_hugepage() ? g_pagesize_huge : PAGE_SIZE;
 	if (is_paddr_local(paddr))
 		return calc_paddr_acidx_acpi(paddr, nid, index, page_size);
-	return calc_paddr_acidx_iomem(paddr, nid, index, page_size);
+	return remote_ram_snapshot_paddr_acidx(ap->remote_snapshot, paddr, nid,
+					       index, page_size);
 }
 
 int add_to_bm_page(u64 paddr, struct access_pid *ap)
@@ -65,7 +68,7 @@ int add_to_bm_page(u64 paddr, struct access_pid *ap)
 	int nid, ret;
 	u64 acidx;
 
-	ret = calc_paddr_acidx(paddr, &nid, &acidx);
+	ret = calc_paddr_acidx(paddr, ap, &nid, &acidx);
 	if (ret)
 		return ret;
 
@@ -141,7 +144,7 @@ int add_to_bm_hugepage(u64 vaddr, u64 paddr, struct access_pid *ap)
 	int nid, ret;
 	u64 acidx;
 
-	ret = calc_paddr_acidx(paddr, &nid, &acidx);
+	ret = calc_paddr_acidx(paddr, ap, &nid, &acidx);
 	if (ret)
 		return ret;
 

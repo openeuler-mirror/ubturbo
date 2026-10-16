@@ -35,6 +35,7 @@
 #include "scan_main.h"
 #include "smap_page_flags.h"
 #include "accessed_bit.h"
+#include "iomem.h"
 
 #define DEFAULT_REF_COUNT 0
 #define TRUE_REF 1
@@ -420,7 +421,7 @@ static inline int get_numa_id_by_paddr(phys_addr_t paddr)
 }
 
 static void actc_data_add_fast(phys_addr_t paddr, struct page *page,
-			       u32 page_size)
+			       struct access_pid *ap, u32 page_size)
 {
 	int ret, nid;
 	u64 pa_index;
@@ -436,14 +437,18 @@ static void actc_data_add_fast(phys_addr_t paddr, struct page *page,
 		ret = calc_paddr_acidx_acpi_known_nid(paddr, nid, &pa_index,
 						      page_size);
 	} else {
-		ret = calc_paddr_acidx_iomem_known_nid(paddr, nid, &pa_index,
-						       page_size);
+		ret = remote_ram_snapshot_paddr_acidx_known_nid(
+			ap->remote_snapshot, paddr, nid, &pa_index, page_size);
 	}
 
 	if (unlikely(ret))
 		return;
 
-	if (unlikely(pa_index >= get_node_page_count(nid)))
+	if (unlikely(pa_index >=
+		     (nid < nr_local_numa
+			      ? get_node_page_count(nid)
+			      : remote_ram_snapshot_page_count(
+					ap->remote_snapshot, nid, page_size))))
 		return;
 
 	/* 纯硬模式下远端页频次由硬件独家提供，跳过软件累计；其余模式软硬叠加 */
@@ -491,7 +496,7 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 	if (is_young) {
 		struct page *page = pfn_to_online_page(pte_pfn(pte));
 
-		actc_data_add_fast(paddr, page, g_pagesize_huge);
+		actc_data_add_fast(paddr, page, ap, g_pagesize_huge);
 	}
 
 	if (access_pid_cur_last_scanning(ap))
@@ -1431,14 +1436,16 @@ static const struct mm_walk_ops pte_range_ops = {
 	.pte_entry = check_pte_young,
 };
 
-static inline int cal_acidx_and_node_by_paddr(phys_addr_t paddr, int *nid,
+static inline int cal_acidx_and_node_by_paddr(phys_addr_t paddr,
+					      struct access_pid *ap, int *nid,
 					      u64 *pa_idx, int page_size)
 {
 	int ret;
 
 	ret = calc_paddr_acidx_acpi(paddr, nid, pa_idx, page_size);
 	if (ret) {
-		ret = calc_paddr_acidx_iomem(paddr, nid, pa_idx, page_size);
+		ret = remote_ram_snapshot_paddr_acidx(
+			ap->remote_snapshot, paddr, nid, pa_idx, page_size);
 	}
 
 	return ret;
@@ -1470,15 +1477,20 @@ static void process_scan_results(struct pte_walk *pte_walk)
 			ret = calc_paddr_acidx_acpi_known_nid(
 				entry->paddr, nid, &pa_idx, PAGE_SIZE);
 			if (ret) {
-				ret = cal_acidx_and_node_by_paddr(
-					entry->paddr, &nid, &pa_idx, PAGE_SIZE);
+				ret = cal_acidx_and_node_by_paddr(entry->paddr,
+								  pte_walk->ap,
+								  &nid, &pa_idx,
+								  PAGE_SIZE);
 			}
 		} else {
-			ret = calc_paddr_acidx_iomem_known_nid(
-				entry->paddr, nid, &pa_idx, PAGE_SIZE);
+			ret = remote_ram_snapshot_paddr_acidx_known_nid(
+				pte_walk->ap->remote_snapshot, entry->paddr,
+				nid, &pa_idx, PAGE_SIZE);
 			if (ret) {
-				ret = cal_acidx_and_node_by_paddr(
-					entry->paddr, &nid, &pa_idx, PAGE_SIZE);
+				ret = cal_acidx_and_node_by_paddr(entry->paddr,
+								  pte_walk->ap,
+								  &nid, &pa_idx,
+								  PAGE_SIZE);
 			}
 		}
 		if (ret)

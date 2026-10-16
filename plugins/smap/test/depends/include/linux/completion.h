@@ -21,8 +21,16 @@ static inline void reinit_completion(struct completion *x)
 	x->done = 0;
 }
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void complete(struct completion *);
 void wait_for_completion(struct completion *x);
 bool completion_done(struct completion *x);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

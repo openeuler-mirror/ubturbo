@@ -78,6 +78,8 @@ struct vm_mapping_info {
 	u8 *priors;
 };
 
+struct remote_ram_snapshot;
+
 struct access_pid {
 	pid_t pid;
 	smap_pid_type pid_type;
@@ -87,8 +89,10 @@ struct access_pid {
 	u32 cur_times;
 	struct delayed_work scan_work;
 	struct completion work_done;
-	wait_queue_head_t wq; /* per-pid scan-complete poll wait queue */
+	/* Notify readers only after scanning and bitmap construction finish. */
+	wait_queue_head_t wq;
 	bool freq_ready; /* window data ready for user-space consumption */
+	struct remote_ram_snapshot *remote_snapshot;
 	u32 scan_count[SMAP_MAX_NUMNODES];
 	size_t page_num[SMAP_MAX_NUMNODES];
 	size_t bm_len[SMAP_MAX_NUMNODES];
