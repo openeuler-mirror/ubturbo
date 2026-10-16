@@ -27,6 +27,9 @@
 #define MAX_NR_REMOVE MAX_NR_MIGOUT
 #define SCHEDULE_INTERVAL (100000)
 
+#define MAX_SCAN_PERIOD 60000
+#define MAX_MIGRATE_PERIOD 300000
+
 static dev_t ioctl_scan_dev;
 static struct class *scan_class;
 static struct cdev scan_cdev;
@@ -75,9 +78,48 @@ static int add_payload(int len, struct access_add_pid_payload *payload,
 	return ret;
 }
 
+static bool check_payload_validity(struct access_add_pid_payload *payload,
+				   int len)
+{
+	int i;
+
+	for (i = 0; i < len; i++) {
+		if (payload[i].pid == NON_EXIST_PID)
+			continue;
+		pr_info("[%d] pid %d, numa_nodes %#x, scan_time %u, ntimes %u, duration %u, type %d\n",
+			i, payload[i].pid, payload[i].numa_nodes,
+			payload[i].scan_time, payload[i].ntimes,
+			payload[i].duration, payload[i].type);
+		if (payload[i].type >= MAX_SCAN_TYPE || payload[i].type < 0) {
+			pr_err("invalid scan type %d of message payload[%d]\n",
+			       payload[i].type, i);
+			return false;
+		}
+		if (payload[i].ntimes == 0) {
+			pr_err("invalid scan times %d of message payload[%d]\n",
+			       payload[i].ntimes, i);
+			return false;
+		}
+		if (payload[i].scan_time == 0 ||
+		    payload[i].scan_time > MAX_SCAN_PERIOD) {
+			pr_err("invalid scan time %d of message payload[%d]\n",
+			       payload[i].scan_time, i);
+			return false;
+		}
+		if (payload[i].ntimes >
+		    (MAX_MIGRATE_PERIOD / payload[i].scan_time)) {
+			pr_err("invalid scan ntimes %d of message payload[%d]\n",
+			       payload[i].ntimes, i);
+			return false;
+		}
+	}
+
+	return true;
+}
+
 static long ioctl_add_pid(void __user *argp)
 {
-	int ret = 0, i = 0;
+	int ret = 0;
 	struct access_add_pid_msg msg;
 	struct access_add_pid_payload *payload;
 	int page_size = get_scan_page_size();
@@ -99,25 +141,9 @@ static long ioctl_add_pid(void __user *argp)
 	}
 
 	pr_info("adding pid payload:\n");
-	for (i = 0; i < msg.count; i++) {
-		if (payload[i].pid == NON_EXIST_PID)
-			continue;
-		pr_info("[%d] pid %d, numa_nodes %#x, scan_time %u, ntimes %u, duration %u, type %d\n",
-			i, payload[i].pid, payload[i].numa_nodes,
-			payload[i].scan_time, payload[i].ntimes,
-			payload[i].duration, payload[i].type);
-		if (payload[i].type >= MAX_SCAN_TYPE || payload[i].type < 0) {
-			pr_err("invalid scan type %d of message payload[%d]\n",
-			       payload[i].type, i);
-			ret = -EINVAL;
-			goto out_free_payload;
-		}
-		if (payload[i].ntimes == 0) {
-			pr_err("invalid scan times %d of message payload[%d]\n",
-			       payload[i].ntimes, i);
-			ret = -EINVAL;
-			goto out_free_payload;
-		}
+	if (!check_payload_validity(payload, msg.count)) {
+		ret = -EINVAL;
+		goto out_free_payload;
 	}
 	ret = add_payload(msg.count, payload, page_size);
 out_free_payload:

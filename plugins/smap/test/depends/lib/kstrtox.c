@@ -7,7 +7,6 @@
 int kstrtoint(const char *str, unsigned int base, int *result)
 {
     long tmp;
-
     errno = 0;
     tmp = strtol(str, NULL, base);
     if (errno)

@@ -282,6 +282,8 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPid)
         msg.payload[i].pid = i;
         msg.payload[i].numa_nodes = 0x10;
         payload_data[i].ntimes = 40;
+        /* check_payload_validity 要求 scan_time 在 (0, MAX_SCAN_PERIOD] 内 */
+        payload_data[i].scan_time = 100;
     }
 
     g_test_msg = &msg;
@@ -363,7 +365,8 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidThree)
         payload_data[i].ntimes = 40;
         payload_data[i].type = HAM_SCAN;
         payload_data[i].duration = 0;
-        payload_data[i].scan_time = 0;
+        /* check_payload_validity 要求 scan_time 在 (0, MAX_SCAN_PERIOD] 内 */
+        payload_data[i].scan_time = 100;
     }
 
     g_test_msg = &msg;
