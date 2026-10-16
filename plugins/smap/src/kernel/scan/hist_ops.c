@@ -634,6 +634,29 @@ static int generate_aligned_4k_scan_wins_info(struct segs_info *win_info,
 	return 0;
 }
 
+/*
+ * actc_add_page - Compress a kernel page's raw frequency into page->flags
+ * @pg_base: physical address of the kernel page start (PAGE_SIZE aligned)
+ * @raw_sum: sum of all hardware sub-counters covering this kernel page
+ */
+static inline void actc_add_page(phys_addr_t pg_base, u32 raw_sum)
+{
+	struct page *page;
+
+	/*
+	 * compress_freq() takes a u16 (result <= 255, i.e. a u8/256 bucket).
+	 * Saturate the aggregated sub-counters to u16 first, so that the
+	 * narrowing cast cannot wrap around.
+	 */
+	raw_sum = min_t(u32, raw_sum, (u32)U16_MAX);
+	if (!raw_sum)
+		return;
+	page = pfn_to_online_page(PHYS_PFN(pg_base));
+	if (!page)
+		return;
+	smap_page_freq_add(page, compress_freq((u16)raw_sum));
+}
+
 /**
  * do_actc_update - Update frequency counts via page flags
  * @base: physical address of first page in intersection region
@@ -642,30 +665,38 @@ static int generate_aligned_4k_scan_wins_info(struct segs_info *win_info,
  * @inter_pages: number of pages in intersection region
  * @freq: hardware scan frequency buffer (u16 values)
  *
- * For each page in the intersection, compress the raw hardware freq
- * and add into page->flags LAST_CPUPID via smap_page_freq_add.
+ * Attribute hardware frequencies to page->flags' LAST_CPUPID at kernel page
+ * granularity:
+ * - hardware granularity >= kernel page: a unit maps to one kernel page or
+ *   spans several, and is accounted once on its starting page;
+ * - hardware granularity < kernel page (e.g. 4K STS + 64K kernel page): the
+ *   sub-counters covering the same kernel page are summed and compressed
+ *   once, so that a page is never counted repeatedly (which would inflate
+ *   and prematurely saturate its frequency).
  */
 static void do_actc_update(phys_addr_t base, u32 shift, u64 hist_offset,
 			   u64 inter_pages, u16 *freq)
 {
 	u64 j;
 
-	for (j = 0; j < inter_pages; j++) {
-		phys_addr_t paddr = base + ((u64)j << shift);
-		struct page *page;
-		u16 raw;
-		actc_t cv;
+	/*
+	 * Aggregate per kernel page. When shift >= PAGE_SHIFT, consecutive
+	 * hardware units are 2^shift >= PAGE_SIZE apart and hence always land
+	 * on different kernel pages, so the inner loop runs exactly once and
+	 * degenerates into "account each unit on its starting page".
+	 */
+	for (j = 0; j < inter_pages;) {
+		phys_addr_t pg, pa;
+		u32 raw_sum = 0;
 
-		/* Zero freq: untouched page (free pages are never accessed),
-		 * nothing to accumulate. */
-		raw = freq[hist_offset + j];
-		if (!raw)
-			continue;
-		page = pfn_to_online_page(PHYS_PFN(paddr));
-		if (!page)
-			continue;
-		cv = compress_freq(raw);
-		smap_page_freq_add(page, cv);
+		pa = base + ((u64)j << shift);
+		pg = pa & PAGE_MASK;
+		while (j < inter_pages && ((pa & PAGE_MASK) == pg)) {
+			raw_sum += freq[hist_offset + j];
+			j++;
+			pa += (1ULL << shift);
+		}
+		actc_add_page(pg, raw_sum);
 	}
 }
 
