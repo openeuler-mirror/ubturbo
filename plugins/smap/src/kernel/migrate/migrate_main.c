@@ -127,6 +127,8 @@ next:
 		task->status = MB_TASK_DONE;
 		task->progress = HUNDRED;
 	}
+	/* 唤醒 SMAP_MIGRATE_BACK 同步等待者（含 ERR 任务被 RETRY_ID 重置的场景） */
+	complete(&task->done);
 	goto next;
 }
 
@@ -139,11 +141,17 @@ int migrate_init(void)
 		pr_err("smap process symbols failed\n");
 		return ret;
 	}
+	/*
+	 * obmm is optional for SMAP init: iterate_obmm_dev() may fail
+	 * (e.g. -ENOENT when no obmm device is present), which is an
+	 * expected condition on systems without obmm. Do not abort
+	 * tracking_init; migrate_back retries periodically.
+	 */
 	ret = iterate_obmm_dev();
-	if (ret) {
-		pr_err("failed to iterate obmm_dev, ret: %d\n", ret);
-		goto out_obmm_dev;
-	}
+	if (ret)
+		pr_warn("failed to iterate obmm_dev, ret: %d, obmm is optional, continue init\n",
+			ret);
+
 	migrate_back_wq = create_workqueue("smap_migrate_back_wq");
 	if (!migrate_back_wq) {
 		pr_err("failed to create migrate back workqueue\n");

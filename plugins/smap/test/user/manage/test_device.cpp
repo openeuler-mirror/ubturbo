@@ -46,7 +46,6 @@ protected:
 
 extern "C" {
 int ConfigTrackingDev(struct ProcessManager *manager, uint32_t pageSize);
-int EnableTracking(struct ProcessManager *manager);
 int OpenAndFlockFd(int *fd, const char *device);
 }
 TEST_F(DeviceTest, TestIInitTrackingDevOne)
@@ -72,28 +71,6 @@ TEST_F(DeviceTest, TestIInitTrackingDevThree)
     EXPECT_EQ(0, ret);
 }
 
-TEST_F(DeviceTest, TestEnableTracking)
-{
-    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
-    int ret;
-
-    pm.fds.access = 1;
-    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
-    ret = EnableTracking(&pm);
-    EXPECT_EQ(0, ret);
-}
-
-TEST_F(DeviceTest, TestDisableTracking)
-{
-    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
-    int ret;
-
-    pm.fds.access = 1;
-    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
-    ret = DisableTracking(&pm);
-    EXPECT_EQ(0, ret);
-}
-
 TEST_F(DeviceTest, TestConfigTrackingDev)
 {
     struct ProcessManager pm = {};
@@ -108,13 +85,11 @@ TEST_F(DeviceTest, TestConfigTrackingDev)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" int DisableTracking(struct ProcessManager *manager);
 TEST_F(DeviceTest, TestDeinitTrackingDev)
 {
     struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
     pm.fds.migrate = 3; pm.fds.access = 4;
 
-    MOCKER(DisableTracking).stubs().will(returnValue(0));
     MOCKER(static_cast<int (*)(int)>(close)).expects(exactly(2)).will(ignoreReturnValue());
     DeinitTrackingDev(&pm);
     EXPECT_EQ(DEFAULT_FD, pm.fds.migrate);

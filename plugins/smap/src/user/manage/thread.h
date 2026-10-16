@@ -12,10 +12,16 @@
 #ifndef __THREAD_H__
 #define __THREAD_H__
 
-#include "smap_env.h"
+#include "manage.h"
 
 int InitScanMigrateThread(struct ProcessManager *manager, uint32_t period);
-
 int DestroyScanMigrateThread(struct ProcessManager *manager);
+int InitEventLoop(struct ProcessManager *manager);
+int DestroyEventLoop(struct ProcessManager *manager);
+int EventLoopRegisterPid(pid_t pid);
+void EventLoopEnsureRegistered(struct ProcessManager *manager);
+void EventLoopUnregisterSlot(struct PidSlot *slot);
+void EventLoopUnregisterSlotLocked(struct PidSlot *slot);
+void EventLoopResetEnqueued(struct PidSlot *slot);
 
 #endif /* __THREAD_H__ */

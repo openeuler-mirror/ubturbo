@@ -43,15 +43,20 @@ struct obmm_dev_info obmm_dev = {
 	.lock = __MUTEX_INITIALIZER(obmm_dev.lock),
 };
 
-void free_obmm_dev(void)
+static void free_obmm_dev_locked(void)
 {
 	struct memid_range *mr, *tmp;
 
-	mutex_lock(&obmm_dev.lock);
 	list_for_each_entry_safe(mr, tmp, &obmm_dev.list, node) {
 		list_del(&mr->node);
 		kfree(mr);
 	}
+}
+
+void free_obmm_dev(void)
+{
+	mutex_lock(&obmm_dev.lock);
+	free_obmm_dev_locked();
 	mutex_unlock(&obmm_dev.lock);
 }
 
@@ -311,7 +316,7 @@ int iterate_obmm_dev(void)
 	ret = iterate_obmm_dev_dir();
 	if (ret) {
 		pr_err("failed to iterate obmm_dev directory, ret: %d\n", ret);
-		free_obmm_dev();
+		free_obmm_dev_locked();
 		goto out;
 	}
 

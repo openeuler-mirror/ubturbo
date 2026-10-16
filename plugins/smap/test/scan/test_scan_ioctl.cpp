@@ -37,7 +37,6 @@ static void ap_test_reset_slots(void)
         ap_data.slots[i].ap = nullptr;
         refcount_set(&ap_data.slots[i].refs, 0);
     }
-    ap_data.state_flag = AP_STATE_WALK;
 }
 
 class ScanIoctlTestKernel : public ::testing::Test {
@@ -64,7 +63,6 @@ protected:
     static unsigned long mockCopyFromUserSetPayload(void *to, const void *from, unsigned long n);
     static bool checkCopyFromUserIsMsg(const void *from);
     static bool checkCopyFromUserIsPayload(const void *from);
-    static void write_bitmap_buffer_stub(char **buffer);
 };
 
 struct access_add_pid_msg ScanIoctlTestKernel::m_msg = {.count=0, .payload=NULL};
@@ -118,16 +116,6 @@ long ScanIoctlTestKernel::checkIoctlAddPid(struct access_add_pid_msg msg)
         .will(invoke(ScanIoctlTestKernel::mockCopyFromUserSetPayload));
     ret = ioctl_add_pid(&m_msg);
     return ret;
-}
-
-// Write "ABCDEFGHI" to buffer and advance the buffer pointer by BITMAP_BUF_LEN bytes
-void ScanIoctlTestKernel::write_bitmap_buffer_stub(char **buffer)
-{
-    for (int i = 0; i < BITMAP_BUF_LEN - 1; i++) {
-        (*buffer)[i] = 'A' + i;
-    }
-    (*buffer)[BITMAP_BUF_LEN - 1] = '\0';
-    *buffer += BITMAP_BUF_LEN;
 }
 
 TEST_F(ScanIoctlTestKernel, IoctlAddPidWithOnePid)
@@ -447,29 +435,61 @@ TEST_F(ScanIoctlTestKernel, IoctlRemoveAllPid)
 }
 
 extern "C" long ioctl_walk_pagemap(void __user *argp);
-extern "C" size_t calc_bitmap_len(void);
-extern "C" char *smap_bitmap_buf;
-extern "C" size_t smap_buf_len;
+static pid_t g_stubWalkPid;
+
+static unsigned long StubCopyFromUserPidPages(void *to, const void *from, unsigned long n)
+{
+    (void)from;
+    if (n == sizeof(struct smap_pid_page_num)) {
+        struct smap_pid_page_num *dst = (struct smap_pid_page_num *)to;
+
+        dst->pid = g_stubWalkPid;
+        memset(dst->page_num, 0, sizeof(dst->page_num));
+    }
+    return 0;
+}
+
+static unsigned long StubCopyToUserPidPages(void *to, const void *from, unsigned long n)
+{
+    if (n == sizeof(struct smap_pid_page_num)) {
+        memcpy(to, from, n);
+    }
+    return 0;
+}
+
 TEST_F(ScanIoctlTestKernel, IoctlWalkPagemap)
 {
     int ret = 0;
-    ap_data.state_flag = 1;
-    MOCKER(calc_bitmap_len).stubs().will(returnValue(0UL));
-    ret = ioctl_walk_pagemap(NULL);
-    EXPECT_EQ(-EFAULT, ret);
-    EXPECT_EQ(AP_STATE_WALK, ap_data.state_flag);
+    struct access_pid walk_ap = {};
+    struct smap_pid_page_num param = {};
 
+    ap_test_reset_slots();
+    walk_ap.pid = 4321;
+    walk_ap.type = NORMAL_SCAN;
+    walk_ap.page_num[0] = 7;
+    ap_slot_add(&walk_ap);
+
+    /* 输入拷贝失败 */
+    MOCKER(copy_from_user).stubs().will(returnValue(1UL));
+    ret = ioctl_walk_pagemap(&param);
+    EXPECT_EQ(-EFAULT, ret);
+
+    /* 未跟踪pid返回ESRCH */
     GlobalMockObject::verify();
-    smap_buf_len = BITMAP_BUF_LEN;
-    smap_bitmap_buf = (char *)vmalloc(BITMAP_BUF_LEN);
-    ASSERT_NE(nullptr, smap_bitmap_buf);
-    MOCKER(calc_bitmap_len).stubs().will(returnValue(360UL));
-    MOCKER(copy_to_user).stubs().will(returnValue(0UL));
-    ret = ioctl_walk_pagemap(NULL);
+    g_stubWalkPid = 1234;
+    MOCKER(copy_from_user).stubs().will(invoke(StubCopyFromUserPidPages));
+    ret = ioctl_walk_pagemap(&param);
+    EXPECT_EQ(-ESRCH, ret);
+
+    /* 命中跟踪pid：回填page_num */
+    GlobalMockObject::verify();
+    g_stubWalkPid = 4321;
+    MOCKER(copy_from_user).stubs().will(invoke(StubCopyFromUserPidPages));
+    MOCKER(copy_to_user).stubs().will(invoke(StubCopyToUserPidPages));
+    ret = ioctl_walk_pagemap(&param);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(AP_STATE_WALK | AP_STATE_READ, ap_data.state_flag);
-    EXPECT_EQ(nullptr, smap_bitmap_buf);
-    EXPECT_EQ(0, smap_buf_len);
+    EXPECT_EQ(4321, param.pid);
+    EXPECT_EQ(7UL, param.page_num[0]);
 }
 
 extern "C" void update_tracking_data(u16 *tracking_data, struct statistics_tracking_info *stat_info,
@@ -567,138 +587,8 @@ TEST_F(ScanIoctlTestKernel, IoctlGetTracking)
     free(tracking_data);
 }
 
-extern "C" ssize_t read_bitmap(char __user *buf, size_t cnt, loff_t *loff, bool *completed);
-TEST_F(ScanIoctlTestKernel, ReadBitmapZeroCnt)
-{
-    int ret = 0;
-    char buf;
-    loff_t loff;
-    bool completed = false;
-
-    ret = read_bitmap(&buf, 0, &loff, &completed);
-    EXPECT_EQ(0, ret);
-    EXPECT_TRUE(completed);
-}
-
-extern "C" void write_bitmap_buffer(char **buffer);
-
-TEST_F(ScanIoctlTestKernel, ReadBitmapZeroLoff)
-{
-    int ret;
-    char buf[BITMAP_BUF_LEN] = { 0 };
-    char bitmapBuf[BITMAP_BUF_LEN] = "ABCDEFGHI";
-    loff_t loff = 0;
-    bool completed = false;
-    constexpr int EXPECTED_LEN = BITMAP_BUF_LEN;
-
-    MOCKER(calc_bitmap_len).stubs().will(returnValue(sizeof(buf)));
-    MOCKER(write_bitmap_buffer)
-        .stubs()
-        .with()
-        .will(invoke(write_bitmap_buffer_stub));
-    ret = read_bitmap(buf, BITMAP_BUF_LEN, &loff, &completed);
-    EXPECT_EQ(EXPECTED_LEN, ret);
-    EXPECT_EQ(nullptr, smap_bitmap_buf);
-    EXPECT_EQ(0, smap_buf_len);
-    EXPECT_TRUE(strcmp(bitmapBuf, buf) == 0);
-    EXPECT_TRUE(completed);
-}
-
-TEST_F(ScanIoctlTestKernel, ReadBitmapNonZeroLoff)
-{
-    constexpr int TEMP_LOFF = 4;
-    int ret;
-    char buf[BITMAP_BUF_LEN - TEMP_LOFF] = { 0 };
-    char bitmapBuf[BITMAP_BUF_LEN] = "ABCDEFGHI";
-    loff_t loff = TEMP_LOFF;
-    bool completed = false;
-    char *tmp;
-
-    smap_buf_len = BITMAP_BUF_LEN;
-
-    // alloc mem for smap_bitmap_buf and write 'ABCDEFGHI'
-    smap_bitmap_buf = (char*)vmalloc(BITMAP_BUF_LEN);
-    ASSERT_NE(nullptr, smap_bitmap_buf);
-    tmp = smap_bitmap_buf;
-    write_bitmap_buffer_stub(&smap_bitmap_buf);
-    smap_bitmap_buf = tmp;
-    cout << "smap_bitmap_buf: " << smap_bitmap_buf << endl;
-
-    ret = read_bitmap(buf, BITMAP_BUF_LEN - TEMP_LOFF, &loff, &completed);
-    EXPECT_EQ(BITMAP_BUF_LEN - TEMP_LOFF, ret);
-    EXPECT_EQ(nullptr, smap_bitmap_buf);
-    EXPECT_EQ(0, smap_buf_len);
-    cout << "buf: " << buf << endl;
-    EXPECT_TRUE(strcmp(bitmapBuf + TEMP_LOFF, buf) == 0);
-    EXPECT_TRUE(completed);
-}
-
-TEST_F(ScanIoctlTestKernel, ReadBitmapNonZeroLoffPartial)
-{
-    constexpr int TEMP_LOFF = 4;
-    int ret;
-    char buf[BITMAP_BUF_LEN - TEMP_LOFF] = { 0 };
-    char bitmapBuf[BITMAP_BUF_LEN] = "ABCDEFGHI";
-    loff_t loff = TEMP_LOFF;
-    bool completed = false;
-    size_t cnt = BITMAP_BUF_LEN - TEMP_LOFF - 1;
-    char *tmp;
-    constexpr int EXPECTED_LEN = BITMAP_BUF_LEN;
-
-    smap_buf_len = BITMAP_BUF_LEN;
-
-    // alloc mem for smap_bitmap_buf and write 'ABCDEFGHI'
-    smap_bitmap_buf = (char*)vmalloc(BITMAP_BUF_LEN);
-    ASSERT_NE(nullptr, smap_bitmap_buf);
-    tmp = smap_bitmap_buf;
-    write_bitmap_buffer_stub(&smap_bitmap_buf);
-    smap_bitmap_buf = tmp;
-    cout << "smap_bitmap_buf: " << smap_bitmap_buf << endl;
-
-    ret = read_bitmap(buf, cnt, &loff, &completed);
-    EXPECT_EQ(cnt, ret);
-    EXPECT_EQ(EXPECTED_LEN, smap_buf_len);
-    EXPECT_TRUE(strcmp(bitmapBuf, smap_bitmap_buf) == 0);
-    cout << "buf: " << buf << endl;
-    EXPECT_TRUE(strncmp(bitmapBuf + TEMP_LOFF, buf, cnt) == 0);
-    EXPECT_FALSE(completed);
-
-    vfree(smap_bitmap_buf);
-    smap_bitmap_buf = nullptr;
-    smap_buf_len = 0;
-}
-
-TEST_F(ScanIoctlTestKernel, ReadBitmapNonZeroLoffBeyond)
-{
-    constexpr int TEMP_LOFF = 4;
-    int ret;
-    char buf[BITMAP_BUF_LEN - TEMP_LOFF] = { 0 };
-    char bitmapBuf[BITMAP_BUF_LEN] = "ABCDEFGHI";
-    loff_t loff = TEMP_LOFF;
-    bool completed = false;
-    size_t cnt = BITMAP_BUF_LEN - TEMP_LOFF + 1;
-    char *tmp;
-
-    smap_buf_len = BITMAP_BUF_LEN;
-
-    // alloc mem for smap_bitmap_buf and write 'ABCDEFGHI'
-    smap_bitmap_buf = (char*)vmalloc(BITMAP_BUF_LEN);
-    ASSERT_NE(nullptr, smap_bitmap_buf);
-    tmp = smap_bitmap_buf;
-    write_bitmap_buffer_stub(&smap_bitmap_buf);
-    smap_bitmap_buf = tmp;
-    cout << "smap_bitmap_buf: " << smap_bitmap_buf << endl;
-
-    ret = read_bitmap(buf, cnt, &loff, &completed);
-    EXPECT_EQ(BITMAP_BUF_LEN - TEMP_LOFF, ret);
-    EXPECT_EQ(nullptr, smap_bitmap_buf);
-    EXPECT_EQ(0, smap_buf_len);
-    cout << "buf: " << buf << endl;
-    EXPECT_TRUE(strcmp(bitmapBuf + TEMP_LOFF, buf) == 0);
-}
-
 extern "C" int smap_scan_open(struct inode *inode, struct file *file);
-TEST_F(ScanIoctlTestKernel, SmapScanOpen)
+TEST_F(ScanIoctlTestKernel, SmapAccessOpen)
 {
     int ret = 0;
 
@@ -751,77 +641,6 @@ TEST_F(ScanIoctlTestKernel, SmapScanIoctlThree)
     EXPECT_EQ(-ENOTTY, ret);
 }
 
-extern "C" ssize_t smap_scan_read(struct file *file, char __user *buf, size_t cnt, loff_t *loff);
-TEST_F(ScanIoctlTestKernel, SmapScanReadNoPermission)
-{
-    ssize_t ret;
-    char buf[BITMAP_BUF_LEN] = { 0 };
-    loff_t loff = 0;
-
-    ap_data.state_flag = AP_STATE_WALK;
-    MOCKER(read_bitmap).stubs().will(returnValue((ssize_t)BITMAP_BUF_LEN));
-    ret = smap_scan_read(NULL, buf, BITMAP_BUF_LEN, &loff);
-    EXPECT_EQ(-EPERM, ret);
-    EXPECT_EQ(AP_STATE_WALK, ap_data.state_flag);
-}
-
-TEST_F(ScanIoctlTestKernel, SmapScanReadAll)
-{
-    ssize_t ret;
-    char buf[BITMAP_BUF_LEN] = { 0 };
-    loff_t loff = 0;
-    constexpr int EXPECTED_LEN = BITMAP_BUF_LEN;
-    bool completed = true;
-
-    ap_data.state_flag = AP_STATE_WALK | AP_STATE_READ;
-    MOCKER(read_bitmap).stubs().with(any(), any(), any(), outBoundP(&completed, sizeof(completed)))
-        .will(returnValue((ssize_t)BITMAP_BUF_LEN));
-    ret = smap_scan_read(NULL, buf, BITMAP_BUF_LEN, &loff);
-    EXPECT_EQ(EXPECTED_LEN, ret);
-    EXPECT_EQ(AP_STATE_WALK | AP_STATE_FREQ, ap_data.state_flag);
-}
-
-TEST_F(ScanIoctlTestKernel, SmapScanReadPartial)
-{
-    ssize_t ret;
-    char buf[BITMAP_BUF_LEN] = { 0 };
-    loff_t loff = 0;
-
-    ap_data.state_flag = AP_STATE_WALK | AP_STATE_READ;
-    MOCKER(read_bitmap).stubs().will(returnValue((ssize_t)BITMAP_BUF_LEN - 1));
-    ret = smap_scan_read(NULL, buf, BITMAP_BUF_LEN, &loff);
-    EXPECT_EQ(BITMAP_BUF_LEN - 1, ret);
-    EXPECT_EQ(AP_STATE_WALK | AP_STATE_READ, ap_data.state_flag);
-}
-
-TEST_F(ScanIoctlTestKernel, SmapScanReadFinished)
-{
-    ssize_t ret;
-    char buf[BITMAP_BUF_LEN] = { 0 };
-    loff_t loff = 0;
-    bool completed = true;
-
-    ap_data.state_flag = AP_STATE_WALK | AP_STATE_READ;
-    MOCKER(read_bitmap).stubs().with(any(), any(), any(), outBoundP(&completed, sizeof(completed)))
-        .will(returnValue((ssize_t)0));
-    ret = smap_scan_read(NULL, buf, BITMAP_BUF_LEN, &loff);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(AP_STATE_WALK | AP_STATE_FREQ, ap_data.state_flag);
-}
-
-TEST_F(ScanIoctlTestKernel, SmapScanReadFailed)
-{
-    ssize_t ret;
-    char buf[BITMAP_BUF_LEN] = { 0 };
-    loff_t loff = 0;
-
-    ap_data.state_flag = AP_STATE_WALK | AP_STATE_READ;
-    MOCKER(read_bitmap).stubs().will(returnValue((ssize_t)-EAGAIN));
-    ret = smap_scan_read(NULL, buf, BITMAP_BUF_LEN, &loff);
-    EXPECT_EQ(-EAGAIN, ret);
-    EXPECT_EQ(AP_STATE_WALK, ap_data.state_flag);
-}
-
 extern "C" void scan_dev_exit(void);
 TEST_F(ScanIoctlTestKernel, ScanDevExit)
 {
@@ -860,34 +679,12 @@ TEST_F(ScanIoctlTestKernel, ScanDevInitTwo)
 }
 
 extern "C" void access_remove_all_pid(void);
-extern "C" char *smap_bitmap_buf;
-extern "C" size_t smap_buf_len;
+extern "C" void scan_ioctl_exit(void);
 TEST_F(ScanIoctlTestKernel, ScanIoctlExit)
 {
-    // Test with null bitmap buffer
-    smap_bitmap_buf = nullptr;
-    smap_buf_len = 0;
-    MOCKER(vfree).stubs();
     MOCKER(access_remove_all_pid).stubs().will(ignoreReturnValue());
     MOCKER(scan_dev_exit).stubs().will(ignoreReturnValue());
     scan_ioctl_exit();
-    EXPECT_EQ(nullptr, smap_bitmap_buf);
-    EXPECT_EQ(0, smap_buf_len);
-}
-
-TEST_F(ScanIoctlTestKernel, ScanIoctlExitWithBitmapBuf)
-{
-    // Test with valid bitmap buffer - should call vfree
-    smap_bitmap_buf = (char *)vmalloc(BITMAP_BUF_LEN);
-    ASSERT_NE(nullptr, smap_bitmap_buf);
-    smap_buf_len = BITMAP_BUF_LEN;
-
-    MOCKER(vfree).stubs();
-    MOCKER(access_remove_all_pid).stubs().will(ignoreReturnValue());
-    MOCKER(scan_dev_exit).stubs().will(ignoreReturnValue());
-    scan_ioctl_exit();
-    EXPECT_EQ(nullptr, smap_bitmap_buf);
-    EXPECT_EQ(0, smap_buf_len);
 }
 
 extern "C" int scan_ioctl_init(void);
@@ -966,29 +763,9 @@ TEST_F(ScanIoctlTestKernel, IoctlSetScanCpuSuccess)
     EXPECT_EQ(0, ret);
 }
 
-/* bitmap 布局：pid + page_num[SMAP_MAX_NUMNODES]
- * （内核不回读 numa_nodes，用户态按页数自行合成位图） */
-TEST_F(ScanIoctlTestKernel, WriteBitmapBufferLayout)
+extern "C" int access_tracking_restart_pid(pid_t pid);
+TEST_F(ScanIoctlTestKernel, IoctlRestartPidNoent)
 {
-    struct access_pid ap = {};
-    unsigned char buf[512] = { 0 };
-    char *cursor = (char *)buf;
-    char *const base = cursor;
-
     ap_test_reset_slots();
-    ap.pid = 4321;
-    ap.type = NORMAL_SCAN;
-    ap.page_num[0] = 3;
-    ap.page_num[SMAP_MAX_NUMNODES - 1] = 5;
-    ap_slot_add(&ap);
-
-    write_bitmap_buffer(&cursor);
-
-    const size_t nodePagesBytes = sizeof(size_t) * SMAP_MAX_NUMNODES;
-    EXPECT_EQ(sizeof(pid_t) + nodePagesBytes,
-              (size_t)(cursor - base));
-    EXPECT_EQ(4321, *(pid_t *)base);
-    const size_t *pages = (const size_t *)(base + sizeof(pid_t));
-    EXPECT_EQ((size_t)3, pages[0]);
-    EXPECT_EQ((size_t)5, pages[SMAP_MAX_NUMNODES - 1]);
+    EXPECT_EQ(-ENOENT, access_tracking_restart_pid(8899));
 }

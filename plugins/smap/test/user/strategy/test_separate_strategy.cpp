@@ -8,7 +8,6 @@
 #include <vector>
 #include <cstdint>
 #include <unordered_set>
-#include <gmock/gmock.h>
 #include "manage/manage.h"
 #include "strategy/strategy.h"
 #include "strategy/separate_strategy.h"

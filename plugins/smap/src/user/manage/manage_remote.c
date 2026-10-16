@@ -579,6 +579,7 @@ static int ValidateCandidateRemoteResidency(ProcessAttr *candidate, const Proces
 static int PrepareProcessTargetCandidate(ProcessAttr *candidate, const ProcessTargetConfig *config,
                                          const ManagedLocalObservation *observation)
 {
+
     ProcessTargetConfig targetConfig;
     int ret = CopyProcessTargetConfig(&targetConfig, config);
     if (ret) {
@@ -682,20 +683,43 @@ int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *conf
 
 int ApplyPendingMigrationTargets(ProcessAttr *attr)
 {
-    if (!attr || !attr->pendingTargetConfigValid) {
+    if (!attr) {
         return 0;
     }
 
+    struct PidSlot *slot = PidSlotGetRefByAttr(attr);
+    if (slot) {
+        EnvMutexLock(&slot->attrLock);
+    }
+    if (!attr->pendingTargetConfigValid) {
+        if (slot) {
+            EnvMutexUnlock(&slot->attrLock);
+            PidSlotReleaseRefs(&slot, 1);
+        }
+        return 0;
+    }
     ProcessTargetConfig config = attr->pendingTargetConfig;
+    bool ignoreRemoteCapacity = attr->pendingIgnoreRemoteCapacity;
+    if (slot) {
+        EnvMutexUnlock(&slot->attrLock);
+    }
     ManagedLocalObservation observation;
+
     int ret = CollectProcessCandidateObservation(attr->pid, attr->type == VM_TYPE, &observation);
     if (ret) {
+        if (slot) {
+            PidSlotReleaseRefs(&slot, 1);
+        }
         return ret;
     }
 
     ProcessAttr candidate = *attr;
+    candidate.ignoreRemoteCapacity = ignoreRemoteCapacity;
     ret = PrepareProcessTargetCandidate(&candidate, &config, &observation);
     if (ret) {
+        if (slot) {
+            PidSlotReleaseRefs(&slot, 1);
+        }
         return ret;
     }
 
@@ -704,12 +728,17 @@ int ApplyPendingMigrationTargets(ProcessAttr *attr)
      * without a numa_nodes bitmap and the pid is already tracked, so ADD_PID
      * would be a no-op re-seed.
      */
+    if (slot) {
+        EnvMutexLock(&slot->attrLock);
+    }
     PublishProcessTargetCandidate(attr, &candidate);
-
-    attr->ignoreRemoteCapacity = attr->pendingIgnoreRemoteCapacity;
     ClearProcessTargetConfig(&attr->pendingTargetConfig);
     attr->pendingTargetConfigValid = false;
     attr->pendingIgnoreRemoteCapacity = false;
+    if (slot) {
+        EnvMutexUnlock(&slot->attrLock);
+        PidSlotReleaseRefs(&slot, 1);
+    }
     ret = SyncAllProcessConfig();
     if (ret) {
         SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", attr->pid, ret);
@@ -777,6 +806,9 @@ int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size)
             SMAP_LOGGER_INFO("Node%d total borrow pages: %llu.", l2Nid, numaInfo->usedInfo[j].size);
         }
     }
+    /* 配额变更后同步刷新 used/fresh，供紧随其后的迁回就绪检查使用。 */
+    ClearRemoteMemUsed();
+    CalRemoteMemUsed();
     EnvMutexUnlock(&numaInfo->lock);
     return 0;
 }
@@ -798,6 +830,16 @@ bool CheckPrivateBorrowUsed(int destNid)
                 EnvMutexUnlock(&numaInfo->lock);
                 EnvMsleep(WAIT_FRESH_USED_PERIOD);
                 break;
+            }
+
+            // 远端配额已取消（size=0）：残留 used 须由 migrate_back 清理，
+            // 不应再用 used>size 卡住 ready，否则 size 被提前清零后永远 not ready。
+            if (usedInfo->size == 0) {
+                if (i == nrLocalNuma - 1) {
+                    EnvMutexUnlock(&numaInfo->lock);
+                    return true;
+                }
+                continue;
             }
 
             if (usedInfo->used > usedInfo->size) {
@@ -831,6 +873,10 @@ bool CheckBorrowUsed(int destNid)
             EnvMsleep(WAIT_FRESH_USED_PERIOD);
             continue;
         }
+        if (usedInfo->size == 0) {
+            EnvMutexUnlock(&numaInfo->lock);
+            return true;
+        }
         if (usedInfo->used > usedInfo->size) {
             EnvMutexUnlock(&numaInfo->lock);
             return false;
@@ -841,15 +887,94 @@ bool CheckBorrowUsed(int destNid)
     return false;
 }
 
+/* 普通扫描 PID 的远端账本、快照和在途迁移均为空时返回 true。 */
+static bool IsRemoteNodeDrained(int destNid)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    int column = destNid - nrLocalNuma;
+
+    uint64_t accountSum = 0;
+    bool inFlight = false;
+    struct RemoteNumaInfo *numaInfo = &GetProcessManager()->remoteNumaInfo;
+    EnvMutexLock(&numaInfo->lock);
+    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM && !inFlight; i++) {
+        inFlight = numaInfo->privateInFlight[i][column] != 0;
+    }
+    EnvMutexUnlock(&numaInfo->lock);
+
+    bool migrating = false;
+    uint64_t snapshotSum = 0;
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t n = PidSlotCollectRefs(GetProcessManager(), all, MAX_PID_SLOTS);
+    for (size_t k = 0; k < n; k++) {
+        ProcessAttr *attr = all[k]->attr;
+        if (!InAttrL2(attr, destNid)) {
+            continue;
+        }
+        if (attr->state == PROC_MIGRATE || attr->state == PROC_MOVE) {
+            SMAP_LOGGER_INFO("Remote node %d still has pid %d in state %d.", destNid, attr->pid, attr->state);
+            migrating = true;
+            break;
+        }
+        if (attr->groupPolicy.enabled || attr->scanType != NORMAL_SCAN) {
+            continue;
+        }
+        for (int l = 0; l < nrLocalNuma && l < LOCAL_NUMA_NUM; l++) {
+            accountSum += attr->strategyAttr.remoteNrPagesAfterMigrate[l][column];
+        }
+        snapshotSum += attr->walkPage.nrPages[destNid];
+    }
+    PidSlotReleaseRefs(all, n);
+
+    if (inFlight) {
+        SMAP_LOGGER_INFO("Remote node %d still has in-flight migrate outbound pages.", destNid);
+        return false;
+    }
+    if (migrating) {
+        return false;
+    }
+    if (accountSum != 0 || snapshotSum != 0) {
+        SMAP_LOGGER_INFO("Remote node %d not drained: account pages %llu, snapshot pages %llu.", destNid, accountSum,
+                         snapshotSum);
+        return false;
+    }
+    return true;
+}
+
+/* 检查远端节点的 shared/private 配额是否均为零。 */
+static bool IsRemoteQuotaCleared(int destNid)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    int column = destNid - nrLocalNuma;
+    if (column < 0 || column >= REMOTE_NUMA_NUM) {
+        return false;
+    }
+    struct RemoteNumaInfo *numaInfo = &GetProcessManager()->remoteNumaInfo;
+    EnvMutexLock(&numaInfo->lock);
+    bool cleared = numaInfo->sharedSize[column] == 0;
+    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM && cleared; i++) {
+        cleared = numaInfo->privateSize[i][column] == 0;
+    }
+    EnvMutexUnlock(&numaInfo->lock);
+    return cleared;
+}
+
 bool CheckReadyMigrateBack(int destNid)
 {
+    int column = destNid - GetNrLocalNuma();
+    if (destNid < 0 || destNid >= MAX_NODES || column < 0 || column >= REMOTE_NUMA_NUM) {
+        SMAP_LOGGER_ERROR("Invalid remote node %d for migrate back readiness check.", destNid);
+        return false;
+    }
+
     // 如果已经没有管理中的虚机，则默认可以执行迁回
     if (PidSlotEmpty(GetProcessManager())) {
         SMAP_LOGGER_INFO("CheckReadyMigrateBack no process, destNid %d.", destNid);
         return true;
     }
     struct RemoteNumaInfo *numaInfo = &GetProcessManager()->remoteNumaInfo;
-    int column = destNid - GetProcessManager()->nrLocalNuma;
+    // 配额清零后，还需检查普通扫描 PID 的远端账本和快照。
+    bool quotaCleared = IsRemoteQuotaCleared(destNid);
 
     int nrWait = 0;
     while (nrWait < MAX_MIGRATE_BACK_WAIT_TIME) {
@@ -857,14 +982,21 @@ bool CheckReadyMigrateBack(int destNid)
         EnvMutexLock(&numaInfo->lock);
         bool flag = numaInfo->sharedSize[column] > 0;
         EnvMutexUnlock(&numaInfo->lock);
+        bool ready;
         if (flag) {
-            if (CheckBorrowUsed(destNid)) {
-                return true;
-            }
+            ready = CheckBorrowUsed(destNid);
         } else {
-            if (CheckPrivateBorrowUsed(destNid)) {
-                return true;
+            ready = CheckPrivateBorrowUsed(destNid);
+        }
+        if (ready && quotaCleared) {
+            // 设0后必须等 per-pid 流水把远端清空（账本结算+在途归零+无活跃流水），
+            // 否则显式迁回 ioctl 会与在途迁出竞争内核页面，导致概率性迁不回
+            if (!IsRemoteNodeDrained(destNid)) {
+                ready = false;
             }
+        }
+        if (ready) {
+            return true;
         }
         EnvMsleep(MIGRATE_BACK_CHECK_PERIOD);
         nrWait++;

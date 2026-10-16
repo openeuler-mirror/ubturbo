@@ -36,47 +36,6 @@ typedef enum {
     PGSIZE_TWO_MB = 9,
 } PageSize;
 
-int EnableTracking(struct ProcessManager *manager)
-{
-    int ret = ioctl(manager->fds.access, SMAP_IOCTL_TRACKING_CMD, 1);
-    if (ret < 0) {
-        SMAP_LOGGER_ERROR("ioctl enable tracking failed: %s.", strerror(errno));
-        return -errno;
-    }
-    if (!ret) {
-        manager->tracking.trackingEnabled = true;
-    }
-    return ret;
-}
-
-static inline int DisableTrackingInternal(struct ProcessManager *manager)
-{
-    int ret = ioctl(manager->fds.access, SMAP_IOCTL_TRACKING_CMD, 0);
-
-    return ret < 0 ? -errno : ret;
-}
-
-int DisableTracking(struct ProcessManager *manager)
-{
-    int ret;
-
-    while (1) {
-        ret = DisableTrackingInternal(manager);
-        if (ret != -EBUSY) {
-            if (ret) {
-                SMAP_LOGGER_ERROR("ioctl disable tracking failed: %s.", strerror(-ret));
-            }
-            break;
-        }
-        SMAP_LOGGER_DEBUG("Scanning still in progress, will retry.");
-        usleep(DISABLE_TRACKING_RETRY_DELAY_US);
-    }
-    if (!ret) {
-        manager->tracking.trackingEnabled = false;
-    }
-    return ret;
-}
-
 bool IsNumaCriticalErr(int nid)
 {
     char path[SYS_NODE_CRITICAL_ERR_LEN] = { 0 };
@@ -250,7 +209,6 @@ int InitTrackingDev(struct ProcessManager *manager)
 
 void DeinitTrackingDev(struct ProcessManager *manager)
 {
-    DisableTracking(manager);
     if (manager->fds.migrate >= 0) {
         close(manager->fds.migrate);
         manager->fds.migrate = DEFAULT_FD;

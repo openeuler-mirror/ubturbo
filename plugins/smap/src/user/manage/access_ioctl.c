@@ -15,7 +15,9 @@
 #include <errno.h>
 
 #include "smap_user_log.h"
+#include "securec.h"
 
+#include "thread.h"
 #include "manage.h"
 #include "device.h"
 #include "access_ioctl.h"
@@ -60,6 +62,12 @@ int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
     if (ret < 0) {
         SMAP_LOGGER_ERROR("access ioctl add pids error: %d.", ret);
         ret = -EBADF;
+    } else {
+        for (int i = 0; i < len; i++) {
+            if (payload[i].type == NORMAL_SCAN) {
+                EventLoopRegisterPid(payload[i].pid);
+            }
+        }
     }
     return ret;
 }
@@ -102,16 +110,24 @@ int AccessIoctlRemoveAllPid(void)
     return ret;
 }
 
-int AccessIoctlWalkPagemap(size_t *len)
+int AccessIoctlWalkPagemap(pid_t pid, struct ProcessMemBitmap *pmb)
 {
     struct ProcessManager *manager = GetProcessManager();
+    struct ProcessMemBitmap param;
+    int ret;
 
-    int ret = ioctl(manager->fds.access, SMAP_ACCESS_WALK_PAGEMAP, len);
-    if (ret < 0) {
-        SMAP_LOGGER_ERROR("access walk pagemap error: %d.", ret);
-        ret = -EBADF;
+    if (!pmb) {
+        return -EINVAL;
     }
-    return ret;
+    (void)memset_s(&param, sizeof(param), 0, sizeof(param));
+    param.pid = pid;
+    ret = ioctl(manager->fds.access, SMAP_ACCESS_WALK_PAGEMAP, &param);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("access walk pagemap for pid %d error: %d.", pid, -errno);
+        return -errno;
+    }
+    *pmb = param;
+    return 0;
 }
 
 int AccessIoctlCreateProcfs(struct UserInfo *ui)
@@ -124,31 +140,6 @@ int AccessIoctlCreateProcfs(struct UserInfo *ui)
         ret = -EBADF;
     }
     return ret;
-}
-
-int AccessRead(size_t len, char *buf)
-{
-    struct ProcessManager *manager = GetProcessManager();
-    ssize_t bytesRead;
-    size_t totalRead = 0;
-
-    while (totalRead < len) {
-        bytesRead = read(manager->fds.access, buf + totalRead, len - totalRead);
-        if (bytesRead < 0) {
-            SMAP_LOGGER_ERROR("access ioctl read error: %zd.", bytesRead);
-            return -EIO;
-        }
-        SMAP_LOGGER_DEBUG("bytesRead: %zd, total len: %zu.", bytesRead, len);
-        totalRead += bytesRead;
-        if (bytesRead == 0) {
-            break;
-        }
-    }
-    if (totalRead != len) {
-        SMAP_LOGGER_ERROR("access ioctl read expect %zu, actual %zd.", len, totalRead);
-        return -EIO;
-    }
-    return 0;
 }
 
 void IoctlUpdateUbDmaAvail(uint32_t value)
@@ -190,4 +181,18 @@ void IoctlSetRemoteScanMode(uint32_t mode)
         return;
     }
     SMAP_LOGGER_INFO("Set remote scan mode to %u success.", mode);
+}
+
+int AccessIoctlRestartPid(pid_t pid)
+{
+    struct ProcessManager *manager = GetProcessManager();
+
+    /* TRACKING_CMD 复用为 per-pid 窗口重启：arg=pid；-ENOENT 表示 pid 未被内核跟踪 */
+    int ret = ioctl(manager->fds.access, SMAP_IOCTL_TRACKING_CMD, pid);
+    if (ret < 0) {
+        ret = errno;
+        SMAP_LOGGER_ERROR("ioctl restart pid %d scan failed: %d.", ret, errno);
+        return -ret;
+    }
+    return ret;
 }

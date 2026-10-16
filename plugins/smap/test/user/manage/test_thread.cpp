@@ -31,7 +31,7 @@ protected:
 
 extern "C" void EnvMutexLock(EnvMutex *mutex);
 extern "C" void EnvMutexUnlock(EnvMutex *mutex);
-extern "C" void *ThreadMain(void *args);
+extern "C" void *ThreadMainEvent(void *args);
 
 TEST_F(ThreadTest, TestThreadMainStoped)
 {
@@ -39,7 +39,7 @@ TEST_F(ThreadTest, TestThreadMainStoped)
     EnvAtomicSet(&pm.scanMigrateStop, 1);
     pm.migPeriod = 50;
 
-    void *ret = ThreadMain(&pm);
+    void *ret = ThreadMainEvent(&pm);
     EXPECT_EQ(nullptr, ret);
 }
 

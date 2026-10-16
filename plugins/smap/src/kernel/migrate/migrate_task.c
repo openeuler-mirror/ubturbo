@@ -22,6 +22,8 @@ struct migrate_back_task *init_migrate_back_task(unsigned long long task_id)
 	if (!task)
 		return NULL;
 	task->task_id = task_id;
+	task->status = MB_TASK_CREATED;
+	init_completion(&task->done);
 	INIT_LIST_HEAD(&task->subtask);
 	return task;
 }

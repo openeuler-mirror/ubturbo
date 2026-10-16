@@ -62,7 +62,6 @@ struct access_scan_state {
 	struct rw_semaphore lock;
 	char workq_name[WORKQ_NAME_SIZE];
 	u8 page_size_mode;
-	bool enable_on;
 };
 
 static struct access_scan_state scan_state;
@@ -129,11 +128,6 @@ int set_remote_scan_mode(u8 mode)
 
 	pr_info("set remote scan mode to %u, hist inited: %d\n", mode, hist_inited);
 	return 0;
-}
-
-bool access_scan_enabled(void)
-{
-	return READ_ONCE(scan_state.enable_on);
 }
 
 int get_scan_page_size(void)
@@ -289,29 +283,6 @@ void submit_one_work(struct access_pid *ap)
 			   msecs_to_jiffies(ap->scan_time));
 }
 
-static void submit_scan_works(void)
-{
-	int i;
-
-	for (i = 0; i < AP_MAX_SLOTS; i++) {
-		struct ap_slot *s = ap_get_slot_at(i);
-		struct access_pid *ap;
-
-		if (!s)
-			continue;
-		ap = s->ap;
-		/* re-arm the whole scan cycle (ntimes rounds). Hold the
-		 * transient ref across submit_one_work so the ap cannot be
-		 * reclaimed between; submit_one_work takes its own work-ref.
-		 */
-		down_write(&s->ap_lock);
-		ap->cur_times = 0;
-		up_write(&s->ap_lock);
-		submit_one_work(ap);
-		ap_put_slot(s);
-	}
-}
-
 static int create_scan_workqueue(void)
 {
 	scnprintf(scan_state.workq_name, sizeof(scan_state.workq_name),
@@ -386,44 +357,32 @@ static void refresh_node_page_count(void)
 	}
 }
 
-static void access_tracking_enable_scan(void)
+/* Restart one PID's scan window; return -ENOENT if it is not tracked. */
+int access_tracking_restart_pid(pid_t pid)
 {
-	down_write(&scan_state.lock);
-	refresh_node_page_count();
-	WRITE_ONCE(scan_state.enable_on, true);
-	up_write(&scan_state.lock);
-	submit_scan_works();
-}
-
-static int access_tracking_disable_scan(void)
-{
-	bool all_complete = true;
 	int i;
 
-	/*
-	 * No global write lock: walk the INUSE slots and check each one's
-	 * work_done. add_pid publishes a slot via ap_slot_add before calling
-	 * complete(work_done) in the disable window, so a brand-new pid appears
-	 * complete and does not force -EBUSY. If any pid still has an
-	 * in-flight/pending scan, return -EBUSY and let the upper layer retry;
-	 * once all are complete, flip enable_on off.
-	 */
 	for (i = 0; i < AP_MAX_SLOTS; i++) {
 		struct ap_slot *s = ap_get_slot_at(i);
+		struct access_pid *ap;
 
 		if (!s)
 			continue;
-		if (!completion_done(&s->ap->work_done)) {
-			all_complete = false;
+		down_write(&s->ap_lock);
+		ap = s->ap;
+		if (ap->type == NORMAL_SCAN && ap->pid == pid) {
+			ap->cur_times = 0;
+			/* next window starts scanning; drop readiness now */
+			WRITE_ONCE(ap->freq_ready, false);
+			up_write(&s->ap_lock);
+			submit_one_work(ap);
 			ap_put_slot(s);
-			break;
+			return 0;
 		}
+		up_write(&s->ap_lock);
 		ap_put_slot(s);
 	}
-	if (all_complete)
-		WRITE_ONCE(scan_state.enable_on, false);
-
-	return all_complete ? 0 : -EBUSY;
+	return -ENOENT;
 }
 
 static void access_tracking_set_page_size_scan(u8 page_size_index)
@@ -433,25 +392,6 @@ static void access_tracking_set_page_size_scan(u8 page_size_index)
 	refresh_node_page_count();
 	up_write(&scan_state.lock);
 	pr_info("set tracking page size to %u\n", page_size_index);
-}
-
-void access_tracking_enable(void)
-{
-	access_tracking_enable_scan();
-	if (is_remote_scan_hist_active())
-		hist_tracking_enable();
-}
-
-int access_tracking_disable(void)
-{
-	int ret;
-
-	ret = access_tracking_disable_scan();
-	if (ret)
-		return ret;
-	if (is_remote_scan_hist_active())
-		return hist_tracking_disable();
-	return 0;
 }
 
 int access_tracking_set_page_size(u8 page_size_index)
@@ -466,7 +406,6 @@ int access_tracking_set_page_size(u8 page_size_index)
 static void scan_state_init(void)
 {
 	memset(node_page_count, 0, sizeof(node_page_count));
-	WRITE_ONCE(scan_state.enable_on, false);
 	WRITE_ONCE(scan_state.page_size_mode, PAGE_MODE_2M);
 	init_rwsem(&scan_state.lock);
 	refresh_node_page_count();
@@ -570,7 +509,11 @@ static void access_work_func(struct work_struct *work)
 		ap->last_scan_end = ktime_get();
 		/* keep the work-ref for the next round */
 	} else {
-		/* last round, or slot removed mid-cycle: drop the work-ref */
+		/* Publish scan readiness before completing the removal wait. */
+		if (ap->type == NORMAL_SCAN) {
+			WRITE_ONCE(ap->freq_ready, true);
+			wake_up_all(&ap->wq);
+		}
 		complete(&ap->work_done);
 		ap_put_slot(slot);
 	}

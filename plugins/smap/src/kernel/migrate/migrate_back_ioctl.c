@@ -12,6 +12,9 @@
 #undef pr_fmt
 #define pr_fmt(fmt) "SMAP_migrate_back: " fmt
 
+/* 同步等待内核迁回任务完成的上限，对齐用户态 MIGRATE_BACK ready 等待时长 */
+#define MIGBACK_SYNC_WAIT_MS 60000
+
 static int dup_task(unsigned long long task_id, struct list_head *head)
 {
 	struct migrate_back_task *t;
@@ -20,12 +23,57 @@ static int dup_task(unsigned long long task_id, struct list_head *head)
 		if (t->task_id == task_id) {
 			if (t->status == MB_TASK_ERR) {
 				t->status = MB_TASK_WAITING;
+				/* 上个 ERR 生命周期已经 complete 过，重投前重置
+				 * completion，否则同步等待拿到的是陈旧信号 */
+				reinit_completion(&t->done);
 				return RETRY_ID;
 			}
 			return DUP_ID;
 		}
 	}
 	return NORMAL_ID;
+}
+
+static struct migrate_back_task *find_task_by_id_locked(
+	unsigned long long task_id)
+{
+	struct migrate_back_task *t;
+
+	list_for_each_entry(t, &migrate_back_task_list, task_node) {
+		if (t->task_id == task_id)
+			return t;
+	}
+	return NULL;
+}
+
+/* 等待迁回任务完成，并按 task ID 查询结果；已清理的任务视为完成。 */
+static int wait_migrate_back_result(unsigned long long task_id)
+{
+	struct migrate_back_task *t;
+	unsigned long left;
+	int status;
+
+	spin_lock(&migrate_back_task_lock);
+	t = find_task_by_id_locked(task_id);
+	spin_unlock(&migrate_back_task_lock);
+	if (!t) {
+		pr_err("migrate back task %llu disappeared before wait\n",
+		       task_id);
+		return -EAGAIN;
+	}
+
+	left = wait_for_completion_timeout(
+		&t->done, msecs_to_jiffies(MIGBACK_SYNC_WAIT_MS));
+	spin_lock(&migrate_back_task_lock);
+	t = find_task_by_id_locked(task_id);
+	status = t ? (int)t->status : MB_TASK_DONE;
+	spin_unlock(&migrate_back_task_lock);
+
+	if (left == 0)
+		return -ETIMEDOUT;
+	if (status == MB_TASK_ERR)
+		return -EAGAIN;
+	return 0;
 }
 
 static int check_duplicate_task(struct migrate_back_task *task)
@@ -77,7 +125,8 @@ int smap_ioctl_migrate_back(struct migrate_back_inner_msg *msg)
 	}
 	if (task_ret == RETRY_ID) {
 		kfree(task);
-		return 0;
+		/* 残留 ERR 任务已重置回 WAITING，同步等待新一轮执行结果 */
+		return wait_migrate_back_result(msg->task_id);
 	}
 
 	for (i = 0; i < msg->count; i++) {
@@ -93,7 +142,11 @@ int smap_ioctl_migrate_back(struct migrate_back_inner_msg *msg)
 	}
 	task->subtask_cnt = msg->count;
 	clear_migrate_back_task();
-	return start_migrate_back_work();
+	ret = start_migrate_back_work();
+	if (ret)
+		return ret;
+	/* 入队成功后等待迁回任务完成并返回状态。 */
+	return wait_migrate_back_result(msg->task_id);
 
 err_subtask:
 	list_for_each_entry_safe(subtask, tmp, &task->subtask, task_list) {

@@ -36,9 +36,6 @@ kuid_t procfs_kuid;
 kgid_t procfs_kgid;
 struct proc_dir_entry *smap_procfs_root = NULL;
 
-static char *smap_bitmap_buf = NULL;
-static size_t smap_buf_len = 0;
-
 static int check_msg_validity(struct access_add_pid_msg *msg)
 {
 	if (!msg) {
@@ -223,168 +220,42 @@ static long ioctl_create_smap_procfs(void __user *argp)
 #define BYTES_PER_LONG 8
 #endif
 
-static size_t calc_bitmap_len(void)
-{
-	size_t buf_len = 0;
-	int i;
-
-	/*
-	 * Each process's information layout is as follows:
-	 * +----------+------------------------------------------------------+
-	 * | PID (4B) |        NR_NODE0_PAGE-NR_NODEn_PAGE (n * 8B)          |
-	 * +----------+------------------------------------------------------+
-	 *
-	 * Note: bitmap/mapping data is not transmitted here since mem_freq_read
-	 * already assembles complete actc_data including freq, prior, and white_list.
-	 */
-	for (i = 0; i < AP_MAX_SLOTS; i++) {
-		struct ap_slot *s = ap_get_slot_at(i);
-		bool normal;
-
-		if (!s)
-			continue;
-		down_read(&s->ap_lock);
-		normal = s->ap->type == NORMAL_SCAN;
-		up_read(&s->ap_lock);
-		if (normal) {
-			buf_len += sizeof(pid_t);
-			buf_len += sizeof(size_t) * SMAP_MAX_NUMNODES;
-		}
-		ap_put_slot(s);
-	}
-
-	return buf_len;
-}
-
+/* Return the tracked PID's page counts. Callers read them after its scan-ready event. */
 static long ioctl_walk_pagemap(void __user *argp)
 {
-	size_t buf_len;
-	if (!check_and_clear_ap_state(&ap_data, AP_STATE_WALK)) {
-		pr_err("walk pagemap of access pid is not allowed\n");
-		return -EAGAIN;
-	}
-	buf_len = calc_bitmap_len();
-	if (!buf_len || copy_to_user(argp, &buf_len, sizeof(buf_len))) {
-		set_ap_whole_state(&ap_data, AP_STATE_WALK);
+	struct smap_pid_page_num param;
+	struct ap_slot *s;
+	struct access_pid *ap;
+	bool found = false;
+	int i;
+
+	if (copy_from_user(&param, argp, sizeof(param)))
 		return -EFAULT;
-	} else {
-		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ);
-		vfree(smap_bitmap_buf);
-		smap_bitmap_buf = NULL;
-		smap_buf_len = 0;
-	}
-	return 0;
-}
 
-static inline void write_bitmap_pid(char **buffer, struct access_pid *ap)
-{
-	if (unlikely(!buffer || !(*buffer) || !ap)) {
-		pr_err("invalid buffer or access pid passed to write bitmap\n");
-		return;
-	}
-	memcpy(*buffer, &ap->pid, sizeof(ap->pid));
-	*buffer += sizeof(ap->pid);
-}
-
-static inline void write_bitmap_nrpage(char **buffer, struct access_pid *ap)
-{
-	int i;
-	if (unlikely(!buffer || !(*buffer) || !ap)) {
-		pr_err("invalid buffer or access pid passed to write page number\n");
-		return;
-	}
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
-		memcpy(*buffer, &ap->page_num[i], sizeof(ap->page_num[i]));
-		*buffer += sizeof(ap->page_num[i]);
-	}
-}
-
-static void write_bitmap_buffer(char **buffer)
-{
-	int i;
-
-	if (unlikely(!buffer || !(*buffer))) {
-		pr_err("invalid buffer passed to write bitmap buffer\n");
-		return;
-	}
-	for (i = 0; i < AP_MAX_SLOTS; i++) {
-		struct ap_slot *s = ap_get_slot_at(i);
-		struct access_pid *ap;
-		bool normal;
-
+	for (i = 0; i < AP_MAX_SLOTS && !found; i++) {
+		s = ap_get_slot_at(i);
 		if (!s)
 			continue;
 		down_read(&s->ap_lock);
 		ap = s->ap;
-		normal = ap->type == NORMAL_SCAN;
-		if (normal) {
-			write_bitmap_pid(buffer, ap);
-			write_bitmap_nrpage(buffer, ap);
+		if (ap->type == NORMAL_SCAN && ap->pid == param.pid) {
+			memcpy(param.page_num, ap->page_num,
+			       sizeof(param.page_num));
+			found = true;
 		}
 		up_read(&s->ap_lock);
 		ap_put_slot(s);
 	}
-}
 
-static ssize_t read_bitmap(char __user *buf, size_t cnt, loff_t *loff,
-			   bool *completed)
-{
-	char *tmp_buf;
-	ssize_t len;
-
-	*completed = false;
-	pr_debug("reading bitmap, smap_buf_len %zu, loff %lld, cnt %zu\n",
-		 smap_buf_len, *loff, cnt);
-	if (cnt == 0) {
-		*completed = true;
-		return 0;
-	}
-	if (*loff > 0)
-		goto copy_data;
-
-	smap_buf_len = calc_bitmap_len();
-	if (smap_buf_len == 0) {
-		*completed = true;
-		return 0;
+	if (!found) {
+		pr_debug("walk pagemap: pid %d not tracked\n", param.pid);
+		return -ESRCH;
 	}
 
-	vfree(smap_bitmap_buf);
-	smap_bitmap_buf = vmalloc(smap_buf_len);
-	if (!smap_bitmap_buf) {
-		pr_err("failed to alloc memory in read_bitmap\n");
-		return -ENOMEM;
-	}
+	if (copy_to_user(argp, &param, sizeof(param)))
+		return -EFAULT;
 
-	tmp_buf = smap_bitmap_buf;
-	write_bitmap_buffer(&smap_bitmap_buf);
-	smap_bitmap_buf = tmp_buf;
-
-copy_data:
-	if (unlikely(*loff >= smap_buf_len)) {
-		len = -ERANGE;
-		goto free_buf;
-	}
-	if (*loff + cnt > smap_buf_len)
-		len = smap_buf_len - *loff;
-	else
-		len = cnt;
-	if (copy_to_user(buf, smap_bitmap_buf + (*loff), len)) {
-		len = -EFAULT;
-		goto free_buf;
-	}
-	if (*loff + len == smap_buf_len) {
-		*completed = true;
-		goto free_buf;
-	}
-	*loff += len;
-	return len;
-
-free_buf:
-	vfree(smap_bitmap_buf);
-	smap_bitmap_buf = NULL;
-	smap_buf_len = 0;
-	*loff = 0;
-	return len;
+	return 0;
 }
 
 static int smap_scan_open(struct inode *inode, struct file *file)
@@ -508,12 +379,9 @@ static long ioctl_set_scan_cpu(void __user *argp)
 	return 0;
 }
 
-static long ioctl_tracking_cmd(unsigned long arg)
+static long ioctl_tracking_restart_pid(unsigned long arg)
 {
-	if (arg == TRACKING_DISABLED)
-		return access_tracking_disable();
-	access_tracking_enable();
-	return 0;
+	return access_tracking_restart_pid((pid_t)arg);
 }
 
 static long ioctl_tracking_page_size(unsigned long arg)
@@ -561,8 +429,6 @@ static long smap_scan_ioctl(struct file *file, unsigned int cmd,
 
 	pr_debug("enter smap_scan_ioctl, nr %u\n", _IOC_NR(cmd));
 	switch (cmd) {
-	case SMAP_IOCTL_TRACKING_CMD:
-		return ioctl_tracking_cmd(arg);
 	case SMAP_IOCTL_PAGE_SIZE_SET_CMD:
 		return ioctl_tracking_page_size(arg);
 	case SMAP_IOCTL_SCAN_MODE_SET_CMD:
@@ -592,6 +458,8 @@ static long smap_scan_ioctl(struct file *file, unsigned int cmd,
 		return rc;
 	case SMAP_ACCESS_SET_SCAN_CPU:
 		return ioctl_set_scan_cpu(argp);
+	case SMAP_IOCTL_TRACKING_CMD:
+		return ioctl_tracking_restart_pid(arg);
 	default:
 		rc = -ENOTTY;
 	}
@@ -600,31 +468,9 @@ static long smap_scan_ioctl(struct file *file, unsigned int cmd,
 	return rc;
 }
 
-static ssize_t smap_scan_read(struct file *file, char __user *buf, size_t cnt,
-			      loff_t *loff)
-{
-	ssize_t ret;
-	bool completed = false;
-
-	if (!check_and_clear_ap_state(&ap_data, AP_STATE_READ)) {
-		pr_err("read bitmap of access pid is not allowed\n");
-		return -EPERM;
-	}
-
-	ret = read_bitmap(buf, cnt, loff, &completed);
-	if (ret < 0)
-		set_ap_whole_state(&ap_data, AP_STATE_WALK);
-	else if (completed)
-		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_FREQ);
-	else
-		set_ap_whole_state(&ap_data, AP_STATE_WALK | AP_STATE_READ);
-	return ret;
-}
-
 static struct file_operations smap_scan_fops = {
 	.owner = THIS_MODULE,
 	.open = smap_scan_open,
-	.read = smap_scan_read,
 	.unlocked_ioctl = smap_scan_ioctl,
 	.release = smap_scan_release,
 };
@@ -681,9 +527,6 @@ err_cdev:
 
 void scan_ioctl_exit(void)
 {
-	vfree(smap_bitmap_buf);
-	smap_bitmap_buf = NULL;
-	smap_buf_len = 0;
 	access_remove_all_pid();
 	remove_procfs_root();
 	scan_dev_exit();

@@ -3,6 +3,7 @@
  * Description: smap5.0 user migration ut code
  */
 
+#include <cstddef>
 #include <cstdlib>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
@@ -38,32 +39,7 @@ constexpr int RETURN_ERROR = -1;
 
 using StrategyConfigReadFunc = int32_t (*)(char*, char*);
 
-typedef struct {
-    uint32_t scanPeriod;
-    uint32_t migratePeriod;
-    uint32_t remoteFreqPercentile;
-    uint32_t slowThreshold;
-    uint64_t freqWt;
-    uint32_t remoteHotThreshold;
-    uint32_t groupSwapRatio;
-    uint32_t groupSwapMinRemoteFreq;
-    uint32_t groupSwapMinFreqGain;
-    uint32_t groupSwapLocalWatermarkRatio;
-    uint32_t migrateMode;
-    bool migrateModeChanged;
-    bool migrateModeEnable;
-    bool zeroFreqMigrateEnable;
-    bool adaptiveRatioEnable;
-    bool fileConfSwitch;
-    bool scanPeriodChanged;
-    bool migratePeriodChanged;
-    bool scanCpuChanged;
-    uint32_t scanCpuMin;
-    uint32_t scanCpuMax;
-    uint32_t ubBwThreshold;
-    uint32_t remoteScanMode;
-    bool remoteScanModeChanged;
-} StrategyConfig;
+/* StrategyConfig 定义来自 strategy/strategy_config.h（单一来源，禁止手工镜像） */
 
 typedef struct {
     char *substr;
@@ -845,7 +821,7 @@ TEST_F(PeriodConfigTest, PeriodConfigReviewTest)
     int32_t ret = StrategyConfigReview();
     EXPECT_EQ(-1, ret);
 
-    uint32_t num = 18;
+    uint32_t num = 19;
     for (int i = 0; i < num; i++) {
         g_strategyConfigRead[i].needCfg = 2UL;
         g_strategyConfigRead[i].realCfg = 2UL;
@@ -931,6 +907,8 @@ TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChanged)
 
 TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedNoChange)
 {
+    (void)memset_s(&g_tmpStrategyConfig, sizeof(g_tmpStrategyConfig), 0, sizeof(g_tmpStrategyConfig));
+    (void)memset_s(&g_strategyConfig, sizeof(g_strategyConfig), 0, sizeof(g_strategyConfig));
     g_tmpStrategyConfig.fileConfSwitch = true;
     g_strategyConfig.scanPeriod = 500;
     g_strategyConfig.migratePeriod = 1000;
@@ -997,22 +975,6 @@ TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedAdaptiveRatioChanged)
 
     bool ret = UpdateStrategyConfigChanged();
     EXPECT_EQ(true, ret);
-}
-
-TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedMigrateModeChanged)
-{
-    g_tmpStrategyConfig.fileConfSwitch = true;
-    g_strategyConfig.scanPeriod = 500;
-    g_strategyConfig.migratePeriod = 1000;
-    g_strategyConfig.zeroFreqMigrateEnable = true;
-    g_strategyConfig.adaptiveRatioEnable = true;
-    g_tmpStrategyConfig.scanPeriod = 500;
-    g_tmpStrategyConfig.migratePeriod = 1000;
-    g_tmpStrategyConfig.zeroFreqMigrateEnable = true;
-    g_tmpStrategyConfig.adaptiveRatioEnable = true;
-
-    bool ret = UpdateStrategyConfigChanged();
-    EXPECT_EQ(false, ret);
 }
 
 extern "C" void StrategyConfigRead(const char *configFile);

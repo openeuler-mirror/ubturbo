@@ -77,6 +77,9 @@
 
 #define FREQ_BUCKETS_SIZE 256
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 extern EnvAtomic g_forbiddenNodes[MAX_NODES];
 
 #define NODE_FORBIDDEN_USER (1 << 0)
@@ -419,6 +422,8 @@ struct PidSlot {
     ProcessAttr *attr;
     EnvAtomic refs;
     EnvMutex attrLock;
+    int memFreqFd; /* epoll 监听的 /proc/smap/<pid>/mem_freq fd，-1 未注册 */
+    EnvAtomic eventEnqueued; /* 事件驱动的同pid去重：派发中置1，worker完成复位 */
 } __attribute__((aligned(64)));
 
 /*
@@ -505,6 +510,10 @@ struct RemoteNumaInfo {
     uint64_t sharedSize[REMOTE_NUMA_NUM];
     struct RemoteNumaUsedInfo usedInfo[REMOTE_NUMA_NUM];
     struct RemoteNumaUsedInfo privateUsedInfo[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
+    /* 事件驱动流水的在途预扣账本（页，per local→remote 对）：规划时预扣、
+     * 结算释放；重建函数 Clear/CalRemoteMemUsed 不触碰，由 acquire/settle
+     * 成对维护；每远端合计在快照内按列汇总计算 */
+    uint64_t privateInFlight[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
 };
 
 struct UbBwMonitor {
@@ -512,6 +521,33 @@ struct UbBwMonitor {
     struct UbFluxMbStatistic currentFluxMb; // 当前周期UB带宽数据
     int currentFluxRet; // 当前周期UB带宽查询结果
 };
+
+/* per-pid mem_freq 事件循环：epoll + eventfd 门铃，内核 pid 扫描窗口完成时
+ * 文件可读（水平触发），Loop 取回槽位派发线程池 */
+typedef struct {
+    int epfd;
+    int wakeFd;
+    EnvAtomic stop;
+    pthread_t thread;
+    bool inited;
+} EventLoop;
+
+typedef struct {
+    struct PidSlot *slot;
+    pid_t pid;
+} ThreadPoolTask;
+
+#define MAX_POOL_WORKERS 10
+
+typedef struct {
+    ThreadPoolTask ring[MAX_PID_SLOTS];
+    uint32_t head, tail, count;
+    EnvMutex lock;
+    EnvCond cond;
+    EnvAtomic stop;
+    pthread_t workers[MAX_POOL_WORKERS];
+    int nrWorkers;
+} ThreadPool;
 
 struct ProcessManager {
     struct PidSlot slots[MAX_PID_SLOTS];
@@ -526,12 +562,16 @@ struct ProcessManager {
     struct RemoteNumaInfo remoteNumaInfo; // 借用远端内存数量
     EnvMutex threadLock;
     struct UbBwMonitor ubBwMonitor; // UB带宽监控
+    EventLoop eventLoop; // per-pid mem_freq 事件循环
+    ThreadPool threadPool; // per-pid 迁移 worker 线程池
 };
+
+#define MAX_POOL_WORKERS 10
 
 struct ProcessMemBitmap {
     pid_t pid;
     size_t nrPages[MAX_NODES];
-};
+}; /* 同时作为SMAP_ACCESS_WALK_PAGEMAP的传输结构，须与内核struct smap_pid_page_num布局对齐 */
 
 typedef struct {
     pid_t pid;
@@ -608,13 +648,24 @@ int ApplyPendingGroupedPolicy(ProcessAttr *attr);
 void CheckAndRemoveInvalidProcess(void);
 
 void RemoveManagedProcess(int nr, pid_t *pidArr);
+struct RemoveMsg;
+struct RemovePayload;
+int IoctlRemoveProcess(struct RemoveMsg *msg);
+void ClearManagedProcess(int nr, struct RemovePayload *payload);
 
 int MigrateMemoryBack(pid_t pid, int srcNid, int desNid, uint64_t paStart, uint64_t paEnd);
 
-int BuildAllPidData(void);
+int BuildPidData(ProcessAttr *attr);
+int RefreshAllPidData(void);
 void CalibratePairAccount(ProcessAttr *attr);
+/* 按进程账本刷新远端容量分配。 */
+void CalcMigrateNrPagesPerPidMultiNuma(void);
 int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext *context, PairTarget targets[],
                               size_t targetCap, size_t *targetCnt, PairRequestSummary *summary);
+
+/* 为 per-pid 流水构建 PairRequestContext 的容量 mask。 */
+void BuildPairCapacityLocalMasks(struct ProcessManager *manager, const ProcessAttr *attr,
+                                 PairRequestContext *context);
 int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], size_t targetCap, size_t *targetCnt);
 int BuildAllPairPlanInputs(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
                            PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt);
@@ -649,10 +700,11 @@ int PidSlotAdd(struct ProcessManager *manager, ProcessAttr *attr);
 void PidSlotRemove(struct ProcessManager *manager, pid_t pid);
 bool PidSlotEmpty(struct ProcessManager *manager);
 struct PidSlot *PidSlotGetRef(pid_t pid);
+struct PidSlot *PidSlotGetRefByAttr(const ProcessAttr *attr);
+bool PidSlotTryGetRef(struct PidSlot *slot);
 size_t PidSlotCollectRefs(struct ProcessManager *manager, struct PidSlot *arr[], size_t cap);
 void PidSlotReleaseRefs(struct PidSlot *arr[], size_t n);
 void PutProcessAttr(ProcessAttr *attr);
-
 static inline ProcessAttr *PidSlotAttr(struct PidSlot *s)
 {
     return s ? s->attr : NULL;
@@ -925,4 +977,7 @@ static inline bool IsMultiNumaVm(ProcessAttr *process)
 }
 
 bool IsMemoryLow(pid_t pid);
+#ifdef __cplusplus
+}
+#endif
 #endif /* __MANAGE_H__ */

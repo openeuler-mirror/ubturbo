@@ -49,14 +49,14 @@ extern "C" struct smap_hist_dev g_smap_hist_dev;
 extern "C" void hist_tracking_enable(void);
 TEST_F(HistTrackingTest, hist_tracking_enable)
 {
-    hist_tracking_enable();
+    hist_thread_resume();
     EXPECT_EQ(true, g_smap_hist_dev.thread_enable);
 }
 
 extern "C" int hist_tracking_disable(void);
 TEST_F(HistTrackingTest, hist_tracking_disable)
 {
-    hist_tracking_disable();
+    hist_thread_pause();
     EXPECT_EQ(false, g_smap_hist_dev.thread_enable);
 }
 

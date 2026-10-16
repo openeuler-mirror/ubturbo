@@ -74,26 +74,11 @@ static void NoAccountAlloc(int remoteNid, ProcessAttr *attr)
     SMAP_LOGGER_INFO("Rebuild alloc account complete for pid %d", attr->pid);
 }
 
-static void ClearNormalPidAccount(ProcessAttr *attr, int remoteNode, int nrLocalNuma)
-{
-    if (attr->state != PROC_MOVE) {
-        for (int i = 0; i < nrLocalNuma; i++) {
-            attr->strategyAttr.remoteNrPagesAfterMigrate[i][remoteNode] = 0;
-        }
-    }
-}
-
 static void CheckAccountAndNrPage(ProcessAttr *attr, bool returnFlag[REMOTE_NUMA_NUM])
 {
     int i, j;
     int nrLocalNuma = GetNrLocalNuma();
-    /**
-     * 每个远端numa的账本，和nrPage进行对比
-     * 1、远端numa有账本，但是nrPage没有，对账本进行清零
-     * 2、nrPage有但是远端numa没有账本，
-     *   1）检查L1的分布情况，平均分
-     *   2）L1没有分布情况，按照CPU绑定情况，平均分
-     */
+    /* 远端快照为零时保留旧账本；有页但无账本时重建分配。 */
     for (j = 0; j < REMOTE_NUMA_NUM; j++) {
         int remoteNid = nrLocalNuma + j;
         uint32_t tmpTotal = 0;
@@ -102,7 +87,7 @@ static void CheckAccountAndNrPage(ProcessAttr *attr, bool returnFlag[REMOTE_NUMA
             continue;
         }
         if (attr->walkPage.nrPages[remoteNid] == 0) {
-            ClearNormalPidAccount(attr, j, nrLocalNuma);
+            /* 页数快照可能滞后于迁出结算，不能据此清空账本。 */
             continue;
         }
         for (i = 0; i < nrLocalNuma; i++) {
@@ -521,20 +506,30 @@ void CalRemoteMemUsed(void)
             SMAP_LOGGER_DEBUG("usedInfo[%d].used: %llu, nrPages[%d+%d]: %u.", j, remoteNumaInfo->usedInfo[j].used, j,
                               nrLocal, attr->walkPage.nrPages[j + nrLocal]);
             for (i = 0; i < LOCAL_NUMA_NUM; i++) {
-                remoteNumaInfo->privateUsedInfo[i][j].used += attr->strategyAttr.allocRemoteNrPages[i][j];
-                SMAP_LOGGER_DEBUG("privateUsedInfo[%d][%d].used: %llu, allocRemoteNrPages[%d][%d]: %u.", i, j,
+                // 用迁回结算值 remoteNrPagesAfterMigrate 而非 allocRemoteNrPages：
+                // 后者由 RebuildAllocAccount 从 walkPage 快照均分派生，扫描窗口滞后于
+                // 迁回，导致迁回成功后 used 仍卡在旧快照派生值（如 36097/2=18048），
+                // 使 CheckPrivateBorrowUsed 误判 used>size 而 reject migrate_back。
+                remoteNumaInfo->privateUsedInfo[i][j].used += attr->strategyAttr.remoteNrPagesAfterMigrate[i][j];
+                SMAP_LOGGER_DEBUG("privateUsedInfo[%d][%d].used: %llu, remoteNrPagesAfterMigrate[%d][%d]: %u.", i, j,
                                   remoteNumaInfo->privateUsedInfo[i][j].used, i, j,
-                                  attr->strategyAttr.allocRemoteNrPages[i][j]);
+                                  attr->strategyAttr.remoteNrPagesAfterMigrate[i][j]);
             }
         }
     }
     PidSlotReleaseRefs(all, n);
 }
 
-void CalcMigrateNrPagesPerPIDMuiltNuma(void)
+void CalcMigrateNrPagesPerPidMultiNuma(void)
 {
     struct RemoteNumaInfo *numaInfo = &GetProcessManager()->remoteNumaInfo;
     if (GetProcessManager()->nr[VM_TYPE] + GetProcessManager()->nr[PROCESS_TYPE] == 0) {
+        // 无管理 pid：仍须清空残留 used，否则 remote_numa_info_set 把 size
+        // 清零后，上一周期残留的 used 会让 CheckPrivateBorrowUsed/CheckBorrowUsed
+        // 误判 used>size 而 reject migrate_back。
+        EnvMutexLock(&numaInfo->lock);
+        ClearRemoteMemUsed();
+        EnvMutexUnlock(&numaInfo->lock);
         return;
     }
     // 根据账本信息，计算每个PID各本地numa可支配的内存；
@@ -549,4 +544,62 @@ void CalcMigrateNrPagesPerPIDMuiltNuma(void)
     // 按照远端numa的粒度，和上一步计算的迁移量，计算每个本地numa相对于1个远端numa的比例
     CalRemoteNumaSizeAllocPerNuma();
     EnvMutexUnlock(&numaInfo->lock);
+}
+
+/* 持远端账本锁重建已用页数，并扣除在途预扣后返回可用页数。 */
+void SnapshotRemoteCapacityLocked(uint64_t privateAvail[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
+                                  uint64_t sharedAvail[REMOTE_NUMA_NUM])
+{
+    struct RemoteNumaInfo *remoteNumaInfo = &GetProcessManager()->remoteNumaInfo;
+    int nrLocal = GetNrLocalNuma();
+
+    ClearRemoteMemUsed();
+    CalRemoteMemUsed();
+    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+        uint64_t sharedCapPages = MBToPage(remoteNumaInfo->sharedSize[remote]);
+        uint64_t usedSharedPages = remoteNumaInfo->usedInfo[remote].used;
+        uint64_t inFlightSharedPages = 0;
+
+        for (int local = 0; local < nrLocal; local++) {
+            uint64_t privateCapPages = MBToPage(remoteNumaInfo->privateSize[local][remote]);
+            uint64_t usedPrivatePages =
+                remoteNumaInfo->privateUsedInfo[local][remote].used + remoteNumaInfo->privateInFlight[local][remote];
+
+            privateAvail[local][remote] = privateCapPages > usedPrivatePages ? privateCapPages - usedPrivatePages : 0;
+            inFlightSharedPages += remoteNumaInfo->privateInFlight[local][remote];
+        }
+        sharedAvail[remote] = sharedCapPages > (usedSharedPages + inFlightSharedPages) ?
+                                  sharedCapPages - usedSharedPages - inFlightSharedPages :
+                                  0;
+    }
+}
+
+/* 迁移结算后回收全部在途预扣；成功迁移的页数由后续快照重新入账。 */
+void LedgerSettleInFlight(const uint32_t planned[MAX_NODES][MAX_NODES], int nrLocalNuma)
+{
+    struct RemoteNumaInfo *remoteNumaInfo = &GetProcessManager()->remoteNumaInfo;
+
+    EnvMutexLock(&remoteNumaInfo->lock);
+    for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
+        for (int i = 0; i < nrLocalNuma; i++) {
+            if (planned[i][j] == 0) {
+                continue;
+            }
+            remoteNumaInfo->privateInFlight[i][j] = remoteNumaInfo->privateInFlight[i][j] >= planned[i][j] ?
+                                                        remoteNumaInfo->privateInFlight[i][j] - planned[i][j] :
+                                                        0;
+        }
+    }
+    EnvMutexUnlock(&remoteNumaInfo->lock);
+}
+
+void LedgerPlanInFlightLocked(const uint32_t nrMigratePages[MAX_NODES][MAX_NODES], int nrLocalNuma)
+{
+    struct RemoteNumaInfo *remoteNumaInfo = &GetProcessManager()->remoteNumaInfo;
+
+    for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
+        for (int i = 0; i < nrLocalNuma; i++) {
+            remoteNumaInfo->privateInFlight[i][j] += nrMigratePages[i][j];
+        }
+    }
 }
