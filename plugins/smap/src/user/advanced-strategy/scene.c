@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -545,6 +543,10 @@ static void ConfigMultiVmRatioInGroups(struct ProcessManager *manager)
 
         int l1 = GetAttrL1(current);
         int l2 = GetAttrL2(current);
+        if (l1 < 0 || l1 > maxL1node || l2 < 0 ||
+            l2 > maxL2node) { // 越界防护，processed 数组下标必须落在 [0, max] 区间
+            continue;
+        }
         if (processed[l1][l2]) { // 如果这个近端-远端组处理过了则跳过
             continue;
         }

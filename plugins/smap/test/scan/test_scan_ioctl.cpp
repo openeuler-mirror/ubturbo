@@ -1,19 +1,17 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: smap scan ioctl module
  */
-
 
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include <linux/fs.h>
-#include <linux/ioctl.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
-#include <linux/vmalloc.h>
-#include <linux/slab.h>
+#include <linux/fs.h>
+#include <linux/ioctl.h>
 #include <linux/list.h>
+#include <linux/slab.h>
+#include <linux/vmalloc.h>
 
 #include "acpi_mem.h"
 #include "iomem.h"
@@ -74,7 +72,7 @@ extern "C" int check_msg_validity(struct access_add_pid_msg *msg);
 unsigned long ScanIoctlTestKernel::mockCopyFromUserSetMsg(void *to, const void *from, unsigned long n)
 {
     cout << "mockCopyFromUserSetMsg" << endl;
-    struct access_add_pid_msg *tmpMsg = (struct access_add_pid_msg*) to;
+    struct access_add_pid_msg *tmpMsg = (struct access_add_pid_msg *)to;
     *tmpMsg = m_msg;
     return 0UL;
 };
@@ -82,7 +80,7 @@ unsigned long ScanIoctlTestKernel::mockCopyFromUserSetMsg(void *to, const void *
 unsigned long ScanIoctlTestKernel::mockCopyFromUserSetPayload(void *to, const void *from, unsigned long n)
 {
     cout << "mockCopyFromUserSetPayload" << endl;
-    struct access_add_pid_payload *tmpPayload = (struct access_add_pid_payload*) to;
+    struct access_add_pid_payload *tmpPayload = (struct access_add_pid_payload *)to;
     if (n / sizeof(struct access_add_pid_payload) != m_msg.count) {
         return n;
     }
@@ -149,7 +147,7 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidWithOnePid)
 
     // following tests will not run add_payload, since don't need add_payload mock
     // invalid scan_type case
-    msg.payload[0].type = (scan_type) - 1;
+    msg.payload[0].type = (scan_type)-1;
     ret = checkIoctlAddPid(msg);
     EXPECT_EQ(-EINVAL, ret);
 
@@ -175,7 +173,7 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidWithMultiPid)
         msg.payload[i].pid = 14587 + i;
         msg.payload[i].numa_nodes = 0x10;
         msg.payload[i].duration = 1;
-        if (i%2) {
+        if (i % 2) {
             msg.payload[i].scan_time = 50;
             msg.payload[i].ntimes = 40;
             msg.payload[i].type = HAM_SCAN;
@@ -186,9 +184,7 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidWithMultiPid)
         }
     }
     // set add_payload mock
-    MOCKER(add_payload).stubs()
-        .will(returnValue(0))
-        .then(returnValue(-EINVAL));
+    MOCKER(add_payload).stubs().will(returnValue(0)).then(returnValue(-EINVAL));
 
     // success case
     ret = checkIoctlAddPid(msg);
@@ -212,15 +208,9 @@ TEST_F(ScanIoctlTestKernel, AddPayloadTest)
 {
     int len = 1;
     struct access_add_pid_payload payload;
-    MOCKER(access_add_ham_pid).stubs()
-        .will(returnValue(-EINVAL))
-        .then(returnValue(0));
-    MOCKER(access_add_statistic_pid).stubs()
-        .will(returnValue(-EINVAL))
-        .then(returnValue(0));
-    MOCKER(access_add_pid).stubs()
-        .will(returnValue(-EINVAL))
-        .then(returnValue(0));
+    MOCKER(access_add_ham_pid).stubs().will(returnValue(-EINVAL)).then(returnValue(0));
+    MOCKER(access_add_statistic_pid).stubs().will(returnValue(-EINVAL)).then(returnValue(0));
+    MOCKER(access_add_pid).stubs().will(returnValue(-EINVAL)).then(returnValue(0));
 
     // test all case
     EXPECT_EQ(-EINVAL, add_payload(len, &payload, PMD_SIZE));
@@ -281,6 +271,7 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPid)
     for (i = 0; i < msg.count; i++) {
         msg.payload[i].pid = i;
         msg.payload[i].numa_nodes = 0x10;
+        payload_data[i].scan_time = 50;
         payload_data[i].ntimes = 40;
         /* check_payload_validity 要求 scan_time 在 (0, MAX_SCAN_PERIOD] 内 */
         payload_data[i].scan_time = 100;
@@ -290,9 +281,7 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPid)
     g_test_payload = payload_data;
     g_test_payload_size = sizeof(struct access_add_pid_payload) * msg.count;
 
-    MOCKER(copy_from_user)
-        .stubs()
-        .will(invoke(mock_copy_from_user));
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user));
 
     MOCKER(access_add_ham_pid).stubs().will(returnValue(0));
     MOCKER(access_add_pid).stubs().will(returnValue(0));
@@ -322,7 +311,7 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidTwo)
 
     MOCKER(copy_from_user)
         .stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
+        .with(outBoundP((void *)&msg, sizeof(msg)))
         .will(returnValue(0UL))
         .then(returnValue(1UL));
 
@@ -344,9 +333,7 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidThree)
     g_test_payload = nullptr;
     g_test_payload_size = 0;
 
-    MOCKER(copy_from_user)
-        .stubs()
-        .will(invoke(mock_copy_from_user));
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user));
 
     ret = ioctl_add_pid(NULL);
     EXPECT_EQ(-EINVAL, ret);
@@ -373,14 +360,17 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidThree)
     g_test_payload = payload_data;
     g_test_payload_size = sizeof(struct access_add_pid_payload) * msg.count;
 
-    MOCKER(copy_from_user)
-        .stubs()
-        .will(invoke(mock_copy_from_user));
+    MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user));
 
     MOCKER(access_add_ham_pid).stubs().will(returnValue(1));
 
     ret = ioctl_add_pid(NULL);
     EXPECT_EQ(1, ret);
+
+    // scan_time == 0 should be rejected
+    payload_data[0].scan_time = 0;
+    ret = ioctl_add_pid(NULL);
+    EXPECT_EQ(-EINVAL, ret);
 
     vfree(payload_data);
 
@@ -401,10 +391,7 @@ TEST_F(ScanIoctlTestKernel, IoctlRemovePid)
 
     GlobalMockObject::verify();
     msg.count = 0;
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
-        .will(returnValue(0UL));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
     ret = ioctl_remove_pid(NULL);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -417,10 +404,7 @@ TEST_F(ScanIoctlTestKernel, IoctlRemovePidTwo)
     msg.count = 1;
     msg.payload = &payload;
     msg.payload[0].pid = 1;
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
-        .will(returnValue(0UL));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
     MOCKER(access_remove_pid).stubs();
     MOCKER(access_remove_ham_pid).stubs();
     int ret = ioctl_remove_pid(NULL);
@@ -496,7 +480,7 @@ TEST_F(ScanIoctlTestKernel, IoctlWalkPagemap)
 }
 
 extern "C" void update_tracking_data(u16 *tracking_data, struct statistics_tracking_info *stat_info,
-    struct tracking_info_payload *payload_info);
+                                     struct tracking_info_payload *payload_info);
 extern "C" long ioctl_get_tracking(void __user *argp);
 TEST_F(ScanIoctlTestKernel, IoctlGetTrackingError)
 {
@@ -514,20 +498,14 @@ TEST_F(ScanIoctlTestKernel, IoctlGetTrackingError)
     // invalid length case
     GlobalMockObject::verify();
     msg.length = 65536;
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
-        .will(returnValue(0UL));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
     ret = ioctl_get_tracking(NULL);
     EXPECT_EQ(-EINVAL, ret);
 
     // null data case
     GlobalMockObject::verify();
     msg.length = 1;
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
-        .will(returnValue(0UL));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
     ret = ioctl_get_tracking(NULL);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -560,10 +538,7 @@ TEST_F(ScanIoctlTestKernel, IoctlGetTracking)
         }
     }
     list_add(&tmp->node, &statistic_pid_list);
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
-        .will(returnValue(0UL));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
     MOCKER(copy_to_user).stubs().will(returnValue(0UL));
 
     ret = ioctl_get_tracking(NULL);

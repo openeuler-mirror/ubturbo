@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
  * Description: urma test
  */
 #include <cerrno>
@@ -287,7 +286,7 @@ TEST_F(TestUbUrma, init_urma_mem_trans_part2)
             return &g_mock_jfc;
         }));
     int ret = init_urma_mem_trans(jfce_handler);
-    ASSERT_EQ(ret, 0);
+    ASSERT_EQ(ret, -EFAULT);
     GlobalMockObject::verify();
     MOCKER(ubcore_delete_jfc).stubs().will(returnValue(0));
     MOCKER(ubcore_delete_jfr).stubs().will(returnValue(0));
@@ -310,7 +309,7 @@ TEST_F(TestUbUrma, init_urma_mem_trans_part2)
             return &g_mock_jfc;
         }));
     ret = init_urma_mem_trans(jfce_handler);
-    ASSERT_EQ(ret, 0);
+    ASSERT_EQ(ret, -EFAULT);
     GlobalMockObject::verify();
 }
 
@@ -349,7 +348,7 @@ TEST_F(TestUbUrma, init_urma_mem_trans_part3)
     MOCKER(create_jfc).stubs().will(returnValue(&g_mock_jfc));
     MOCKER(create_client_jfs).stubs().will(returnValue(static_cast<ubcore_jfs *>(nullptr)));
     ret = init_urma_mem_trans(jfce_handler);
-    ASSERT_EQ(ret, 0);
+    ASSERT_EQ(ret, -EFAULT);
 }
 
 TEST_F(TestUbUrma, init_urma_mem_trans_part4)
@@ -374,7 +373,7 @@ TEST_F(TestUbUrma, init_urma_mem_trans_part4)
     MOCKER(create_client_jfs).stubs().will(returnValue(&client_jfs));
     MOCKER(create_server_jfr).stubs().will(returnValue(static_cast<ubcore_jfr *>(nullptr)));
     int ret = init_urma_mem_trans(jfce_handler);
-    ASSERT_EQ(ret, 0);
+    ASSERT_EQ(ret, -EFAULT);
     GlobalMockObject::verify();
     MOCKER(ubcore_delete_jfc).stubs().will(returnValue(0));
     MOCKER(ubcore_delete_jfr).stubs().will(returnValue(0));
@@ -393,7 +392,7 @@ TEST_F(TestUbUrma, init_urma_mem_trans_part4)
     MOCKER(create_server_jfr).stubs().will(returnValue(&server_jfr));
     MOCKER(import_server_jfr).stubs().will(returnValue(static_cast<ubcore_tjetty *>(nullptr)));
     ret = init_urma_mem_trans(jfce_handler);
-    ASSERT_EQ(ret, 0);
+    ASSERT_EQ(ret, -EFAULT);
 }
 TEST_F(TestUbUrma, init_urma_mem_trans_part5)
 {

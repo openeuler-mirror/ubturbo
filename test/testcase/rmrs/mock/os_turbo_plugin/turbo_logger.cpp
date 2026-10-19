@@ -1,5 +1,4 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  */
 #include "turbo_logger.h"
 namespace turbo::log {
@@ -69,7 +68,10 @@ char *TurboLoggerEntry::GetBuffer()
     return nullptr;
 }
 
-void TurboLoggerEntry::ResizeBuffer(size_t addSize) {}
+bool TurboLoggerEntry::ResizeBuffer(size_t addSize)
+{
+    return true;
+}
 
 TurboLoggerEntry &TurboLoggerEntry::operator<<(const std::string &data)
 {

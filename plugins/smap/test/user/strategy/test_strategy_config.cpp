@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: smap5.0 user migration ut code
  */
 
@@ -285,13 +284,14 @@ extern "C" int32_t ConfigReadValueToInt(char *pvalue, uint32_t *resultvalue);
 TEST_F(PeriodConfigTest, ConfigScanCpuTestValid)
 {
     char *substr = "smap.scan.cpu";
-    char value[] = "1-3";
+    /* CPU 0 is available even on small CI hosts. */
+    char value[] = "0-0";
     g_tmpStrategyConfig.scanCpuMin = 0;
     g_tmpStrategyConfig.scanCpuMax = 0;
     int32_t ret = ConfigScanCpu(substr, value);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(1, g_tmpStrategyConfig.scanCpuMin);
-    EXPECT_EQ(3, g_tmpStrategyConfig.scanCpuMax);
+    EXPECT_EQ(0, g_tmpStrategyConfig.scanCpuMin);
+    EXPECT_EQ(0, g_tmpStrategyConfig.scanCpuMax);
 }
 
 TEST_F(PeriodConfigTest, ConfigScanCpuTestNoDash)
@@ -850,6 +850,10 @@ TEST_F(PeriodConfigTest, PeriodConifgResetTest)
 extern "C" void InitStrategyConfig(void);
 TEST_F(PeriodConfigTest, InitPeriodConfigTest)
 {
+    /* mock fopen 失败，GetSystemCpuRange 走"读取失败用默认 0-0"回退路径，
+     * 使 scanCpu 初始化结果确定，不依赖运行环境的实际 CPU 拓扑 */
+    MOCKER(fopen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
+
     g_strategyConfig.scanPeriod = 10;
     g_strategyConfig.migratePeriod = 10;
     g_strategyConfig.migrateMode = 5;

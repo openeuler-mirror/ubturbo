@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  * Description: smap smap config ut code
  * Create: 2025-04-06
  */
@@ -595,6 +594,40 @@ TEST_F(SmapConfigTest, TestAssignProcessAttr)
     EXPECT_EQ(attr.enableSwap, true);
 }
 
+TEST_F(SmapConfigTest, TestAssignProcessAttrRestoresIgnoreRemoteCapacity)
+{
+    ProcessAttr attr;
+    struct ProcessPayload payload = {0};
+    payload.pid = 1025;
+    payload.scanType = NORMAL_SCAN;
+    payload.type = PROCESS_TYPE;
+    payload.state = PROC_IDLE;
+    payload.migrateMode = MIG_RATIO_MODE;
+    payload.count = 0;
+    payload.ignoreRemoteCapacity = 1;
+
+    memset(&attr, 0, sizeof(ProcessAttr));
+    EXPECT_EQ(0, AssignProcessAttr(&attr, &payload));
+    EXPECT_TRUE(attr.ignoreRemoteCapacity);
+}
+
+TEST_F(SmapConfigTest, TestAssignProcessAttrIgnoreRemoteCapacityDefault)
+{
+    ProcessAttr attr;
+    struct ProcessPayload payload = {0};
+    payload.pid = 1025;
+    payload.scanType = NORMAL_SCAN;
+    payload.type = PROCESS_TYPE;
+    payload.state = PROC_IDLE;
+    payload.migrateMode = MIG_RATIO_MODE;
+    payload.count = 0;
+    payload.ignoreRemoteCapacity = 0;
+
+    memset(&attr, 0, sizeof(ProcessAttr));
+    EXPECT_EQ(0, AssignProcessAttr(&attr, &payload));
+    EXPECT_FALSE(attr.ignoreRemoteCapacity);
+}
+
 extern "C" size_t CalcNumaConfigLen(void);
 extern "C" bool IsProcessConfigValid(char *processBase, size_t totalLen);
 TEST_F(SmapConfigTest, TestIsProcessConfigValid)
@@ -666,7 +699,7 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfig)
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
     MOCKER(InitProcessMigrationTargetState).expects(exactly(nrProcess));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
-    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(false));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)false));
     ret = RecoverProcessConfig((char *)&header);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(nrProcess, manager.nr[PROCESS_TYPE]);
@@ -701,9 +734,37 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigTwo)
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
     MOCKER(calloc).stubs().will(returnValue(static_cast<void *>(nullptr)));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
-    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(false));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)false));
     ret = RecoverProcessConfig((char *)&header);
     EXPECT_EQ(-ENOMEM, ret);
+    ASSERT_EQ(nullptr, PmHeadAttr(&manager));
+}
+
+TEST_F(SmapConfigTest, TestRecoverProcessConfigPidNotExist)
+{
+    /* 进程已退出（-ESRCH）时同样跳过恢复，不进入纳管流程 */
+    int ret;
+    int nrProcess = 1;
+    struct PayloadHeader header = {.len = nrProcess * CONFIG_PROC_LEN};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessPayload payload[] = {{.pid = 1025,
+                                        .scanType = NORMAL_SCAN,
+                                        .type = PROCESS_TYPE,
+                                        .state = PROC_IDLE,
+                                        .migrateMode = MIG_RATIO_MODE,
+                                        .numaNodes = 0x11,
+                                        .scanTime = 200,
+                                        .count = 1,
+                                        .migrateParam = {{.nid = 4, .ratio = 25}}}};
+
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
+    MOCKER(InitProcessMigrationTargetState).expects(never());
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue(-ESRCH));
+    ret = RecoverProcessConfig((char *)&header);
+    EXPECT_EQ(0, ret);
     ASSERT_EQ(nullptr, PmHeadAttr(&manager));
 }
 
@@ -727,6 +788,8 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigRestoresPairMultiRemoteTarget)
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetPageSize).stubs().will(returnValue(static_cast<uint32_t>(PAGESIZE_4K)));
     MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)&payload));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)false));
 
     EXPECT_EQ(0, RecoverProcessConfig((char *)&header));
     ASSERT_NE(nullptr, PmHeadAttr(&manager));
@@ -910,6 +973,57 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffe
     EXPECT_EQ(1, payload[0].count);
     EXPECT_EQ(8, payload[0].migrateParam[0].nid);
     EXPECT_EQ(8192U, payload[0].migrateParam[0].memSize);
+    free(payload);
+}
+
+TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsIgnoreRemoteCapacity)
+{
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    ProcessAttr attr = {};
+    struct ProcessPayload *payload = nullptr;
+    int len = 0;
+    attr.type = PROCESS_TYPE;
+    attr.pid = 1234;
+    attr.scanType = NORMAL_SCAN;
+    attr.state = PROC_IDLE;
+    attr.migrateMode = MIG_RATIO_MODE;
+    attr.ignoreRemoteCapacity = true;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+
+    EXPECT_EQ(0, BuildAllProcessPayload(&payload, &len));
+    ASSERT_NE(nullptr, payload);
+    EXPECT_EQ(1, len);
+    EXPECT_EQ(1, payload[0].ignoreRemoteCapacity);
+    free(payload);
+}
+
+TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingIgnoreRemoteCapacity)
+{
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    ProcessAttr attr = {};
+    struct ProcessPayload *payload = nullptr;
+    int len = 0;
+    attr.type = PROCESS_TYPE;
+    attr.pid = 1234;
+    attr.scanType = NORMAL_SCAN;
+    attr.state = PROC_MIGRATE;
+    attr.migrateMode = MIG_RATIO_MODE;
+    attr.ignoreRemoteCapacity = false;
+    attr.pendingTargetConfigValid = true;
+    attr.pendingIgnoreRemoteCapacity = true;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+
+    EXPECT_EQ(0, BuildAllProcessPayload(&payload, &len));
+    ASSERT_NE(nullptr, payload);
+    EXPECT_EQ(1, len);
+    EXPECT_EQ(PROC_IDLE, payload[0].state);
+    EXPECT_EQ(1, payload[0].ignoreRemoteCapacity);
     free(payload);
 }
 

@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -19,7 +17,6 @@ namespace turbo::common {
 using RetCode = uint32_t;
 
 constexpr auto CONFIG_DEFAULT_DIR = "conf";
-constexpr auto LIB_DEFAULT_DIR = "lib";
 
 constexpr inline auto MODULE_NAME = "ubturbo";
 constexpr inline auto MODULE_CODE = 1;

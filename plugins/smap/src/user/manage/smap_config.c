@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -470,14 +468,30 @@ static bool IsRecoveredTargetConfigZero(const ProcessTargetConfig *config)
 
 static int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayload *payload)
 {
+    /* 磁盘 payload 属于外部输入：type 会被用作 nr[] 数组下标，scanType 参与枚举比较，
+     * 越界值必须拒绝，防止恢复后越界写 */
+    if (payload->type >= TYPE_MAX || payload->scanType >= SCAN_TYPE_MAX) {
+        SMAP_LOGGER_ERROR("Invalid persisted process %d type %u scanType %u.", payload->pid, payload->type,
+                          payload->scanType);
+        return -EINVAL;
+    }
+
     ProcessTargetConfig activeConfig;
     int ret = RestoreProcessTargetConfig(&activeConfig, payload->migrateMode, payload->count, payload->migrateParam);
     if (ret) {
         return ret;
     }
 
+    /* numaNodes 净化：用户态访问器（InL1/InL2 等）只认 [0, MAX_NODES) 位域，
+     * 超出位属脏数据，掩掉后仅经 ADD_PID 下发内核，不拒绝恢复 */
+    const uint32_t validNumaMask = (1u << MAX_NODES) - 1;
+    if (payload->numaNodes & ~validNumaMask) {
+        SMAP_LOGGER_WARNING("pid %d recovered numaNodes %#x has invalid bits, sanitized.", payload->pid,
+                            payload->numaNodes);
+    }
+
     attr->pid = payload->pid;
-    attr->numaAttr.numaNodes = payload->numaNodes;
+    attr->numaAttr.numaNodes = payload->numaNodes & validNumaMask;
     attr->type = payload->type;
     attr->state = payload->state == PROC_MIGRATE ? PROC_IDLE : payload->state;
     attr->scanType = payload->scanType;
@@ -486,6 +500,8 @@ static int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayload *pay
     attr->enableSwap = true;
     attr->isFirstScan = true;
     ApplyRecoveredTargetConfig(attr, &activeConfig);
+    /* 恢复持久化的 sync 旁路容量标记：payload 存 uint8_t，非 0 视为 true */
+    attr->ignoreRemoteCapacity = (payload->ignoreRemoteCapacity == 1);
     attr->autoRemoveWhenRemoteEmpty = attr->scanType == NORMAL_SCAN && IsRecoveredTargetConfigZero(&activeConfig);
     if (time(&attr->scanStart) == (time_t)-1) {
         SMAP_LOGGER_ERROR("get time error.");
@@ -531,8 +547,10 @@ static int RecoverProcessConfig(char *processBase)
     nrPayload = header->len / CONFIG_PROC_LEN;
     struct ProcessPayload *payload = (struct ProcessPayload *)JumpToProcessPayload(processBase);
     for (uint32_t i = 0; i < nrPayload; i++, payload++) {
-        /* 页类型一致性校验：pid 实际页类型须与 smap 当前模式匹配，否则内核扫描返回 -EINVAL */
-        if (IsPidUsingHugePages(payload->pid) != IsHugeMode()) {
+        /* 页类型一致性校验：pid 实际页类型须与 smap 当前模式匹配，否则内核扫描返回 -EINVAL；
+         * 进程已退出（-ESRCH）同样跳过恢复 */
+        int hugeFlag = IsPidUsingHugePages(payload->pid);
+        if (hugeFlag == -ESRCH || (hugeFlag != 0) != IsHugeMode()) {
             SMAP_LOGGER_WARNING("pid %d page type mismatch smap mode, skip recover.", payload->pid);
             continue;
         }
@@ -679,6 +697,9 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
             PidSlotReleaseRefs(all, n);
             return ret;
         }
+        /* 与 effectiveConfig 选择一致：pending 生效时用 pending 的容量策略 */
+        tmp->ignoreRemoteCapacity =
+            (attr->pendingTargetConfigValid ? attr->pendingIgnoreRemoteCapacity : attr->ignoreRemoteCapacity) ? 1 : 0;
         tmp++;
     }
 

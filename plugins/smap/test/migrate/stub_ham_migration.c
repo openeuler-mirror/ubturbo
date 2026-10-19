@@ -1,4 +1,3 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 
 #include "coherence_maintain.h"
 #include "ham_migration.h"

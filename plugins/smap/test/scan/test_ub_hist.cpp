@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  * Description: SMAP : tests for smap_hist_mid
  * Create: 2025-7-2
  */

@@ -1,5 +1,4 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
 * Description: SMAP access mmu测试代码
 */
 #include "gtest/gtest.h"
@@ -418,14 +417,11 @@ TEST_F(AccessMMUTest, SetPaPrior)
     free(ap.info.priors);
 }
 
-TEST_F(AccessMMUTest, PosToAddr)
+TEST_F(AccessMMUTest, PosToAddrWithEmptyVmaTree)
 {
-    struct vm_area_struct vma;
-    struct mm_struct mm;
-    unsigned long vaddr;
+    struct mm_struct mm = {};
+    unsigned long vaddr = 0;
 
-    MOCKER(vma_find).stubs().will(returnValue(&vma));
-    vma.vm_end = 0x100;
-    vma.vm_start = 0;
     pos_to_addr(&mm, 0x1, &vaddr);
+    EXPECT_EQ(0UL, vaddr);
 }

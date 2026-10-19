@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
  * Description: ub-dma memory notifiter
  */
 #include <asm/page-def.h>
@@ -147,7 +146,7 @@ int memory_notifier_init(void)
 		alloc_workqueue("my_queue", WQ_CPU_INTENSIVE, WQ_MAX_THREADS);
 	if (!mem_nf_wq) {
 		ub_dma_log_err("alloc mem_nf_wq failed\n");
-		ret = -ENOMEM;
+		return -ENOMEM;
 	}
 
 	ret = register_memory_notifier(&ub_dma_nb);

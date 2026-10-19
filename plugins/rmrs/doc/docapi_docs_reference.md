@@ -21,7 +21,7 @@ uint32_t UBTurboRMRSAgentMigrateStrategy(const MigrateStrategyParamRMRS &migrate
 | name                  | IN/OUT | description                                                  |
 | --------------------- | ------ | ------------------------------------------------------------ |
 | migrateStrategyParam  | IN     | struct MigrateStrategyParamRMRS { <br/> std::vector&lt;VMPresetParam&gt; vmInfoList;                    // 虚拟机列表及最大迁出比例<br/> std::uint64_t borrowSize;                                 // 需要匀出本地内存大小 <br/> std::map<pid_t, std::vector<uint16_t>> pidRemoteNumaMap;  // pid对应的远端numa信息Map <br/> std::vector<uint16_t> timeOutNumas;                       // 归还超时的远端numa<br/>}; <br/> struct VMPresetParam {<br/>pid_t pid;      // vm对应pid<br/>uint16_t ratio; // 迁出最大比例<br/>};|
-| migrateStrategyResult | OUT    | struct VMMigrateOutParam {<br/>    pid_t pid;<br/>    uint64_t memSize;   // 迁出预设大小<br/>    uint16_t desNumaId; // 迁移远端numa<br/>};<br/>struct MigrateStrategyResult {<br/>    std::vector<VMMigrateOutParam> vmInfoList;<br/>    uint64_t waitingTime; // 单位ms<br/>}; |
+| migrateStrategyResult | OUT    | struct VMMigrateOutParam {<br/>    pid_t pid;<br/>    uint64_t memSize;   // 迁出预设大小<br/>    uint16_t desNumaId; // 迁移远端numa<br/>};<br/>struct MigrateStrategyResult {<br/>    `std::vector<VMMigrateOutParam> vmInfoList`;<br/>    uint64_t waitingTime; // 单位ms<br/>}; |
 
 ## 返回值 RETURN VALUE
 
@@ -39,8 +39,7 @@ uint32_t UBTurboRMRSAgentMigrateStrategy(const MigrateStrategyParamRMRS &migrate
 
 返回值5：函数执行错误
 
-返回值6：函数返回值不合法
-
+返回值6：函数返回值非法
 
 ## 约束 CONSTRAINTS
 
@@ -65,8 +64,8 @@ UBTurboRMRSAgentMigrateStrategy UBTurboRMRSAgentMigrateStrategy = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentMigrateStrategy = reinterpret_cast<UBTurboRMRSAgentMigrateStrategy>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateStrategy"));
-	
+    UBTurboRMRSAgentMigrateStrategy = reinterpret_cast<UBTurboRMRSAgentMigrateStrategy>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateStrategy"));
+
     MigrateStrategyParam migrateStrategyParam;
     /*
     填充对应参数
@@ -106,11 +105,16 @@ uint32_t UBTurboRMRSAgentMigrateExecute(const MigrateStrategyResult &migrateStra
 ## 错误 ERRORS
 
 返回值1：通用错误码
+
 返回值2：socket创建失败
+
 返回值3：与server通信失败
+
 返回值4：未找到对应函数
+
 返回值5：函数执行错误
-返回值6：函数返回值不合法
+
+返回值6：函数返回值非法
 
 ## 约束 CONSTRAINTS
 
@@ -134,9 +138,8 @@ UBTurboRMRSAgentMigrateExecute UBTurboRMRSAgentMigrateExecute = nullptr;
 
 int main()
 {
-    ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentMigrateExecute = reinterpret_cast<UBTurboRMRSAgentMigrateExecute>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateExecute"));
-	
+    ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);UBTurboRMRSAgentMigrateExecute = reinterpret_cast<UBTurboRMRSAgentMigrateExecute>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateExecute"));
+
     MigrateStrategyResult migrateStrategyResult;
     /*
     填充对应参数
@@ -186,7 +189,7 @@ uint32_t UBTurboRMRSAgentMigrateBack(MigrateBackResult &migrateBackResult);
 
 返回值5：函数执行错误
 
-返回值6：函数返回值不合法
+返回值6：函数返回值非法
 
 ## 约束 CONSTRAINTS
 
@@ -211,8 +214,8 @@ UBTurboRMRSAgentMigrateBack UBTurboRMRSAgentMigrateBack = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentMigrateBack = reinterpret_cast<UBTurboRMRSAgentMigrateBack>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateBack"));
-	
+    UBTurboRMRSAgentMigrateBack = reinterpret_cast<UBTurboRMRSAgentMigrateBack>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateBack"));
+
     MigrateBackResult migrateBackResult;
     /*
     填充对应参数
@@ -242,7 +245,7 @@ uint32_t UBTurboRMRSAgentBorrowRollBack(std::map<std::string, std::set<BorrowIdI
 
 | name             | IN/OUT | description                                                  |
 | ---------------- | ------ | ------------------------------------------------------------ |
-| borrowIdsPidsMap | IN     | std::map<std::string, std::set<BorrowIdInfo>><br/>（key为borrowId）<br/>struct BorrowIdInfo {<br/>    pid_t pid;<br/>    uint64_t oriSize;    // 对应pid之前占用远端内存大小<br/>}; |
+| borrowIdsPidsMap | IN     | `std::map<std::string, std::set<BorrowIdInfo>>` <br/>（key为borrowId）<br/>struct BorrowIdInfo {<br/>    pid_t pid;<br/>    uint64_t oriSize;    // 对应pid之前占用远端内存大小<br/>}; |
 
 ## 返回值 RETURN VALUE
 
@@ -260,7 +263,7 @@ uint32_t UBTurboRMRSAgentBorrowRollBack(std::map<std::string, std::set<BorrowIdI
 
 返回值5：函数执行错误
 
-返回值6：函数返回值不合法
+返回值6：函数返回值非法
 
 ## 约束 CONSTRAINTS
 
@@ -285,8 +288,8 @@ UBTurboRMRSAgentBorrowRollBack UBTurboRMRSAgentBorrowRollBack = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentBorrowRollBack = reinterpret_cast<UBTurboRMRSAgentBorrowRollBack>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentBorrowRollBack"));
-	
+    UBTurboRMRSAgentBorrowRollBack = reinterpret_cast<UBTurboRMRSAgentBorrowRollBack>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentBorrowRollBack"));
+
     std::map<std::string, std::set<BorrowIdInfo>> curBorrowIdsPidsMap;
     /*
     填充对应参数
@@ -317,7 +320,7 @@ RMRS提供容器进程内存采集。
 | name                     | IN/OUT | description                                                  |
 | ------------------------ | ------ | ------------------------------------------------------------ |
 | PidNumaInfoCollectParam  | IN     | class PidNumaInfoCollectParam : public Serializer { <br/>public: <br/>PidNumaInfoCollectParam() {} <br/>explicit PidNumaInfoCollectParam(std::vector<pid_t> pidList) : pidList(pidList) {} <br/>std::vector<pid_t> pidList{}; <br/> }; |
-| PidNumaInfoCollectResult | OUT    | class PidNumaInfoCollectResult : public Serializer { <br/>public: <br/>PidNumaInfoCollectResult() {} <br/>explicit PidNumaInfoCollectResult(std::vector< mempooling::PidInfo> pidInfoList) <br/>: pidInfoList(pidInfoList) {} <br/>std::vector< mempooling::PidInfo> pidInfoList{};  <br/> |
+| PidNumaInfoCollectResult | OUT    | class PidNumaInfoCollectResult : public Serializer { <br/>public: <br/>PidNumaInfoCollectResult() {} <br/>explicit PidNumaInfoCollectResult(std::vector< mempooling::PidInfo> pidInfoList) <br/>: pidInfoList(pidInfoList) {} <br/>std::vector< mempooling::PidInfo> pidInfoList{};}  <br/> |
 
 ## 返回值 RETURN VALUE
 
@@ -335,7 +338,7 @@ RMRS提供容器进程内存采集。
 
 返回值5：函数执行错误
 
-返回值6：函数返回值不合法
+返回值6：函数返回值非法
 
 ## 约束 CONSTRAINTS
 
@@ -360,9 +363,9 @@ UBTurboRMRSAgentPidNumaInfoCollect UBTurboRMRSAgentPidNumaInfoCollect = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentPidNumaInfoCollect =
-        reinterpret_cast<UBTurboRMRSAgentPidNumaInfoCollect>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentPidNumaInfoCollect"));
-	
+    UBTurboRMRSAgentPidNumaInfoCollect =
+    reinterpret_cast<UBTurboRMRSAgentPidNumaInfoCollect>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentPidNumaInfoCollect"));
+
     turbo::rmrs::PidNumaInfoCollectParam pidNumaInfoCollectParam;
     turbo::rmrs::PidNumaInfoCollectResult pidNumaInfoCollectResult;
     /*
@@ -394,7 +397,7 @@ RMRS提供容器进程内存采集。
 | name                    | IN/OUT | description                                                  |
 | ----------------------- | ------ | ------------------------------------------------------------ |
 | NumaMemInfoCollectParam | IN     | class NumaMemInfoCollectParam : public Serializer { <br/>public: <br/>NumaMemInfoCollectParam() {} <br/>explicit NumaMemInfoCollectParam(int numaId) : <br/>numaId(numaId) {} <br/>int numaId{}; <br/> |
-| ResponseInfoSimpo       | OUT    | class ResponseInfoSimpo { </br>public: ResponseInfoSimpo() = default;<br> explicit ResponseInfoSimpo(ResponseInfo responseInfoInput) : responseInfo_(std::move(responseInfoInput)) {}<br> inline ResponseInfo GetResponseInfo() { <br> return responseInfo_; <br> }<br> inline void SetResponseInfo(const int code, const std::string &message) { </br>responseInfo_.code = code; </br>responseInfo_.message = message;<br>  }<br> std::string ToString() const { </br>return "code=" + std::to_string(responseInfo_.code) + ", message=" + responseInfo_.message; <br>}<br> ResponseInfo responseInfo_{}; </br>}; |
+| ResponseInfoSimpo       | OUT    | class ResponseInfoSimpo { <br/>public: ResponseInfoSimpo() = default;<br> explicit ResponseInfoSimpo(ResponseInfo responseInfoInput) : responseInfo_(std::move(responseInfoInput)) {}<br> inline ResponseInfo GetResponseInfo() { <br> return responseInfo_; <br> }<br> inline void SetResponseInfo(const int code, const std::string &message) { <br/>responseInfo_.code = code; <br/>responseInfo_.message = message;<br>  }<br> std::string ToString() const { <br/>return "code=" + std::to_string(responseInfo_.code) + ", message=" + responseInfo_.message; <br>}<br> ResponseInfo responseInfo_{}; <br/>};} |
 
 ## 返回值 RETURN VALUE
 
@@ -412,7 +415,7 @@ RMRS提供容器进程内存采集。
 
 返回值5：函数执行错误
 
-返回值6：函数返回值不合法
+返回值6：函数返回值非法
 
 ## 约束 CONSTRAINTS
 
@@ -437,11 +440,11 @@ UBTurboRMRSAgentNumaMemInfoCollect UBTurboRMRSAgentNumaMemInfoCollect = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentNumaMemInfoCollect =
+    UBTurboRMRSAgentNumaMemInfoCollect =
         reinterpret_cast<UBTurboRMRSAgentNumaMemInfoCollect>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentNumaMemInfoCollect"));
-	
-   turbo::rmrs::NumaMemInfoCollectParam numaMemInfoCollectParam;
-   turbo::rmrs::ResponseInfoSimpo responseInfoSimpo;
+
+    turbo::rmrs::NumaMemInfoCollectParam numaMemInfoCollectParam;
+    turbo::rmrs::ResponseInfoSimpo responseInfoSimpo;
     /*
     填充对应参数
     */
@@ -491,7 +494,7 @@ RMRS提供pagecache迁移策略执行。
 
 返回值5：函数执行错误
 
-返回值6：函数返回值不合法
+返回值6：函数返回值非法
 
 ## 约束 CONSTRAINTS
 
@@ -516,8 +519,8 @@ UBTurboRMRSAgentUCacheMigrateStrategy UBTurboRMRSAgentUCacheMigrateStrategy = nu
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentUCacheMigrateStrategy = reinterpret_cast<UBTurboRMRSAgentUCacheMigrateStrategy>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentUCacheMigrateStrategy"));
-	
+    UBTurboRMRSAgentUCacheMigrateStrategy = reinterpret_cast<UBTurboRMRSAgentUCacheMigrateStrategy>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentUCacheMigrateStrategy"));
+
     UCacheMigrationStrategyParam param;
     ResCode result;
     /*
@@ -568,7 +571,7 @@ RMRS提供停止pagecache迁移。
 
 返回值5：函数执行错误
 
-返回值6：函数返回值不合法
+返回值6：函数返回值非法
 
 ## 约束 CONSTRAINTS
 
@@ -593,17 +596,13 @@ UBTurboRMRSAgentUCacheMigrateStop UBTurboRMRSAgentUCacheMigrateStop = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentUCacheMigrateStop = reinterpret_cast<UBTurboRMRSAgentUCacheMigrateStop>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentUCacheMigrateStop"));
-	
+    UBTurboRMRSAgentUCacheMigrateStop = reinterpret_cast<UBTurboRMRSAgentUCacheMigrateStop>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentUCacheMigrateStop"));
+
     ResCode result;
     auto ret = UBTurboRMRSAgentUCacheMigrateStop(result);
     return 0;
 }
 ```
-
-
-
-
 
 # UBTurboRMRSAgentUpdateUCacheRatio:计算Pagecache远端内存使用比例
 
@@ -646,7 +645,7 @@ RMRS提供计算Pagecache远端内存使用比例。
 
 返回值5：函数执行错误
 
-返回值6：函数返回值不合法
+返回值6：函数返回值非法
 
 ## 约束 CONSTRAINTS
 
@@ -671,8 +670,8 @@ UBTurboRMRSAgentUpdateUCacheRatio UBTurboRMRSAgentUpdateUCacheRatio = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentUpdateUCacheRatio = reinterpret_cast<UBTurboRMRSAgentUpdateUCacheRatio>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentUpdateUCacheRatio"));
-	
+    UBTurboRMRSAgentUpdateUCacheRatio = reinterpret_cast<UBTurboRMRSAgentUpdateUCacheRatio>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentUpdateUCacheRatio"));
+
     MigrationInfoParam param;
     UCacheRatioRes result;
     /*
@@ -682,4 +681,3 @@ int main()
     return 0;
 }
 ```
-

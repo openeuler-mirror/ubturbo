@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -409,6 +407,7 @@ static int BuildProcessTargetConfig(const struct MigrateOutPayload *payload, Pro
 static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
 {
     int i;
+    bool hasPidNotExist = false;
     if (!msg) {
         SMAP_LOGGER_ERROR("Smap mig out msg is null.");
         return -EINVAL;
@@ -436,15 +435,17 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
     for (i = 0; i < msg->count; i++) {
         uniquePids[i] = msg->payload[i].pid;
     }
-    if (!IsMigOutCountValid(uniquePids, msg->count)) {
-        SMAP_LOGGER_ERROR("migrate out count will exceed current max pid count: %d.", GetCurrentMaxNrPid());
-        return -EINVAL;
-    }
-
+    bool invalidPid[MAX_NR_MIGOUT] = { false };
     for (i = 0; i < msg->count; i++) {
         ProcessAttr *attr = GetProcessAttr(msg->payload[i].pid);
         if (attr && attr->groupPolicy.enabled) {
             SMAP_LOGGER_ERROR("pid %d already uses grouped migrate out.", msg->payload[i].pid);
+            PutProcessAttr(attr);
+            return -EINVAL;
+        }
+        if (attr && attr->scanType != NORMAL_SCAN) {
+            SMAP_LOGGER_ERROR("pid %d is in tracking mode %d, migrate out is not allowed.", msg->payload[i].pid,
+                              attr->scanType);
             PutProcessAttr(attr);
             return -EINVAL;
         }
@@ -469,7 +470,10 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
         int pidType = GetPidTypeFromComm(msg->payload[i].pid);
         if (!IsPidTypeValid(pidType)) {
             SMAP_LOGGER_ERROR("migrate out pid %d type detect failed: %d.", msg->payload[i].pid, pidType);
-            return -EINVAL;
+            /* PID 探测失败时跳过该 PID，其他 PID 继续处理。 */
+            hasPidNotExist = true;
+            invalidPid[i] = true;
+            continue;
         }
         if (!IsPidTypeCompatibleWithMode(pidType)) {
             SMAP_LOGGER_ERROR("migrate out pid %d type %d not allowed in current page mode "
@@ -478,12 +482,34 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
             return -EINVAL;
         }
 
-        if (IsPidUsingHugePages(msg->payload[i].pid) != IsHugeMode()) {
+        int hugeFlag = IsPidUsingHugePages(msg->payload[i].pid);
+        if (hugeFlag < 0) {
+            /* 页面类型探测失败时跳过该 PID，其他 PID 继续处理。 */
+            SMAP_LOGGER_ERROR("migrate out pid %d page type probe failed: %d.", msg->payload[i].pid, hugeFlag);
+            hasPidNotExist = true;
+            invalidPid[i] = true;
+            continue;
+        }
+        if ((hugeFlag != 0) != IsHugeMode()) {
             SMAP_LOGGER_ERROR("migrate out pid %d page type mismatch smap mode.", msg->payload[i].pid);
             return -EINVAL;
         }
     }
-    return 0;
+
+    pid_t validPids[MAX_NR_MIGOUT];
+    int validPidCount = 0;
+    for (i = 0; i < msg->count; i++) {
+        if (!invalidPid[i]) {
+            validPids[validPidCount++] = msg->payload[i].pid;
+        }
+    }
+    if (!IsMigOutCountValid(validPids, validPidCount)) {
+        SMAP_LOGGER_ERROR("migrate out count will exceed current max pid count: %d.", GetCurrentMaxNrPid());
+        return -EINVAL;
+    }
+
+    /* 存在无效 PID 时返回 -ESRCH，其余合法 PID 已正常完成检查。 */
+    return hasPidNotExist ? -ESRCH : 0;
 }
 
 static bool HasDuplicateInt(const int *arr, int count)
@@ -933,8 +959,28 @@ static int PrepareMigrateOutCandidatesWithCapacityPolicy(struct MigrateOutMsg *m
         ProcessParam param;
         int ret = BuildMigrateOutProcessParamWithCapacityPolicy(&msg->payload[i], &param, ignoreRemoteCapacity);
         if (ret == 0) {
+            /* 进程可能在检查阶段之后变为 zombie；重新探测以避免将其提交给 access。 */
+            int hugeFlag = IsPidUsingHugePages(msg->payload[i].pid);
+            if (hugeFlag < 0) {
+                ret = -ESRCH;
+            } else {
+                uint32_t residentLocalMask = 0;
+                uint64_t numaPages[MAX_NODES] = { 0 };
+                ret = GetProcessNumaMapsObservation(msg->payload[i].pid, IsHugeMode(), &residentLocalMask, numaPages);
+            }
+            if (ret) {
+                SMAP_LOGGER_ERROR("Observe pid %d numa maps failed during migrate out preparation: %d.",
+                                  msg->payload[i].pid, ret);
+                ret = -ESRCH;
+            }
+        }
+        if (ret == 0) {
             PidType type = GetPidTypeFromComm(msg->payload[i].pid);
-            ret = PrepareProcessManageCandidate(&param, type, &candidates[i]);
+            if (!IsPidTypeValid(type)) {
+                ret = -ESRCH;
+            } else {
+                ret = PrepareProcessManageCandidate(&param, type, &candidates[i]);
+            }
         }
         if (ret) {
             SMAP_LOGGER_ERROR("Prepare pid %d update failed: %d.", msg->payload[i].pid, ret);
@@ -1010,10 +1056,12 @@ static int MigrateOutWithCapacityPolicy(struct MigrateOutMsg *msg, int pageType,
     }
 
     int ret = CheckMigrateOutMsg(msg, pageType);
-    if (ret) {
+    if (ret && ret != -ESRCH) {
         SMAP_LOGGER_ERROR("Migrate out msg check failed, ret: %d.", ret);
-        return -EINVAL;
+        return ret;
     }
+    /* 部分进程不存在（-ESRCH）时继续迁出其余进程：Prepare 阶段会跳过失败 pid 并以
+     * firstError 收集 -ESRCH，最终随 prepareError 返回给调用方 */
 
     ProcessManageCandidate candidates[MAX_NR_MIGOUT] = { 0 };
     int prepareError = ignoreRemoteCapacity ?
@@ -2455,6 +2503,7 @@ static void SetSyncWaitRemoteEmpty(struct MigrateOutMsg *msg, bool enable)
             continue;
         }
         attr->syncWaitRemoteEmpty = enable;
+        attr->syncWaitRemoteEmptySnapshotValid = false;
         SMAP_LOGGER_INFO("Pid %d sync wait remote empty protection %s.", attr->pid, enable ? "enabled" : "disabled");
         PutProcessAttr(attr);
     }
@@ -2507,6 +2556,8 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint6
         return ret;
     }
 
+    /* 迁移前预保护：已纳管零目标 pid 在迁移期间免于被自动移除；
+     * 未纳管 pid 此时 GetProcessAttr 返回 NULL，天然跳过，迁移后再统一保护。 */
     SetSyncWaitRemoteEmpty(msg, true);
     syncWaitProtected = true;
 
@@ -2516,6 +2567,9 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint6
         goto out;
     }
     SMAP_LOGGER_INFO("Smap migrate out done.");
+
+    /* 迁移完成后为（含新纳管的）零目标 pid 建立保护，直到等待结束。 */
+    SetSyncWaitRemoteEmpty(msg, true);
 
     while (maxWaitTime == 0 || waitTime < maxWaitTime) {
         waitTime += WAIT_TIME;

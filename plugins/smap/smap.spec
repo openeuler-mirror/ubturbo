@@ -4,12 +4,12 @@
 Name:          ubturbo-smap
 Version:       %{smap_version}
 Release:       %{release_version}
-Summary:       Huawei SMAP driver
+Summary:       openEuler SMAP driver
 License:       GPLv2
-URL:           https://support.huawei.com
+URL:           https://www.openeuler.org
 Source0:       smap.tar.gz
 Provides:      %{name}
-Vendor:        Huawei Technologies Co., Ltd.
+Vendor:        openEuler Community
 BuildRoot:     %{buildroot}
 ExclusiveArch: %arm64
 BuildRequires: kernel-devel >= 5.10.0-136.12.0.86 make >= 4.3 gcc >= 10.3.1
@@ -23,7 +23,7 @@ Requires:      kernel >= 5.10.0-136.12.0.86
 %define udev_rules_dir %{_sysconfdir}/udev/rules.d
 
 %description
-This package contains the Huawei SMAP Driver
+This package contains the openEuler SMAP Driver
 
 %prep
 %setup -q -T -b 0 -c -n smap

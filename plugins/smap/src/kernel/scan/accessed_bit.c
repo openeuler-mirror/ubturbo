@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2024. All rights reserved.
  * Description: SMAP Tiering Memory Solution: get accessed bit模块
  */
 
@@ -229,6 +228,7 @@ static ssize_t proc_file_read(struct file *file, char __user *buf, size_t count,
 {
 	int ret = 0;
 	struct ham_tracking_info *info = NULL;
+	struct ham_tracking_info *tmp;
 	u64 num = 0;
 	struct freq_info *freq_info_array;
 	int pid = get_pid_from_tracking_file(file);
@@ -236,9 +236,11 @@ static ssize_t proc_file_read(struct file *file, char __user *buf, size_t count,
 		return -EINVAL;
 
 	spin_lock(&ham_lock);
-	list_for_each_entry(info, &ham_pid_list, node) {
-		if (info->pid == pid)
+	list_for_each_entry(tmp, &ham_pid_list, node) {
+		if (tmp->pid == pid) {
+			info = tmp;
 			break;
+		}
 	}
 	spin_unlock(&ham_lock);
 
@@ -319,14 +321,17 @@ int get_ham_pages_freqs(pid_t pid, struct freq_info **freq_info_array,
 			uint64_t *freq_info_num)
 {
 	struct ham_tracking_info *info = NULL;
+	struct ham_tracking_info *tmp;
 	if (!access_pid_is_scanning(pid)) {
 		pr_info("the current access pid: %d is not scanning\n", pid);
 		return -EINVAL;
 	}
 	spin_lock(&ham_lock);
-	list_for_each_entry(info, &ham_pid_list, node) {
-		if (info->pid == pid)
+	list_for_each_entry(tmp, &ham_pid_list, node) {
+		if (tmp->pid == pid) {
+			info = tmp;
 			break;
+		}
 	}
 	spin_unlock(&ham_lock);
 
@@ -450,6 +455,7 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 			      struct access_pid *ap, bool is_young)
 {
 	struct hstate *h;
+	struct vm_area_struct *vma;
 	unsigned long hmask;
 	unsigned long sz;
 	pte_t *ptep;
@@ -459,7 +465,12 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 	if (!kvm)
 		return -EINVAL;
 
-	h = hstate_vma(find_vma(kvm->mm, host_va));
+	vma = find_vma(kvm->mm, host_va);
+	if (!vma || !is_vm_hugetlb_page(vma)) {
+		pr_debug("invalid vma for hugetlb, host_va: %llu\n", host_va);
+		return -EFAULT;
+	}
+	h = hstate_vma(vma);
 	hmask = huge_page_mask(h);
 	sz = huge_page_size(h);
 	if (sz != g_pagesize_huge)
@@ -530,6 +541,7 @@ static void ham_actc_data_add(int pid, phys_addr_t paddr, u32 page_size)
 static int hva_to_hpa_ham(struct kvm *kvm, u64 host_va, pid_t pid)
 {
 	struct hstate *h;
+	struct vm_area_struct *vma;
 	unsigned long hmask;
 	unsigned long sz;
 	pte_t *ptep;
@@ -539,7 +551,12 @@ static int hva_to_hpa_ham(struct kvm *kvm, u64 host_va, pid_t pid)
 	if (!kvm)
 		return -EINVAL;
 
-	h = hstate_vma(find_vma(kvm->mm, host_va));
+	vma = find_vma(kvm->mm, host_va);
+	if (!vma || !is_vm_hugetlb_page(vma)) {
+		pr_debug("invalid vma for hugetlb, host_va: %llu\n", host_va);
+		return -EFAULT;
+	}
+	h = hstate_vma(vma);
 	hmask = huge_page_mask(h);
 	sz = huge_page_size(h);
 	if (sz != g_pagesize_huge) {
@@ -1675,6 +1692,7 @@ static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 	if (ret) {
 		pr_err("failed to setup statistic scan, ret: %d\n", ret);
 		vfree(pte_walk.scan_results);
+		kfree(vma_array);
 		mmput(mm);
 		return -EINVAL;
 	}

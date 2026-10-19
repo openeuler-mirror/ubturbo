@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -83,6 +81,7 @@ struct ProcessPayload {
     uint32_t duration;
     int count;
     struct PersistRemoteTarget migrateParam[REMOTE_NUMA_NUM];
+    uint8_t ignoreRemoteCapacity; /* 新增：sync 旁路容量标记 */
 };
 
 int RecoverFromConfig(void);

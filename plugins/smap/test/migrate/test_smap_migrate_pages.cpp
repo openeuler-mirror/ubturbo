@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
  * Description: SMAP3.0 attr模块测试代码
  */
 #include "gtest/gtest.h"
@@ -112,7 +111,7 @@ TEST_F(SmapMigratePagesTest, TestSmapAddPageOne)
 
 TEST_F(SmapMigratePagesTest, TestSmapAddPageTwo)
 {
-    struct page *page;
+    struct page page = {};
     pid_t pid = 123;
     bool migrate_all = true;
     struct page_task_arg pta;
@@ -122,13 +121,13 @@ TEST_F(SmapMigratePagesTest, TestSmapAddPageTwo)
     MOCKER(PageHuge).stubs().will(returnValue(1));
     MOCKER(PageHead).stubs().will(returnValue(1));
     MOCKER(find_page_task).stubs().with(any(), any(), outBoundP(&pta, sizeof(struct page_task_arg)));
-    int ret = smap_add_page_for_migration(page, nullptr, nullptr, pid, migrate_all);
+    int ret = smap_add_page_for_migration(&page, nullptr, nullptr, pid, migrate_all);
     EXPECT_EQ(-EINVAL, ret);
 }
 
 TEST_F(SmapMigratePagesTest, TestSmapAddPageThree)
 {
-    struct page *page;
+    struct page page = {};
     pid_t pid = 123;
     bool migrate_all = true;
     unsigned int nr_folios = 0;
@@ -140,7 +139,7 @@ TEST_F(SmapMigratePagesTest, TestSmapAddPageThree)
     MOCKER(PageHuge).stubs().will(returnValue(1));
     MOCKER(PageHead).stubs().will(returnValue(1));
     MOCKER(find_page_task).stubs().with(any(), any(), outBoundP(&pta, sizeof(struct page_task_arg)));
-    int ret = smap_add_page_for_migration(page, folios, &nr_folios, pid, migrate_all);
+    int ret = smap_add_page_for_migration(&page, folios, &nr_folios, pid, migrate_all);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, nr_folios);
     vfree(folios);

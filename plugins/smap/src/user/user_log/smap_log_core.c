@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -240,7 +238,7 @@ int SmapLogCoreWrite(int level, const char *prefix, const char *message)
         }
     }
 
-    if (fprintf(g_smapLogFile.fileHandle, logLine) != lineLen) {
+    if (fprintf(g_smapLogFile.fileHandle, "%s", logLine) != lineLen) {
         pthread_mutex_unlock(&g_smapLogFile.lock);
         return -EIO;
     }

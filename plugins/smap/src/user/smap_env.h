@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -56,8 +54,7 @@ typedef enum {
 #define PAGESIZE_64K (64 * KIB)
 #define PAGESIZE_2M (2 * MIB)
 
-#define CAT_SCRIPT_CAT_PATH "sudo /usr/local/bin/cat.sh"
-#define CAT_SCRIPT_TAIL "2>&1"
+#define MAX_NR_MIGOUT 40
 
 #ifdef __cplusplus
 typedef std::atomic<int> atomic_int;

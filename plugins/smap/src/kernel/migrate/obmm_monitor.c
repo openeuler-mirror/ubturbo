@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2024. All rights reserved.
  * Description: SMAP monitor for OBMM device discovery and address range query
  */
 
 #include <linux/kernel.h>
+#include <linux/overflow.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/list.h>
@@ -159,7 +159,7 @@ error:
 static void update_obmm_dev_pa(void)
 {
 	int ret;
-	u64 pa, size;
+	u64 pa, size, end;
 	struct path path;
 	char filepath[OBMM_FILE_SIZE] = { 0 };
 	struct memid_range *mr;
@@ -200,8 +200,12 @@ static void update_obmm_dev_pa(void)
 		if (ret != 0)
 			continue;
 
+		/* Reject invalid range to avoid inverted or wrapped interval */
+		if (size == 0 || check_add_overflow(pa, size - 1, &end))
+			continue;
+
 		mr->start = pa;
-		mr->end = mr->start + size - 1;
+		mr->end = end;
 		pr_debug("update memid: %llu, pa: %#llx, size: %#llx\n",
 			 mr->memid, pa, size);
 	}

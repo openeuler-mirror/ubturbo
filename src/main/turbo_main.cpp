@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -10,16 +8,18 @@
  * See the Mulan PSL v2 for more details.
  */
 #include "turbo_main.h"
+#include "turbo_module_security.h"
 #include "turbo_module_smap.h"
 
 namespace turbo::main {
 using namespace turbo::module;
 
 // 这里的顺序就是启动顺序，停止顺序与之相反。模块间有依赖关系，需要注意
+// security 置于首位：在其它模块运行前将进程能力收敛到最小集
 const std::vector<std::shared_ptr<TurboModule>> g_modules = {
-    std::make_shared<turbo::config::TurboModuleConf>(), std::make_shared<turbo::log::TurboModuleLogger>(),
-    std::make_shared<turbo::smap::TurboModuleSmap>(), std::make_shared<turbo::plugin::TurboModulePlugin>(),
-    std::make_shared<turbo::ipc::server::TurboModuleIPC>()};
+    std::make_shared<turbo::security::TurboModuleSecurity>(), std::make_shared<turbo::config::TurboModuleConf>(),
+    std::make_shared<turbo::log::TurboModuleLogger>(),        std::make_shared<turbo::smap::TurboModuleSmap>(),
+    std::make_shared<turbo::plugin::TurboModulePlugin>(),     std::make_shared<turbo::ipc::server::TurboModuleIPC>()};
 
 RetCode TurboMain::Run()
 {

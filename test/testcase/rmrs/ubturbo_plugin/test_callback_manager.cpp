@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.‘
  */
 #include <gmock/gmock.h>
 #include <cstring>
@@ -553,5 +552,86 @@ TEST_F(TestCallBackManager, UpdateUCacheRatioRecvHandlerTestSucceed)
         .will(returnValue(0));
     auto res = CallbackManager::UpdateUCacheRatioRecvHandler(req, resp);
     ASSERT_EQ(res, 0);
+}
+
+TEST_F(TestCallBackManager, MigrateExecuteRecvHandlerFailedWhenStreamTruncated)
+{
+    // 反序列化截断流应校验失败并返回错误，不再执行后续迁移
+    TurboByteBuffer req;
+    TurboByteBuffer resp;
+    rmrs::serialization::MigrateStrategyResult param;
+    RmrsOutStream builder;
+    builder << param;
+    req = {.data = builder.GetBufferPointer(), .len = builder.GetSize() - 1, .freeFunc = nullptr};
+    MOCKER_CPP(CallbackManager::InitSmap, RmrsResult(*)()).stubs().will(returnValue(RMRS_OK));
+    auto res = CallbackManager::MigrateExecuteRecvHandler(req, resp);
+    delete[] req.data;
+    ASSERT_EQ(res, RMRS_ERROR);
+}
+
+TEST_F(TestCallBackManager, MigrateStrategyRecvHandlerFailedWhenStreamTruncated)
+{
+    TurboByteBuffer req;
+    TurboByteBuffer resp;
+    MigrateStrategyParamRMRS param;
+    RmrsOutStream builder;
+    builder << param;
+    req = {.data = builder.GetBufferPointer(), .len = builder.GetSize() - 1, .freeFunc = nullptr};
+    MOCKER_CPP(&CallbackManager::InitSmap, RmrsResult(*)()).stubs().will(returnValue(0));
+    auto res = CallbackManager::MigrateStrategyRecvHandler(req, resp);
+    delete[] req.data;
+    ASSERT_EQ(res, RMRS_ERROR);
+}
+
+TEST_F(TestCallBackManager, PidNumaInfoCollectRecvHandlerFailedWhenStreamTruncated)
+{
+    TurboByteBuffer req;
+    TurboByteBuffer resp;
+    PidNumaInfoCollectParam param;
+    RmrsOutStream builder;
+    builder << param;
+    req = {.data = builder.GetBufferPointer(), .len = builder.GetSize() - 1, .freeFunc = nullptr};
+    auto ret = CallbackManager::PidNumaInfoCollectRecvHandler(req, resp);
+    delete[] req.data;
+    ASSERT_EQ(ret, RMRS_ERROR);
+}
+
+TEST_F(TestCallBackManager, NumaMemInfoCollectRecvHandlerFailedWhenStreamTruncated)
+{
+    TurboByteBuffer req;
+    TurboByteBuffer resp;
+    NumaMemInfoCollectParam param;
+    RmrsOutStream builder;
+    builder << param;
+    req = {.data = builder.GetBufferPointer(), .len = builder.GetSize() - 1, .freeFunc = nullptr};
+    auto res = CallbackManager::NumaMemInfoCollectRecvHandler(req, resp);
+    delete[] req.data;
+    ASSERT_EQ(res, RMRS_ERROR);
+}
+
+TEST_F(TestCallBackManager, UCacheMigrateStrategyRecvHandlerFailedWhenStreamTruncated)
+{
+    TurboByteBuffer req;
+    TurboByteBuffer resp;
+    UCacheMigrationStrategyParam param;
+    RmrsOutStream builder;
+    builder << param;
+    req = {.data = builder.GetBufferPointer(), .len = builder.GetSize() - 1, .freeFunc = nullptr};
+    auto res = CallbackManager::UCacheMigrateStrategyRecvHandler(req, resp);
+    delete[] req.data;
+    ASSERT_EQ(res, RMRS_ERROR);
+}
+
+TEST_F(TestCallBackManager, UpdateUCacheRatioRecvHandlerFailedWhenStreamTruncated)
+{
+    TurboByteBuffer req;
+    TurboByteBuffer resp;
+    MigrationInfoParam param;
+    RmrsOutStream builder;
+    builder << param;
+    req = {.data = builder.GetBufferPointer(), .len = builder.GetSize() - 1, .freeFunc = nullptr};
+    auto res = CallbackManager::UpdateUCacheRatioRecvHandler(req, resp);
+    delete[] req.data;
+    ASSERT_EQ(res, RMRS_ERROR);
 }
 } // namespace rmrs

@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  * Description: smap_log_core ut code
  */
 #include <sys/stat.h>

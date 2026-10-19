@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
  * Description: segment test
  */
 
@@ -133,6 +132,54 @@ TEST_F(TestSegment, ub_dma_unregister_segment_not_found_test)
     urma_meta_sge_init();
     int ret = ub_dma_unregister_segment(0, 3);
     EXPECT_EQ(ret, -ENOENT);
+}
+
+extern "C" {
+    void *test_seg_kzalloc(size_t size, gfp_t flags);
+    void test_seg_kfree(void *p);
+}
+
+void *test_seg_kzalloc(size_t size, gfp_t flags)
+{
+    (void)flags;
+    return calloc(1, size);
+}
+
+void test_seg_kfree(void *p)
+{
+    free(p);
+}
+
+TEST_F(TestSegment, ub_dma_unregister_segment_hash_collision_test)
+{
+    u64 pa_a = 0;
+    u64 pa_b = 0x2; // 0x2, same hash key with pa_a (same va >> 27 bucket)
+    int ret;
+
+    // use real malloc-backed allocator so the hash table works
+    MOCKER(kzalloc).stubs().will(invoke(test_seg_kzalloc));
+    MOCKER(kfree).stubs().will(invoke(test_seg_kfree));
+    MOCKER(check_mem_info).stubs().will(returnValue(0));
+    MOCKER(urma_register_segment).stubs().will(returnValue(0));
+    urma_meta_sge_init();
+    ASSERT_EQ(ub_dma_register_segment(pa_a, pa_a + 0x3), 0);
+    ASSERT_EQ(ub_dma_register_segment(pa_b, pa_b + 0x3), 0);
+
+    // unregister A in a hash bucket containing A and B, only A is removed, and B is still usable
+    MOCKER(unregister_urma_segment).stubs();
+    // mismatched range should not delete any node in the bucket (including A)
+    ret = ub_dma_unregister_segment(pa_a + 0x1, pa_a + 0x3);
+    EXPECT_EQ(ret, -ENOENT);
+
+    ret = ub_dma_unregister_segment(pa_a, pa_a + 0x3);
+    EXPECT_EQ(ret, 0);
+
+    // A has been removed; the node found here is still B (same bucket), but start_va mismatches
+    ret = ub_dma_unregister_segment(pa_a, pa_a + 0x3);
+    EXPECT_EQ(ret, -ENOENT);
+
+    ret = ub_dma_unregister_segment(pa_b, pa_b + 0x3);
+    EXPECT_EQ(ret, 0);
 }
 
 TEST_F(TestSegment, ub_dma_unregister_all_segment_test)

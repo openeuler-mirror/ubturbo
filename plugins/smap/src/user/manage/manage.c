@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -359,17 +357,21 @@ bool PidIsValid(pid_t pid)
 int GetPidTypeFromComm(pid_t pid)
 {
     char comm[BUFFER_SIZE];
-    char cmdBuf[BUFFER_SIZE];
-    int ret = snprintf_s(cmdBuf, sizeof(cmdBuf), sizeof(cmdBuf) - 1, "%s %d comm %s", CAT_SCRIPT_CAT_PATH, pid,
-                         CAT_SCRIPT_TAIL);
+    char path[BUFFER_SIZE];
+    int ret = snprintf_s(path, sizeof(path), sizeof(path) - 1, "/proc/%d/comm", pid);
     if (ret < 0) {
-        SMAP_LOGGER_ERROR("Failed to generate cmd string, ret is %d.", ret);
+        SMAP_LOGGER_ERROR("Failed to generate comm path, ret is %d.", ret);
         return -EINVAL;
     }
     SMAP_LOGGER_INFO("Before open comm file");
-    FILE *file = popen(cmdBuf, "r");
+    /* 进程内直读 /proc/<pid>/comm，依赖 CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE，不再经 sudo cat.sh */
+    FILE *file = fopen(path, "r");
     if (!file) {
         SMAP_LOGGER_ERROR("Failed to open file, errno is %d.", errno);
+        /* 进程已退出时 /proc/<pid>/comm 不存在，按"进程不存在"语义返回 -ESRCH */
+        if (errno == ENOENT) {
+            return -ESRCH;
+        }
         return -EINVAL;
     }
     bool foundLine = false;
@@ -377,12 +379,12 @@ int GetPidTypeFromComm(pid_t pid)
         foundLine = true;
         if ((strncmp(comm, VM_NAME_STR, PID_NAME_LEN) == 0) ||
             (strncmp(comm, VM_KVM_NAME_STR, PID_KVM_NAME_LEN) == 0)) {
-            pclose(file);
+            fclose(file);
             return VM_TYPE;
         }
     }
     SMAP_LOGGER_ERROR("Error occur in fgets comm file");
-    (void)pclose(file);
+    (void)fclose(file);
     if (foundLine) {
         return PROCESS_TYPE;
     }
@@ -729,7 +731,8 @@ int DetectPidType(pid_t pid)
     int ret = GetPidTypeFromComm(pid);
     if (ret != VM_TYPE && ret != PROCESS_TYPE) {
         SMAP_LOGGER_ERROR("Pid %d type detect failed: %d.", pid, ret);
-        return -EINVAL;
+        /* 与入口 PidIsValid 保持一致：进程已退出时透传 -ESRCH，其余仍按 -EINVAL */
+        return (ret == -ESRCH) ? -ESRCH : -EINVAL;
     }
     return ret;
 }
@@ -762,30 +765,24 @@ struct PidSlot *PidSlotGetRefByAttr(const ProcessAttr *attr)
 
 int ReadCmdlineByPid(pid_t pid, char *buf, int len)
 {
-    char cmdBuf[BUFFER_SIZE];
-    char skip[BUFFER_SIZE];
-    int ret = snprintf_s(cmdBuf, sizeof(cmdBuf), sizeof(cmdBuf) - 1, "%s %d cmdline %s", CAT_SCRIPT_CAT_PATH, pid,
-                         CAT_SCRIPT_TAIL);
+    char path[BUFFER_SIZE];
+    int ret = snprintf_s(path, sizeof(path), sizeof(path) - 1, "/proc/%d/cmdline", pid);
     if (ret < 0) {
-        SMAP_LOGGER_ERROR("Make pid %d cmdline cmd error.", pid);
+        SMAP_LOGGER_ERROR("Make pid %d cmdline path error.", pid);
         return -EINVAL;
     }
-    FILE *file = popen(cmdBuf, "r");
+    /* 进程内直读 /proc/<pid>/cmdline，依赖 CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE，不再经 sudo cat.sh */
+    FILE *file = fopen(path, "r");
     if (file == NULL) {
         SMAP_LOGGER_ERROR("Open pid %d cmdline error: %d.", pid, errno);
         return -errno;
     }
-    if (fgets(skip, sizeof(skip), file) == NULL) {
-        (void)pclose(file);
-        SMAP_LOGGER_ERROR("Read pid %d cmdline skip-line failed.", pid);
-        return -EIO;
-    }
     if (fgets(buf, len, file) == NULL) {
-        (void)pclose(file);
+        (void)fclose(file);
         SMAP_LOGGER_ERROR("Read pid %d cmdline content failed.", pid);
         return -EIO;
     }
-    (void)pclose(file);
+    (void)fclose(file);
     /* /proc/<pid>/cmdline 不受 4096 字节限制: 大虚机参数可能更长。缓冲填满说明被截断,
      * share 标志可能落在窗口外导致误判 PRIVATE。保守返回错误, 由 ParseMmapType 置 SHARED。 */
     if (strlen(buf) >= (size_t)len - 1) {
@@ -915,7 +912,8 @@ int AddProcess(ProcessParam *param, PidType type)
         SMAP_LOGGER_INFO("Set pid %d state to %d.", param->pid, PROC_MOVE);
     }
 
-    ret = SetProcessConfig(attr, param);
+    bool skipRemoteResidencyCheck = (param->scanType == STATISTIC_SCAN);
+    ret = SetProcessConfig(attr, param, skipRemoteResidencyCheck);
     if (ret) {
         SMAP_LOGGER_ERROR("Set process %d config failed: %d.", param->pid, ret);
         free(attr);
@@ -950,6 +948,9 @@ void DiscardProcessManageCandidate(ProcessManageCandidate *candidate)
     }
 
     free(candidate->prepared);
+    if (candidate->slot) {
+        PidSlotReleaseRefs(&candidate->slot, 1);
+    }
     *candidate = (ProcessManageCandidate){ 0 };
 }
 
@@ -980,12 +981,20 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
         return ret;
     }
 
-    ProcessAttr *active = GetProcessAttr(param->pid);
+    /* 一次性解析宿主槽位并持引用：active 从该槽位派生，保证 Publish 阶段加锁的
+     * slot 与 active 绑定；attr 另持一次引用，沿用 PutProcessAttr 归还约定，
+     * 槽位引用由 DiscardProcessManageCandidate 归还 */
+    candidate->slot = PidSlotGetRef(param->pid);
+    ProcessAttr *active = PidSlotAttr(candidate->slot);
+    if (active) {
+        AtomicIncrease(&candidate->slot->refs, 1);
+    }
     ProcessAttr *prepared = NULL;
     if (active) {
         prepared = malloc(sizeof(ProcessAttr));
         if (!prepared) {
             PutProcessAttr(active);
+            DiscardProcessManageCandidate(candidate);
             return -ENOMEM;
         }
         *prepared = *active;
@@ -1019,7 +1028,7 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
     candidate->isPending = active && active->state == PROC_MIGRATE;
     /* memSize 增大时重置 isFirstScan，使下一轮高频扫描快速迁移新增需求 */
     uint64_t oldMemSize = active ? SumAttrMigrateMemSize(active) : 0;
-    ret = ConfigureMigrationTargetsWithCapacityPolicy(prepared, &config, param->ignoreRemoteCapacity);
+    ret = ConfigureMigrationTargetsWithCapacityPolicy(prepared, &config, param->ignoreRemoteCapacity, false);
     if (ret) {
         PutProcessAttr(candidate->active);
         DiscardProcessManageCandidate(candidate);
@@ -1062,9 +1071,22 @@ void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
 
     ProcessAttr *prepared = candidate->prepared;
     if (candidate->isPending) {
+        /* 加锁写 pending 字段，与扫描线程 ApplyPendingMigrationTargets 的快照/清除互斥；
+         * 锁用 Prepare 阶段持引用的宿主槽位，保证锁与 active 绑定：按 pid 重查在槽位已
+         * 摘除(REMOVING，PidSlotGetRef 返回空)时会退化为无锁写、在 pid 复用时可能锁错
+         * 槽位。单测场景 attr 未注册进槽位表（slot 为空）时无并发写者，退化为直接写。
+         * 槽位引用由末尾 DiscardProcessManageCandidate 归还 */
+        struct PidSlot *slot = candidate->slot;
+        if (slot) {
+            EnvMutexLock(&slot->attrLock);
+        }
         candidate->active->pendingTargetConfig = prepared->pendingTargetConfig;
         candidate->active->pendingTargetConfigValid = prepared->pendingTargetConfigValid;
         candidate->active->pendingIgnoreRemoteCapacity = prepared->pendingIgnoreRemoteCapacity;
+        candidate->active->pendingSeq++;
+        if (slot) {
+            EnvMutexUnlock(&slot->attrLock);
+        }
         int ret = SyncAllProcessConfig();
         if (ret) {
             SMAP_LOGGER_WARNING("Synchronize pending pid %d config maybe failed: %d.", prepared->pid, ret);
@@ -1126,16 +1148,20 @@ int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap)
 
 FILE *OpenNumaMaps(pid_t pid)
 {
-    char cmdBuf[BUFFER_SIZE];
-    int ret = snprintf_s(cmdBuf, sizeof(cmdBuf), sizeof(cmdBuf) - 1, "%s %d numa_maps %s", CAT_SCRIPT_CAT_PATH, pid,
-                         CAT_SCRIPT_TAIL);
+    char path[BUFFER_SIZE];
+    int ret = snprintf_s(path, sizeof(path), sizeof(path) - 1, "/proc/%d/numa_maps", pid);
     if (ret < 0) {
         SMAP_LOGGER_ERROR("OpenNumaMaps for pid %d err.", pid);
         return NULL;
     }
-    FILE *fp = popen(cmdBuf, "r");
+    /* 进程内直读 /proc/<pid>/numa_maps，依赖 CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE，不再经 sudo cat.sh */
+    FILE *fp = fopen(path, "r");
     if (!fp) {
-        SMAP_LOGGER_ERROR("OpenNumaMaps fopen failed: %d.", -errno);
+        /* 保存并恢复 errno：日志输出可能改写 errno，调用方（IsPidUsingHugePages）
+         * 依赖 fopen 的 errno 区分进程不存在（ENOENT） */
+        int saveErrno = errno;
+        SMAP_LOGGER_ERROR("OpenNumaMaps fopen failed: %d.", -saveErrno);
+        errno = saveErrno;
     }
     return fp;
 }
@@ -1188,30 +1214,63 @@ int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool o
             break;
         }
     }
-    if (pclose(fp)) {
+    if (fclose(fp)) {
         SMAP_LOGGER_WARNING("Close numa maps failed, pid=%d.", pid);
     }
     return ret;
 }
 
-bool IsPidUsingHugePages(pid_t pid)
+int IsPidUsingHugePages(pid_t pid)
 {
     char line[MAX_LINE_LENGTH];
     FILE *fp = OpenNumaMaps(pid);
     if (!fp) {
-        SMAP_LOGGER_ERROR("Open pid %d numa maps failed when probing page type.", pid);
-        return false;
+        /* numa_maps 不可用时，迁出接口将该 PID 视为无效并跳过。 */
+        int openErrno = errno;
+        SMAP_LOGGER_ERROR("Open pid %d numa maps failed when probing page type, errno: %d.", pid, openErrno);
+        return -ESRCH;
     }
     while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
         if (IsNumaMapLineHuge(line)) {
-            (void)pclose(fp);
-            return true;
+            (void)fclose(fp);
+            return 1;
         }
     }
-    if (pclose(fp)) {
+    if (ferror(fp)) {
+        (void)fclose(fp);
+        SMAP_LOGGER_ERROR("Read pid %d numa maps failed when probing page type.", pid);
+        return -ESRCH;
+    }
+    if (fclose(fp)) {
         SMAP_LOGGER_WARNING("Close numa maps failed when probing page type, pid=%d.", pid);
     }
-    return false;
+    /* 被 kill 的进程在回收前可能仍保留 /proc 和 numa_maps，此时应视为无效 PID。 */
+    char statusPath[BUFFER_SIZE];
+    if (snprintf_s(statusPath, sizeof(statusPath), sizeof(statusPath) - 1, "/proc/%d/status", pid) >= 0) {
+        FILE *status = fopen(statusPath, "r");
+        if (status) {
+            char statusLine[MAX_LINE_LENGTH];
+            while (fgets(statusLine, sizeof(statusLine), status) != NULL) {
+                if (strncmp(statusLine, "State:", 6) == 0 && strchr(statusLine, 'Z') != NULL) {
+                    (void)fclose(status);
+                    return -ESRCH;
+                }
+            }
+            (void)fclose(status);
+        }
+    }
+    /* 读取阶段未发现大页：进程可能在读取过程中退出导致后续行丢失，
+     * 重新打开一次 numa_maps 复查：access 只校验节点存在性，对僵尸进程无效；
+     * 而重新打开需要内核实际读取，僵尸态（mm 已释放）与完全退出均会失败，
+     * 失败则按"进程不存在"语义返回 -ESRCH */
+    FILE *fpAgain = OpenNumaMaps(pid);
+    if (!fpAgain) {
+        SMAP_LOGGER_ERROR("Reopen pid %d numa maps failed when probing page type, process may have exited, errno: %d.",
+                          pid, errno);
+        return -ESRCH;
+    }
+    (void)fclose(fpAgain);
+    return 0;
 }
 
 static void SetLocalByNumaMaps(char *line, uint32_t *nodeBitmap, bool hugeFlag)
@@ -1261,7 +1320,10 @@ int GetProcessNumaMapsObservation(pid_t pid, bool hugeFlag, uint32_t *residentLo
         }
         SetLocalByNumaMaps(line, residentLocalMask, hugeFlag);
     }
-    if (pclose(fp)) {
+    if (ferror(fp)) {
+        ret = -EIO;
+    }
+    if (fclose(fp)) {
         SMAP_LOGGER_WARNING("Close numa maps failed, pid=%d.", pid);
     }
     return ret;

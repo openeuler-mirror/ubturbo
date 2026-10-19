@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: SMAP migrate-back ioctl module
  */
 
@@ -55,6 +54,8 @@ static int wait_migrate_back_result(unsigned long long task_id)
 
 	spin_lock(&migrate_back_task_lock);
 	t = find_task_by_id_locked(task_id);
+	if (t)
+		kref_get(&t->ref);
 	spin_unlock(&migrate_back_task_lock);
 	if (!t) {
 		pr_err("migrate back task %llu disappeared before wait\n",
@@ -65,9 +66,9 @@ static int wait_migrate_back_result(unsigned long long task_id)
 	left = wait_for_completion_timeout(
 		&t->done, msecs_to_jiffies(MIGBACK_SYNC_WAIT_MS));
 	spin_lock(&migrate_back_task_lock);
-	t = find_task_by_id_locked(task_id);
-	status = t ? (int)t->status : MB_TASK_DONE;
+	status = find_task_by_id_locked(task_id) == t ? (int)t->status : MB_TASK_DONE;
 	spin_unlock(&migrate_back_task_lock);
+	kref_put(&t->ref, migrate_back_task_release);
 
 	if (left == 0)
 		return -ETIMEDOUT;
@@ -102,7 +103,7 @@ int smap_ioctl_migrate_back(struct migrate_back_inner_msg *msg)
 {
 	int i, ret, task_ret;
 	struct migrate_back_task *task;
-	struct migrate_back_subtask *subtask, *tmp;
+	struct migrate_back_subtask *subtask;
 
 	ret = 0;
 	if (msg->count == 0) {
@@ -124,7 +125,7 @@ int smap_ioctl_migrate_back(struct migrate_back_inner_msg *msg)
 		goto err_dup_task;
 	}
 	if (task_ret == RETRY_ID) {
-		kfree(task);
+		kref_put(&task->ref, migrate_back_task_release);
 		/* 残留 ERR 任务已重置回 WAITING，同步等待新一轮执行结果 */
 		return wait_migrate_back_result(msg->task_id);
 	}
@@ -149,15 +150,16 @@ int smap_ioctl_migrate_back(struct migrate_back_inner_msg *msg)
 	return wait_migrate_back_result(msg->task_id);
 
 err_subtask:
-	list_for_each_entry_safe(subtask, tmp, &task->subtask, task_list) {
-		list_del(&subtask->task_list);
-		kfree(subtask);
-	}
+	/* 引用释放交给 migrate_back_task_release：subtask 清理与 debugfs
+	 * 移除统一在其内完成（此时尚未创建 debugfs 文件，为 no-op） */
 	spin_lock(&migrate_back_task_lock);
 	list_del(&task->task_node);
 	spin_unlock(&migrate_back_task_lock);
+	kref_put(&task->ref, migrate_back_task_release);
+	return ret;
 err_dup_task:
-	kfree(task);
+	/* 任务从未入列表，引用计数为 1，put 即释放 */
+	kref_put(&task->ref, migrate_back_task_release);
 err_param:
 	return ret;
 }

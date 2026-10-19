@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
  * Description: SMAP : ub_hist
  */
 
@@ -212,6 +211,9 @@ int ub_hist_query_ba_tags(uint64_t *p_tags, int count)
 {
 	int ret = 0, ba_count = 0;
 	struct ub_hist_ba_device *ba_dev;
+
+	if (!p_tags)
+		return -EINVAL;
 
 	spin_lock(&ub_hist_ba_list_lock);
 	list_for_each_entry(ba_dev, &ub_hist_ba_list, list) {

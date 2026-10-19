@@ -35,10 +35,12 @@ target_include_directories(ubturbo_client PUBLIC
 )
 
 set(BOUNDSCHECK_LIB /usr/lib64/libboundscheck.so)
+find_package(Threads REQUIRED)
 
 # 链接库到可执行文件
 target_link_libraries(ubturbo_client PRIVATE
     ${BOUNDSCHECK_LIB}
+    Threads::Threads
 )
 
 # 不需要将 libubturbo_client.so 链接到 ub_turbo_exec，因为它是对外提供的共享库
@@ -56,6 +58,7 @@ target_include_directories(ub_turbo_exec PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/../include
     ${CMAKE_CURRENT_LIST_DIR}/include
     ${CMAKE_CURRENT_LIST_DIR}/config
+    ${CMAKE_CURRENT_LIST_DIR}/security
     ${CMAKE_CURRENT_LIST_DIR}/plugin
     ${CMAKE_CURRENT_LIST_DIR}/utils
     ${CMAKE_CURRENT_LIST_DIR}/ipc/client
@@ -69,10 +72,13 @@ target_include_directories(ub_turbo_exec PUBLIC
 target_link_libraries(ub_turbo_exec PRIVATE
     turbo_log
     ${BOUNDSCHECK_LIB}
+    Threads::Threads
+    ${CMAKE_DL_LIBS}
 )
 
 # 添加子目录
 add_subdirectory(config)
+add_subdirectory(security)
 add_subdirectory(plugin)
 add_subdirectory(utils)
 add_subdirectory(main)
