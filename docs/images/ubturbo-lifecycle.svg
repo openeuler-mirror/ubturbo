@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">UBTurbo module lifecycle</title>
+  <desc id="desc">Modules initialize and start in security, configuration, logging, SMAP, plugin and IPC order. Stop and uninitialize run in reverse order.</desc>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L9,3 L0,6 Z" fill="#40566f"/></marker><style>.b{fill:#edf5ff;stroke:#40566f;stroke-width:2}.t{font-family:Arial,'Noto Sans CJK SC',sans-serif;fill:#172b3a;text-anchor:middle}.h{font-size:22px;font-weight:700}.s{font-size:16px}.l{stroke:#40566f;stroke-width:2;marker-end:url(#a)}.r{stroke:#b34a4a}</style></defs>
+  <rect width="1200" height="360" fill="#fff"/><text class="t h" x="600" y="36">UBTurbo module lifecycle</text>
+  <text class="t s" x="95" y="115">Init / Start</text><text class="t s" x="1100" y="295">Stop / UnInit</text>
+  <g><rect class="b" x="125" y="75" width="145" height="70" rx="9"/><text class="t h" x="197" y="118">Security</text><rect class="b" x="305" y="75" width="145" height="70" rx="9"/><text class="t h" x="377" y="118">Config</text><rect class="b" x="485" y="75" width="145" height="70" rx="9"/><text class="t h" x="557" y="118">Logger</text><rect class="b" x="665" y="75" width="145" height="70" rx="9"/><text class="t h" x="737" y="118">SMAP</text><rect class="b" x="845" y="75" width="145" height="70" rx="9"/><text class="t h" x="917" y="118">Plugins</text><rect class="b" x="1025" y="75" width="145" height="70" rx="9"/><text class="t h" x="1097" y="118">IPC</text></g>
+  <path class="l" d="M270 110 H305"/><path class="l" d="M450 110 H485"/><path class="l" d="M630 110 H665"/><path class="l" d="M810 110 H845"/><path class="l" d="M990 110 H1025"/>
+  <path class="l r" d="M1097 245 H917"/><path class="l r" d="M917 245 H737"/><path class="l r" d="M737 245 H557"/><path class="l r" d="M557 245 H377"/><path class="l r" d="M377 245 H197"/>
+  <text class="t s" x="600" y="195">A failure aborts Run; Stop still traverses all modules in reverse order.</text>
+</svg>

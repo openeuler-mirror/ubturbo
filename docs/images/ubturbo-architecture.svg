@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">UBTurbo components and data flow</title>
+  <desc id="desc">External clients call the UBTurbo daemon over Unix domain sockets. The daemon contains configuration, logging, SMAP integration, plugin management and IPC modules. RMRS and UCache are dynamically loaded plugins.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L9,3 L0,6 Z" fill="#40566f"/></marker>
+    <style>.box{fill:#f7f9fc;stroke:#40566f;stroke-width:2}.core{fill:#e9f3ff}.plugin{fill:#ebf7ee}.smap{fill:#fff4df}.t{font-family:Arial,'Noto Sans CJK SC',sans-serif;fill:#172b3a;text-anchor:middle}.h{font-size:22px;font-weight:700}.b{font-size:17px}.line{stroke:#40566f;stroke-width:2;fill:none;marker-end:url(#arrow)}.dash{stroke-dasharray:8 6}</style>
+  </defs>
+  <rect width="1200" height="720" fill="#fff"/>
+  <text class="t h" x="600" y="38">UBTurbo component and data flow</text>
+  <rect class="box core" x="40" y="80" width="250" height="120" rx="12"/>
+  <text class="t h" x="165" y="125">External process</text><text class="t b" x="165" y="160">libubturbo_client.so</text>
+  <rect class="box core" x="350" y="60" width="810" height="510" rx="18"/>
+  <text class="t h" x="755" y="96">ub_turbo_exec</text>
+  <rect class="box" x="390" y="125" width="210" height="85" rx="10"/><text class="t h" x="495" y="160">IPC server</text><text class="t b" x="495" y="188">registered handlers</text>
+  <rect class="box" x="640" y="125" width="210" height="85" rx="10"/><text class="t h" x="745" y="160">Configuration</text><text class="t b" x="745" y="188">conf files</text>
+  <rect class="box" x="890" y="125" width="210" height="85" rx="10"/><text class="t h" x="995" y="160">Logging</text><text class="t b" x="995" y="188">async ring buffer</text>
+  <rect class="box" x="390" y="265" width="250" height="105" rx="10"/><text class="t h" x="515" y="305">Plugin manager</text><text class="t b" x="515" y="335">dlopen / init / deinit</text>
+  <rect class="box smap" x="900" y="265" width="220" height="105" rx="10"/><text class="t h" x="1010" y="305">SMAP adapter</text><text class="t b" x="1010" y="335">loads libsmap.so</text>
+  <rect class="box plugin" x="390" y="430" width="150" height="80" rx="10"/><text class="t h" x="465" y="478">RMRS</text>
+  <rect class="box plugin" x="570" y="430" width="150" height="80" rx="10"/><text class="t h" x="645" y="478">UCache</text>
+  <rect class="box plugin" x="750" y="430" width="150" height="80" rx="10"/><text class="t b" x="825" y="465" font-weight="700">Other admitted</text><text class="t b" x="825" y="492">plugins</text>
+  <rect class="box smap" x="865" y="615" width="290" height="70" rx="10"/><text class="t h" x="1010" y="658">SMAP kernel modules</text>
+  <path class="line" d="M290 140 H390"/><text class="t b" x="340" y="128">UDS</text>
+  <path class="line" d="M600 168 H640"/><path class="line" d="M850 168 H890"/>
+  <path class="line" d="M495 210 V265"/>
+  <path class="line" d="M435 370 L465 430"/><path class="line" d="M515 370 L645 430"/><path class="line" d="M595 370 L825 430"/>
+  <path class="line dash" d="M640 318 H900"/><text class="t b" x="770" y="305">SMAP calls</text>
+  <path class="line" d="M1010 370 V615"/>
+  <text class="t b" x="600" y="705">Solid arrows: control/call path · Dashed arrow: plugin use of SMAP capability</text>
+</svg>

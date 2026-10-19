@@ -118,7 +118,7 @@ plugins/
 
 3rdparty/           # libboundscheck, rapidjson (git submodules)
 conf/               # ubturbo.conf, ubturbo_plugin_admission.conf
-doc/                # Documentation and architecture diagrams
+docs/               # Documentation and architecture diagrams
 test/
 ├── 3rdparty/       # googletest, mockcpp (submodules)
 └── testcase/       # Unit tests -> ubturbo_ut, rmrs_ut
