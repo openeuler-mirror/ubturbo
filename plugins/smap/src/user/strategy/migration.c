@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -37,7 +35,6 @@
 
 #define MAX_MIG_ADDR_PRINT_LEN 2
 #define MAX_GROUP_SWAP_COMP_PLANS (MAX_2M_PROCESSES_CNT * MAX_PER_PID_MIG_LIST_COUNT)
-#define PAIR_PLAN_LOCAL_FREE_RESERVE_DIVISOR 20
 
 typedef struct {
     pid_t pid;
@@ -105,8 +102,6 @@ int CollectNodeFreeSnapshot(bool hugePage, int nrLocalNuma, PairPlanContext *con
     for (int nid = 0; nid < nrLocalNuma; nid++) {
         uint64_t freePages = hugePage ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
         snapshot.freePages[nid] = freePages;
-        snapshot.safetyReservePages[nid] =
-            freePages / PAIR_PLAN_LOCAL_FREE_RESERVE_DIVISOR + (freePages % PAIR_PLAN_LOCAL_FREE_RESERVE_DIVISOR != 0);
     }
     *context = snapshot;
     return 0;
@@ -1126,15 +1121,6 @@ static int DecideThreadNum(struct MigrateMsg *mMsg)
     return nThread;
 }
 
-struct SubMigrateCtx {
-    struct MigrateMsg msg;
-    int *origIdx;
-    int fd;
-    int ret;
-    uint32_t cpuMin;
-    uint32_t cpuMax;
-};
-
 static void *SubMigrateThreadFn(void *arg)
 {
     struct SubMigrateCtx *ctx = arg;
@@ -1209,13 +1195,33 @@ static void AggregateSubMigResults(struct SubMigrateCtx *subs, int nrThreads, st
     for (int i = 0; i < nrThreads; i++) {
         for (int k = 0; k < subs[i].msg.cnt; k++) {
             int orig = subs[i].origIdx[k];
-            mMsg->migList[orig].failedMigNr += subs[i].msg.migList[k].failedMigNr;
-            mMsg->migList[orig].failedIsolatedNr += subs[i].msg.migList[k].failedIsolatedNr;
+            if (subs[i].ret < 0) {
+                /* ioctl整体失败（如全局状态竞争-EAGAIN）时内核不回填统计字段，
+                 * 子条目仍为初始值0，若直接聚合会把下发数虚报为成功数，
+                 * 全部计为隔离失败，保证successMigCount真实 */
+                mMsg->migList[orig].failedIsolatedNr += subs[i].msg.migList[k].nr;
+            } else {
+                mMsg->migList[orig].failedMigNr += subs[i].msg.migList[k].failedMigNr;
+                mMsg->migList[orig].failedIsolatedNr += subs[i].msg.migList[k].failedIsolatedNr;
+            }
             if (subs[i].msg.migList[k].successToUser) {
                 mMsg->migList[orig].successToUser = true;
             }
         }
     }
+}
+
+/* 汇总子线程返回值：任一线程ioctl整体失败（负errno）即返回首个错误码，
+ * 全部ioctl成功返回0。部分失败页数（正值）不进入返回值，
+ * 实际迁移成功/失败量由UpdateMigResult日志承载 */
+static int AggregateSubThreadRet(const struct SubMigrateCtx *subs, int nrThreads)
+{
+    for (int i = 0; i < nrThreads; i++) {
+        if (subs[i].ret < 0) {
+            return subs[i].ret;
+        }
+    }
+    return 0;
 }
 
 static int RunMultiThreadedMigrate(struct MigrateMsg *mMsg, struct ProcessManager *manager, int nrThreads)
@@ -1260,13 +1266,7 @@ static int RunMultiThreadedMigrate(struct MigrateMsg *mMsg, struct ProcessManage
             pthread_join(tids[i], NULL);
         }
     }
-    for (int i = 0; i < nrThreads; i++) {
-        if (subs[i].ret > 0 && err >= 0) {
-            err += subs[i].ret;
-        } else {
-            err = subs[i].ret;
-        }
-    }
+    err = AggregateSubThreadRet(subs, nrThreads);
     AggregateSubMigResults(subs, nrThreads, mMsg);
     FreeSubMigrateMsgs(subs, nrThreads);
     free(subs);
@@ -1293,6 +1293,9 @@ int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager)
         err = (mMsg->cnt > 0) ? ioctl(manager->fds.migrate, SMAP_MIG_MIGRATE, mMsg) : 0;
     } else {
         err = RunMultiThreadedMigrate(mMsg, manager, nThread);
+    }
+    if (err < 0) {
+        SMAP_LOGGER_ERROR("DoMigration ioctl failed, ret: %d.", err);
     }
 
     for (int i = 0; i < mMsg->cnt; i++) {
@@ -1462,6 +1465,10 @@ static void ApplyUbBwStop(ProcessAttr *current, struct ProcessManager *manager)
 
     for (int i = 0; i < manager->ubBwMonitor.currentFluxMb.len; i++) {
         int nid = manager->ubBwMonitor.currentFluxMb.flux[i].numaId;
+        if (nid < 0 || nid >= MAX_NODES) {
+            SMAP_LOGGER_ERROR("UB BW: invalid numa id %d, skip.", nid);
+            continue;
+        }
         uint32_t totalBw =
             manager->ubBwMonitor.currentFluxMb.flux[i].readMb + manager->ubBwMonitor.currentFluxMb.flux[i].writeMb;
 

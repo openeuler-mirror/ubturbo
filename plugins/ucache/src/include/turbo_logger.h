@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -168,7 +166,7 @@ public:
     }
 
 private:
-    void ResizeBuffer(size_t addSize);
+    bool ResizeBuffer(size_t addSize);
 
     char *GetBuffer();
 
@@ -184,7 +182,9 @@ private:
     template <typename T>
     void EncodeData(TurboLoggerTypeId id, T data)
     {
-        ResizeBuffer(sizeof(TurboLoggerTypeId) + sizeof(T));
+        if (!ResizeBuffer(sizeof(TurboLoggerTypeId) + sizeof(T))) {
+            return;
+        }
         EncodeData<TurboLoggerTypeId>(id);
         EncodeData<T>(data);
     }

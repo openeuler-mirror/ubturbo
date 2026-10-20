@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -54,16 +52,16 @@ void ResetActcData(ActcData *actcData[], int len);
 int DetectPidType(pid_t pid);
 int RefreshManagedLocalState(ProcessAttr *attr, bool fullReplacement);
 int ConfigureMigrationTargetsWithCapacityPolicy(ProcessAttr *attr, const ProcessTargetConfig *config,
-                                                bool ignoreRemoteCapacity);
+                                                bool ignoreRemoteCapacity, bool skipRemoteResidencyCheck);
 int GetProcessNumaMapsObservation(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask, uint64_t numaPages[MAX_NODES]);
 int CollectProcessCandidateObservation(pid_t pid, bool hugeFlag, ManagedLocalObservation *observation);
 int ApplyManagedLocalObservation(ProcessAttr *attr, const ManagedLocalObservation *observation, bool fullReplacement);
 
 /* manage_remote.c 使用 */
 int BuildProcessTargetConfigFromParam(const ProcessParam *param, ProcessTargetConfig *config);
-int ApplyProcessTargetConfig(ProcessAttr *attr, const ProcessTargetConfig *config);
+int ApplyProcessTargetConfig(ProcessAttr *attr, const ProcessTargetConfig *config, bool skipRemoteResidencyCheck);
 int StagePendingMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config, bool ignoreRemoteCapacity);
-int SetProcessConfig(ProcessAttr *attr, ProcessParam *param);
+int SetProcessConfig(ProcessAttr *attr, ProcessParam *param, bool skipRemoteResidencyCheck);
 void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *candidate);
 void SetBasicProcessConfig(ProcessAttr *attr, ProcessParam *param);
 void SetMultiNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma);

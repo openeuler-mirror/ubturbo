@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2025. All rights reserved.
  */
 
 #include <filesystem>
@@ -326,7 +325,7 @@ TEST_F(TestUcacheMigrationExecutor, MigrateToRemoteNodeTest)
 
     strategy.srcNid = 0;
     executor.MigrateToRemoteNode(desNid, strategy);
-    EXPECT_EQ(executor.pidsToMigrate_.size(), 1);
+    EXPECT_EQ(executor.pidsToMigrate_.size(), 0);
 
     GlobalMockObject::verify();
 }

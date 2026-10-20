@@ -1,5 +1,7 @@
 # UBTurbo
 
+<p > English | <a href="README.md">简体中文</a> </p>
+
 ## Project Overview
 
 UBTurbo is an open source intra-node resource management framework. It provides configuration reading, plugin loading, log printing, and IPC communication capabilities, and integrates the SMAP capability to provide basic multi-level memory scheduling services.
@@ -109,3 +111,7 @@ Compilation products:
 chmod +x ub_turbo_exec
 ./ub_turbo_exec
 ```
+
+# Illustrate
+
+This open-source project is not a Huawei product. Huawei offers only limited support.

@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
  * Description: SMAP3.0 access_acpi_mem模块测试代码
  */
 

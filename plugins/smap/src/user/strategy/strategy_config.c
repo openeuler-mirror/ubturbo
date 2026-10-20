@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -522,6 +520,15 @@ static int32_t ConfigScanCpu(char *substr, char *value)
     }
     if (scanCpuMin > scanCpuMax) {
         SMAP_LOGGER_ERROR("Config scan cpu min(%u) > max(%u), key:%s.", scanCpuMin, scanCpuMax, substr);
+        return RETURN_ERROR;
+    }
+    /* 与内核 ioctl_set_scan_cpu 的校验规则对齐：max 必须小于系统 possible cpu 数，
+     * 否则配置下发内核被 EINVAL 拒绝，迁移线程绑核也会落空 */
+    uint32_t sysCpuMin, sysCpuMax;
+    GetSystemCpuRange(&sysCpuMin, &sysCpuMax);
+    if (scanCpuMax > sysCpuMax) {
+        SMAP_LOGGER_ERROR("Config scan cpu max(%u) exceeds system possible cpu max(%u), key:%s.", scanCpuMax, sysCpuMax,
+                          substr);
         return RETURN_ERROR;
     }
     g_tmpStrategyConfig.scanCpuMin = scanCpuMin;

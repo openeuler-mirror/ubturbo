@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -180,7 +178,7 @@ public:
     int EncodeRequest(TurboByteBuffer &buffer, uint16_t *numa, uint16_t length);
     int DecodeRequest(const TurboByteBuffer &buffer, uint16_t *&numa, uint16_t &length);
     int EncodeResponse(TurboByteBuffer &buffer, uint64_t *freq, uint16_t len, int returnValue);
-    int DecodeResponse(TurboByteBuffer &buffer, uint64_t *freq, uint16_t &outLen, int &returnValue);
+    int DecodeResponse(TurboByteBuffer &buffer, uint64_t *freq, uint16_t length, uint16_t &outLen, int &returnValue);
 };
 
 } // namespace turbo::smap::codec

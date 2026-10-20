@@ -1,4 +1,4 @@
-Please note we provide an open source software notice for the third party open source software along with this software and/or this software component contributed by Huawei (in the following just “this SOFTWARE”). The open source software licenses are granted by the respective right holders.
+Please note we provide an open source software notice for the third party open source software along with this software and/or this software component contributed by openEuler (in the following just “this SOFTWARE”). The open source software licenses are granted by the respective right holders.
 
 ## **Warranty Disclaimer**
 
@@ -411,7 +411,7 @@ necessary.  Here is a sample; alter the names:
 Yoyodyne, Inc., hereby disclaims all copyright interest in the program
 `Gnomovision' (which makes passes at compilers) written by James Hacker.
 
-<signature of Ty Coon>, 1 April 1989
+\<signature of Ty Coon>, 1 April 1989
 Ty Coon, President of Vice
 
 This General Public License does not permit incorporating your program into

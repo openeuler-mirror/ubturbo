@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -218,6 +216,9 @@ void InitProcessMigrationTargetState(ProcessAttr *attr)
     attr->ignoreRemoteCapacity = false;
     attr->pendingTargetConfigValid = false;
     attr->pendingIgnoreRemoteCapacity = false;
+    attr->pendingSeq = 0;
+    attr->syncWaitRemoteEmpty = false;
+    attr->syncWaitRemoteEmptySnapshotValid = false;
     attr->managedLocalState = (ManagedLocalState){ 0 };
 }
 
@@ -557,37 +558,40 @@ static void UpdateAutoRemoveRemoteEmptyFlag(ProcessAttr *attr, const ProcessTarg
     }
 }
 
-static int ValidateCandidateRemoteResidency(ProcessAttr *candidate, const ProcessTargetConfig *config,
-                                            const ManagedLocalObservation *observation)
+static uint32_t BuildCandidateRemoteDrainNodes(ProcessAttr *candidate, const ProcessTargetConfig *config,
+                                               const ManagedLocalObservation *observation)
 {
     if (!candidate || !config || !observation || !observation->residentValid) {
         return 0;
     }
 
+    uint32_t drainNodes = 0;
     int nrLocalNuma = GetNrLocalNuma();
     for (int remoteNid = nrLocalNuma; remoteNid < nrLocalNuma + REMOTE_NUMA_NUM; remoteNid++) {
-        if (observation->numaPages[remoteNid] == 0 || FindProcessRemoteTarget(config, remoteNid) ||
-            InAttrL2(candidate, remoteNid)) {
+        if (observation->numaPages[remoteNid] == 0 || FindProcessRemoteTarget(config, remoteNid)) {
             continue;
         }
-        SMAP_LOGGER_ERROR("Pid %d has unmanaged remote node %d resident pages.", candidate->pid, remoteNid);
-        return -EINVAL;
+        AddL2ByNid(&drainNodes, remoteNid);
+        if (!InAttrL2(candidate, remoteNid)) {
+            SMAP_LOGGER_INFO("Pid %d remote node %d has unmanaged resident pages; add it to drain tracking.",
+                             candidate->pid, remoteNid);
+        }
     }
-    return 0;
+    return drainNodes;
 }
 
 static int PrepareProcessTargetCandidate(ProcessAttr *candidate, const ProcessTargetConfig *config,
-                                         const ManagedLocalObservation *observation)
+                                         const ManagedLocalObservation *observation, bool skipRemoteResidencyCheck)
 {
 
     ProcessTargetConfig targetConfig;
+    uint32_t drainNodes = 0;
     int ret = CopyProcessTargetConfig(&targetConfig, config);
     if (ret) {
         return ret;
     }
-    ret = ValidateCandidateRemoteResidency(candidate, &targetConfig, observation);
-    if (ret) {
-        return ret;
+    if (!skipRemoteResidencyCheck) {
+        drainNodes = BuildCandidateRemoteDrainNodes(candidate, &targetConfig, observation);
     }
 
     candidate->targetConfig = targetConfig;
@@ -595,11 +599,12 @@ static int PrepareProcessTargetCandidate(ProcessAttr *candidate, const ProcessTa
     if (ret) {
         return ret;
     }
-    /* 内核不维护 numa_nodes 位图，配置事件不改变跟踪范围，payload 只更新扫描参数 */
     ret = UpdateProcessMigrateConfig(candidate, &targetConfig, observation);
     if (ret) {
         return ret;
     }
+    /* 内核不维护 numa_nodes 位图；用户态仍需记住待迁回的远端驻留节点。 */
+    candidate->numaAttr.numaNodes |= drainNodes;
     UpdateAutoRemoveRemoteEmptyFlag(candidate, &targetConfig);
     return 0;
 }
@@ -611,6 +616,8 @@ void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *candida
     attr->remoteNumaCnt = candidate->remoteNumaCnt;
     attr->initLocalMemRatio = candidate->initLocalMemRatio;
     attr->autoRemoveWhenRemoteEmpty = candidate->autoRemoveWhenRemoteEmpty;
+    attr->syncWaitRemoteEmpty = candidate->syncWaitRemoteEmpty;
+    attr->syncWaitRemoteEmptySnapshotValid = candidate->syncWaitRemoteEmptySnapshotValid;
     attr->ignoreRemoteCapacity = candidate->ignoreRemoteCapacity;
     attr->numaAttr = candidate->numaAttr;
     attr->managedLocalState = candidate->managedLocalState;
@@ -622,7 +629,7 @@ void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *candida
     }
 }
 
-int ApplyProcessTargetConfig(ProcessAttr *attr, const ProcessTargetConfig *config)
+int ApplyProcessTargetConfig(ProcessAttr *attr, const ProcessTargetConfig *config, bool skipRemoteResidencyCheck)
 {
     ManagedLocalObservation observation;
     int ret = CollectProcessCandidateObservation(attr->pid, attr->type == VM_TYPE, &observation);
@@ -631,7 +638,7 @@ int ApplyProcessTargetConfig(ProcessAttr *attr, const ProcessTargetConfig *confi
     }
 
     ProcessAttr candidate = *attr;
-    ret = PrepareProcessTargetCandidate(&candidate, config, &observation);
+    ret = PrepareProcessTargetCandidate(&candidate, config, &observation, skipRemoteResidencyCheck);
     if (ret) {
         return ret;
     }
@@ -653,12 +660,14 @@ int StagePendingMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *c
     attr->pendingTargetConfig = targetConfig;
     attr->pendingTargetConfigValid = true;
     attr->pendingIgnoreRemoteCapacity = ignoreRemoteCapacity;
+    /* 注册槽位的调用方持有 attrLock。序号用于识别应用期间的新写入。 */
+    attr->pendingSeq++;
     SMAP_LOGGER_INFO("Save pending migration target for pid %d.", attr->pid);
     return 0;
 }
 
 int ConfigureMigrationTargetsWithCapacityPolicy(ProcessAttr *attr, const ProcessTargetConfig *config,
-                                                bool ignoreRemoteCapacity)
+                                                bool ignoreRemoteCapacity, bool skipRemoteResidencyCheck)
 {
     ProcessTargetConfig targetConfig;
     if (!attr || ValidateProcessTargetConfig(config) || CopyProcessTargetConfig(&targetConfig, config)) {
@@ -669,7 +678,7 @@ int ConfigureMigrationTargetsWithCapacityPolicy(ProcessAttr *attr, const Process
         return StagePendingMigrationTargets(attr, &targetConfig, ignoreRemoteCapacity);
     }
 
-    int ret = ApplyProcessTargetConfig(attr, &targetConfig);
+    int ret = ApplyProcessTargetConfig(attr, &targetConfig, skipRemoteResidencyCheck);
     if (!ret) {
         attr->ignoreRemoteCapacity = ignoreRemoteCapacity;
     }
@@ -678,7 +687,7 @@ int ConfigureMigrationTargetsWithCapacityPolicy(ProcessAttr *attr, const Process
 
 int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config)
 {
-    return ConfigureMigrationTargetsWithCapacityPolicy(attr, config, false);
+    return ConfigureMigrationTargetsWithCapacityPolicy(attr, config, false, false);
 }
 
 int ApplyPendingMigrationTargets(ProcessAttr *attr)
@@ -700,6 +709,7 @@ int ApplyPendingMigrationTargets(ProcessAttr *attr)
     }
     ProcessTargetConfig config = attr->pendingTargetConfig;
     bool ignoreRemoteCapacity = attr->pendingIgnoreRemoteCapacity;
+    uint32_t pendingSeq = attr->pendingSeq;
     if (slot) {
         EnvMutexUnlock(&slot->attrLock);
     }
@@ -715,7 +725,7 @@ int ApplyPendingMigrationTargets(ProcessAttr *attr)
 
     ProcessAttr candidate = *attr;
     candidate.ignoreRemoteCapacity = ignoreRemoteCapacity;
-    ret = PrepareProcessTargetCandidate(&candidate, &config, &observation);
+    ret = PrepareProcessTargetCandidate(&candidate, &config, &observation, false);
     if (ret) {
         if (slot) {
             PidSlotReleaseRefs(&slot, 1);
@@ -731,10 +741,18 @@ int ApplyPendingMigrationTargets(ProcessAttr *attr)
     if (slot) {
         EnvMutexLock(&slot->attrLock);
     }
+    bool stageUnchanged = attr->pendingSeq == pendingSeq;
     PublishProcessTargetCandidate(attr, &candidate);
-    ClearProcessTargetConfig(&attr->pendingTargetConfig);
-    attr->pendingTargetConfigValid = false;
-    attr->pendingIgnoreRemoteCapacity = false;
+    if (attr->syncWaitRemoteEmpty) {
+        attr->syncWaitRemoteEmptySnapshotValid = false;
+    }
+    if (stageUnchanged) {
+        ClearProcessTargetConfig(&attr->pendingTargetConfig);
+        attr->pendingTargetConfigValid = false;
+        attr->pendingIgnoreRemoteCapacity = false;
+    } else {
+        SMAP_LOGGER_INFO("Pending migration target of pid %d restaged during apply, defer to next cycle.", attr->pid);
+    }
     if (slot) {
         EnvMutexUnlock(&slot->attrLock);
         PidSlotReleaseRefs(&slot, 1);
@@ -756,7 +774,7 @@ bool IsZeroRemoteTargetConfig(ProcessParam *param)
     return IsZeroProcessTargetConfig(&config);
 }
 
-int SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
+int SetProcessConfig(ProcessAttr *attr, ProcessParam *param, bool skipRemoteResidencyCheck)
 {
     ProcessTargetConfig config;
     int ret = BuildProcessTargetConfigFromParam(param, &config);
@@ -765,7 +783,8 @@ int SetProcessConfig(ProcessAttr *attr, ProcessParam *param)
     }
 
     SetBasicProcessConfig(attr, param);
-    return ConfigureMigrationTargetsWithCapacityPolicy(attr, &config, param->ignoreRemoteCapacity);
+    return ConfigureMigrationTargetsWithCapacityPolicy(attr, &config, param->ignoreRemoteCapacity,
+                                                       skipRemoteResidencyCheck);
 }
 
 int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size)
@@ -1142,13 +1161,13 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
     if (GetRunMode() == WATERLINE_MODE) {
         l1node = GetAttrL1(attr);
         if (attr->migrateMode == MIG_MEMSIZE_MODE) {
-            ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
             attr->migrateParam[0].nid = destNodeIndex + nrLocalNuma;
         } else {
             if (ratio >= attr->strategyAttr.initRemoteMemRatio[l1node][srcNodeIndex]) {
                 ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
             }
         }
+        bool migOutAll = true;
         for (int i = 0; i < GetProcessManager()->nrLocalNuma; i++) {
             if (!InAttrL1(attr, i)) {
                 continue;
@@ -1164,14 +1183,21 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
             } else {
                 attr->strategyAttr.memSize[i][srcNodeIndex] = 0;
             }
+            if (attr->migrateMode == MIG_MEMSIZE_MODE && attr->strategyAttr.memSize[i][srcNodeIndex] != 0) {
+                migOutAll = false;
+            }
 
             SMAP_LOGGER_INFO("[change_remote] pid=%d local=%d old_remote=%d new_remote=%d old_sz=%llu new_sz=%llu",
                              attr->pid, i, srcNodeIndex, destNodeIndex, attr->strategyAttr.memSize[i][srcNodeIndex],
                              attr->strategyAttr.memSize[i][destNodeIndex]);
         }
+        /* 部分迁移时保留原节点L2位，否则同源节点后续迁移请求可能会被拒绝 */
+        if (attr->migrateMode == MIG_MEMSIZE_MODE && migOutAll) {
+            ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
+        }
     } else if (GetRunMode() == MEM_POOL_MODE) {
         uint64_t srcMemSize = 0;
-        int remoteNidIndex;
+        int remoteNidIndex = -1;
         for (int i = 0; i < attr->remoteNumaCnt; i++) {
             int srcNid = srcNodeIndex + nrLocalNuma;
             if (srcNid == attr->migrateParam[i].nid) {
@@ -1180,12 +1206,16 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
                 break;
             }
         }
-        if (memSize >= srcMemSize) {
-            ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
-            attr->migrateParam[remoteNidIndex].nid = 0;
-            attr->migrateParam[remoteNidIndex].memSize = 0;
-        } else {
-            attr->migrateParam[remoteNidIndex].memSize -= memSize;
+        /* src 节点不在该进程的迁移目标列表时，无 migrateParam 可改，
+         * 不清 numaNodes 位（本就无该远端页），仅调整下方账本 */
+        if (remoteNidIndex >= 0) {
+            if (memSize >= srcMemSize) {
+                ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
+                attr->migrateParam[remoteNidIndex].nid = 0;
+                attr->migrateParam[remoteNidIndex].memSize = 0;
+            } else {
+                attr->migrateParam[remoteNidIndex].memSize -= memSize;
+            }
         }
 
         for (int i = 0; i < GetProcessManager()->nrLocalNuma; i++) {
@@ -1433,7 +1463,10 @@ static bool IsRemoteTargetMigOutDone(ProcessAttr *attr, int remoteNid, uint64_t 
     SMAP_LOGGER_INFO("Pid: %d, remote node: %d, target pages: %llu, accounted pages: %llu, current remote pages: %llu.",
                      attr->pid, remoteNid, targetPages, accountedPages, remotePages);
 
-    if (targetPages > 0 && accountedPages == targetPages) {
+    if (targetPages == 0) {
+        return accountedPages == 0 && remotePages == 0;
+    }
+    if (accountedPages == targetPages) {
         return true;
     }
     return remotePages == targetPages;
@@ -1459,6 +1492,18 @@ bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid)
     pid_t pid = attr->pid;
 
     attr->enableSwap = false;
+    *isMultiNumaPid = IsMultiNumaVm(attr);
+    /* 新迁移目标已暂存未生效：migrateParam 仍是上一轮配置，用它判定完成会在上一次
+     * sync 刚结束时误判成功（旧账本/旧远端页数恰好等于旧目标），导致上层提前
+     * remove。等待迁移周期 ApplyPendingMigrationTargets 生效后再判定。 */
+    if (attr->pendingTargetConfigValid) {
+        SMAP_LOGGER_INFO("Pid %d has a pending migration target, mig out is not done yet.", pid);
+        return false;
+    }
+    if (attr->syncWaitRemoteEmpty && !attr->syncWaitRemoteEmptySnapshotValid) {
+        SMAP_LOGGER_INFO("Pid %d is waiting for a fresh remote-empty page snapshot.", pid);
+        return false;
+    }
     if (IsMultiNumaVm(attr)) {
         *isMultiNumaPid = true;
         for (int i = 0; i < attr->remoteNumaCnt; i++) {
@@ -1492,13 +1537,14 @@ bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid)
     return ret;
 }
 
-static void SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRemoteNumaIoctlMsg *msg, int len)
+static int SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRemoteNumaIoctlMsg *msg, int len)
 {
     int runMode = GetRunMode();
-    uint64_t srcMemSize;
     int l1node;
     int l2node;
     int nrLocalNuma = GetNrLocalNuma();
+    int outCnt = 0;
+
     for (int i = 0; i < len; i++) {
         ProcessAttr *attr = GetProcessAttr(msg->payloads[i].pid);
         if (!attr) {
@@ -1506,28 +1552,44 @@ static void SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRe
             PutProcessAttr(attr);
             continue;
         }
-        payload[i].pid = attr->pid;
-        payload[i].numaNodes = attr->numaAttr.numaNodes;
-        l1node = GetAttrL1(attr);
-        l2node = msg->payloads[i].srcNid;
-        // 远端单numa->远端多numa，使用AddL2ByNid
-        if (runMode == WATERLINE_MODE) {
-            if (msg->payloads[i].ratio >= attr->strategyAttr.initRemoteMemRatio[l1node][l2node - nrLocalNuma]) {
-                ClearNodeBit(&payload[i].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
-            }
-        } else { // MEM_POOL_MODE
-            if (msg->payloads[i].memSize >= attr->strategyAttr.memSize[l1node][l2node - nrLocalNuma]) {
-                ClearNodeBit(&payload[i].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
+        int found = -1;
+        for (int j = 0; j < outCnt; j++) {
+            if (payload[j].pid == attr->pid) {
+                found = j;
+                break;
             }
         }
-
-        AddL2ByNid(&payload[i].numaNodes, msg->payloads[i].destNid);
-        payload[i].scanTime = attr->scanTime;
-        payload[i].duration = attr->duration;
-        payload[i].type = attr->scanType;
-        payload[i].pidType = attr->type;
+        if (found < 0) {
+            found = outCnt++;
+            payload[found].pid = attr->pid;
+            payload[found].numaNodes = attr->numaAttr.numaNodes;
+            payload[found].scanTime = attr->scanTime;
+            payload[found].duration = attr->duration;
+            payload[found].type = attr->scanType;
+            payload[found].pidType = attr->type;
+        }
+        l1node = GetAttrL1(attr);
+        l2node = msg->payloads[i].srcNid;
+        if (runMode == WATERLINE_MODE) {
+            bool clearSrc;
+            if (attr->migrateMode == MIG_MEMSIZE_MODE) {
+                clearSrc = msg->payloads[i].memSize >= attr->strategyAttr.memSize[l1node][l2node - nrLocalNuma];
+            } else {
+                int initRatio = attr->strategyAttr.initRemoteMemRatio[l1node][l2node - nrLocalNuma];
+                clearSrc = msg->payloads[i].ratio >= initRatio;
+            }
+            if (clearSrc) {
+                ClearNodeBit(&payload[found].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
+            }
+        } else {
+            if (msg->payloads[i].memSize >= attr->strategyAttr.memSize[l1node][l2node - nrLocalNuma]) {
+                ClearNodeBit(&payload[found].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
+            }
+        }
+        AddL2ByNid(&payload[found].numaNodes, msg->payloads[i].destNid);
         PutProcessAttr(attr);
     }
+    return outCnt;
 }
 
 int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg)
@@ -1544,9 +1606,14 @@ int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg)
         return -ENOMEM;
     }
 
-    SetPayloadValue(payload, msg, msg->pidCnt);
-    SMAP_LOGGER_INFO("ChangePidRemoteByPid ioctl begin, len: %d.", msg->pidCnt);
-    int ret = AccessIoctlAddPid(msg->pidCnt, payload);
+    int payloadCnt = SetPayloadValue(payload, msg, msg->pidCnt);
+    if (payloadCnt == 0) {
+        free(payload);
+        SMAP_LOGGER_INFO("ChangePidRemoteByPid no valid payload.");
+        return 0;
+    }
+    SMAP_LOGGER_INFO("ChangePidRemoteByPid ioctl begin, len: %d.", payloadCnt);
+    int ret = AccessIoctlAddPid(payloadCnt, payload);
     free(payload);
     if (ret) {
         SMAP_LOGGER_ERROR("ChangePidRemoteByNuma ioctl failed: %d.", ret);

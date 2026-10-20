@@ -11,6 +11,7 @@
 #define ___GFP_THISNODE		0x200000u
 #define ___GFP_HIGHMEM		0x02u
 #define ___GFP_NOWARN		0x2000u
+#define ___GFP_MEMALLOC		0x200u
 #define ___GFP_NOMEMALLOC	0x80000u
 #define ___GFP_DIRECT_RECLAIM	0x400u
 #define ___GFP_KSWAPD_RECLAIM	0x800u
@@ -20,6 +21,7 @@
 #define __GFP_HIGHMEM	((__force gfp_t)___GFP_HIGHMEM)
 #define __GFP_NOWARN	((__force gfp_t)___GFP_NOWARN)
 #define __GFP_NOMEMALLOC ((__force gfp_t)___GFP_NOMEMALLOC)
+#define __GFP_MEMALLOC	((__force gfp_t)___GFP_MEMALLOC)
 
 #define __GFP_DIRECT_RECLAIM	((__force gfp_t)___GFP_DIRECT_RECLAIM) /* Caller can reclaim */
 #define __GFP_KSWAPD_RECLAIM	((__force gfp_t)___GFP_KSWAPD_RECLAIM) /* kswapd can wake */

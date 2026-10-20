@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -58,10 +56,9 @@ public:
     /**
      * @brief 从配置文件读取配置
      * @param[in] confDir: 配置文件所在的目录
-     * @param[in] libDir: 插件so文件所在的目录
      * @return RetCode, 成功返回0, 失败返回非0
      */
-    RetCode Init(const std::string &confDir, const std::string &libDir);
+    RetCode Init(const std::string &confDir);
 
     /**
      * @brief 获取单条配置
@@ -97,7 +94,6 @@ private:
     RetCode CheckPluginNameAndCode(const std::string &pluginName, uint16_t moduleCode);
 
     std::string confDir;
-    std::string libDir;
     std::unordered_map<std::string, std::string> lineContentMap;
     std::vector<TurboPluginConf> allPluginConf;
 };

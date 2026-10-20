@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025-2026. All rights reserved.
  */
 #ifndef TURBO_LOGGER_H
 #define TURBO_LOGGER_H

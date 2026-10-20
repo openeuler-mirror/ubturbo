@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -172,12 +170,13 @@ bool RackLoggerFilesink::CompressFile(const std::string &fileName, const std::st
         std::cerr << "Failed to compress file using system command" << std::endl;
         return false;
     }
+    fileMap[fileName].logFile.close();
     try {
         fs::permissions(destFilename, fs::perms::owner_read); // 设置权限为400
         fs::remove(sourceFilename);
-        fileMap[fileName].logFile.close();
     } catch (const std::exception &e) {
         std::cerr << "Error: " << e.what() << std::endl;
+        return false;
     }
     return true;
 }

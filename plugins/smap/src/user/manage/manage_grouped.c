@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -56,6 +54,7 @@ void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeBitmap, 
     attr->pendingGroupPolicy.valid = false;
     attr->autoRemoveWhenRemoteEmpty = false;
     attr->syncWaitRemoteEmpty = false;
+    attr->syncWaitRemoteEmptySnapshotValid = false;
     if (time(&attr->scanStart) == (time_t)-1) {
         SMAP_LOGGER_ERROR("get time error");
     }

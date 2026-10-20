@@ -6,12 +6,12 @@
 Name:           ub_dma
 Version:        %{ub_dma_version}
 Release:        %{release_os_version}
-Summary:        Huawei UB-DMA driver
+Summary:        openEuler UB-DMA driver
 License:        GPLv2
-URL:            https://support.huawei.com
+URL:            https://www.openeuler.org
 Source0:        ub_dma-1.0.0.tar.gz
 Provides:       %{name}
-Vendor:         Huawei Technologies Co., Ltd.
+Vendor:         openEuler Community
 BuildRoot:      %{buildroot}
 ExclusiveArch:  %arm64
 BuildRequires:  kernel-devel >= 5.10.0-136.12.0.86 make >= 4.3 gcc >= 10.3.1
@@ -20,7 +20,7 @@ Requires:       kernel >= 5.10.0-136.12.0.86
 %define ub_dma_dir /lib/modules/ub_dma
 
 %description
-This package contains the Huawei UB-DMA Driver
+This package contains the openEuler UB-DMA Driver
 
 %prep
 %setup -q -T -b 0 -c -n src

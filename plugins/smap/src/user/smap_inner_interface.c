@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -63,6 +61,12 @@ int SmapQueryVmMemRatio(struct VmRatioMsg *vrMsg)
         }
         if (current->type != VM_TYPE) {
             continue;
+        }
+        /* 兜底：VM 仅 2M 模式准入（上限 MAX_2M_PROCESSES_CNT），但恢复路径不经过准入校验，
+         * 持久化残留可突破该不变式，此处对齐数组容量防止越界写 */
+        if (vrMsg->nrVm >= MAX_2M_PROCESSES_CNT) {
+            SMAP_LOGGER_ERROR("SmapQueryVmMemRatio vm count exceeds %d, truncate.", MAX_2M_PROCESSES_CNT);
+            break;
         }
         vrMsg->vr[vrMsg->nrVm].pid = current->pid;
         vrMsg->vr[vrMsg->nrVm].ratio = HUNDRED;

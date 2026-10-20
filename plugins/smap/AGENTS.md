@@ -71,7 +71,7 @@ cd test/build && cmake -DCMAKE_BUILD_TYPE=Debug .. && make -j$(nproc)
 
 ## Architecture
 
-```
+```text
 src/
 ├── common.h              # Shared kernel/user constants
 ├── kernel/               # Unified smap.ko source

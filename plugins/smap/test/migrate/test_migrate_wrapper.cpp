@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: SMAP3.0 stub_smap_migrate_wrapper.c test code
  * Author: hebo h00519890
  * Create: 2024-8-20

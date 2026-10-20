@@ -1,5 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
  * Description: smap5.0 user separate strategy ut code
  */
 
@@ -8,6 +7,7 @@
 #include <vector>
 #include <cstdint>
 #include <unordered_set>
+#include <gtest/gtest.h>
 #include "manage/manage.h"
 #include "strategy/strategy.h"
 #include "strategy/separate_strategy.h"

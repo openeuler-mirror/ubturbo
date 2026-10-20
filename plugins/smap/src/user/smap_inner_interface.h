@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -35,7 +33,7 @@ struct VmRatio {
 
 struct VmRatioMsg {
     int nrVm;
-    struct VmRatio vr[MAX_NR_MIGOUT];
+    struct VmRatio vr[MAX_2M_PROCESSES_CNT];
 };
 
 int SmapEnableAdaptMem(int flag);

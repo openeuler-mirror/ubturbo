@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * smap is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -28,6 +26,15 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+struct SubMigrateCtx {
+    struct MigrateMsg msg;
+    int *origIdx;
+    int fd;
+    int ret;
+    uint32_t cpuMin;
+    uint32_t cpuMax;
+};
+
 int AddMigList(struct MigrateMsg *mMsg, struct MigList *mList);
 
 void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager);

@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
  * Description: SMAP bug.h stub
  */
 #ifndef __ALPHA_HWRPB_H

@@ -1,5 +1,7 @@
 # RMRS
 
+<p > English | <a href="README.md">简体中文</a></p>
+
 ## Project Introduction
 
 RMRS is an open-source memory migration tool in the form of a plugin of the UBTurbo framework. Working with OBMM and leveraging the underlying SMAP, RMRS provides decision-making and execution capabilities for migrating virtual machines to remote memory and migrating them back.
@@ -53,7 +55,7 @@ The **RMRS** is deployed in the UBTurbo of each compute node. Based on its own r
 
 ## RMRS Compilation
 
-The RMRS plugin is integrated in UBTurbo by default. For details about how to install, deploy, and use the plugin, see [UBTurbo Doc](../../../doc/).
+The RMRS plugin is integrated in UBTurbo by default. For details about how to install, deploy, and use the plugin, see [UBTurbo Doc](./doc/).
 
 ## RMRS Activation
 

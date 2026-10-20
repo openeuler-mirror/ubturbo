@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -24,16 +22,14 @@ RetCode TurboModuleConf::Init()
 {
     fs::path exeRootDir(TurboFileUtil::GetExecutableRootDir());
     std::string confPath;
-    std::string libPath;
     try {
         confPath = fs::canonical(fs::path(exeRootDir) / CONFIG_DEFAULT_DIR).string();
-        libPath = fs::canonical(fs::path(exeRootDir) / LIB_DEFAULT_DIR).string();
     } catch (const fs::filesystem_error &e) {
         std::cerr << "[Conf] Path resolution failed: " << e.what() << std::endl;
         return TURBO_ERROR;
     }
 
-    return TurboConfManager::GetInstance().Init(confPath, libPath);
+    return TurboConfManager::GetInstance().Init(confPath);
 }
 
 RetCode TurboModuleConf::Start()

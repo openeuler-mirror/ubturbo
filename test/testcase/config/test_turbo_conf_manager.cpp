@@ -1,8 +1,6 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.‘
  */
 
-#include <gmock/gmock.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -84,16 +82,15 @@ TEST_F(TestTurboConf, InitSuccessTEST)
 
     TurboConfManager mgr;
     const std::string config = "/tmp/ubturbo_ut/conf";
-    const std::string libDir = "/tmp/ubturbo_ut/lib";
-    RetCode ret = mgr.Init(config, libDir);
+    RetCode ret = mgr.Init(config);
     EXPECT_EQ(ret, TURBO_OK);
 
     MOCKER_CPP(&TurboConfManager::CheckPluginNameAndCode, RetCode(*)(void *)).stubs().will(returnValue(TURBO_ERROR));
-    ret = mgr.Init(config, libDir);
+    ret = mgr.Init(config);
     EXPECT_EQ(ret, TURBO_ERROR);
 
     MOCKER_CPP(&TurboConfManager::ParseFile, RetCode(*)(void *)).stubs().will(returnValue(TURBO_ERROR));
-    ret = mgr.Init(config, libDir);
+    ret = mgr.Init(config);
     EXPECT_EQ(ret, TURBO_ERROR);
     delTestFile();
 }
@@ -104,8 +101,7 @@ TEST_F(TestTurboConf, InitFailedTEST)
 
     TurboConfManager mgr;
     const std::string config = "/tmp/conf";
-    const std::string libDir = "/tmp/lib";
-    RetCode ret = mgr.Init(config, libDir);
+    RetCode ret = mgr.Init(config);
     EXPECT_EQ(ret, TURBO_ERROR);
 
     delTestFile();

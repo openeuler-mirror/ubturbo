@@ -1,5 +1,7 @@
-[TOC]
 # UBTurbo
+
+<p > 简体中文 | <a href="README_EN.md">English</a> </p>
+
 ## 项目简介
 
 UBTurbo是一款开源的节点内资源管理框架, 具备配置读取、插件加载、日志打印和IPC通信能力，集成SMAP能力提供基础的多级内存调度服务。
@@ -8,8 +10,7 @@ UBTurbo是一款开源的节点内资源管理框架, 具备配置读取、插�
 
 ## 目录结构
 
-
-```
+```text
 UBTURBO/
 ├── 3rdparty                    // 源码三方库
 ├── build                       // 项目脚本
@@ -32,16 +33,17 @@ UBTURBO/
 ```
 
 ## 约束说明
+
 - 用户使用UBTurbo进行内存借用时，需保证迁出内存地址和迁入内存地址的安全性一致。
 - 用户管理的需要迁移的虚机或容器对应的用户权限应该和远端内存对应的用户权限保持一致。
 - 客户使用UBTurbo，需要将用户添加到UBTurbo属组，被添加用户须拥有节点内存资源管理员的权限，才能使用UBTurbo内存迁移的能力，在内存迁移中PID由集群资源管理中心管理和下发，UBTurbo组件无法校验PID有效性，需要开发者在整体解决方案中，综合考虑pid、srcNid，destNid等参数传输和存储的安全。
-
 
 ## 项目架构
 
 ![UBTURBO_ARCHITECTURE.png](./doc/images/UBTURBO_ARCHITECTURE.png "UBTURBO_ARCHITECTURE")
 
 **UBTurbo**组件包含以下服务：
+
 - **UBTurboSDK**：UBTurbo服务提供的SDK端，作为一个独立SDK，对外通过接口给外层模块组件使用来使用UBTurbo能力。
 - **Common**：公共组件，提供一些公共能力。
   - **Log**：提供日志功能模块。
@@ -53,34 +55,34 @@ UBTURBO/
 - **SMAP**：分级内存使能模块，通过页面扫描和迁移使能分级内存能力。
 
 主要包含以下关键技术和方案：
+
 1. **配置加载**：从/opt/ubturbo/conf目录下读取ubturbo.conf、ubturbo_plugin_admission.conf以及每个插件的配置文件。
 2. **插件加载**：从指定目录下查找so，通过dlopen加载插件，卸载时通过dlclose关闭动态库。
 3. **进程通信**：通过unix domain socket机制，进行节点内进程间通信，提供面向连接的可靠数据传输功能。使用Reactor模式，server端启动线程监听指定socket文件，接受client端连接后创建一个新线程，调用指定回调函数，将结果发送给client端。
 4. **日志管理**：
-  - 1）**异步环形缓冲区**：使用异步环形缓冲区实现异步日志记录，避免阻塞主线程；
-  - 2）**锁机制**：采用适当的锁机制确保多线程环境下的线程安全性；
-  - 3）**时间戳处理**：利用系统时间函数获取时间戳信息；
-  - 4）**文件操作**：使用文件操作相关的API实现日志文件的写入和管理。UBTurbo框架和各插件日志独立，各自单个日志最大200MB，绕接进行记录，各自最多存储10个文件。
+
+   - **异步环形缓冲区**：使用异步环形缓冲区实现异步日志记录，避免阻塞主线程；
+   - **锁机制**：采用适当的锁机制确保多线程环境下的线程安全性；
+   - **时间戳处理**：利用系统时间函数获取时间戳信息；
+   - **文件操作**：使用文件操作相关的API实现日志文件的写入和管理。UBTurbo框架和各插件日志独立，各自单个日志最大200MB，绕接进行记录，各自最多存储10个文件。
 
 # 快速入门
 
 ## 前置条件
 
-- UBTurbo集成了SMAP能力，如需使用SMAP相关能力，需提前安装SMAP. SMAP的安装方式、运行模式与单元测试运行方式详见下文[SMAP插件安装与单元测试](#SMAP插件安装与单元测试)章节，完整文档位于`plugins/smap/doc/`.
+- UBTurbo集成了SMAP能力，如需使用SMAP相关能力，需提前安装SMAP. SMAP的安装方式、运行模式与单元测试运行方式详见下文[SMAP插件安装与单元测试](#SMAP插件安装与单元测试)章节，完整文档位于`plugins/smap/doc/`。
 
-- /dev/shm/smap_config保存了NUMA和进程配置等信息，如果UBTurbo进程需要切换用户，则需要先删除该文件.
+- /dev/shm/smap_config保存了NUMA和进程配置等信息，如果UBTurbo进程需要切换用户，则需要先删除该文件。
 
-- /dev/shm/ubturbo_page_type.dat保存了SMAP的初始化类型信息，如果UBTurbo进程需要切换用户或者场景（例如虚拟化场景切换到大数据场景），则需要先删除该文件.
+- /dev/shm/ubturbo_page_type.dat保存了SMAP的初始化类型信息，如果UBTurbo进程需要切换用户或者场景（例如虚拟化场景切换到大数据场景），则需要先删除该文件。
 
-- UBTurbo默认不启用任何插件，请依据业务场景在ubturbo_plugin_admission.conf中打开插件（取消对应插件的注释）.
+- UBTurbo默认不启用任何插件，请依据业务场景在ubturbo_plugin_admission.conf中打开插件（取消对应插件的注释）。
 
-- 在ubturbo_plugin_admission.conf中打开插件前，需保证对应插件已安装且配置完成，否则UBTurbo及对应插件将启动异常.
-
-
+- 在ubturbo_plugin_admission.conf中打开插件前，需保证对应插件已安装且配置完成，否则UBTurbo及对应插件将启动异常。
 
 ## 构建依赖
 
-> **架构与操作系统要求**：UBTurbo仅支持aarch64架构，构建强依赖openEuler（`CMakeLists.txt`读取`/etc/openEuler-release`），推荐在openEuler 24.03 LTS上构建。SMAP插件同样仅支持aarch64。
+> **架构与操作系统要求**：UBTurbo仅支持aarch64架构，推荐在openEuler 24.03 LTS上构建与打包（RPM 打包基于仓库根目录的 `ubturbo.spec`，通过 `rpmbuild` 构建）。SMAP插件同样仅支持aarch64。
 
 编译UBTurbo需要安装以下依赖（以openEuler为例）：
 
@@ -112,6 +114,7 @@ git submodule update --init --recursive
 dos2unix build.sh
 sh build.sh
 ```
+
 编译产物：
 
 - 在dist/release/bin下会有以下二进制文件: `ub_turbo_exec`
@@ -119,6 +122,26 @@ sh build.sh
 - 在dist/release/lib下会有以下库文件: `libubturbo_client.so`
 
 - 在dist/release/conf下会有以配置文件: `ubturbo_plugin_admission.conf`、`ubturbo.conf`
+
+### 构建 RPM 包
+
+RPM 打包基于仓库根目录的 `ubturbo.spec`，通过 `rpmbuild` 构建（不再使用 CPack），需先安装 `rpm-build`：
+
+```bash
+sudo dnf install -y rpm-build
+```
+
+在根目录下执行：
+
+```bash
+sh build.sh ubturbo        # 构建 ubturbo 主包
+sh build.sh ubturbo-rmrs   # 构建 ubturbo-rmrs 子包
+```
+
+构建产物位于根目录 `output/`：
+
+- `ubturbo-*.aarch64.rpm`：UBTurbo 主框架（`ub_turbo_exec`、`libubturbo_client.so`、框架配置与 systemd 服务）
+- `ubturbo-rmrs-*.aarch64.rpm`：rmrs 插件（`librmrs_ubturbo_plugin.so`）及其配置
 
 ## 单元测试
 
@@ -165,19 +188,20 @@ sh run_dt.sh
 # 编译安装：make install PREFIX=/usr/local
 ```
 
-> **已知兼容性问题**：
+> **已知兼容性问题**
+>
 > - **lcov 2.3 与 gcc 12.3.1 存在 mismatched exception tag 兼容问题**，导致覆盖率收集步骤报错（脚本退出码非0，但测试本身全部通过）。`run_ut.sh` 已使用 `set +e` 包裹覆盖率收集阶段，使 lcov 报错不影响脚本退出码和 CI 结果。如需获取覆盖率报告，请使用与 gcc 12.3.1 兼容的 lcov 版本。
 > - **UTC 时区导致 TestGenerateCompressedFilename 测试失败**：容器默认 UTC 时区，但日志文件名测试期望 +0800 时区。执行测试前需设置 `export TZ=Asia/Shanghai`，`run_ut.sh` 已自动设置。
-
 
 ## UBTurbo运行
 
 > **运行前提**：运行 `ub_turbo_exec` 前必须先**构建并安装 SMAP**（见下方 [SMAP插件安装与单元测试](#SMAP插件安装与单元测试) 章节），包括：
+>
 > 1. 构建 `libsmap.so` 用户态库并安装到 `/usr/lib64/`；
 > 2. 构建 SMAP 内核模块 `smap.ko` 并安装到 `/lib/modules/smap/`；
 > 3. 按 [SMAP安装方式](#安装RPM包) 加载该模块。
 >
-> 若 SMAP 未安装或内核模块未加载，UBTurbo 启动时会因 Smap 模块启动失败而退出（日志：`Start module failed, name:Smap`）。
+> 若 SMAP 未安装或内核模块未加载，UBTurbo 启动时会因 Smap 模块启动失败而退出（日志：`Start module failed, name:Smap`）。若要完整运行样例可参考脚本`docker/run_verify.sh`。
 
 - 配置ubturbo.conf，控制日志级别
 
@@ -186,6 +210,7 @@ sh run_dt.sh
 | 1 | log.level | 日志等级 | 默认值：INFO，取值范围：DEBUG、INFO、WARN、ERROR、CRIT | 所有节点 | 决定主进程和插件的日志输出等级 |
 
 - 在保持上述编译产物的相对位置的前提下，执行如下命令
+
 ```bash
 chmod +x ub_turbo_exec
 ./ub_turbo_exec
@@ -201,78 +226,75 @@ SMAP是UBTurbo的内部插件，源码位于`plugins/smap/`，通过页面扫描
 
 #### 构建RPM包
 
-**前置依赖：**
+**前置依赖**
 
 ```bash
 sudo dnf install -y rpm-build cmake make gcc gcc-c++ ninja-build \
     chrpath patchelf libboundscheck-devel rapidjson-devel libvirt-devel kernel-devel
 ```
 
-> `kernel-devel` 是构建 SMAP 内核模块的必需依赖，需确保 `/lib/modules/$(uname -r)/build` 目录存在。
+`kernel-devel` 是构建 SMAP 内核模块的必需依赖，需确保 `/lib/modules/$(uname -r)/build` 目录存在。
 
-**构建步骤：**
+**构建步骤**
 
 1. 创建 rpmbuild 工作目录：
 
-```bash
-RPMBUILD_DIR=$(mktemp -d -t ubturbo-rpmbuild-XXXXXX)
-mkdir -p "$RPMBUILD_DIR"/{SOURCES,SPECS,RPMS,SRPMS,BUILD,BUILDROOT}
-```
+    ```bash
+    RPMBUILD_DIR=$(mktemp -d -t ubturbo-rpmbuild-XXXXXX)
+    mkdir -p "$RPMBUILD_DIR"/{SOURCES,SPECS,RPMS,SRPMS,BUILD,BUILDROOT}
+    ```
 
-2. 构建 ubturbo-rmrs RPM（打包 UBTurbo 源码并执行 rpmbuild）：
+2. 构建 ubturbo / ubturbo-rmrs RPM（推荐使用仓库封装的入口，基于 `ubturbo.spec` 自动打包源码并执行 rpmbuild）：
 
-```bash
-cd <SOURCE_DIR>
-tar -czf "$RPMBUILD_DIR/SOURCES/ubturbo.tar.gz" \
-    --exclude='.git' --exclude='.gitignore' --exclude='.gitmodules' \
-    --exclude='dist' --exclude='output' --exclude='*.tar.gz' --exclude='*.rpm' .
-cp ubturbo.spec "$RPMBUILD_DIR/SPECS/"
-rpmbuild -ba "$RPMBUILD_DIR/SPECS/ubturbo.spec" \
-    --define "_topdir $RPMBUILD_DIR" \
-    --define "_sourcedir $RPMBUILD_DIR/SOURCES" \
-    --define "ubturbo_version 1.1.1" \
-    --define "release_version 1"
-```
+    ```bash
+    cd <SOURCE_DIR>
+    bash build.sh ubturbo        # 构建 ubturbo 主包
+    bash build.sh ubturbo-rmrs   # 构建 ubturbo-rmrs 子包
+    ```
+
+    产物位于 `<SOURCE_DIR>/output/`（`ubturbo-*.aarch64.rpm`、`ubturbo-rmrs-*.aarch64.rpm`）。
+    SMAP 相关的 rpmbuild 工作目录 `$RPMBUILD_DIR` 仅用于下面的 SMAP 步骤。
 
 3. 构建 ubturbo-smap RPM（打包 `plugins/smap/` 源码并执行 rpmbuild，传入 `KERNEL_VERSION` 宏）：
 
-```bash
-cd <SOURCE_DIR>/plugins
-tar -czf "$RPMBUILD_DIR/SOURCES/smap.tar.gz" \
-    --exclude='.git' --exclude='build' --exclude='output' \
-    --exclude='smap/CMakeCache.txt' --exclude='smap/CMakeFiles' smap
-cp smap/smap.spec "$RPMBUILD_DIR/SPECS/"
-rpmbuild -ba "$RPMBUILD_DIR/SPECS/smap.spec" \
-    --define "_topdir $RPMBUILD_DIR" \
-    --define "_sourcedir $RPMBUILD_DIR/SOURCES" \
-    --define "KERNEL_VERSION <openeuler|ocos|velinux>" \
-    --define "smap_version 1.0.0" \
-    --define "release_version 1"
-```
+    ```bash
+    cd <SOURCE_DIR>/plugins
+    tar -czf "$RPMBUILD_DIR/SOURCES/smap.tar.gz" \
+        --exclude='.git' --exclude='build' --exclude='output' \
+        --exclude='smap/CMakeCache.txt' --exclude='smap/CMakeFiles' smap
+    cp smap/smap.spec "$RPMBUILD_DIR/SPECS/"
+    rpmbuild -ba "$RPMBUILD_DIR/SPECS/smap.spec" \
+        --define "_topdir $RPMBUILD_DIR" \
+        --define "_sourcedir $RPMBUILD_DIR/SOURCES" \
+        --define "KERNEL_VERSION <openeuler|ocos|velinux>" \
+        --define "smap_version 1.0.0" \
+        --define "release_version 1"
+    ```
 
-> `KERNEL_VERSION` 默认 `openeuler`，可选值：`openeuler` | `ocos` | `velinux`。
+    `KERNEL_VERSION` 默认 `openeuler`，可选值：`openeuler` | `ocos` | `velinux`。
 
-4. 收集 RPM 产物到输出目录：
+4. 收集 SMAP RPM 产物到输出目录（ubturbo / ubturbo-rmrs 已在上一步生成于 `<SOURCE_DIR>/output/`）：
 
-```bash
-mkdir -p <OUTPUT_DIR>
-cp "$RPMBUILD_DIR"/RPMS/*/*.rpm <OUTPUT_DIR>/
-cp "$RPMBUILD_DIR"/SRPMS/*.rpm <OUTPUT_DIR>/
-rm -rf "$RPMBUILD_DIR"
-```
+    ```bash
+    mkdir -p <OUTPUT_DIR>
+    cp "$RPMBUILD_DIR"/RPMS/*/*.rpm <OUTPUT_DIR>/
+    cp "$RPMBUILD_DIR"/SRPMS/*.rpm <OUTPUT_DIR>/
+    rm -rf "$RPMBUILD_DIR"
+    ```
 
-**构建产物：**
+**构建产物**
 
-- `ubturbo-rmrs-*.aarch64.rpm`：UBTurbo 主框架
+- `ubturbo-*.aarch64.rpm`：UBTurbo 主框架（`ub_turbo_exec`、`libubturbo_client.so`、框架配置与 systemd 服务）
+- `ubturbo-rmrs-*.aarch64.rpm`：RMRS 插件（`librmrs_ubturbo_plugin.so`）及其配置
 - `ubturbo-smap-*.aarch64.rpm`：SMAP 内核驱动与用户态库
 
 #### 安装RPM包
 
 1. 安装SMAP软件包（包名`ubturbo-smap`）：
 
-```bash
-rpm -ivh ubturbo-smap-x.x.x-x.oe2403sp1.aarch64.rpm
-```
+    ```bash
+    rpm -ivh ubturbo-smap-x.x.x-x.oe2403sp1.aarch64.rpm
+    ```
 
 RPM安装会自动部署以下文件：
 - 内核模块：`/lib/modules/smap/smap.ko`
@@ -290,30 +312,30 @@ insmod smap.ko                                           # 远端扫描模式由
 
 3. 启动 ubturbo 服务：
 
-```bash
-systemctl start ubturbo
-```
+    ```bash
+    systemctl start ubturbo
+    ```
 
 4. 等待 IPC socket 就绪（检测 `/opt/ubturbo/ubturbo_ipc`，最多等待30秒）：
 
-```bash
-for i in $(seq 1 30); do
-    [[ -S /opt/ubturbo/ubturbo_ipc ]] && break
-    sleep 1
-done
-```
+    ```bash
+    for i in $(seq 1 30); do
+        [[ -S /opt/ubturbo/ubturbo_ipc ]] && break
+        sleep 1
+    done
+    ```
 
 5. 调用 SMAP 初始化（`page_type`: `1`=2M模式，`0`=4K模式）：
 
-```bash
-python3 smap_ipc.py start <page_type>
-```
+    ```bash
+    python3 smap_ipc.py start <page_type>
+    ```
 
 6. 验证模块加载成功：
 
-```bash
-lsmod | grep -E "tracking|smap"
-```
+    ```bash
+    lsmod | grep -E "tracking|smap"
+    ```
 
 ## SMAP运行模式
 
@@ -325,14 +347,17 @@ SMAP运行模式由用户态接口`ubturbo_smap_start(pageType)`的入参控制�
 | 1 | 2M模式 | 虚拟化场景 |
 
 运行前提条件：
+
 - 开启ACPI
 - 关闭NUMA平衡与透明大页：
-```bash
-echo 0 > /proc/sys/kernel/numa_balancing
-echo 0 > /proc/sys/vm/compaction_proactiveness
-echo never > /sys/kernel/mm/transparent_hugepage/defrag
-echo never > /sys/kernel/mm/transparent_hugepage/enabled
-```
+
+    ```bash
+    echo 0 > /proc/sys/kernel/numa_balancing
+    echo 0 > /proc/sys/vm/compaction_proactiveness
+    echo never > /sys/kernel/mm/transparent_hugepage/defrag
+    echo never > /sys/kernel/mm/transparent_hugepage/enabled
+    ```
+
 - 提前安装URMA、libvirt、numactl
 - 创建ubturbo用户和用户组
 
@@ -362,3 +387,7 @@ sh run_dt.sh
 | perl-Capture-Tiny | lcov运行依赖 | `dnf install -y perl-Capture-Tiny` |
 | perl-DateTime | lcov运行依赖 | `dnf install -y perl-DateTime` |
 | lcov / genhtml | 覆盖率报告 | 源码安装 |
+
+# 说明
+
+此开源项目非华为产品，仅提供有限支持。

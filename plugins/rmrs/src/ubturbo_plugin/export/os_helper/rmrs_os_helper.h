@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
  * rmrs is licensed under the Mulan PSL v2.
  * You can use this software according to the terms and conditions of the Mulan PSL v2.
  * You may obtain a copy of Mulan PSL v2 at:
@@ -52,11 +50,7 @@ public:
 
     static RmrsResult GetRemoteAvailableFlag(vector<NumaInfo> &numaInfos);
 
-    static std::string ExecCommand(const std::string &cmd);
-
     static RmrsResult ReadNumaMap(const std::string &pidStr, std::string &fileContent);
-
-    static RmrsResult checkUidEuid(const std::string &fileContent);
 
 private:
     static string cpuSocketPathPrefix;

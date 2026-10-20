@@ -1,3 +1,5 @@
+# 用户指南
+
 ## SMAP简介
 
 SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使用其他节点内存资源，可以将进程的热页留在本地, 冷页迁往远端, 达到扩容的目的。
@@ -8,6 +10,7 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 当NUMA内的内存使用率下降到一定水线时, SMAP支持按照借用的内存迁回虚机数据。
 
 > 多 NUMA 迁出说明：
+>
 > * `pageType` 由 `ubturbo_smap_start` 启动时传入，决定本次跟踪的页面类型：4K 普通进程使用 0，2M 虚机使用 1；调用迁出接口时必须与启动页型一致。
 > * 普通 `ubturbo_smap_migrate_out` 支持一个 PID 同时配置多个远端 NUMA。调用方只配置 remote 聚合目标，不指定本地 NUMA；SMAP 会根据 CPU affinity、页面驻留和既有迁移账本自动管理多个 local NUMA。
 > * 每次普通 migrate-out 配置均全量替换该 PID 的远端目标；未包含的 remote 会清零，`payload.count == 0` 表示清空全部普通迁出目标。`srcNid` 仅为 ABI 兼容保留，普通迁出中不生效。
@@ -15,11 +18,11 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 
 ## SMAP安装&部署
 
-#### 前提条件
+### 前提条件
 
-* 安装前先创建ubturbo用户和用户组，配置免密登录，命令如下。
+* 安装前先创建ubturbo用户和用户组，命令如下。
 
-  <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen580884719598"><p class="p" id="p1395174862716">groupadd -r ubturbo</p><p class="p" id="p179511848102716">useradd -r -g ubturbo -s /sbin/nologin ubturbo</p><p class="p" id="p1095194882719">touch /etc/sudoers.d/ubturbo</p><p class="p" id="p17951104832720">echo "ubturbo ALL=(root) NOPASSWD:/user/local/bin/cat.sh" > /etc/sudoers.d/ubturbo</p></pre>
+  <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen580884719598"><p class="p" id="p1395174862716">groupadd -r ubturbo</p><p class="p" id="p179511848102716">useradd -r -g ubturbo -s /sbin/nologin ubturbo</p></pre>
 
 * 当前部署环境需开启ACPI，并提前安装好obmm、URMA、libvirt库和numactl库。执行以下命令关闭numa\_balancing和透明大页。
   
@@ -29,9 +32,9 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
   <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen1743004145"><p class="p" id="p13953174812279">yum install -y qemu*</p><p class="p" id="p295334842710">yum install -y libvirt*</p><p class="p" id="p795354842714">//进行libvirt配置</p><p class="p" id="p139531948192713">systemctl start libvirtd</p></pre>
 * 由于SMAP与HCOM对obmm均有依赖，若先安装smap再安装HCOM会导致HCOM出现异常，因此建议安装SMAP前先安装HCOM，安装方式参见HCOM安装。
 * /dev/shm/smap\_config保存了NUMA和进程配置等信息，使用SMAP动态库的进程如果需要切换用户，则需要先删除该文件。
-* smap的period.config文件依赖ubturbo-rmrs组件，若环境上未安装ubturbo-rmrs，则需要手动创建目录/opt/ubturbo/conf，且确保目录权限和smap二进制文件权限一致。
+* smap的period.config文件位于/opt/ubturbo/conf（该目录由ubturbo主框架包创建），若环境上未安装ubturbo主框架包，则需要手动创建目录/opt/ubturbo/conf，且确保目录权限和smap二进制文件权限一致。
 
-#### 安装步骤
+### 安装步骤
 
 1. 安装SMAP。
    
