@@ -104,7 +104,8 @@ int set_remote_scan_mode(u8 mode)
 	if (mode != SMAP_REMOTE_SCAN_SOFT && !hist_inited) {
 		ret = hist_module_init();
 		if (ret) {
-			pr_err("unable to init hist tracking for scan mode %u, ret: %d\n", mode, ret);
+			pr_err("unable to init hist tracking for scan mode %u, ret: %d\n",
+			       mode, ret);
 			mutex_unlock(&remote_scan_mode_lock);
 			return -ENODEV;
 		}
@@ -126,7 +127,8 @@ int set_remote_scan_mode(u8 mode)
 	}
 	mutex_unlock(&remote_scan_mode_lock);
 
-	pr_info("set remote scan mode to %u, hist inited: %d\n", mode, hist_inited);
+	pr_info("set remote scan mode to %u, hist inited: %d\n", mode,
+		hist_inited);
 	return 0;
 }
 
@@ -400,7 +402,9 @@ int access_tracking_set_page_size(u8 page_size_index)
 		return -EINVAL;
 
 	access_tracking_set_page_size_scan(page_size_index);
-	return is_remote_scan_hist_active() ? hist_tracking_set_page_size(page_size_index) : 0;
+	return is_remote_scan_hist_active()
+		       ? hist_tracking_set_page_size(page_size_index)
+		       : 0;
 }
 
 static void scan_state_init(void)
