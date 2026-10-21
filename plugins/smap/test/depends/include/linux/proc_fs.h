@@ -14,6 +14,7 @@
 struct proc_ops {
 	unsigned int proc_flags;
 	int	(*proc_open)(struct inode *, struct file *);
+	int	(*proc_poll)(struct file *, poll_table *);
 	ssize_t	(*proc_read)(struct file *, char __user *, size_t, loff_t *);
 	int	(*proc_release)(struct inode *, struct file *);
 	/* mandatory unless nonseekable_open() or equivalent is used */

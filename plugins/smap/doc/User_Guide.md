@@ -10,7 +10,7 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 当NUMA内的内存使用率下降到一定水线时, SMAP支持按照借用的内存迁回虚机数据。
 
 > 多 NUMA 迁出说明：
-> 
+>
 > * `pageType` 由 `ubturbo_smap_start` 启动时传入，决定本次跟踪的页面类型：4K 普通进程使用 0，2M 虚机使用 1；调用迁出接口时必须与启动页型一致。
 > * 普通 `ubturbo_smap_migrate_out` 支持一个 PID 同时配置多个远端 NUMA。调用方只配置 remote 聚合目标，不指定本地 NUMA；SMAP 会根据 CPU affinity、页面驻留和既有迁移账本自动管理多个 local NUMA。
 > * 每次普通 migrate-out 配置均全量替换该 PID 的远端目标；未包含的 remote 会清零，`payload.count == 0` 表示清空全部普通迁出目标。`srcNid` 仅为 ABI 兼容保留，普通迁出中不生效。
@@ -40,32 +40,16 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
    
    安装smap软件包。
    <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen5971151198"><p class="p" id="p39578483278">rpm -ivh smap-x.x.x-x.oe2403sp1.aarch64.rpm</p></pre>
-2. 载入扫描驱动。
-   
-   <pre class="screen" id="screen8274308918"><p class="p" id="p1958548202716">cd /lib/modules/smap</p><p class="p" id="p295820488271">insmod smap_tracking_core.ko</p></pre>
-   
-   * 安装smap_histogram_tracking.ko。
-     
-     <pre class="screen" id="screen1810215131197"><p class="p" id="p995994814275">insmod smap_histogram_tracking.ko</p></pre>
-   * 安装smap_access_tracking.ko。在UB仿真中安装时，如使能SMAP硬件判热功能，则增加enable_hist=1参数。
-     
-     <pre class="screen"><p class="p" id="p8959848192712">insmod smap_access_tracking.ko</p></pre>
-3. 检查扫描驱动是否载入成功。
-   
-   <pre class="screen" id="screen1884674894220"><p class="p" id="p9960648142719">lsmod | grep tracking</p></pre>
-   
-   * 在环境能查询到插入的3个ko，则表示载入成功，示例如下：
-     
-     <pre class="screen" id="screen81169214579"><p class="p" id="p179602488279">[root@controller ~]# lsmod | grep tracking</p><p class="p" id="p15960174814274">smap_access_tracking         65536  0</p><p class="p" id="p1696084810278">smap_histogram_tracking      28672  1 access_tracking</p><p class="p" id="p179602488279">smap_tracking_core           28672  1 smap_access_tracking</p></pre>
+2. 载入SMAP内核模块。远端扫描模式由配置文件`/opt/ubturbo/conf/smap/period.config`中的`smap.remote.scan.mode`控制（0=纯软，1=软硬结合（默认），2=纯硬），硬件判热需该值非0且机型为鲲鹏950，其余场景自动降级为纯软扫描。insmod阶段不再通过模块参数控制。
+
+   <pre class="screen" id="screen8274308918"><p class="p" id="p1958548202716">cd /lib/modules/smap</p><p class="p" id="p295820488271">insmod smap.ko</p></pre>
+
+3. 检查模块是否载入成功。
+
+   <pre class="screen" id="screen1884674894220"><p class="p" id="p9960648142719">lsmod | grep '^smap'</p></pre>
+
+   * 查询到`smap`模块即表示载入成功。
 4. 虚拟化场景需安装qemu-system-aarch64。
    
    <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen113013468319"><p class="p" id="p17961114816271">yum install qemu-system-aarch64 -y</p></pre>
-5. 进入以下目录，载入迁移驱动。
-   
-   <pre class="screen" id="ZH-CN_TOPIC_0000002029393654__screen14933143815411"><p class="p" id="p8962164813273">cd /lib/modules/smap</p></pre>
-   
-   pageType（容器4K=0 / 虚拟化2M=1）由 ubturbo_smap_start(pageType) 下发，insmod 阶段不再通过参数区分场景。
-   <pre class="screen"><p class="p" id="p4962648122720">insmod smap_tiering.ko</p></pre>
-6. 检查迁移驱动是否载入成功，返回smap信息即表示安装成功。
-   
-   <pre class="screen"><p class="p" id="p20963104815273">lsmod | grep smap</p></pre>
+5. pageType（容器4K=0 / 虚拟化2M=1）由`ubturbo_smap_start(pageType)`下发，insmod阶段不再通过参数区分场景。SMAP仅创建`/dev/smap_scan_dev`和`/dev/smap_migrate_dev`两个主设备节点，均由udev配置为`ubturbo:ubturbo`、0600权限。

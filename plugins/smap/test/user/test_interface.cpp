@@ -228,6 +228,10 @@ TEST_F(InterfaceTest, TestIsLocalNidValid)
 extern "C" void EnvMutexLock(EnvMutex *mutex);
 extern "C" void EnvMutexUnlock(EnvMutex *mutex);
 extern "C" int ScanMigrateWork(struct ProcessManager *manager);
+extern "C" int ThreadPoolInit(struct ProcessManager *manager, int workers);
+extern "C" void ThreadPoolDestroy(struct ProcessManager *manager);
+extern "C" int InitEventLoop(struct ProcessManager *manager);
+extern "C" int DestroyEventLoop(struct ProcessManager *manager);
 extern "C" int InitAllThreads(struct ProcessManager *manager);
 extern "C" int InitScanMigrateThread(struct ProcessManager *manager, uint32_t period);
 TEST_F(InterfaceTest, TestIsRatioValidTwo)
@@ -251,6 +255,10 @@ TEST_F(InterfaceTest, TestInitAllThreads)
 
     EnvMutexInit(&pm.threadLock);
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(ThreadPoolInit).stubs().will(returnValue(0));
+    MOCKER(InitEventLoop).stubs().will(returnValue(0));
+    MOCKER(DestroyEventLoop).stubs().will(ignoreReturnValue());
+    MOCKER(ThreadPoolDestroy).stubs().will(ignoreReturnValue());
     MOCKER(InitScanMigrateThread).stubs().will(returnValue(-EPERM));
     // InitScanMigrateThread 失败时 scanMigrateThread 已清零，无需再销毁
     MOCKER(DestroyScanMigrateThread).expects(never());
@@ -268,6 +276,8 @@ TEST_F(InterfaceTest, TestInitAllThreadsHugeMode)
     EnvMutexInit(&pm.threadLock);
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
+    MOCKER(ThreadPoolInit).stubs().will(returnValue(0));
+    MOCKER(InitEventLoop).stubs().will(returnValue(0));
     MOCKER(InitScanMigrateThread).stubs().will(returnValue(0));
     ret = InitAllThreads(&pm);
     EXPECT_EQ(0, ret);
@@ -281,6 +291,8 @@ TEST_F(InterfaceTest, TestInitAllThreadsProcessMode)
     EnvMutexInit(&pm.threadLock);
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
+    MOCKER(ThreadPoolInit).stubs().will(returnValue(0));
+    MOCKER(InitEventLoop).stubs().will(returnValue(0));
     MOCKER(InitScanMigrateThread).stubs().will(returnValue(0));
     ret = InitAllThreads(&pm);
     EXPECT_EQ(0, ret);
@@ -779,9 +791,8 @@ TEST_F(InterfaceTest, TestCheckMigrateOutMsgAllowsZeroTargetOnDisabledRemote)
     EnvAtomicSet(&g_forbiddenNodes[4], 0);
 }
 
-extern "C" int IoctlHandler(const void *msg, int pidType, const unsigned long *ioctlCommands);
-extern "C" int PrepareMigrateOutCandidates(struct MigrateOutMsg *msg, int pidType, ProcessManageCandidate *candidates,
-                                           uint32_t *nodeBitmap);
+extern "C" int IoctlHandler(int fd, const void *msg);
+extern "C" int PrepareMigrateOutCandidates(struct MigrateOutMsg *msg, int pidType, ProcessManageCandidate *candidates);
 extern "C" int TrackMigrateOutCandidates(ProcessManageCandidate *candidates, int count);
 
 static int CheckPreparedCandidateTrackingPayload(int len, struct AccessAddPidPayload *payload)
@@ -1461,13 +1472,13 @@ TEST_F(InterfaceTest, TestCheckSmapRemoveMsgWithIsCountValidFailed)
     EXPECT_EQ(-EINVAL, ret);
 }
 
-TEST_F(InterfaceTest, TestCheckSmapRemoveMsgWithIsPidTypeValidFailed)
+TEST_F(InterfaceTest, TestCheckSmapRemoveMsgWithPageTypeMismatch)
 {
     int ret;
     struct RemoveMsg msg;
     int pidType = VM_TYPE;
     MOCKER(IsCountValid).stubs().will(returnValue(true));
-    MOCKER(IsPidTypeValid).stubs().will(returnValue(false));
+    MOCKER(IsPageTypeConsistent).stubs().will(returnValue(false));
     ret = CheckSmapRemoveMsg(&msg, pidType);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -1954,42 +1965,42 @@ TEST_F(InterfaceTest, TestSmapStopOne)
     EXPECT_EQ(0, ret);
 }
 
+static int StubIoctlSetErrnoTimeout(int fd, unsigned long cmd, void *arg)
+{
+    (void)fd;
+    (void)cmd;
+    (void)arg;
+    /* 内核对迁回的 -ETIMEDOUT/-EAGAIN 是真实结果，经 errno 上抛 */
+    errno = ETIMEDOUT;
+    return -1;
+}
+
 TEST_F(InterfaceTest, TestIoctlHandlerOne)
 {
     int ret;
-    const void *msg;
-    int pidType = 0;
-    const unsigned long *ioctlCommands;
+    const void *msg = nullptr;
 
-    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(-1));
-    ret = IoctlHandler(msg, pidType, ioctlCommands);
+    ret = IoctlHandler(-1, msg);
     EXPECT_EQ(-EBADF, ret);
 }
 
 TEST_F(InterfaceTest, TestIoctlHandlerTwo)
 {
     int ret;
-    const void *msg;
-    int pidType = 0;
-    const unsigned long *ioctlCommands;
-    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(0));
+    const void *msg = nullptr;
     MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
-    MOCKER(close).stubs().will(ignoreReturnValue());
-    ret = IoctlHandler(msg, pidType, ioctlCommands);
+    ret = IoctlHandler(0, msg);
     EXPECT_EQ(0, ret);
 }
 
 TEST_F(InterfaceTest, TestIoctlHandlerThree)
 {
     int ret;
-    const void *msg;
-    int pidType = 0;
-    const unsigned long *ioctlCommands;
-    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(0));
-    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-1));
-    MOCKER(close).stubs().will(ignoreReturnValue());
-    ret = IoctlHandler(msg, pidType, ioctlCommands);
-    EXPECT_EQ(-EBADF, ret);
+    const void *msg = nullptr;
+    /* IoctlHandler 失败时返回 -errno，与 TestIoctlHandlerIoctlFailed 共用 invoke 桩 */
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(invoke(StubIoctlSetErrnoTimeout));
+    ret = IoctlHandler(0, msg);
+    EXPECT_EQ(-ETIMEDOUT, ret);
 }
 
 extern "C" void ubturbo_smap_urgent_migrate_out(uint64_t size);
@@ -2492,6 +2503,18 @@ TEST_F(InterfaceTest, TestSmapEnableProcessMigrateNormal)
     MOCKER(EnableProcessMigrate).stubs().will(returnValue(-ENOENT));
     int ret = ubturbo_smap_process_migrate_enable(pidArr, 1, DISABLE_PROCESS_MIGRATE, 0);
     EXPECT_EQ(-ENOENT, ret);
+}
+
+TEST_F(InterfaceTest, TestSmapEnableProcessMigrateRejectsDuplicatePid)
+{
+    pid_t pidArr[] = { 1, 1 };
+    EnvAtomicSet(&g_status, RUNNING);
+    MOCKER(IsPidArrValid).stubs().will(returnValue(true));
+    MOCKER(EnableProcessMigrate).expects(never());
+
+    int ret = ubturbo_smap_process_migrate_enable(pidArr, 2, ENABLE_PROCESS_MIGRATE, 0);
+
+    EXPECT_EQ(-EINVAL, ret);
 }
 
 TEST_F(InterfaceTest, TestIsPidArrValid)
@@ -3587,14 +3610,15 @@ TEST_F(InterfaceTest, AddProcessTrackingHAMScanSuccess)
     EXPECT_EQ(0, ret);
 }
 
-static int CheckTrackingPayloadKeepsAllRemoteNodes(int len, struct AccessAddPidPayload *payload)
+static int CheckTrackingPayloadSendsNoBitmap(int len, struct AccessAddPidPayload *payload)
 {
     EXPECT_EQ(1, len);
-    EXPECT_EQ((1U << 4) | (1U << 6), payload[0].numaNodes);
+    /* numaAttr.numaNodes is user-synthesized: tracking-add must not carry any bitmap. */
+    EXPECT_EQ(0U, payload[0].numaNodes);
     return 0;
 }
 
-TEST_F(InterfaceTest, AddProcessTrackingKeepsAllManagedRemoteNodes)
+TEST_F(InterfaceTest, AddProcessTrackingSendsNoTrackingBitmap)
 {
     pid_t pid = 1234;
     uint32_t scanTime = MIN_SCAN_TIME;
@@ -3611,7 +3635,7 @@ TEST_F(InterfaceTest, AddProcessTrackingKeepsAllManagedRemoteNodes)
     MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
     MOCKER(IsPidTypeCompatibleWithMode).stubs().will(returnValue(true));
-    MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckTrackingPayloadKeepsAllRemoteNodes));
+    MOCKER(AccessIoctlAddPid).expects(once()).will(invoke(CheckTrackingPayloadSendsNoBitmap));
 
     EXPECT_EQ(0, AddProcessTracking(&pid, &scanTime, &duration, 1, NORMAL_SCAN));
 }
@@ -4288,13 +4312,6 @@ TEST_F(InterfaceTest, TestSameRemoteNumaMigrateSuccess)
     EnvAtomicSet(&g_status, 0);
 }
 
-extern "C" void SmapAutoRemoveRemoteEmptyProcessesWithFreshData(void);
-TEST_F(InterfaceTest, TestSmapAutoRemoveRemoteEmptyProcesses)
-{
-    MOCKER(GetCurrentMaxNrPid).stubs().will(returnValue(0));
-    SmapAutoRemoveRemoteEmptyProcessesWithFreshData();
-}
-
 extern "C" bool IsScanTypeValid(pid_t *pidArr, int len);
 TEST_F(InterfaceTest, TestIsScanTypeValidHam)
 {
@@ -4397,9 +4414,8 @@ TEST_F(InterfaceTest, TestIsPidArrValidDuplicatePid)
 TEST_F(InterfaceTest, TestIoctlHandlerOpenFailed)
 {
     int ret;
-    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(-1));
     struct MigrateBackMsg msg = {};
-    ret = IoctlHandler(&msg, 0, nullptr);
+    ret = IoctlHandler(-1, &msg);
     EXPECT_EQ(-EBADF, ret);
 }
 
@@ -4407,19 +4423,18 @@ TEST_F(InterfaceTest, TestIoctlHandlerIoctlFailed)
 {
     int ret;
     struct MigrateBackMsg msg = {};
-    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(10));
-    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-1));
-    ret = IoctlHandler(&msg, 0, nullptr);
-    EXPECT_EQ(-EBADF, ret);
+    /* IoctlHandler 失败时返回 -errno，需用 invoke 桩同时设置 errno */
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(invoke(StubIoctlSetErrnoTimeout));
+    ret = IoctlHandler(0, &msg);
+    EXPECT_EQ(-ETIMEDOUT, ret);
 }
 
 TEST_F(InterfaceTest, TestIoctlHandlerSuccess)
 {
     int ret;
     struct MigrateBackMsg msg = {};
-    MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(10));
     MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
-    ret = IoctlHandler(&msg, 0, nullptr);
+    ret = IoctlHandler(0, &msg);
     EXPECT_EQ(0, ret);
 }
 
@@ -4552,75 +4567,6 @@ TEST_F(InterfaceTest, TestIsMigrateBackSourceNid)
     EXPECT_EQ(false, ret);
 }
 
-extern "C" bool IsAutoRemoveCandidate(ProcessAttr *attr);
-TEST_F(InterfaceTest, TestIsAutoRemoveCandidateNull)
-{
-    bool ret = IsAutoRemoveCandidate(nullptr);
-    EXPECT_EQ(false, ret);
-}
-
-TEST_F(InterfaceTest, TestIsAutoRemoveCandidateNotEligible)
-{
-    ProcessAttr attr = {};
-    attr.autoRemoveWhenRemoteEmpty = true;
-    bool ret = IsAutoRemoveCandidate(&attr);
-    EXPECT_EQ(false, ret);
-
-    attr.autoRemoveWhenRemoteEmpty = false;
-    attr.groupPolicy.enabled = true;
-    ret = IsAutoRemoveCandidate(&attr);
-    EXPECT_EQ(false, ret);
-
-    attr.groupPolicy.enabled = false;
-    attr.scanType = STATISTIC_SCAN;
-    ret = IsAutoRemoveCandidate(&attr);
-    EXPECT_EQ(false, ret);
-
-    attr.scanType = NORMAL_SCAN;
-    attr.syncWaitRemoteEmpty = true;
-    ret = IsAutoRemoveCandidate(&attr);
-    EXPECT_EQ(false, ret);
-}
-
-TEST_F(InterfaceTest, TestIsAutoRemoveCandidateEligible)
-{
-    ProcessAttr attr = {};
-    attr.autoRemoveWhenRemoteEmpty = true;
-    attr.syncWaitRemoteEmpty = false;
-    attr.groupPolicy.enabled = false;
-    attr.scanType = NORMAL_SCAN;
-    attr.walkPage.nrPage = 100;
-    bool ret = IsAutoRemoveCandidate(&attr);
-    EXPECT_EQ(true, ret);
-}
-
-extern "C" bool HasRemotePages(ProcessAttr *attr);
-TEST_F(InterfaceTest, TestHasRemotePagesIncludesPairAccount)
-{
-    ProcessAttr attr = {};
-    g_processManager.nrLocalNuma = 4;
-
-    EXPECT_FALSE(HasRemotePages(&attr));
-
-    attr.walkPage.nrPages[4] = 1;
-    EXPECT_TRUE(HasRemotePages(&attr));
-
-    attr.walkPage.nrPages[4] = 0;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 1;
-    EXPECT_TRUE(HasRemotePages(&attr));
-}
-
-extern "C" bool IsPidAlreadyCollected(pid_t *pids, int count, pid_t pid);
-TEST_F(InterfaceTest, TestIsPidAlreadyCollected)
-{
-    pid_t pids[] = { 123, 456 };
-    bool ret = IsPidAlreadyCollected(pids, 2, 123);
-    EXPECT_EQ(true, ret);
-
-    ret = IsPidAlreadyCollected(pids, 2, 789);
-    EXPECT_EQ(false, ret);
-}
-
 extern "C" bool IsRemoveWholeProcess(const struct RemovePayload *payload);
 TEST_F(InterfaceTest, TestIsRemoveWholeProcess)
 {
@@ -4648,15 +4594,32 @@ TEST_F(InterfaceTest, TestAccessRemovePidFailed)
     EXPECT_EQ(-EBADF, ret);
 }
 
-extern "C" uint32_t ClearRemovePayloadRemoteNodes(ProcessAttr *attr, const struct RemovePayload *payload);
-TEST_F(InterfaceTest, TestClearRemovePayloadRemoteNodes)
+extern "C" bool RemoveLeavesNoRemoteTarget(ProcessAttr *attr, const struct RemovePayload *payload);
+TEST_F(InterfaceTest, TestRemoveLeavesNoRemoteTarget)
 {
+    /* The helper is a pure predicate: it never mutates attr. */
     ProcessAttr attr = {};
-    attr.numaAttr.numaNodes = 0b00010100;
-    struct RemovePayload payload = { .count = 1, .nid = { 4 } };
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
-    uint32_t ret = ClearRemovePayloadRemoteNodes(&attr, &payload);
-    EXPECT_NE(attr.numaAttr.numaNodes, ret);
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.count = 2;
+    attr.targetConfig.targets[0] = {4, 25, 0};
+    attr.targetConfig.targets[1] = {5, 25, 0};
+
+    /* Removing one of two targets leaves the other one. */
+    struct RemovePayload partial = { .count = 1, .nid = { 4 } };
+    EXPECT_FALSE(RemoveLeavesNoRemoteTarget(&attr, &partial));
+
+    /* Removing the only remaining target leaves none. */
+    ProcessAttr lastAttr = {};
+    lastAttr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    lastAttr.targetConfig.count = 1;
+    lastAttr.targetConfig.targets[0] = {5, 25, 0};
+    struct RemovePayload last = { .count = 1, .nid = { 5 } };
+    EXPECT_TRUE(RemoveLeavesNoRemoteTarget(&lastAttr, &last));
+
+    /* Removing a nid that is not a target changes nothing. */
+    ProcessAttr otherAttr = attr;
+    struct RemovePayload other = { .count = 1, .nid = { 6 } };
+    EXPECT_FALSE(RemoveLeavesNoRemoteTarget(&otherAttr, &other));
 }
 
 extern "C" int CheckSmapRemoveGroupedPidLocked(struct RemoveMsg *msg);
@@ -5175,6 +5138,7 @@ TEST_F(InterfaceTest, TestIsPidArrValidTooMany)
 extern "C" void MigrateAndCpuConfig(void);
 extern "C" void IoctlUpdateUbDmaAvail(uint32_t value);
 extern "C" void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax);
+extern "C" void IoctlSetRemoteScanMode(uint32_t mode);
 extern "C" bool CheckUbFeatureUbDma(void);
 extern "C" bool GetMigrateModeEnableConfig(void);
 extern "C" uint32_t GetMigrateModeConfig(void);
@@ -5189,6 +5153,7 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigMigrateModeEnable)
     MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)0));
     MOCKER(GetScanCpuMaxConfig).stubs().will(returnValue((uint32_t)4));
     MOCKER(IoctlSetScanCpuRange).stubs().will(ignoreReturnValue());
+    MOCKER(IoctlSetRemoteScanMode).stubs().will(ignoreReturnValue());
     MigrateAndCpuConfig();
     GlobalMockObject::verify();
 }
@@ -5201,6 +5166,7 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigMigrateModeDisableUbDmaAvail)
     MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)0));
     MOCKER(GetScanCpuMaxConfig).stubs().will(returnValue((uint32_t)4));
     MOCKER(IoctlSetScanCpuRange).stubs().will(ignoreReturnValue());
+    MOCKER(IoctlSetRemoteScanMode).stubs().will(ignoreReturnValue());
     MigrateAndCpuConfig();
     GlobalMockObject::verify();
 }
@@ -5213,6 +5179,7 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigMigrateModeDisableUbDmaNotAvail)
     MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)0));
     MOCKER(GetScanCpuMaxConfig).stubs().will(returnValue((uint32_t)4));
     MOCKER(IoctlSetScanCpuRange).stubs().will(ignoreReturnValue());
+    MOCKER(IoctlSetRemoteScanMode).stubs().will(ignoreReturnValue());
     MigrateAndCpuConfig();
     GlobalMockObject::verify();
 }
@@ -5225,6 +5192,7 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigScanCpuEnable)
     MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)1));
     MOCKER(GetScanCpuMaxConfig).stubs().will(returnValue((uint32_t)3));
     MOCKER(IoctlSetScanCpuRange).stubs().will(ignoreReturnValue());
+    MOCKER(IoctlSetRemoteScanMode).stubs().will(ignoreReturnValue());
     MigrateAndCpuConfig();
     GlobalMockObject::verify();
 }
@@ -5237,6 +5205,7 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigBothEnabled)
     MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)0));
     MOCKER(GetScanCpuMaxConfig).stubs().will(returnValue((uint32_t)4));
     MOCKER(IoctlSetScanCpuRange).stubs().will(ignoreReturnValue());
+    MOCKER(IoctlSetRemoteScanMode).stubs().will(ignoreReturnValue());
     MigrateAndCpuConfig();
     GlobalMockObject::verify();
 }

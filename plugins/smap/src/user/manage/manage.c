@@ -25,6 +25,7 @@
 #include "securec.h"
 #include "device.h"
 #include "access_ioctl.h"
+#include "thread.h"
 #include "advanced-strategy/scene.h"
 #include "smap_config.h"
 #include "strategy/strategy_config.h"
@@ -32,6 +33,7 @@
 #include "strategy/migration.h"
 #include "manage.h"
 #include "manage_internal.h"
+#include "smap_interface.h"
 
 #define UPDATE_CRITICAL_ERR_COUNT 5
 
@@ -245,52 +247,6 @@ int RefreshManagedLocalState(ProcessAttr *attr, bool fullReplacement)
     return ApplyManagedLocalObservation(attr, &observation, fullReplacement);
 }
 
-uint32_t BuildManagedTrackingNodes(const ProcessAttr *attr)
-{
-    if (!attr) {
-        return 0;
-    }
-
-    uint32_t allLocalMask = BuildAllLocalNumaMask();
-    if (allLocalMask == 0) {
-        return 0;
-    }
-
-    /*
-     * Rebuild the remote tracking scope from the current target and resident
-     * page state. An omitted remote must remain tracked while it still owns
-     * pages, but stale bits must not survive after reconciliation reaches zero.
-     */
-    uint32_t localBitmapMask = (1U << LOCAL_NUMA_BITS) - 1U;
-    /* A zero total-page count means no fresh pagemap snapshot is available. */
-    bool pageSnapshotValid = attr->walkPage.nrPage != 0;
-    uint32_t numaNodes = pageSnapshotValid ? 0 : (attr->numaAttr.numaNodes & ~localBitmapMask);
-    numaNodes |= attr->managedLocalState.managedLocalMask & allLocalMask;
-
-    uint32_t targetCount = attr->targetConfig.count;
-    if (targetCount > REMOTE_NUMA_NUM) {
-        SMAP_LOGGER_WARNING("Pid %d target count %u exceeds limit.", attr->pid, targetCount);
-        targetCount = REMOTE_NUMA_NUM;
-    }
-    for (uint32_t i = 0; i < targetCount; i++) {
-        int remoteIndex;
-        int remoteNid = attr->targetConfig.targets[i].remoteNid;
-        if (RemoteNidToIndex(remoteNid, GetNrLocalNuma(), &remoteIndex) == 0) {
-            AddL2ByNid(&numaNodes, remoteNid);
-        }
-    }
-    for (int remoteIndex = 0; remoteIndex < REMOTE_NUMA_NUM; remoteIndex++) {
-        int remoteNid = GetNrLocalNuma() + remoteIndex;
-        bool hasResidentPages = remoteNid < MAX_NODES && attr->walkPage.nrPages[remoteNid] != 0;
-        bool hasAccount = attr->managedLocalState.accountLocalMask[remoteIndex] != 0;
-        if (!hasResidentPages && !hasAccount) {
-            continue;
-        }
-        AddL2ByNid(&numaNodes, remoteNid);
-    }
-    return numaNodes;
-}
-
 /*
  * Validate that nid belongs to the configured remote NUMA id range. This is a
  * range check only; callers that require online-node validation should do that
@@ -365,9 +321,6 @@ int ProcessManagerInit(uint32_t pageType)
         g_processManager.migPeriod = GetMigratePeriodConfig();
     }
 
-    for (i = 0; i < MAX_NODES; i++) {
-        g_processManager.fds.nodes[i] = DEFAULT_FD;
-    }
     g_processManager.fds.migrate = DEFAULT_FD;
     g_processManager.fds.access = DEFAULT_FD;
     g_processManager.fds.lock = DEFAULT_FD;
@@ -492,6 +445,8 @@ void PidSlotInit(struct ProcessManager *manager)
         manager->slots[i].pid = 0;
         manager->slots[i].attr = NULL;
         EnvAtomicSet(&manager->slots[i].refs, 0);
+        EnvAtomicSet(&manager->slots[i].eventEnqueued, 0);
+        manager->slots[i].memFreqFd = -1;
         EnvMutexInit(&manager->slots[i].attrLock);
     }
 }
@@ -513,9 +468,11 @@ static void PidSlotTryReclaim(struct ProcessManager *manager, int i)
     if (EnvAtomicCmpAndSwap(PID_SLOT_REMOVING, PID_SLOT_RESERVED, &s->state) != PID_SLOT_REMOVING) {
         return;
     }
+    /* 复槽前复位事件去重标志，防止上一轮残留派发与新一轮 pid 注册竞争 */
+    s->pid = 0;
+    EnvAtomicSet(&s->eventEnqueued, 0);
     FreeProceccesAttr(s->attr);
     s->attr = NULL;
-    s->pid = 0;
     EnvAtomicSet(&s->state, PID_SLOT_FREE);
 }
 
@@ -529,6 +486,7 @@ int PidSlotAdd(struct ProcessManager *manager, ProcessAttr *attr)
         s->pid = attr->pid;
         s->attr = attr;
         EnvAtomicSet(&s->refs, 1);
+        EnvAtomicSet(&s->eventEnqueued, 0);
         EnvAtomicSet(&s->state, PID_SLOT_INUSE);
         return i;
     }
@@ -542,9 +500,15 @@ void PidSlotRemove(struct ProcessManager *manager, pid_t pid)
         if (s->pid != pid) {
             continue;
         }
+        EnvMutexLock(&s->attrLock);
         if (EnvAtomicCmpAndSwap(PID_SLOT_INUSE, PID_SLOT_REMOVING, &s->state) != PID_SLOT_INUSE) {
+            EnvMutexUnlock(&s->attrLock);
             return;
         }
+        /* 注销必须与 EventLoopRegisterPid 持同一把 attrLock 串行化：
+         * 若移除时已注册 mem_freq fd，此处注销并 close，防止复槽后 fd 泄漏给新 pid */
+        EventLoopUnregisterSlotLocked(s);
+        EnvMutexUnlock(&s->attrLock);
         if (AtomicDecrease(&s->refs, 1) == 1) {
             PidSlotTryReclaim(manager, i);
         }
@@ -560,6 +524,21 @@ bool PidSlotEmpty(struct ProcessManager *manager)
         }
     }
     return true;
+}
+
+bool PidSlotTryGetRef(struct PidSlot *slot)
+{
+    if (EnvAtomicRead(&slot->state) != PID_SLOT_INUSE) {
+        return false;
+    }
+    AtomicIncrease(&slot->refs, 1);
+    if (EnvAtomicRead(&slot->state) == PID_SLOT_INUSE) {
+        return true;
+    }
+    if (AtomicDecrease(&slot->refs, 1) == 1) {
+        PidSlotTryReclaim(&g_processManager, (int)(slot - g_processManager.slots));
+    }
+    return false;
 }
 
 struct PidSlot *PidSlotGetRef(pid_t pid)
@@ -765,6 +744,25 @@ ProcessAttr *GetProcessAttr(pid_t pid)
     return PidSlotAttr(s);
 }
 
+/* 按 attr 定位 slot 并取得引用；调用方用完后须释放引用。 */
+struct PidSlot *PidSlotGetRefByAttr(const ProcessAttr *attr)
+{
+    if (!attr) {
+        return NULL;
+    }
+    for (int i = 0; i < MAX_PID_SLOTS; i++) {
+        struct PidSlot *s = &g_processManager.slots[i];
+        if (!PidSlotTryGetRef(s)) {
+            continue;
+        }
+        if (s->attr == attr) {
+            return s;
+        }
+        PidSlotReleaseRefs(&s, 1);
+    }
+    return NULL;
+}
+
 int ReadCmdlineByPid(pid_t pid, char *buf, int len)
 {
     char path[BUFFER_SIZE];
@@ -886,10 +884,9 @@ void SetMultiNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
     }
 }
 
-int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
+int AddProcess(ProcessParam *param, PidType type)
 {
     int ret;
-    (void)nodeBitmap;
     if (g_processManager.nr[VM_TYPE] + g_processManager.nr[PROCESS_TYPE] >= GetCurrentMaxNrPid()) {
         SMAP_LOGGER_ERROR("nr of pid is out of limit.");
         return -EINVAL;
@@ -922,6 +919,13 @@ int AddProcess(ProcessParam *param, PidType type, uint32_t *nodeBitmap)
         free(attr);
         return ret;
     }
+    /*
+     * 纳管时以观测值（CPU 亲和性 + numa_maps 驻留）预置本地位：作为首次
+     * bitmap 回读前的过渡值，保证 GetAttrL1 等本地位消费方拿到合法 L1。
+     * 首轮回读后由 BuildAllPidData 按各节点回读页数重新合成本地位。
+     * 仅写用户态 attr，内核不维护 numa_nodes。
+     */
+    attr->numaAttr.numaNodes |= attr->managedLocalState.managedLocalMask;
     attr->scanTime = DEFAULT_SCAN_PERIOD;
     PidSlotAdd(&g_processManager, attr);
     SMAP_LOGGER_INFO("Set pid %d scan cycle to %ums.", attr->pid, attr->scanTime);
@@ -1047,6 +1051,13 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
         }
     }
     if (candidate->isNew) {
+        /*
+         * 纳管时以观测值（CPU 亲和性 + numa_maps 驻留，Configure 阶段已采样
+         * 合入 managedLocalState）预置本地位：作为首次 bitmap 回读前的过渡
+         * 值，保证 GetAttrL1 等本地位消费方拿到合法 L1。首轮回读后由
+         * BuildAllPidData 按各节点回读页数重新合成。
+         */
+        prepared->numaAttr.numaNodes |= prepared->managedLocalState.managedLocalMask;
         prepared->scanTime = DEFAULT_SCAN_PERIOD;
     }
     return 0;
@@ -1072,7 +1083,6 @@ void PublishProcessManageCandidate(ProcessManageCandidate *candidate)
         candidate->active->pendingTargetConfig = prepared->pendingTargetConfig;
         candidate->active->pendingTargetConfigValid = prepared->pendingTargetConfigValid;
         candidate->active->pendingIgnoreRemoteCapacity = prepared->pendingIgnoreRemoteCapacity;
-        candidate->active->pendingTargetNumaNodes = prepared->pendingTargetNumaNodes;
         candidate->active->pendingSeq++;
         if (slot) {
             EnvMutexUnlock(&slot->attrLock);
@@ -1384,7 +1394,7 @@ static uint64_t SumParamMigrateMemSize(const ProcessParam *param)
     return total;
 }
 
-int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
+int ProcessAddManage(ProcessParam *param)
 {
     int ret;
     ProcessTargetConfig config;
@@ -1401,25 +1411,24 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
     }
     ProcessAttr *current = GetProcessAttr(param->pid);
     if (current) {
+        struct PidSlot *slotForPending = PidSlotGetRefByAttr(current);
+        if (slotForPending) {
+            EnvMutexLock(&slotForPending->attrLock);
+        }
         ret = ConfigureMigrationTargets(current, &config);
         if (ret) {
+            if (slotForPending) {
+                EnvMutexUnlock(&slotForPending->attrLock);
+                PidSlotReleaseRefs(&slotForPending, 1);
+            }
             SMAP_LOGGER_ERROR("Configure pid %d target failed: %d.", current->pid, ret);
             PutProcessAttr(current);
             return ret;
         }
-        bool pending = false;
-        /* 与 ApplyPendingMigrationTargets 的快照/清除互斥 */
-        struct PidSlot *slot = PidSlotGetRef(param->pid);
-        if (slot) {
-            EnvMutexLock(&slot->attrLock);
-        }
-        pending = current->pendingTargetConfigValid;
-        if (pending && nodeBitmap) {
-            current->pendingTargetNumaNodes = *nodeBitmap;
-        }
-        if (slot) {
-            EnvMutexUnlock(&slot->attrLock);
-            PidSlotReleaseRefs(&slot, 1);
+        bool pending = current->pendingTargetConfigValid;
+        if (slotForPending) {
+            EnvMutexUnlock(&slotForPending->attrLock);
+            PidSlotReleaseRefs(&slotForPending, 1);
         }
         SMAP_LOGGER_INFO("Update pid %d migrate config, migrateMode: %d, remoteNumaCnt: %d.", current->pid,
                          current->migrateMode, current->remoteNumaCnt);
@@ -1442,7 +1451,7 @@ int ProcessAddManage(ProcessParam *param, uint32_t *nodeBitmap)
         }
         PutProcessAttr(current);
     } else {
-        ret = AddProcess(param, pidType, nodeBitmap);
+        ret = AddProcess(param, pidType);
         if (ret) {
             SMAP_LOGGER_ERROR("Add pid %d to list failed: %d.", param->pid, ret);
             return ret;
@@ -1506,6 +1515,199 @@ void CheckAndRemoveInvalidProcess(void)
         EnvMutexUnlock(&numaInfo->lock);
     }
     PidSlotReleaseRefs(all, n);
+}
+
+/* A remove payload with no nid keeps the legacy whole-process remove behavior. */
+static bool IsRemoveWholeProcess(const struct RemovePayload *payload)
+{
+    return payload->count == 0;
+}
+
+/* Remove all access-tracking state for pid from the kernel module. */
+static int AccessRemovePid(pid_t pid)
+{
+    struct AccessRemovePidPayload payload = { .pid = pid };
+    int ret = AccessIoctlRemovePid(1, &payload);
+    if (ret) {
+        SMAP_LOGGER_ERROR("access ioctl remove pid %d error: %d.", pid, ret);
+    }
+    return ret;
+}
+
+/*
+ * Decide whether removing the requested remote nodes leaves the process
+ * without any remote target. The kernel tracks pages per node without a
+ * numa_nodes bitmap, so no tracking-scope update is needed; the result only
+ * decides whether kernel tracking should be torn down entirely.
+ */
+static bool RemoveLeavesNoRemoteTarget(ProcessAttr *attr, const struct RemovePayload *payload)
+{
+    int remaining = 0;
+    for (uint32_t i = 0; i < attr->targetConfig.count; i++) {
+        int nid = attr->targetConfig.targets[i].remoteNid;
+        bool removedNow = false;
+        for (int j = 0; j < payload->count; j++) {
+            if (payload->nid[j] == nid) {
+                removedNow = true;
+                break;
+            }
+        }
+        if (!removedNow) {
+            remaining++;
+        }
+    }
+    return remaining == 0;
+}
+
+/* Apply remove requests to kernel access tracking before changing manager state. */
+int IoctlRemoveProcess(struct RemoveMsg *msg)
+{
+    for (int i = 0; i < msg->count; i++) {
+        struct RemovePayload *payload = &msg->payload[i];
+        pid_t pid = payload->pid;
+        if (IsRemoveWholeProcess(payload)) {
+            int ret = AccessRemovePid(pid);
+            if (ret) {
+                return ret;
+            }
+            continue;
+        }
+
+        ProcessAttr *attr = GetProcessAttr(pid);
+        if (!attr) {
+            int ret = AccessRemovePid(pid);
+            if (ret) {
+                PutProcessAttr(attr);
+                return ret;
+            }
+            PutProcessAttr(attr);
+            continue;
+        }
+        if (RemoveLeavesNoRemoteTarget(attr, payload)) {
+            int ret = AccessRemovePid(pid);
+            if (ret) {
+                PutProcessAttr(attr);
+                return ret;
+            }
+        }
+        /* kernel tracks pages per node without a numa_nodes bitmap: draining
+         * pages on removed remote nodes keep tracked until idle reclaim. */
+        PutProcessAttr(attr);
+    }
+    return 0;
+}
+
+static void ClearManagedWholeProcess(pid_t pid, bool *removed)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    ProcessAttr *attr = GetProcessAttr(pid);
+    if (!attr) {
+        SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", pid);
+        *removed = false;
+        return;
+    }
+
+    PidType type = attr->type;
+    PidSlotRemove(manager, attr->pid);
+    if (type >= PROCESS_TYPE && type < TYPE_MAX && manager->nr[type] > 0) {
+        manager->nr[type]--;
+    }
+    *removed = true;
+    SMAP_LOGGER_INFO("Remove pid: %d, from managed process.", pid);
+    PutProcessAttr(attr);
+}
+
+/* Clear strategy/accounting fields that belong to the removed remote node. */
+static void ClearRemovedRemoteStrategy(ProcessAttr *attr, int remoteNid)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    int remoteIdx = remoteNid - nrLocalNuma;
+    if (remoteIdx < 0 || remoteIdx >= REMOTE_NUMA_NUM) {
+        return;
+    }
+
+    for (int i = 0; i < LOCAL_NUMA_NUM; i++) {
+        attr->strategyAttr.initRemoteMemRatio[i][remoteIdx] = 0;
+        attr->strategyAttr.l2RemoteMemRatio[i][remoteIdx] = 0;
+        attr->strategyAttr.l3RemoteMemRatio[i][remoteIdx] = 0;
+        attr->strategyAttr.memSize[i][remoteIdx] = 0;
+        attr->strategyAttr.allocRemoteNrPages[i][remoteIdx] = 0;
+        attr->strategyAttr.remoteNrPagesAfterMigrate[i][remoteIdx] = 0;
+    }
+    for (int i = 0; i < MAX_NODES; i++) {
+        attr->strategyAttr.nrMigratePages[i][remoteNid] = 0;
+        attr->strategyAttr.nrMigratePages[remoteNid][i] = 0;
+    }
+}
+
+/* Drop one remote node from a managed process and compact migrateParam. */
+static void RemoveManagedProcessRemoteNode(ProcessAttr *attr, int remoteNid)
+{
+    int nrLocalNuma = GetNrLocalNuma();
+    int remotePos = remoteNid + (LOCAL_NUMA_BITS - nrLocalNuma);
+    ClearNodeBit(&attr->numaAttr.numaNodes, remotePos);
+    ClearRemovedRemoteStrategy(attr, remoteNid);
+    (void)RemoveProcessRemoteTarget(&attr->targetConfig, remoteNid);
+    if (attr->pendingTargetConfigValid) {
+        (void)RemoveProcessRemoteTarget(&attr->pendingTargetConfig, remoteNid);
+    }
+
+    int writeIdx = 0;
+    for (int i = 0; i < attr->remoteNumaCnt; i++) {
+        if (attr->migrateParam[i].nid == remoteNid) {
+            continue;
+        }
+        if (writeIdx != i) {
+            attr->migrateParam[writeIdx] = attr->migrateParam[i];
+        }
+        writeIdx++;
+    }
+    for (int i = writeIdx; i < REMOTE_NUMA_NUM; i++) {
+        attr->migrateParam[i].nid = 0;
+        attr->migrateParam[i].memSize = 0;
+    }
+    attr->remoteNumaCnt = attr->targetConfig.count;
+}
+
+static void ClearManagedPartialRemoteNodes(struct RemovePayload *payload, bool *removed, bool *changed)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    ProcessAttr *attr = GetProcessAttr(payload->pid);
+    if (!attr) {
+        SMAP_LOGGER_WARNING("pid: %d, not exist, not need to remove.", payload->pid);
+        *changed = false;
+        PutProcessAttr(attr);
+        return;
+    }
+    for (int i = 0; i < payload->count; i++) {
+        RemoveManagedProcessRemoteNode(attr, payload->nid[i]);
+    }
+    *changed = true;
+    if (attr->remoteNumaCnt == 0) {
+        ClearManagedWholeProcess(payload->pid, removed);
+    }
+    PutProcessAttr(attr);
+}
+
+/* Keep manager state and persisted process config consistent after remove. */
+void ClearManagedProcess(int nr, struct RemovePayload *payload)
+{
+    bool removed = false;
+    bool changed = false;
+
+    for (int i = 0; i < nr; i++) {
+        if (IsRemoveWholeProcess(&payload[i])) {
+            ClearManagedWholeProcess(payload[i].pid, &removed);
+        } else {
+            ClearManagedPartialRemoteNodes(&payload[i], &removed, &changed);
+        }
+    }
+    if (removed || changed) {
+        int ret = SyncAllProcessConfig();
+        if (ret) {
+            SMAP_LOGGER_WARNING("Synchronize process config maybe failed: %d.", ret);
+        }
+    }
 }
 
 void RemoveManagedProcess(int nr, pid_t *pidArr)

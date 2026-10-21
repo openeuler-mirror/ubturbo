@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
+#include "securec.h"
 #include "smap_log_core.h"
 
 static SmapLogFile g_smapLogFile;
@@ -148,6 +149,7 @@ int SmapLogCoreInit(const SmapLogConfig *config)
     ret = snprintf_s(g_smapLogFile.basePath, sizeof(g_smapLogFile.basePath), sizeof(g_smapLogFile.basePath) - 1, "%s",
                      config->filePath);
     if (ret == -1) {
+        pthread_mutex_destroy(&g_smapLogFile.lock);
         return -EINVAL;
     }
 

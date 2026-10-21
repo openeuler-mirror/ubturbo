@@ -14,9 +14,10 @@
 #include <sys/ioctl.h>
 #include <linux/types.h>
 
+#include "common.h"
 #include "manage.h"
 
-#define ACCESS_DEVICE "/dev/smap_access_device"
+#define ACCESS_DEVICE "/dev/smap_scan_dev"
 #define MAX_NR_PID MAX_NR_MIGOUT
 
 struct AccessAddPidPayload {
@@ -65,11 +66,11 @@ struct SmapScanCpuRange {
     uint32_t cpuMax;
 };
 
-#define SMAP_ACCESS_MAGIC 0xBB
 #define SMAP_ACCESS_ADD_PID _IOW(SMAP_ACCESS_MAGIC, 1, struct AccessAddPidMsg)
 #define SMAP_ACCESS_REMOVE_PID _IOW(SMAP_ACCESS_MAGIC, 2, struct AccessRemovePidMsg)
 #define SMAP_ACCESS_REMOVE_ALL_PID _IOW(SMAP_ACCESS_MAGIC, 3, int)
-#define SMAP_ACCESS_WALK_PAGEMAP _IOW(SMAP_ACCESS_MAGIC, 4, size_t)
+/* per-pid页数查询：与内核struct smap_pid_page_num布局对齐（pid_t + 每节点一个size_t） */
+#define SMAP_ACCESS_WALK_PAGEMAP _IOWR(SMAP_ACCESS_MAGIC, 4, struct ProcessMemBitmap)
 #define SMAP_ACCESS_GET_TRACKING _IOW(SMAP_ACCESS_MAGIC, 5, struct TrakingInfoPayload)
 #define SMAP_ACCESS_CREATE_PROCFS _IOW(SMAP_ACCESS_MAGIC, 6, struct UserInfo)
 #define SMAP_ACCESS_GET_NR_LOCAL_NUMA _IOR(SMAP_ACCESS_MAGIC, 7, int)
@@ -79,10 +80,11 @@ struct SmapScanCpuRange {
 int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload);
 int AccessIoctlRemovePid(int len, struct AccessRemovePidPayload *payload);
 int AccessIoctlRemoveAllPid(void);
-int AccessIoctlWalkPagemap(size_t *len);
+int AccessIoctlWalkPagemap(pid_t pid, struct ProcessMemBitmap *pmb);
+int AccessIoctlRestartPid(pid_t pid);
 int AccessIoctlCreateProcfs(struct UserInfo *ui);
-int AccessRead(size_t len, char *buf);
 void IoctlUpdateUbDmaAvail(uint32_t value);
 void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax);
+void IoctlSetRemoteScanMode(uint32_t mode);
 
 #endif /* __ACCESS_IOCTL_H__ */

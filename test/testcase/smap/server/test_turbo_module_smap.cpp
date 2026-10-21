@@ -998,6 +998,7 @@ TEST_F(TestTurboModuleSmap, ReturnZeroWhenAllSymbolsFound)
 TEST_F(TestTurboModuleSmap, ReturnEINVALWhenAnySymbolMissing)
 {
     MOCKER((void *(*)(const char *, int))(dlopen)).stubs().will(returnValue((void *)0x1234));
+    MOCKER((int (*)(void *))(dlclose)).stubs().will(returnValue(0));
 
     MOCKER((void *(*)(void *, const char *))(dlsym)).stubs().will(returnValue((void *)nullptr));
 

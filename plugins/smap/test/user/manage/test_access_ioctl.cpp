@@ -15,11 +15,6 @@
 using namespace std;
 
 class AccessIoctlTest : public ::testing::Test {
-public:
-    static constexpr int BITMAP_BUF_LEN = 10;
-    static constexpr int BITMAP_BUF_LEN_PART1 = 4;
-    static constexpr int BITMAP_BUF_LEN_PART2 = 6;
-
 protected:
     void SetUp() override
     {
@@ -70,14 +65,24 @@ TEST_F(AccessIoctlTest, TestAccessIoctlRemoveAllPid)
     EXPECT_EQ(-EBADF, ret);
 }
 
+static int StubWalkIoctlFail(int fd, unsigned long cmd, void *arg)
+{
+    (void)fd;
+    (void)cmd;
+    (void)arg;
+    errno = ENODEV;
+    return -1;
+}
+
 TEST_F(AccessIoctlTest, TestAccessIoctlWalkPagemap)
 {
     int ret;
-    size_t len;
-    MOCKER(open).stubs().will(returnValue(0));
-    MOCKER((int (*)(int, unsigned long, void *))ioctl).stubs().will(returnValue(-1));
-    ret = AccessIoctlWalkPagemap(&len);
-    EXPECT_EQ(-EBADF, ret);
+    struct ProcessMemBitmap pmb = {.pid = 100};
+
+    /* AccessIoctlWalkPagemap 直接上抛 -errno，manage_scan 依赖 -ESRCH 判断 */
+    MOCKER((int (*)(int, unsigned long, void *))ioctl).stubs().will(invoke(StubWalkIoctlFail));
+    ret = AccessIoctlWalkPagemap(100, &pmb);
+    EXPECT_EQ(-ENODEV, ret);
 }
 
 extern "C" void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax);
@@ -92,59 +97,15 @@ TEST_F(AccessIoctlTest, TestIoctlSetScanCpuRangeFailed)
     MOCKER((int (*)(int, unsigned long, void *))ioctl).stubs().will(returnValue(-1));
     IoctlSetScanCpuRange(1, 3);
 }
-
-extern "C" ssize_t read(int fd, void *buf, size_t count);
-TEST_F(AccessIoctlTest, TestAccessReadAllInOneTime)
+extern "C" void IoctlSetRemoteScanMode(uint32_t mode);
+TEST_F(AccessIoctlTest, TestIoctlSetRemoteScanModeSuccess)
 {
-    int ret;
-    size_t len = BITMAP_BUF_LEN;
-    char buf[BITMAP_BUF_LEN];
-
-    MOCKER(read).stubs().will(returnValue(static_cast<ssize_t>(len)));
-    ret = AccessRead(len, buf);
-    EXPECT_EQ(0, ret);
+    MOCKER((int (*)(int, unsigned long, void *))ioctl).stubs().will(returnValue(0));
+    IoctlSetRemoteScanMode(1);
 }
 
-TEST_F(AccessIoctlTest, TestAccessReadPartial)
+TEST_F(AccessIoctlTest, TestIoctlSetRemoteScanModeFailed)
 {
-    int ret;
-    size_t len = BITMAP_BUF_LEN;
-    char buf[BITMAP_BUF_LEN];
-
-    MOCKER(read)
-        .stubs()
-        .will(returnValue(static_cast<ssize_t>(len - 1)))
-        .then(returnValue(static_cast<ssize_t>(0)));
-    ret = AccessRead(len, buf);
-    EXPECT_EQ(-EIO, ret);
-}
-
-TEST_F(AccessIoctlTest, TestAccessReadAllInTwoTimes)
-{
-    int ret;
-    size_t len = BITMAP_BUF_LEN_PART1 + BITMAP_BUF_LEN_PART2;
-    char buf[BITMAP_BUF_LEN_PART1 + BITMAP_BUF_LEN_PART2];
-    constexpr int CALL_NUMS = 2;
-
-    MOCKER(read)
-        .expects(exactly(CALL_NUMS))
-        .will(returnValue(static_cast<ssize_t>(BITMAP_BUF_LEN_PART1)))
-        .then(returnValue(static_cast<ssize_t>(BITMAP_BUF_LEN_PART2)));
-    ret = AccessRead(len, buf);
-    EXPECT_EQ(0, ret);
-}
-
-TEST_F(AccessIoctlTest, TestAccessReadFailedInSecondTime)
-{
-    int ret;
-    size_t len = BITMAP_BUF_LEN_PART1 + BITMAP_BUF_LEN_PART2;
-    char buf[BITMAP_BUF_LEN_PART1 + BITMAP_BUF_LEN_PART2];
-    constexpr int CALL_NUMS = 2;
-
-    MOCKER(read)
-        .expects(exactly(CALL_NUMS))
-        .will(returnValue(static_cast<ssize_t>(BITMAP_BUF_LEN_PART1)))
-        .then(returnValue(static_cast<ssize_t>(-EAGAIN)));
-    ret = AccessRead(len, buf);
-    EXPECT_EQ(-EIO, ret);
+    MOCKER((int (*)(int, unsigned long, void *))ioctl).stubs().will(returnValue(-1));
+    IoctlSetRemoteScanMode(2);
 }

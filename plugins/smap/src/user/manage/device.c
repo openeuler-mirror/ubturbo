@@ -34,66 +34,6 @@ typedef enum {
     PGSIZE_TWO_MB = 9,
 } PageSize;
 
-static int SendCmdToAllNodes(int fds[], unsigned long cmd, int arg)
-{
-    int i;
-    int ret = 0;
-
-    for (i = 0; i < MAX_NODES; i++) {
-        if (fds[i] >= 0) {
-            if (ioctl(fds[i], cmd, arg) < 0) {
-                SMAP_LOGGER_DEBUG("ioctl for node%d failed: %s, skipped.", i, strerror(errno));
-                return -EBADF;
-            }
-        }
-    }
-    return ret;
-}
-
-static int FindFdByNode(int fds[], int fdsLength)
-{
-    int i;
-
-    for (i = 0; i < fdsLength; i++) {
-        if (fds[i] >= 0) {
-            return fds[i];
-        }
-    }
-    return -EINVAL;
-}
-
-int EnableTracking(struct ProcessManager *manager)
-{
-    int ret = SendCmdToAllNodes(manager->fds.nodes, SMAP_IOCTL_TRACKING_CMD, 1);
-    if (!ret) {
-        manager->tracking.trackingEnabled = true;
-    }
-    return ret;
-}
-
-static inline int DisableTrackingInternal(struct ProcessManager *manager)
-{
-    return SendCmdToAllNodes(manager->fds.nodes, SMAP_IOCTL_TRACKING_CMD, 0);
-}
-
-int DisableTracking(struct ProcessManager *manager)
-{
-    int ret;
-
-    while (1) {
-        ret = DisableTrackingInternal(manager);
-        if (!ret) {
-            break;
-        }
-        SMAP_LOGGER_DEBUG("Scanning still in progress, will retry.");
-        usleep(DISABLE_TRACKING_RETRY_DELAY_US);
-    }
-    if (!ret) {
-        manager->tracking.trackingEnabled = false;
-    }
-    return ret;
-}
-
 bool IsNumaCriticalErr(int nid)
 {
     char path[SYS_NODE_CRITICAL_ERR_LEN] = { 0 };
@@ -135,14 +75,16 @@ int RefreshRemoteRam(struct ProcessManager *manager)
     return 0;
 }
 
-static int ConfigTrackingDev(int *trackingFds, uint32_t pageSize)
+static int ConfigTrackingDev(struct ProcessManager *manager, uint32_t pageSize)
 {
-    int ret = 0;
     int arg;
-    arg = pageSize == PAGESIZE_2M ? PGSIZE_TWO_MB : PGSIZE_FOUR_KB;
-    ret |= SendCmdToAllNodes(trackingFds, SMAP_IOCTL_PAGE_SIZE_SET_CMD, arg);
 
-    return ret;
+    arg = pageSize == PAGESIZE_2M ? PGSIZE_TWO_MB : PGSIZE_FOUR_KB;
+    if (ioctl(manager->fds.access, SMAP_IOCTL_PAGE_SIZE_SET_CMD, arg) < 0) {
+        SMAP_LOGGER_ERROR("ioctl set tracking page size failed: %s.", strerror(errno));
+        return -errno;
+    }
+    return 0;
 }
 
 static bool IsLocalNuma(unsigned long nid)
@@ -209,7 +151,7 @@ int ConfigureTrackingDevices(struct ProcessManager *manager)
         return ret;
     }
 
-    ret = ConfigTrackingDev(manager->fds.nodes, manager->tracking.pageSize);
+    ret = ConfigTrackingDev(manager, manager->tracking.pageSize);
     if (ret) {
         SMAP_LOGGER_ERROR("Error when config tracking-node devices.");
         return ret;
@@ -241,10 +183,8 @@ static int OpenAndFlockFd(int *fd, const char *device)
 
 int InitTrackingDev(struct ProcessManager *manager)
 {
-    int i;
     int ret = 0;
     int fd;
-    char path[PATH_MAX];
 
     ret = OpenAndFlockFd(&fd, TIERING_PATH);
     if (ret) {
@@ -257,28 +197,6 @@ int InitTrackingDev(struct ProcessManager *manager)
         return -ENODEV;
     }
     manager->fds.access = fd;
-    for (i = 0; i < MAX_NODES; i++) {
-        ret = snprintf_s(path, sizeof(path), sizeof(path), NODE_PATH, i);
-        if (ret == -1) {
-            SMAP_LOGGER_ERROR("Build tracking node path failed: %d.", ret);
-            return -EINVAL;
-        }
-        if (access(path, F_OK) != 0) {
-            if (errno == ENOENT) {
-                continue;
-            }
-            SMAP_LOGGER_ERROR("%s exists, but cannot be accessed.", path);
-            return -ENODEV;
-        }
-        fd = open(path, O_RDWR);
-        if (fd < 0) {
-            manager->fds.nodes[i] = DEFAULT_FD;
-            SMAP_LOGGER_WARNING("Open tracking node failed: %d.", -errno);
-            continue;
-        }
-        manager->fds.nodes[i] = fd;
-        SMAP_LOGGER_INFO("%s is managed.", path);
-    }
 
     ret = ConfigureTrackingDevices(manager);
     if (ret) {
@@ -289,15 +207,6 @@ int InitTrackingDev(struct ProcessManager *manager)
 
 void DeinitTrackingDev(struct ProcessManager *manager)
 {
-    int i;
-
-    DisableTracking(manager);
-    for (i = 0; i < MAX_NODES; i++) {
-        if (manager->fds.nodes[i] >= 0) {
-            close(manager->fds.nodes[i]);
-            manager->fds.nodes[i] = DEFAULT_FD;
-        }
-    }
     if (manager->fds.migrate >= 0) {
         close(manager->fds.migrate);
         manager->fds.migrate = DEFAULT_FD;
@@ -311,7 +220,7 @@ void DeinitTrackingDev(struct ProcessManager *manager)
 void GetUbFluxMb(void)
 {
     struct ProcessManager *manager = GetProcessManager();
-    int i, ret = -ENODEV;
+    int ret = -ENODEV;
 
     // ubBwThreshold == 0 表示不开启迁移限制：跳过带宽查询与流量统计
     if (!IsBwMonitorEnabled(manager)) {
@@ -320,19 +229,11 @@ void GetUbFluxMb(void)
 
     struct UbFluxMbStatistic *result = &(manager->ubBwMonitor.currentFluxMb);
 
-    /* ub_watch only implemented by remote NUMA tracking_nodes */
-    for (i = LOCAL_NUMA_NUM; i < MAX_NODES; i++) {
-        if (manager->fds.nodes[i] >= 0) {
-            ret = ioctl(manager->fds.nodes[i], SMAP_IOCTL_UB_WATCH_CMD, result);
-            if (ret == 0) {
-                break;
-            }
-        }
-    }
+    ret = ioctl(manager->fds.access, SMAP_IOCTL_UB_WATCH_CMD, result);
 
     manager->ubBwMonitor.currentFluxRet = ret;
     if (manager->ubBwMonitor.currentFluxRet) {
-        SMAP_LOGGER_ERROR("ioctl SMAP_IOCTL_UB_WATCH_CMD failed on all remote nodes.");
+        SMAP_LOGGER_ERROR("ioctl SMAP_IOCTL_UB_WATCH_CMD failed on scan device.");
         return;
     }
 
@@ -350,21 +251,14 @@ int ConfigUbWatch(uint32_t durationMs)
 {
     struct ProcessManager *manager = GetProcessManager();
     struct UbWatchConfig config = { .durationMs = durationMs };
-    int i;
-
     if (durationMs == 0) {
         SMAP_LOGGER_ERROR("ConfigUbWatch: durationMs must be greater than 0");
         return -EINVAL;
     }
 
-    /* ub_watch only implemented by remote NUMA tracking_nodes */
-    for (i = LOCAL_NUMA_NUM; i < MAX_NODES; i++) {
-        if (manager->fds.nodes[i] >= 0) {
-            if (ioctl(manager->fds.nodes[i], SMAP_IOCTL_UB_WATCH_CONFIG_CMD, &config) >= 0) {
-                return 0;
-            }
-        }
+    if (ioctl(manager->fds.access, SMAP_IOCTL_UB_WATCH_CONFIG_CMD, &config) < 0) {
+        SMAP_LOGGER_ERROR("ioctl SMAP_IOCTL_UB_WATCH_CONFIG_CMD failed on scan device.");
+        return -errno;
     }
-    SMAP_LOGGER_ERROR("ioctl SMAP_IOCTL_UB_WATCH_CONFIG_CMD failed on all remote nodes.");
-    return -ENODEV;
+    return 0;
 }

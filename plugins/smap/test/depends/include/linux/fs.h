@@ -16,6 +16,7 @@
 #include <linux/uaccess.h>
 #include <linux/stat.h>
 #include <linux/user_namespace.h>
+#include <linux/poll.h>
 #include <uapi/asm-generic/fcntl.h>
 
 extern struct user_namespace init_user_ns;
@@ -59,6 +60,7 @@ struct file_operations {
 	ssize_t (*write) (struct file *f, const char __user *buf, size_t len, loff_t *off);
 	ssize_t (*read) (struct file *f, char __user *buf, size_t len, loff_t *off);
 	loff_t (*llseek) (struct file *f, loff_t off, int w);
+	unsigned int (*poll) (struct file *f, poll_table *wait);
 };
 
 struct kiocb {

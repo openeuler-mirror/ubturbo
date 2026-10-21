@@ -60,7 +60,7 @@ UBTURBO/
 2. **插件加载**：从指定目录下查找so，通过dlopen加载插件，卸载时通过dlclose关闭动态库。
 3. **进程通信**：通过unix domain socket机制，进行节点内进程间通信，提供面向连接的可靠数据传输功能。使用Reactor模式，server端启动线程监听指定socket文件，接受client端连接后创建一个新线程，调用指定回调函数，将结果发送给client端。
 4. **日志管理**：
-   
+
    - **异步环形缓冲区**：使用异步环形缓冲区实现异步日志记录，避免阻塞主线程；
    - **锁机制**：采用适当的锁机制确保多线程环境下的线程安全性；
    - **时间戳处理**：利用系统时间函数获取时间戳信息；
@@ -189,17 +189,17 @@ sh run_dt.sh
 ```
 
 > **已知兼容性问题**
-> 
+>
 > - **lcov 2.3 与 gcc 12.3.1 存在 mismatched exception tag 兼容问题**，导致覆盖率收集步骤报错（脚本退出码非0，但测试本身全部通过）。`run_ut.sh` 已使用 `set +e` 包裹覆盖率收集阶段，使 lcov 报错不影响脚本退出码和 CI 结果。如需获取覆盖率报告，请使用与 gcc 12.3.1 兼容的 lcov 版本。
 > - **UTC 时区导致 TestGenerateCompressedFilename 测试失败**：容器默认 UTC 时区，但日志文件名测试期望 +0800 时区。执行测试前需设置 `export TZ=Asia/Shanghai`，`run_ut.sh` 已自动设置。
 
 ## UBTurbo运行
 
 > **运行前提**：运行 `ub_turbo_exec` 前必须先**构建并安装 SMAP**（见下方 [SMAP插件安装与单元测试](#SMAP插件安装与单元测试) 章节），包括：
-> 
+>
 > 1. 构建 `libsmap.so` 用户态库并安装到 `/usr/lib64/`；
-> 2. 构建 4 个内核模块（`smap_tracking_core.ko`、`smap_histogram_tracking.ko`、`smap_access_tracking.ko`、`smap_tiering.ko`）并安装到 `/lib/modules/smap/`；
-> 3. 按 [SMAP安装方式](#安装RPM包) 加载内核模块（`insmod` 顺序见下文）。
+> 2. 构建 SMAP 内核模块 `smap.ko` 并安装到 `/lib/modules/smap/`；
+> 3. 按 [SMAP安装方式](#安装RPM包) 加载该模块。
 >
 > 若 SMAP 未安装或内核模块未加载，UBTurbo 启动时会因 Smap 模块启动失败而退出（日志：`Start module failed, name:Smap`）。若要完整运行样例可参考脚本`docker/run_verify.sh`。
 
@@ -218,7 +218,7 @@ chmod +x ub_turbo_exec
 
 # SMAP插件安装与单元测试
 
-SMAP是UBTurbo的内部插件，源码位于`plugins/smap/`，通过页面扫描和迁移使能分级内存能力。SMAP由内核态驱动模块和用户态动态库组成，仅支持aarch64架构，支持软件扫描和硬件扫描两种冷热识别模式：软件扫描模式（`enable_hist=0`，默认）基于Linux内核页表AF位识别内存页冷热，不依赖特定硬件；硬件扫描模式（`enable_hist=1`）利用1650芯片HIST模块进行硬件判热加速，为可选增强。本章节说明SMAP的安装方式、运行模式以及单元测试的运行方式，完整文档参见`plugins/smap/doc/`。
+SMAP是UBTurbo的内部插件，源码位于`plugins/smap/`，通过页面扫描和迁移使能分级内存能力。SMAP由内核态驱动模块和用户态动态库组成，仅支持aarch64架构，支持三种远端扫描模式，由配置文件`period.config`的`smap.remote.scan.mode`控制：纯软模式（`0`）基于Linux内核页表AF位识别内存页冷热，不依赖特定硬件；软硬结合模式（`1`，默认）在软件扫描基础上叠加硬件判热；纯硬模式（`2`）仅使用硬件判热。硬件判热利用1650芯片HIST模块进行硬件判热加速，仅鲲鹏950机型支持，为可选增强；硬件不可用时自动降级为纯软扫描。本章节说明SMAP的安装方式、运行模式以及单元测试的运行方式，完整文档参见`plugins/smap/doc/`。
 
 ## SMAP安装方式
 
@@ -296,19 +296,19 @@ sudo dnf install -y rpm-build cmake make gcc gcc-c++ ninja-build \
     rpm -ivh ubturbo-smap-x.x.x-x.oe2403sp1.aarch64.rpm
     ```
 
-    RPM安装会自动部署以下文件：
-    - 内核模块：`/lib/modules/smap/`（smap_tracking_core.ko、smap_access_tracking.ko、smap_histogram_tracking.ko、smap_tiering.ko）
-    - 用户态库：`/usr/lib64/libsmap.so`
+RPM安装会自动部署以下文件：
+- 内核模块：`/lib/modules/smap/smap.ko`
+- 用户态库：`/usr/lib64/libsmap.so`
 
-2. 加载内核模块（按顺序，顺序有依赖，不可调整）：
+2. 加载 SMAP 内核模块：
 
-    ```bash
-    cd /lib/modules/smap
-    insmod smap_tracking_core.ko
-    insmod smap_histogram_tracking.ko                        # 必需，smap_access_tracking 依赖它
-    insmod smap_access_tracking.ko                           # 使能硬件判热时传 enable_hist=1，可不传
-    insmod smap_tiering.ko smap_pgsize=1                     # smap_pgsize: 1=2M模式(虚拟化), 0=4K模式(容器)
-    ```
+```bash
+cd /lib/modules/smap
+insmod smap.ko                                           # 远端扫描模式由 period.config 的 smap.remote.scan.mode 控制（仅鲲鹏950机型支持硬件判热）
+```
+
+页面类型由 `ubturbo_smap_start(pageType)` 选择：`0` 为 4K，`1` 为 2M；远端扫描模式（`0`=纯软、`1`=软硬结合（默认）、`2`=纯硬）由配置文件 `/opt/ubturbo/conf/smap/period.config` 的 `smap.remote.scan.mode` 设置，运行期可切换，均不再通过 `insmod` 参数设置。
+加载后提供 `/dev/smap_scan_dev` 和 `/dev/smap_migrate_dev` 两个 SMAP 主设备节点，udev 将其设置为 `ubturbo:ubturbo`、0600。
 
 3. 启动 ubturbo 服务：
 
@@ -350,7 +350,7 @@ SMAP运行模式由用户态接口`ubturbo_smap_start(pageType)`的入参控制�
 
 - 开启ACPI
 - 关闭NUMA平衡与透明大页：
-  
+
     ```bash
     echo 0 > /proc/sys/kernel/numa_balancing
     echo 0 > /proc/sys/vm/compaction_proactiveness
@@ -388,6 +388,6 @@ sh run_dt.sh
 | perl-DateTime | lcov运行依赖 | `dnf install -y perl-DateTime` |
 | lcov / genhtml | 覆盖率报告 | 源码安装 |
 
-# 说明 
+# 说明
 
 此开源项目非华为产品，仅提供有限支持。
