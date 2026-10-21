@@ -14,7 +14,7 @@ bool folio_test_dirty(const struct folio *folio)
 }
 
 int migrate_pages(struct list_head *from, new_folio_t get_new_folio, free_folio_t put_new_folio, unsigned long private,
-    enum migrate_mode mode, int reason, unsigned int *ret_succeeded)
+                  enum migrate_mode mode, int reason, unsigned int *ret_succeeded)
 {
     return 0;
 }
@@ -88,7 +88,7 @@ int atomic_read(volatile int *x)
     return 0;
 }
 
-struct folio* __folio_alloc(gfp_t gfp, unsigned int order, int nid, nodemask_t *nmask)
+struct folio *__folio_alloc(gfp_t gfp, unsigned int order, int nid, nodemask_t *nmask)
 {
     return NULL;
 }

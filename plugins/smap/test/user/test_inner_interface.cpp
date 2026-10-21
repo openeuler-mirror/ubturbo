@@ -2,8 +2,8 @@
  * Description: smap5.0 user inner interface ut code
  */
 
-#include <cstdlib>
 #include <sys/time.h>
+#include <cstdlib>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
@@ -81,7 +81,8 @@ TEST_F(InnerInterfaceTest, TestSmapQueryVmMemRatio)
     current.type = VM_TYPE;
     current.pid = 1;
     current.strategyAttr.l3RemoteMemRatio[0][0] = TEST_DEFAULT_LOCAL_MEM_RATIO;
-    memset(&manager->slots, 0, sizeof(manager->slots)); PidSlotAdd(manager, &current);
+    memset(&manager->slots, 0, sizeof(manager->slots));
+    PidSlotAdd(manager, &current);
     ret = SmapQueryVmMemRatio(&msg);
     EXPECT_EQ(1, msg.vr[0].pid);
     EXPECT_EQ(HUNDRED - TEST_DEFAULT_LOCAL_MEM_RATIO, msg.vr[0].ratio);

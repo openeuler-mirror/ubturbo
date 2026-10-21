@@ -2,13 +2,13 @@
  * Description: smap grouped migration strategy unit tests
  */
 
-#include <cstdlib>
 #include <gtest/gtest.h>
+#include <cstdlib>
 #include "mockcpp/mokc.h"
 
 #include "manage/manage.h"
-#include "strategy/strategy.h"
 #include "strategy/grouped_strategy.h"
+#include "strategy/strategy.h"
 #include "strategy/strategy_config.h"
 
 class GroupedStrategyTest : public ::testing::Test {

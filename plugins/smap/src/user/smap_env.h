@@ -22,6 +22,8 @@
 #include <inttypes.h>
 #include <sys/time.h>
 
+#include "common.h"
+
 #ifdef CONFIG_X86
 #define VM_NAME_STR "qemu-system-x86"
 #else
@@ -100,6 +102,36 @@ static inline void EnvMutexUnlock(EnvMutex *mutex)
     pthread_mutex_unlock(&mutex->lock);
 }
 
+/* COND */
+typedef struct {
+    pthread_cond_t cond;
+} EnvCond;
+
+static inline int EnvCondInit(EnvCond *cond)
+{
+    return pthread_cond_init(&cond->cond, NULL);
+}
+
+static inline int EnvCondDestroy(EnvCond *cond)
+{
+    return pthread_cond_destroy(&cond->cond);
+}
+
+static inline void EnvCondWait(EnvCond *cond, EnvMutex *mutex)
+{
+    pthread_cond_wait(&cond->cond, &mutex->lock);
+}
+
+static inline void EnvCondSignal(EnvCond *cond)
+{
+    pthread_cond_signal(&cond->cond);
+}
+
+static inline void EnvCondBroadcast(EnvCond *cond)
+{
+    pthread_cond_broadcast(&cond->cond);
+}
+
 typedef struct {
     atomic_int counter;
 } EnvAtomic;
@@ -124,6 +156,24 @@ static inline int EnvAtomicCmpAndSwap(int oldValue, int newValue, EnvAtomic *a)
     return actual;
 #else
     return __sync_val_compare_and_swap(&a->counter, oldValue, newValue); // C 中使用内置函数
+#endif
+}
+
+static inline int EnvAtomicAdd(EnvAtomic *a, int i)
+{
+#ifdef __cplusplus
+    return atomic_fetch_add(&a->counter, i);
+#else
+    return __sync_fetch_and_add(&a->counter, i);
+#endif
+}
+
+static inline int EnvAtomicSub(EnvAtomic *a, int i)
+{
+#ifdef __cplusplus
+    return atomic_fetch_sub(&a->counter, i);
+#else
+    return __sync_fetch_and_sub(&a->counter, i);
 #endif
 }
 /* TIME */

@@ -87,8 +87,11 @@ static void RebuildPairAccount(ProcessAttr *attr, int remoteIndex, uint32_t actu
     uint32_t allLocalMask = BuildAllLocalNumaMask();
     uint32_t managedLocalMask = attr->managedLocalState.managedLocalMask & allLocalMask;
     uint32_t capacityLocalMask = BuildPairCapacityLocalMask(attr, remoteIndex);
-    uint32_t rebuildLocalMask = managedLocalMask & (capacityLocalMask | attr->managedLocalState.residentLocalMask);
-
+    /* 优先选择有容量的 local pair，避免向无容量 pair 分摊账本。 */
+    uint32_t rebuildLocalMask = managedLocalMask & capacityLocalMask;
+    if (rebuildLocalMask == 0) {
+        rebuildLocalMask = managedLocalMask & attr->managedLocalState.accountLocalMask[remoteIndex];
+    }
     if (rebuildLocalMask == 0) {
         rebuildLocalMask = managedLocalMask;
     }
@@ -124,10 +127,7 @@ static void RebuildPairAccount(ProcessAttr *attr, int remoteIndex, uint32_t actu
     DistributePairAccount(attr, remoteIndex, rebuildLocalMask, weights, weightTotal, actualRemotePages);
 }
 
-/*
- * Reconcile the explanatory Pair account with one consistent page snapshot.
- * The caller must hold GetProcessManager()->lock.
- */
+/* Reconcile the PID's pair account with its latest page snapshot. */
 void CalibratePairAccount(ProcessAttr *attr)
 {
     if (!attr) {
@@ -528,6 +528,25 @@ static int CompletePairRequestAllocation(const ProcessAttr *attr, const PairRequ
  * page/account snapshot. Unassignable demand remains explicit in summary.
  * This function performs no I/O, locking, or global capacity consumption.
  */
+/* 为 per-pid 流水补齐 PairRequestContext 的容量 mask（与 build 全局路径一致） */
+void BuildPairCapacityLocalMasks(struct ProcessManager *manager, const ProcessAttr *attr, PairRequestContext *context)
+{
+    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+        for (int local = 0; local < manager->nrLocalNuma; local++) {
+            if (manager->remoteNumaInfo.privateSize[local][remote] > 0) {
+                AddL1(&context->capacityLocalMask[remote], local);
+            }
+        }
+        if (manager->remoteNumaInfo.sharedSize[remote] > 0) {
+            context->capacityLocalMask[remote] |= attr->managedLocalState.managedLocalMask;
+        }
+        if (attr->ignoreRemoteCapacity) {
+            /* Sync migration can assign its target from every managed local NUMA. */
+            context->capacityLocalMask[remote] |= attr->managedLocalState.managedLocalMask;
+        }
+    }
+}
+
 int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext *context, PairTarget targets[],
                               size_t targetCap, size_t *targetCnt, PairRequestSummary *summary)
 {
@@ -540,7 +559,6 @@ int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext 
     if (ret) {
         return ret;
     }
-
     PairRequestSummary result = { 0 };
     result.managedTotalPages = BuildManagedTotalPages(attr, context->nrLocalNuma);
     BuildRequestedRemotePages(attr, context, &result);

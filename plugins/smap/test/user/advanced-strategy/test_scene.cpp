@@ -1,13 +1,13 @@
 /*
  * Description: smap5.0 user scene ut code
  */
- 
+
 #include <cstdlib>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include "advanced-strategy/scene_info.h"
 #include "advanced-strategy/scene.h"
+#include "advanced-strategy/scene_info.h"
 #include "manage/manage.h"
 
 using namespace std;
@@ -47,7 +47,7 @@ TEST_F(SceneTest, TestNextIndex)
 extern "C" void IncPageIndex(SceneInfo *info);
 TEST_F(SceneTest, TestIncPageIndex)
 {
-    SceneInfo info = { 0 };
+    SceneInfo info = {0};
     IncPageIndex(&info);
     EXPECT_EQ(1, info.pageInfoIndex);
 }
@@ -55,7 +55,7 @@ TEST_F(SceneTest, TestIncPageIndex)
 extern "C" int GetDeltaHot(SceneInfo *info, int currIdx);
 TEST_F(SceneTest, TestGetDeltaHot)
 {
-    SceneInfo info = { 0 };
+    SceneInfo info = {0};
     info.pageInfo[0].nrHot = 10;
     info.pageInfo[1].nrHot = 5;
     int ret = GetDeltaHot(&info, 1);
@@ -65,7 +65,7 @@ TEST_F(SceneTest, TestGetDeltaHot)
 extern "C" bool TryFromStableToUnstable(SceneInfo *info, int idx);
 TEST_F(SceneTest, TestTryFromStableToUnstable)
 {
-    SceneInfo info = { 0 };
+    SceneInfo info = {0};
 
     bool ret = TryFromStableToUnstable(&info, 0);
     EXPECT_EQ(false, ret);
@@ -79,7 +79,7 @@ TEST_F(SceneTest, TestTryFromStableToUnstable)
 
 TEST_F(SceneTest, TestTryFromStableToUnstableLittleDeltaHot)
 {
-    SceneInfo info = { 0 };
+    SceneInfo info = {0};
     info.pageInfo[0].nrPages = 1000;
 
     MOCKER(GetDeltaHot).stubs().will(returnValue(1));
@@ -90,7 +90,7 @@ TEST_F(SceneTest, TestTryFromStableToUnstableLittleDeltaHot)
 extern "C" bool TryToStayInUnstable(SceneInfo *info, int idx);
 TEST_F(SceneTest, TestTryToStayInUnstable)
 {
-    SceneInfo info = { 0 };
+    SceneInfo info = {0};
 
     bool ret = TryToStayInUnstable(&info, 0);
     EXPECT_EQ(false, ret);
@@ -104,7 +104,7 @@ extern "C" bool IsUnstableScene(SceneInfo *info);
 TEST_F(SceneTest, TestIsUnstableScene)
 {
     bool ret;
-    SceneInfo info = { 0 };
+    SceneInfo info = {0};
     info.lastScene = LIGHT_STABLE_SCENE;
     ret = IsUnstableScene(&info);
     EXPECT_EQ(false, ret);
@@ -115,7 +115,7 @@ TEST_F(SceneTest, TestIsUnstableScene)
 
 TEST_F(SceneTest, TestIsUnstableSceneTwo)
 {
-    SceneInfo info = { 0 };
+    SceneInfo info = {0};
     info.lastScene = UNSTABLE_SCENE;
     info.pageInfoIndex = 0;
     info.pageInfo[0].nrHot = 1000;
@@ -134,7 +134,7 @@ extern "C" bool IsHeavyLoadScene(SceneInfo *info);
 TEST_F(SceneTest, TestIsHeavyLoadScene)
 {
     bool ret;
-    SceneInfo info = { 0 };
+    SceneInfo info = {0};
     info.pageInfoIndex = 1;
     info.pageInfo[1].nrL1Guarantee = 61;
     info.pageInfo[1].nrPages = 100;
@@ -224,7 +224,7 @@ TEST_F(SceneTest, TestCalcMemInfo)
 extern "C" int GetProcessSceneAttr(Scene scene, SceneInfo *info, PageType pageType);
 TEST_F(SceneTest, TestGetProcessSceneAttr)
 {
-    SceneInfo info = { 0 };
+    SceneInfo info = {0};
     Scene scene = UNSTABLE_SCENE;
     GetProcessSceneAttr(scene, &info, PAGETYPE_HUGE);
     EXPECT_EQ(VM_UNSTABLE_SCAN_CYCLE, info.cycles.scanCycle);
@@ -244,7 +244,7 @@ TEST_F(SceneTest, TestGetProcessSceneAttr)
 extern "C" int InitSceneInfo(SceneInfo *info, PageType pageType);
 TEST_F(SceneTest, TestInitSceneInfo)
 {
-    SceneInfo info = { 0 };
+    SceneInfo info = {0};
     int ret = InitSceneInfo(&info, PAGETYPE_HUGE);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(VM_LIGHT_STABLE_SCAN_CYCLE, info.cycles.scanCycle);
@@ -271,7 +271,7 @@ TEST_F(SceneTest, TestSetProcessSceneAttr)
 extern "C" void SetLocalMemStatus(SceneInfo *info);
 TEST_F(SceneTest, TestSetLocalMemStatus)
 {
-    SceneInfo info = { 0 };
+    SceneInfo info = {0};
     info.pageInfoIndex = 0;
     info.pageInfo[0].nrL1Planed = 1;
     info.pageInfo[0].nrPages = 1;
@@ -384,7 +384,7 @@ TEST_F(SceneTest, TestDistributeInsufficientPagesTwo)
 extern "C" void BalanceSurpluses(int arr[], int len);
 TEST_F(SceneTest, TestBalanceSurpluses)
 {
-    int arr[4] = { 0 };
+    int arr[4] = {0};
     arr[0] = 1;
     arr[1] = -1;
     BalanceSurpluses(arr, 4);
@@ -417,7 +417,8 @@ TEST_F(SceneTest, TestAdjustVmMemRatio)
     struct ProcessManager manager;
     ProcessAttr current;
     current.next = NULL;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &current);
     manager.nr[1] = 1;
     arr[0] = 1;
     arr[1] = 2;
@@ -478,7 +479,8 @@ TEST_F(SceneTest, TestConfigMultiVmRatio)
 
     manager.nr[VM_TYPE] = 1;
     ProcessAttr current;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &current);
     current.next = NULL;
     MOCKER(IsReadyForAdapt).stubs().will(returnValue(true));
     current.sceneInfo.pageInfoIndex = 0;
@@ -495,8 +497,10 @@ TEST_F(SceneTest, TestGetMaxNuma)
 {
     ProcessAttr attr = {};
     attr.numaAttr.numaNodes = 0b10011001;
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     int maxL1node = 0;
     int maxL2node = 0;
 
@@ -513,7 +517,8 @@ TEST_F(SceneTest, TestConfigMultiVmRatioInGroups)
     ProcessAttr current;
     current.next = nullptr;
     current.numaAttr.numaNodes = 31;
-    memset(&manager->slots, 0, sizeof(manager->slots)); PidSlotAdd(manager, &current);
+    memset(&manager->slots, 0, sizeof(manager->slots));
+    PidSlotAdd(manager, &current);
     MOCKER(ConfigMultiVmRatio).stubs();
     ConfigMultiVmRatioInGroups(manager);
     EXPECT_EQ(false, current.adaptMem.enableAdaptMem);
@@ -526,7 +531,8 @@ TEST_F(SceneTest, TestConfigMultiVmRatioInGroupsTwo)
     current.next = nullptr;
     current.scanType = NORMAL_SCAN;
     current.numaAttr.numaNodes = 0b00010001;
-    memset(&manager->slots, 0, sizeof(manager->slots)); PidSlotAdd(manager, &current);
+    memset(&manager->slots, 0, sizeof(manager->slots));
+    PidSlotAdd(manager, &current);
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(ConfigMultiVmRatio).stubs();
     EXPECT_EQ(false, current.adaptMem.enableAdaptMem);
@@ -535,9 +541,11 @@ TEST_F(SceneTest, TestConfigMultiVmRatioInGroupsTwo)
 extern "C" void SkipMultiProcessRatio(struct ProcessManager *manager);
 TEST_F(SceneTest, TestSkipMultiProcessRatio)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &current);
     current.next = NULL;
     current.scanType = NORMAL_SCAN;
     current.strategyAttr.l2RemoteMemRatio[0][0] = 30;
@@ -551,9 +559,11 @@ extern "C" void ConfigRatios(struct ProcessManager *manager);
 extern "C" void ConfigMultiVmRatioInGroups(struct ProcessManager *manager);
 TEST_F(SceneTest, TestConfigRatiosProcessType)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &current);
     manager.tracking.pageSize = PAGESIZE_4K;
     manager.nr[VM_TYPE] = 0; /* 无 VM → 走 SkipMultiProcessRatio */
     current.next = NULL;
@@ -567,9 +577,11 @@ TEST_F(SceneTest, TestConfigRatiosProcessType)
 
 TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemTrue)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &current);
     manager.tracking.pageSize = PAGESIZE_4K;
     manager.nr[VM_TYPE] = 1; /* 存在 VM + 开自适应 → 走 ConfigMultiVmRatioInGroups */
     current.next = NULL;
@@ -581,9 +593,11 @@ TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemTrue)
 
 TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemFalse)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &current);
     manager.tracking.pageSize = PAGESIZE_4K;
     manager.nr[VM_TYPE] = 1; /* 存在 VM 但关自适应 → 回落 SkipMultiProcessRatio */
     current.next = NULL;
@@ -608,18 +622,18 @@ TEST_F(SceneTest, TetsGetAdaptMem)
 }
 
 extern "C" uint32_t StatsMaxGuaranteePages(ProcessAttr *process);
-TEST_F(SceneTest,  TestStatsMaxGuaranteePages)
+TEST_F(SceneTest, TestStatsMaxGuaranteePages)
 {
     ProcessAttr attr = {};
     attr.sceneInfo.pageInfoIndex = 0;
     attr.sceneInfo.pageInfo[0].nrL1GuaranteeBk = 10;
     MOCKER(PrevIndex).stubs().will(returnValue(0));
-    uint32_t ret =  StatsMaxGuaranteePages(&attr);
+    uint32_t ret = StatsMaxGuaranteePages(&attr);
     EXPECT_EQ(10, ret);
 }
 
 extern "C" int StatsMaxHotPages(ProcessAttr *process);
-TEST_F(SceneTest,  TestStatsMaxHotPages)
+TEST_F(SceneTest, TestStatsMaxHotPages)
 {
     ProcessAttr attr = {};
     attr.sceneInfo.pageInfoIndex = 0;

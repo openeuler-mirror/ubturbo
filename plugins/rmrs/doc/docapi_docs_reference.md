@@ -65,7 +65,7 @@ int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
     UBTurboRMRSAgentMigrateStrategy = reinterpret_cast<UBTurboRMRSAgentMigrateStrategy>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateStrategy"));
-    
+
     MigrateStrategyParam migrateStrategyParam;
     /*
     填充对应参数
@@ -139,7 +139,7 @@ UBTurboRMRSAgentMigrateExecute UBTurboRMRSAgentMigrateExecute = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);UBTurboRMRSAgentMigrateExecute = reinterpret_cast<UBTurboRMRSAgentMigrateExecute>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateExecute"));
-    
+
     MigrateStrategyResult migrateStrategyResult;
     /*
     填充对应参数
@@ -365,7 +365,7 @@ int main()
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
     UBTurboRMRSAgentPidNumaInfoCollect =
     reinterpret_cast<UBTurboRMRSAgentPidNumaInfoCollect>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentPidNumaInfoCollect"));
-    
+
     turbo::rmrs::PidNumaInfoCollectParam pidNumaInfoCollectParam;
     turbo::rmrs::PidNumaInfoCollectResult pidNumaInfoCollectResult;
     /*
@@ -442,7 +442,7 @@ int main()
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
     UBTurboRMRSAgentNumaMemInfoCollect =
         reinterpret_cast<UBTurboRMRSAgentNumaMemInfoCollect>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentNumaMemInfoCollect"));
-    
+
     turbo::rmrs::NumaMemInfoCollectParam numaMemInfoCollectParam;
     turbo::rmrs::ResponseInfoSimpo responseInfoSimpo;
     /*
@@ -520,7 +520,7 @@ int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
     UBTurboRMRSAgentUCacheMigrateStrategy = reinterpret_cast<UBTurboRMRSAgentUCacheMigrateStrategy>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentUCacheMigrateStrategy"));
-    
+
     UCacheMigrationStrategyParam param;
     ResCode result;
     /*

@@ -2,17 +2,17 @@
  * Description: smap5.0 user separate strategy ut code
  */
 
-#include <cstdlib>
-#include <algorithm>
-#include <vector>
-#include <cstdint>
-#include <unordered_set>
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <unordered_set>
+#include <vector>
 #include "manage/manage.h"
-#include "strategy/strategy.h"
-#include "strategy/separate_strategy.h"
-#include "strategy/strategy_config.h"
 #include "smap_user_log.h"
+#include "strategy/separate_strategy.h"
+#include "strategy/strategy.h"
+#include "strategy/strategy_config.h"
 
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
@@ -149,7 +149,7 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KShouldMigrate)
 }
 
 extern "C" int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
-    uint32_t numaOffset[MAX_NODES], int from, int to, SelectionMode mode);
+                                     uint32_t numaOffset[MAX_NODES], int from, int to, SelectionMode mode);
 TEST_F(SeparateStrategyTest, TestSeparateStrategy4KAbnormal)
 {
     ProcessAttr process;
@@ -510,8 +510,8 @@ TEST_F(SeparateStrategyTest, TestCalculateMigInfo)
     process.scanAttr.actcLen[nid] = 1;
     uint64_t demoteNum = 0;
     uint64_t promoteNum = 0;
-    RemoteMigInfo remoteMigInfo[REMOTE_NUMA_NUM] = { 0 };
-    uint64_t nrPages[NR_LEVEL] = { 0 };
+    RemoteMigInfo remoteMigInfo[REMOTE_NUMA_NUM] = {0};
+    uint64_t nrPages[NR_LEVEL] = {0};
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(nrLocalNuma)); // 本地4个numa
     CalculateMigInfo(&process, remoteMigInfo, nrPages, &demoteNum, &promoteNum);
@@ -572,9 +572,10 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategyMultiNumaVm)
     }
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(InitSeparateParam).stubs().will(ignoreReturnValue());
-    MOCKER(CalculateMigInfo).stubs().with(any(), any(), any(), outBoundP(&demoteNum, sizeof(demoteNum)),
-         outBoundP(&promoteNum, sizeof(promoteNum)))
-         .will(ignoreReturnValue());
+    MOCKER(CalculateMigInfo)
+        .stubs()
+        .with(any(), any(), any(), outBoundP(&demoteNum, sizeof(demoteNum)), outBoundP(&promoteNum, sizeof(promoteNum)))
+        .will(ignoreReturnValue());
     MOCKER(DemoteMultiNumaVmStrategy).stubs().will(returnValue(1));
     ret = SeparateStrategyMultiNumaVm(&process, mlist);
     EXPECT_EQ(1, ret);
@@ -587,9 +588,10 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategyMultiNumaVm)
     }
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(InitSeparateParam).stubs().will(ignoreReturnValue());
-    MOCKER(CalculateMigInfo).stubs().with(any(), any(), any(), outBoundP(&demoteNum, sizeof(demoteNum)),
-         outBoundP(&promoteNum, sizeof(promoteNum)))
-         .will(ignoreReturnValue());
+    MOCKER(CalculateMigInfo)
+        .stubs()
+        .with(any(), any(), any(), outBoundP(&demoteNum, sizeof(demoteNum)), outBoundP(&promoteNum, sizeof(promoteNum)))
+        .will(ignoreReturnValue());
     MOCKER(PromoteMultiNumaVmStrategy).stubs().will(returnValue(2));
     ret = SeparateStrategyMultiNumaVm(&process, mlist);
     EXPECT_EQ(2, ret);
@@ -607,7 +609,7 @@ TEST_F(SeparateStrategyTest, TestSwapMultiNumaVmStrategy)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES];
-    uint64_t nrPages[NR_LEVEL] = { 0 };
+    uint64_t nrPages[NR_LEVEL] = {0};
     int nrLocalNuma = 0;
 
     nrPages[0] = 1;
@@ -642,7 +644,8 @@ TEST_F(SeparateStrategyTest, TestSwapMultiNumaVmStrategy)
     nrPages[1] = 1;
     LevelActcData *levelActcData_4 = (LevelActcData *)calloc(nrPages[0], sizeof(LevelActcData));
     LevelActcData *levelActcData_5 = (LevelActcData *)calloc(nrPages[1], sizeof(LevelActcData));
-    MOCKER(calloc).stubs()
+    MOCKER(calloc)
+        .stubs()
         .will(returnValue(static_cast<void *>(levelActcData_4)))
         .then(returnValue(static_cast<void *>(levelActcData_5)));
     MOCKER(BuildLevelActcData).stubs().will(returnValue(0)).then(returnValue(0));
@@ -654,7 +657,8 @@ TEST_F(SeparateStrategyTest, TestSwapMultiNumaVmStrategy)
     GlobalMockObject::verify();
     LevelActcData *levelActcData_6 = (LevelActcData *)calloc(nrPages[0], sizeof(LevelActcData));
     LevelActcData *levelActcData_7 = (LevelActcData *)calloc(nrPages[1], sizeof(LevelActcData));
-    MOCKER(calloc).stubs()
+    MOCKER(calloc)
+        .stubs()
         .will(returnValue(static_cast<void *>(levelActcData_6)))
         .then(returnValue(static_cast<void *>(levelActcData_7)));
     MOCKER(BuildLevelActcData).stubs().will(returnValue(0)).then(returnValue(0));
@@ -667,7 +671,8 @@ TEST_F(SeparateStrategyTest, TestSwapMultiNumaVmStrategy)
     GlobalMockObject::verify();
     LevelActcData *levelActcData_8 = (LevelActcData *)calloc(nrPages[0], sizeof(LevelActcData));
     LevelActcData *levelActcData_9 = (LevelActcData *)calloc(nrPages[1], sizeof(LevelActcData));
-    MOCKER(calloc).stubs()
+    MOCKER(calloc)
+        .stubs()
         .will(returnValue(static_cast<void *>(levelActcData_8)))
         .then(returnValue(static_cast<void *>(levelActcData_9)));
     MOCKER(BuildLevelActcData).stubs().will(returnValue(0)).then(returnValue(0));
@@ -686,7 +691,7 @@ TEST_F(SeparateStrategyTest, TestDemoteMultiNumaVmStrategy)
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES];
     RemoteMigInfo remoteMigInfo[REMOTE_NUMA_NUM];
-    uint64_t nrPages[NR_LEVEL] = { 0 };
+    uint64_t nrPages[NR_LEVEL] = {0};
     uint64_t demoteNum = 0;
     uint64_t l1ActcLen = 0;
 
@@ -713,10 +718,12 @@ TEST_F(SeparateStrategyTest, TestDemoteMultiNumaVmStrategy)
     l1ActcData_2[0].node = 0;
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
-    MOCKER(calloc).stubs()
+    MOCKER(calloc)
+        .stubs()
         .will(returnValue(static_cast<void *>(l1ActcData_2)))
         .then(returnValue(static_cast<void *>(migAddrArray)));
-    MOCKER(BuildLevelActcData).stubs()
+    MOCKER(BuildLevelActcData)
+        .stubs()
         .with(any(), any(), any(), outBoundP(&l1ActcLen, sizeof(uint64_t)))
         .will(returnValue(0));
     MOCKER(BuildDemoteMultiNumaMigLists).stubs().will(returnValue(0));
@@ -775,8 +782,8 @@ TEST_F(SeparateStrategyTest, TestBuildSwapMigLists)
 {
     ProcessAttr process = {};
     struct MigList mlist[MAX_NODES][MAX_NODES];
-    uint64_t nrMig[MAX_NODES] = { 0 };
-    uint64_t *migAddrArray[MAX_NODES] = { NULL };
+    uint64_t nrMig[MAX_NODES] = {0};
+    uint64_t *migAddrArray[MAX_NODES] = {NULL};
     int nrLocalNuma = 4;
 
     process.numaAttr.numaNodes = 0b0000001;
@@ -788,9 +795,7 @@ TEST_F(SeparateStrategyTest, TestBuildSwapMigLists)
     GlobalMockObject::verify();
     process.numaAttr.numaNodes = 0b0100001;
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)1));
-    MOCKER(BuildMigListForDirection).stubs()
-        .will(returnValue(0))
-        .then(returnValue(-MULTI_NUMA_VM_OOM));
+    MOCKER(BuildMigListForDirection).stubs().will(returnValue(0)).then(returnValue(-MULTI_NUMA_VM_OOM));
     ret = BuildSwapMigLists(&process, mlist, nrMig, migAddrArray, nrLocalNuma);
     EXPECT_EQ(-MULTI_NUMA_VM_OOM, ret);
 }
@@ -798,9 +803,9 @@ TEST_F(SeparateStrategyTest, TestBuildSwapMigLists)
 TEST_F(SeparateStrategyTest, TestBuildMigListForDirection)
 {
     MigrateDirection dir;
-    uint64_t *migAddrArray[MAX_NODES] = { NULL };
-    uint64_t nrMig[MAX_NODES] = { 0 };
-    uint64_t destFreeList[MAX_NODES] = { 0 };
+    uint64_t *migAddrArray[MAX_NODES] = {NULL};
+    uint64_t nrMig[MAX_NODES] = {0};
+    uint64_t destFreeList[MAX_NODES] = {0};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
 
     dir = SWAP;
@@ -819,9 +824,9 @@ TEST_F(SeparateStrategyTest, TestBuildMigListForDirection)
 TEST_F(SeparateStrategyTest, TestBuildMigListForDirectionPromote)
 {
     MigrateDirection dir;
-    uint64_t *migAddrArray[MAX_NODES] = { NULL };
-    uint64_t nrMig[MAX_NODES] = { 0 };
-    uint64_t destFreeList[MAX_NODES] = { 0 };
+    uint64_t *migAddrArray[MAX_NODES] = {NULL};
+    uint64_t nrMig[MAX_NODES] = {0};
+    uint64_t destFreeList[MAX_NODES] = {0};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
     dir = PROMOTE;
     nrMig[4] = 1;
@@ -840,10 +845,10 @@ TEST_F(SeparateStrategyTest, TestBuildMigListForDirectionPromote)
 
 TEST_F(SeparateStrategyTest, TestGroupMigPagesByNode)
 {
-    LevelActcData *levelActcData[NR_LEVEL] = { NULL };
+    LevelActcData *levelActcData[NR_LEVEL] = {NULL};
     uint64_t swapNum = 0;
-    uint64_t nrMig[MAX_NODES] = { 0 };
-    uint64_t *migAddrArray[MAX_NODES] = { NULL };
+    uint64_t nrMig[MAX_NODES] = {0};
+    uint64_t *migAddrArray[MAX_NODES] = {NULL};
 
     for (int i = 0; i < MAX_NODES; i++) {
         nrMig[i] = 1;
@@ -875,8 +880,8 @@ extern "C" uint64_t CalMultiNumaVmLowMigrateNum(uint64_t migrateNum, uint64_t fr
 TEST_F(SeparateStrategyTest, TestCalcMultiNumaVmSwapNumByFreq)
 {
     ProcessAttr process = {};
-    LevelActcData *levelActcData[NR_LEVEL] = { NULL };
-    uint64_t levelActcLen[NR_LEVEL] = { 1 };
+    LevelActcData *levelActcData[NR_LEVEL] = {NULL};
+    uint64_t levelActcLen[NR_LEVEL] = {1};
 
     for (int i = 0; i < NR_LEVEL; i++) {
         levelActcData[i] = (LevelActcData *)calloc(1, sizeof(LevelActcData));
@@ -894,7 +899,7 @@ TEST_F(SeparateStrategyTest, TestCalMultiNumaVmLowMigrateNum)
     uint64_t migrateNum = 1;
     uint64_t freqWt = 0;
     uint32_t slowThred = 0;
-    LevelActcData *levelActcData[NR_LEVEL] = { NULL };
+    LevelActcData *levelActcData[NR_LEVEL] = {NULL};
 
     for (int i = 0; i < NR_LEVEL; i++) {
         levelActcData[i] = (LevelActcData *)calloc(1, sizeof(LevelActcData));
@@ -964,8 +969,8 @@ TEST_F(SeparateStrategyTest, TestFreqAscFunc)
 
 TEST_F(SeparateStrategyTest, TestBuildDemoteMultiNumaMigLists)
 {
-    uint64_t *migAddrArray[MAX_NODES] = { NULL };
-    uint64_t nrMig[MAX_NODES] = { 0 };
+    uint64_t *migAddrArray[MAX_NODES] = {NULL};
+    uint64_t nrMig[MAX_NODES] = {0};
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
     RemoteMigInfo remoteMigInfo[REMOTE_NUMA_NUM] = {};
     remoteMigInfo[0].dir = DEMOTE;

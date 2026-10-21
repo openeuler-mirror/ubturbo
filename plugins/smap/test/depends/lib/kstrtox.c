@@ -7,6 +7,7 @@
 int kstrtoint(const char *str, unsigned int base, int *result)
 {
     long tmp;
+    errno = 0;
     tmp = strtol(str, NULL, base);
     if (errno)
         return -errno;
@@ -19,6 +20,8 @@ int kstrtoint(const char *str, unsigned int base, int *result)
 int kstrtouint(const char *str, unsigned int base, unsigned int *result)
 {
 	unsigned long long tmp;
+
+	errno = 0;
 	tmp = strtoull(str, NULL, base);
 	if (errno)
 		return -errno;

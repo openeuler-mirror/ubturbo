@@ -34,7 +34,7 @@ TEST_F(StrategyTest, TestRunStrategyOne)
 {
     size_t mlistSize = NR_LEVEL;
     ProcessAttr process;
-    ActcData actcData = { 0 };
+    ActcData actcData = {0};
     process.scanAttr.actcData[0] = &actcData;
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
@@ -48,7 +48,7 @@ TEST_F(StrategyTest, TestRunStrategyTwo)
 {
     size_t mlistSize = NR_LEVEL;
     ProcessAttr process;
-    ActcData actcData = { 0 };
+    ActcData actcData = {0};
     process.scanAttr.actcData[0] = &actcData;
     struct MigList mlist[MAX_NODES][MAX_NODES] = {};
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
@@ -198,9 +198,7 @@ TEST_F(StrategyTest, TestGetNrFreeHugePagesByNodeFour)
         .will(returnValue(0));
     MOCKER(fopen).stubs().will(returnValue(&fake_file));
     MOCKER(fgets).stubs().will(returnValue(static_cast<char *>("1")));
-    MOCKER((int (*)(char const *, char const *, void *))sscanf_s)
-        .stubs()
-        .will(returnValue(0));
+    MOCKER((int (*)(char const *, char const *, void *))sscanf_s).stubs().will(returnValue(0));
     MOCKER(fclose).stubs().will(returnValue(-1));
     ret = GetNrFreeHugePagesByNode(nid);
     EXPECT_EQ(0, ret);

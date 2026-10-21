@@ -1,8 +1,8 @@
 /*
  * Description: smap_log_core ut code
  */
-#include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <cstring>
 #include <fstream>
