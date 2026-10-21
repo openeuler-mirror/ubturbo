@@ -6,16 +6,16 @@
 
 #include <linux/hugetlb.h>
 #include <linux/pagewalk.h>
+#include <linux/sched/mm.h>
 #include <linux/slab.h>
 #include <linux/swap.h>
 #include <linux/swapops.h>
-#include <linux/sched/mm.h>
 
+#include "access_mmu.h"
+#include "acpi_mem.h"
 #include "check.h"
 #include "iomem.h"
 #include "scan_main.h"
-#include "access_mmu.h"
-#include "acpi_mem.h"
 
 #define PM_PRESENT BIT_ULL(63)
 extern "C" bool is_access_hugepage(void);
@@ -23,12 +23,12 @@ extern "C" int nr_local_numa;
 
 using namespace std;
 
-inline bool operator==(const pte_t& a, const pte_t& b)
+inline bool operator==(const pte_t &a, const pte_t &b)
 {
     return a.pte == b.pte;
 }
 
-inline bool operator==(const pagemap_entry_t& a, const pagemap_entry_t& b)
+inline bool operator==(const pagemap_entry_t &a, const pagemap_entry_t &b)
 {
     return a.pme == b.pme;
 }
@@ -244,7 +244,7 @@ TEST_F(AccessMMUTest, AddToBM)
     MOCKER(add_to_bm_huge).stubs().will(ignoreReturnValue());
 
     int ret = 0;
-    pagemap_entry_t pe {
+    pagemap_entry_t pe{
         .pme = 0,
     };
 
@@ -267,7 +267,7 @@ TEST_F(AccessMMUTest, AddToBM)
 
 TEST_F(AccessMMUTest, AddToBMTwo)
 {
-    pagemap_entry_t pe {
+    pagemap_entry_t pe{
         .pme = 1,
     };
     struct access_pid ap = {};
@@ -283,13 +283,11 @@ TEST_F(AccessMMUTest, AddToBMTwo)
     EXPECT_EQ(1, ret);
 }
 
-extern "C" pagemap_entry_t pte_to_pagemap_entry(struct pagemapread *pm,
-    struct vm_area_struct *vma, unsigned long addr, pte_t pte);
+extern "C" pagemap_entry_t pte_to_pagemap_entry(struct pagemapread *pm, struct vm_area_struct *vma, unsigned long addr,
+                                                pte_t pte);
 TEST_F(AccessMMUTest, PTE2PageMapEntry)
 {
-    pte_t pte = {
-        .pte = 0x56780000
-    };
+    pte_t pte = {.pte = 0x56780000};
 
     pagemap_entry_t pe = pte_to_pagemap_entry(nullptr, nullptr, 0, pte);
 

@@ -638,8 +638,7 @@ static int smu_mig_ioctl_release(struct inode *inode, struct file *file)
 int init_mig_dev(void)
 {
 	int rc = alloc_chrdev_region(&mig_dev, DEVICE_BASE_MINOR,
-				     DEVICE_MINOR_COUNT,
-				     SMAP_MIG_DEV);
+				     DEVICE_MINOR_COUNT, SMAP_MIG_DEV);
 	if (rc < 0) {
 		pr_err("unable to allocate migrate device major number\n");
 		return rc;
@@ -656,8 +655,8 @@ int init_mig_dev(void)
 		rc = PTR_ERR(mig_dev_class);
 		goto err_class;
 	}
-	smu_mig_device = device_create(mig_dev_class, NULL, mig_dev, NULL,
-				       SMAP_MIG_DEV);
+	smu_mig_device =
+		device_create(mig_dev_class, NULL, mig_dev, NULL, SMAP_MIG_DEV);
 	if (IS_ERR(smu_mig_device)) {
 		pr_err("unable to create migrate device\n");
 		rc = PTR_ERR(smu_mig_device);

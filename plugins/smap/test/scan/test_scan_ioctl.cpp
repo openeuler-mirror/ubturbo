@@ -13,12 +13,12 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 
-#include "acpi_mem.h"
-#include "iomem.h"
-#include "check.h"
-#include "scan_main.h"
 #include "access_pid.h"
+#include "acpi_mem.h"
+#include "check.h"
+#include "iomem.h"
 #include "scan_ioctl.h"
+#include "scan_main.h"
 
 using namespace std;
 
@@ -63,7 +63,7 @@ protected:
     static bool checkCopyFromUserIsPayload(const void *from);
 };
 
-struct access_add_pid_msg ScanIoctlTestKernel::m_msg = {.count=0, .payload=NULL};
+struct access_add_pid_msg ScanIoctlTestKernel::m_msg = {.count = 0, .payload = NULL};
 
 extern "C" long ioctl_add_pid(void __user *argp);
 extern "C" int add_payload(int len, struct access_add_pid_payload *payload, int page_size);

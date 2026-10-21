@@ -2,15 +2,15 @@
  * Description: smap5.0 access ioctl ut code
  */
 
-#include <cstdlib>
-#include <sys/ioctl.h>
 #include <linux/errno.h>
+#include <sys/ioctl.h>
+#include <cstdlib>
 
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include "manage/manage.h"
 #include "manage/access_ioctl.h"
+#include "manage/manage.h"
 
 using namespace std;
 

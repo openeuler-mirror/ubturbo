@@ -7,13 +7,13 @@
 
 #include <linux/nodemask.h>
 #include <linux/slab.h>
-#include <linux/workqueue.h>
 #include <linux/version.h>
+#include <linux/workqueue.h>
 
+#include "ham_migration.h"
+#include "migrate_back_ioctl.h"
 #include "migrate_main.h"
 #include "obmm_monitor.h"
-#include "migrate_back_ioctl.h"
-#include "ham_migration.h"
 
 using namespace std;
 
@@ -50,9 +50,7 @@ extern "C" int iterate_obmm_dev(void);
 extern "C" void free_obmm_dev(void);
 extern "C" void destroy_workqueue(struct workqueue_struct *wq);
 extern "C" bool cancel_delayed_work_sync(struct delayed_work *dwork);
-extern "C" bool queue_delayed_work(struct workqueue_struct *wq,
-    struct delayed_work *dwork,
-    unsigned long delay);
+extern "C" bool queue_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork, unsigned long delay);
 extern "C" void ham_exit(void);
 
 extern "C" void free_obmm_dev(void);

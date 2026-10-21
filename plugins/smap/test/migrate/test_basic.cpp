@@ -9,7 +9,7 @@
 using namespace std;
 
 extern "C" {
-    int kernel_num_contig_ptes(unsigned long size, size_t *pgsize);
+int kernel_num_contig_ptes(unsigned long size, size_t *pgsize);
 }
 
 class BasicTest : public ::testing::Test {

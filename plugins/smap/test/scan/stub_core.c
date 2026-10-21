@@ -1,8 +1,8 @@
 /*
 * Description: SMAP3.0 驱动模块打桩文件
 */
-#include <linux/device.h>
 #include "stub_core.h"
+#include <linux/device.h>
 
 /* Modify the numa_node attribute to verify the corresponding stub function */
 void stub_tracking_enable(struct device *ldev)
@@ -22,8 +22,7 @@ int stub_tracking_read(struct device *ldev, void *buffer, u32 length)
     return 1;
 }
 
-void stub_tracking_target_node_update(struct device *ldev,
-                                      u8 target_node_new)
+void stub_tracking_target_node_update(struct device *ldev, u8 target_node_new)
 {
     ldev->numa_node = 7;
 }

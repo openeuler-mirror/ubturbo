@@ -5,13 +5,13 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include <linux/list.h>
 #include <linux/dmi.h>
-#include <linux/ioport.h>
-#include <linux/slab.h>
 #include <linux/errno.h>
-#include <linux/mutex.h>
 #include <linux/fs.h>
+#include <linux/ioport.h>
+#include <linux/list.h>
+#include <linux/mutex.h>
+#include <linux/slab.h>
 
 #include "obmm_monitor.h"
 
@@ -56,7 +56,7 @@ TEST_F(ObmmDevTest, free_remote_ram_dt)
     list_add(&ramdata2->node, &ramdata1->node);
     free_remote_ram(&ramdata1->node);
     if (ramdata1 != nullptr) {
-        delete(ramdata1);
+        delete (ramdata1);
     }
 }
 
@@ -100,7 +100,7 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Two)
     MOCKER(pfn_valid).stubs().will(returnValue(true));
     MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(page_to_nid).stubs().will(returnValue(1));
-    MOCKER(kmalloc).stubs().will(returnValue((void*)nullptr));
+    MOCKER(kmalloc).stubs().will(returnValue((void *)nullptr));
     ret = insert_remote_ram(pa_start, pa_end, &test_list);
     EXPECT_EQ(ret, -ENOMEM);
 }
@@ -112,7 +112,7 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Three)
     u64 pa_end = 3;
     struct page page;
     LIST_HEAD(test_list);
- 
+
     MOCKER(pfn_valid).stubs().will(returnValue(true));
     MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(page_to_nid).stubs().will(returnValue(1));
@@ -138,7 +138,7 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Four)
     struct ram_segment test_node = {
         .numa_node = 1,
         .start = 0,
-        .end =1,
+        .end = 1,
     };
     list_add_tail(&test_node.node, &test_list);
     MOCKER(pfn_valid).stubs().will(returnValue(true));
@@ -146,7 +146,7 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Four)
     MOCKER(page_to_nid).stubs().will(returnValue(1));
     ret = insert_remote_ram(pa_start, pa_end, &test_list);
     EXPECT_EQ(0, ret);
- 
+
     list_del(&test_node.node);
 }
 
@@ -160,7 +160,7 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Five)
     struct ram_segment test_node = {
         .numa_node = 1,
         .start = 0,
-        .end =0,
+        .end = 0,
     };
     list_add_tail(&test_node.node, &test_list);
     MOCKER(pfn_valid).stubs().will(returnValue(true));
@@ -168,7 +168,7 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Five)
     MOCKER(page_to_nid).stubs().will(returnValue(20));
     ret = insert_remote_ram(pa_start, pa_end, &test_list);
     EXPECT_EQ(0, ret);
- 
+
     list_del(&test_node.node);
 }
 
@@ -182,7 +182,7 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Six)
     struct ram_segment test_node = {
         .numa_node = 1,
         .start = 4,
-        .end =4,
+        .end = 4,
     };
     list_add_tail(&test_node.node, &test_list);
     MOCKER(pfn_valid).stubs().will(returnValue(true));
@@ -190,7 +190,7 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Six)
     MOCKER(page_to_nid).stubs().will(returnValue(1));
     ret = insert_remote_ram(pa_start, pa_end, &test_list);
     EXPECT_EQ(0, ret);
- 
+
     list_del(&test_node.node);
 }
 
@@ -204,7 +204,7 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Seven)
     struct ram_segment test_node = {
         .numa_node = 1,
         .start = 2,
-        .end =4,
+        .end = 4,
     };
     list_add_tail(&test_node.node, &test_list);
     MOCKER(pfn_valid).stubs().will(returnValue(true));
@@ -212,7 +212,7 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Seven)
     MOCKER(page_to_nid).stubs().will(returnValue(1));
     ret = insert_remote_ram(pa_start, pa_end, &test_list);
     EXPECT_EQ(0, ret);
- 
+
     list_del(&test_node.node);
 }
 
@@ -226,7 +226,7 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Eight)
     struct ram_segment test_node = {
         .numa_node = 1,
         .start = 4,
-        .end =2,
+        .end = 2,
     };
     list_add_tail(&test_node.node, &test_list);
     MOCKER(pfn_valid).stubs().will(returnValue(true));
@@ -234,7 +234,7 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Eight)
     MOCKER(page_to_nid).stubs().will(returnValue(1));
     ret = insert_remote_ram(pa_start, pa_end, &test_list);
     EXPECT_EQ(0, ret);
- 
+
     list_del(&test_node.node);
 }
 
@@ -248,7 +248,7 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Nine)
     struct ram_segment test_node = {
         .numa_node = 1,
         .start = 1,
-        .end =3,
+        .end = 3,
     };
     list_add_tail(&test_node.node, &test_list);
     MOCKER(pfn_valid).stubs().will(returnValue(true));
@@ -256,13 +256,13 @@ TEST_F(ObmmDevTest, insert_remote_rams_dt_Nine)
     MOCKER(page_to_nid).stubs().will(returnValue(1));
     ret = insert_remote_ram(pa_start, pa_end, &test_list);
     EXPECT_EQ(0, ret);
- 
+
     list_del(&test_node.node);
 }
 
 extern "C" int walk_system_ram_remote_range(struct list_head *head);
-extern "C" int walk_iomem_res_desc(unsigned long desc, unsigned long flags, u64 start,
-    u64 end, void *arg, int (*func)(struct resource *, void *));
+extern "C" int walk_iomem_res_desc(unsigned long desc, unsigned long flags, u64 start, u64 end, void *arg,
+                                   int (*func)(struct resource *, void *));
 TEST_F(ObmmDevTest, walk_system_ram_remote_range_dt)
 {
     int ret = walk_system_ram_remote_range(nullptr);
@@ -335,8 +335,8 @@ TEST_F(ObmmDevTest, extract_hex_content_dt)
     EXPECT_EQ(0x100, content);
 }
 
-extern "C" bool fill_obmmdev(struct dir_context *ctx, const char *name, int namelen,
-    loff_t offset, u64 ino, unsigned int d_type);
+extern "C" bool fill_obmmdev(struct dir_context *ctx, const char *name, int namelen, loff_t offset, u64 ino,
+                             unsigned int d_type);
 TEST_F(ObmmDevTest, fill_obmmdev_dt)
 {
     struct read_obmm_callback call;
@@ -600,7 +600,7 @@ TEST_F(ObmmDevTest, InitObmmDevKzallocFail)
     free_obmm_dev();
     ASSERT_TRUE(list_empty(&obmm_dev.list));
 
-    MOCKER(kzalloc).stubs().will(returnValue((void*)nullptr));
+    MOCKER(kzalloc).stubs().will(returnValue((void *)nullptr));
     int ret = init_obmm_dev();
     EXPECT_EQ(-ENOMEM, ret);
 }
@@ -740,7 +740,7 @@ TEST_F(ObmmDevTest, IterateObmmDevEmptyListInitFail)
     free_obmm_dev();
     ASSERT_TRUE(list_empty(&obmm_dev.list));
 
-    MOCKER(kzalloc).stubs().will(returnValue((void*)nullptr));
+    MOCKER(kzalloc).stubs().will(returnValue((void *)nullptr));
     int ret = iterate_obmm_dev();
     EXPECT_EQ(-ENOMEM, ret);
 }

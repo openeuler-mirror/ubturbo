@@ -514,8 +514,7 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 
 		/* VM 场景 guest RAM 经 memfd/hugetlbfs 后端分配，天然非匿名，
 		 * is_file_or_shared_page() 会误判全部白名单；VM 暂不标记白名单。 */
-		if (ap->pid_type != SMAP_PID_VM &&
-		    is_file_or_shared_page(page))
+		if (ap->pid_type != SMAP_PID_VM && is_file_or_shared_page(page))
 			flags |= ACTC_WHITE_LIST_BIT;
 
 		if (is_shared_file_page(page) && nid >= nr_local_numa) {

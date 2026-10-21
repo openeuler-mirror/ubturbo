@@ -6,8 +6,8 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include "smap_user_log.h"
 #include "smap_log_core.h"
+#include "smap_user_log.h"
 
 using namespace std;
 
@@ -20,8 +20,10 @@ static void MockLogCallback(int level, const char *str, const char *moduleName)
 {
     g_logCallCount++;
     g_lastLogLevel = level;
-    if (str) g_lastLogMsg = str;
-    if (moduleName) g_lastLogModule = moduleName;
+    if (str)
+        g_lastLogMsg = str;
+    if (moduleName)
+        g_lastLogModule = moduleName;
 }
 
 class SmapUserLogTest : public ::testing::Test {

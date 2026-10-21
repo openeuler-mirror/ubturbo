@@ -4,5 +4,5 @@
 
 unsigned long _compound_head(struct page *page)
 {
-	return (unsigned long)page;
+    return (unsigned long)page;
 }

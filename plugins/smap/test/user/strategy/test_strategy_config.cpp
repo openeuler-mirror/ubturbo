@@ -7,14 +7,14 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include <stdio.h>
-#include <stdbool.h>
 #include <limits.h>
-#include <sys/stat.h>
+#include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
-#include "smap_user_log.h"
 #include "securec.h"
+#include "smap_user_log.h"
 #include "strategy/strategy_config.h"
 
 using namespace std;
@@ -36,7 +36,7 @@ protected:
 
 constexpr int RETURN_ERROR = -1;
 
-using StrategyConfigReadFunc = int32_t (*)(char*, char*);
+using StrategyConfigReadFunc = int32_t (*)(char *, char *);
 
 /* StrategyConfig 定义来自 strategy/strategy_config.h（单一来源，禁止手工镜像） */
 
@@ -482,13 +482,13 @@ TEST_F(PeriodConfigTest, SetMigratePeriodChangedTest)
 extern "C" int32_t ConfigReadValueToInt(char *pvalue, uint32_t *resultvalue);
 TEST_F(PeriodConfigTest, ConfigReadValueToIntTest)
 {
-    char* pvalue = "123";
+    char *pvalue = "123";
     uint32_t resultvalue = 0;
     int32_t ret = ConfigReadValueToInt(pvalue, &resultvalue);
     EXPECT_EQ(123, resultvalue);
     EXPECT_EQ(0, ret);
 
-    char* pvalue2 = "abc";
+    char *pvalue2 = "abc";
     uint32_t resultvalue2 = 0;
     ret = ConfigReadValueToInt(pvalue2, &resultvalue2);
     EXPECT_EQ(RETURN_ERROR, ret);
@@ -497,14 +497,14 @@ TEST_F(PeriodConfigTest, ConfigReadValueToIntTest)
 extern "C" int32_t ConfigScanPeriod(char *substr, char *value);
 TEST_F(PeriodConfigTest, ConfigScanPeriodTest)
 {
-    char* substr = "scanPeriod";
-    char* value = "123";
+    char *substr = "scanPeriod";
+    char *value = "123";
     MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
     int32_t ret = ConfigScanPeriod(substr, value);
     EXPECT_EQ(-1, ret);
 
-    char* substr2 = "scanPeriod";
-    char* value2 = "123";
+    char *substr2 = "scanPeriod";
+    char *value2 = "123";
     g_tmpStrategyConfig.scanPeriod = 0;
     MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
     ret = ConfigScanPeriod(substr2, value2);
@@ -519,8 +519,8 @@ TEST_F(PeriodConfigTest, ConfigScanPeriodTest)
 TEST_F(PeriodConfigTest, ConfigScanPeriodTestSuccess)
 {
     int ret;
-    char* substr2 = "scanPeriod";
-    char* value2 = "123";
+    char *substr2 = "scanPeriod";
+    char *value2 = "123";
     g_tmpStrategyConfig.scanPeriod = 100UL;
     MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
     ret = ConfigScanPeriod(substr2, value2);
@@ -530,8 +530,8 @@ TEST_F(PeriodConfigTest, ConfigScanPeriodTestSuccess)
 extern "C" int32_t ConfigMigratePeriod(char *substr, char *value);
 TEST_F(PeriodConfigTest, ConfigMigratePeriodTest)
 {
-    char* substr = "migratePeriod";
-    char* value = "123";
+    char *substr = "migratePeriod";
+    char *value = "123";
     MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
     int32_t ret = ConfigMigratePeriod(substr, value);
     EXPECT_EQ(-1, ret);
@@ -750,18 +750,18 @@ TEST_F(PeriodConfigTest, ConfigGroupSwapLocalWatermarkRatioTest)
 
 TEST_F(PeriodConfigTest, ConfigFileConfSwitchTest)
 {
-    char* substr = "test";
-    char* value1 = "true";
+    char *substr = "test";
+    char *value1 = "true";
     g_tmpStrategyConfig.fileConfSwitch = false;
     int32_t ret = ConfigFileConfSwitch(substr, value1);
     EXPECT_EQ(true, g_tmpStrategyConfig.fileConfSwitch);
 
-    char* value2 = "false";
+    char *value2 = "false";
     g_tmpStrategyConfig.fileConfSwitch = true;
     ret = ConfigFileConfSwitch(substr, value2);
     EXPECT_EQ(false, g_tmpStrategyConfig.fileConfSwitch);
 
-    char* value3 = "test";
+    char *value3 = "test";
     ret = ConfigFileConfSwitch(substr, value3);
     EXPECT_EQ(-1, ret);
 }
@@ -779,8 +779,8 @@ extern "C" char *ConfigReadSearchSubString(const char *buf, const char *substr);
 TEST_F(PeriodConfigTest, ConfigReadSearchSubStringTest)
 {
     char buf[20] = "smap = 2\n";
-    const char* substr = "smap";
-    char* res = nullptr;
+    const char *substr = "smap";
+    char *res = nullptr;
     res = ConfigReadSearchSubString(buf, nullptr);
     EXPECT_EQ(nullptr, res);
 
@@ -886,7 +886,7 @@ TEST_F(PeriodConfigTest, InitPeriodConfigTest)
 extern "C" int32_t EnsureDirectoryExists(const char *dirPath);
 TEST_F(PeriodConfigTest, TestEnsureDirectoryExists)
 {
-    const char* dir = "/home/test";
+    const char *dir = "/home/test";
     MOCKER(stat).stubs().will(returnValue(1));
     MOCKER(mkdir).stubs().will(returnValue(1));
     int32_t ret = EnsureDirectoryExists(dir);
@@ -998,7 +998,7 @@ TEST_F(PeriodConfigTest, RestoreStrategyConfigFileTest)
 
     FILE *fp = fopen(configFile, "r");
     ASSERT_NE(nullptr, fp);
-    char buf[512] = { 0 };
+    char buf[512] = {0};
     bool scanPeriodFound = false;
     bool switchFound = false;
     bool remoteScanModeFound = false;
@@ -1050,7 +1050,6 @@ TEST_F(PeriodConfigTest, PeriodConfigReadTestSuccess)
 
     StrategyConfigRead(configFile);
 }
-
 
 extern "C" uint32_t GetUbBwThresholdConfig(void);
 TEST_F(PeriodConfigTest, GetUbBwThresholdConfigTest)

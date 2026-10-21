@@ -529,8 +529,7 @@ static int CompletePairRequestAllocation(const ProcessAttr *attr, const PairRequ
  * This function performs no I/O, locking, or global capacity consumption.
  */
 /* 为 per-pid 流水补齐 PairRequestContext 的容量 mask（与 build 全局路径一致） */
-void BuildPairCapacityLocalMasks(struct ProcessManager *manager, const ProcessAttr *attr,
-                                 PairRequestContext *context)
+void BuildPairCapacityLocalMasks(struct ProcessManager *manager, const ProcessAttr *attr, PairRequestContext *context)
 {
     for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
         for (int local = 0; local < manager->nrLocalNuma; local++) {

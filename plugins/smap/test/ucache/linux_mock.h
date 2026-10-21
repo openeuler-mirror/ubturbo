@@ -15,7 +15,10 @@ extern "C" {
 #define PATH_MAX 4096
 
 /* from librttest.h. */
-#define ATOMIC_INIT(i)  { (i) }
+#define ATOMIC_INIT(i) \
+    {                  \
+        (i)            \
+    }
 
 /* from uapi/asm-generic/int-ll64.h. */
 #ifdef __GNUC__
@@ -27,83 +30,85 @@ typedef unsigned long long __u64;
 #endif
 
 // from uapi/asm-generic/errno-base.h
-#define	ERANGE		34
-#define	EDOM		33
-#define	EPIPE		32
-#define	EMLINK		31
-#define	EROFS		30
-#define	ESPIPE		29
-#define	ENOSPC		28
-#define	EFBIG		27
-#define	ETXTBSY		26
-#define	ENOTTY		25
-#define	EMFILE		24
-#define	ENFILE		23
-#define	EINVAL		22
-#define	EISDIR		21
-#define	ENOTDIR		20
-#define	ENODEV		19
-#define	EXDEV		18
-#define	EEXIST		17
-#define	EBUSY		16
-#define	ENOTBLK		15
-#define	EFAULT		14
-#define	EACCES		13
-#define	ENOMEM		12
-#define	EAGAIN		11
-#define	ECHILD		10
-#define	EBADF		 9
-#define	ENOEXEC		 8
-#define	E2BIG		 7
-#define	ENXIO		 6
-#define	EIO		     5
-#define	EINTR		 4
-#define	ESRCH		 3
-#define	ENOENT		 2
-#define	EPERM		 1
+#define ERANGE 34
+#define EDOM 33
+#define EPIPE 32
+#define EMLINK 31
+#define EROFS 30
+#define ESPIPE 29
+#define ENOSPC 28
+#define EFBIG 27
+#define ETXTBSY 26
+#define ENOTTY 25
+#define EMFILE 24
+#define ENFILE 23
+#define EINVAL 22
+#define EISDIR 21
+#define ENOTDIR 20
+#define ENODEV 19
+#define EXDEV 18
+#define EEXIST 17
+#define EBUSY 16
+#define ENOTBLK 15
+#define EFAULT 14
+#define EACCES 13
+#define ENOMEM 12
+#define EAGAIN 11
+#define ECHILD 10
+#define EBADF 9
+#define ENOEXEC 8
+#define E2BIG 7
+#define ENXIO 6
+#define EIO 5
+#define EINTR 4
+#define ESRCH 3
+#define ENOENT 2
+#define EPERM 1
 
 // from asm-generic/rwonce.h
-#define __WRITE_ONCE(x, val) \
-do { \
-    *(volatile typeof(x) *)&(x) = static_cast<volatile typeof(x)>(val); \
-} while (0)
+#define __WRITE_ONCE(x, val)                                                \
+    do {                                                                    \
+        *(volatile typeof(x) *)&(x) = static_cast<volatile typeof(x)>(val); \
+    } while (0)
 
-#define WRITE_ONCE(x, val) \
-do { \
-    __WRITE_ONCE(x, val); \
-} while (0)
+#define WRITE_ONCE(x, val)    \
+    do {                      \
+        __WRITE_ONCE(x, val); \
+    } while (0)
 
 // from linux/poison.h
-# define POISON_POINTER_DELTA 0
-#define LIST_POISON1  (reinterpret_cast<void *>(0x100 + POISON_POINTER_DELTA))
-#define LIST_POISON2  (reinterpret_cast<void *>(0x122 + POISON_POINTER_DELTA))
+#define POISON_POINTER_DELTA 0
+#define LIST_POISON1 (reinterpret_cast<void *>(0x100 + POISON_POINTER_DELTA))
+#define LIST_POISON2 (reinterpret_cast<void *>(0x122 + POISON_POINTER_DELTA))
 
 /* from linux/compiler.h. */
 #define __rcu
 #define __user
 
 /* from linux/compiler_attributes.h. */
-#define __always_inline                 inline __attribute__((__always_inline__))
-#define __attribute_const__             __attribute__((__const__))
+#define __always_inline inline __attribute__((__always_inline__))
+#define __attribute_const__ __attribute__((__const__))
 #if __has_attribute(__designated_init__)
-# define __designated_init              __attribute__((__designated_init__))
+#define __designated_init __attribute__((__designated_init__))
 #else
-# define __designated_init
+#define __designated_init
 #endif
 
 // from linux/compiler_types.h
-# define __force
+#define __force
 #if defined(RANDSTRUCT) && !defined(__CHECKER__)
-# define __randomize_layout __designated_init __attribute__((randomize_layout))
-# define __no_randomize_layout __attribute__((no_randomize_layout))
+#define __randomize_layout __designated_init __attribute__((randomize_layout))
+#define __no_randomize_layout __attribute__((no_randomize_layout))
 /* This anon struct can add padding, so only enable it under randstruct. */
-# define randomized_struct_fields_start struct {
-# define randomized_struct_fields_end } __randomize_layout;
+#define randomized_struct_fields_start struct {
+#define randomized_struct_fields_end \
+    }                                \
+    __randomize_layout;
 #else
-# define __randomize_layout __designated_init
-# define __no_randomize_layout
-# define randomized_struct_fields_start
-# define randomized_struct_fields_end
+#define __randomize_layout __designated_init
+#define __no_randomize_layout
+#define randomized_struct_fields_start
+#define randomized_struct_fields_end
 #endif
 
 // from linux/stddef.h
@@ -146,7 +151,7 @@ do { \
 #define __GFP_HIGHMEM ((__force unsigned int)___GFP_HIGHMEM)
 #define __GFP_DMA32 ((__force unsigned int)___GFP_DMA32)
 #define __GFP_MOVABLE ((__force unsigned int)___GFP_MOVABLE)
-#define GFP_ZONEMASK (__GFP_DMA|__GFP_HIGHMEM|__GFP_DMA32|__GFP_MOVABLE)
+#define GFP_ZONEMASK (__GFP_DMA | __GFP_HIGHMEM | __GFP_DMA32 | __GFP_MOVABLE)
 
 #define __GFP_RECLAIMABLE ((__force unsigned int)___GFP_RECLAIMABLE)
 #define __GFP_WRITE ((__force unsigned int)___GFP_WRITE)
@@ -162,7 +167,7 @@ do { \
 #define __GFP_FS ((__force unsigned int)___GFP_FS)
 #define __GFP_DIRECT_RECLAIM ((__force unsigned int)___GFP_DIRECT_RECLAIM)
 #define __GFP_KSWAPD_RECLAIM ((__force unsigned int)___GFP_KSWAPD_RECLAIM)
-#define __GFP_RECLAIM ((__force unsigned int)(___GFP_DIRECT_RECLAIM|___GFP_KSWAPD_RECLAIM))
+#define __GFP_RECLAIM ((__force unsigned int)(___GFP_DIRECT_RECLAIM | ___GFP_KSWAPD_RECLAIM))
 #define __GFP_RETRY_MAYFAIL ((__force unsigned int)___GFP_RETRY_MAYFAIL)
 #define __GFP_NOFAIL ((__force unsigned int)___GFP_NOFAIL)
 #define __GFP_NORETRY ((__force unsigned int)___GFP_NORETRY)
@@ -184,7 +189,7 @@ do { \
 #define __GFP_BITS_SHIFT (26 + IS_ENABLED(CONFIG_LOCKDEP))
 #define __GFP_BITS_MASK ((__force unsigned int)((1 << __GFP_BITS_SHIFT) - 1))
 
-#define GFP_ATOMIC (__GFP_HIGH|__GFP_KSWAPD_RECLAIM)
+#define GFP_ATOMIC (__GFP_HIGH | __GFP_KSWAPD_RECLAIM)
 #define GFP_KERNEL (__GFP_RECLAIM | __GFP_IO | __GFP_FS)
 #define GFP_KERNEL_ACCOUNT (GFP_KERNEL | __GFP_ACCOUNT)
 #define GFP_NOWAIT (__GFP_KSWAPD_RECLAIM)
@@ -195,14 +200,13 @@ do { \
 #define GFP_DMA32 __GFP_DMA32
 #define GFP_HIGHUSER (GFP_USER | __GFP_HIGHMEM)
 #define GFP_HIGHUSER_MOVABLE (GFP_HIGHUSER | __GFP_MOVABLE | __GFP_SKIP_KASAN)
-#define GFP_TRANSHUGE_LIGHT ((GFP_HIGHUSER_MOVABLE | __GFP_COMP | \
-        __GFP_NOMEMALLOC | __GFP_NOWARN) & ~__GFP_RECLAIM)
+#define GFP_TRANSHUGE_LIGHT ((GFP_HIGHUSER_MOVABLE | __GFP_COMP | __GFP_NOMEMALLOC | __GFP_NOWARN) & ~__GFP_RECLAIM)
 #define GFP_TRANSHUGE (GFP_TRANSHUGE_LIGHT | __GFP_DIRECT_RECLAIM)
 #define GFP_RELIABLE __GFP_RELIABLE
 
 // from linux/numa.h
-#define NODES_SHIFT     10
-#define MAX_NUMNODES    (1 << NODES_SHIFT)
+#define NODES_SHIFT 10
+#define MAX_NUMNODES (1 << NODES_SHIFT)
 
 // from linux/bits.h
 #define BIT_MASK(nr) (UL(1) << ((nr) % BITS_PER_LONG))
@@ -237,12 +241,14 @@ typedef struct {
 #define VM_BUG_ON_FOLIO(cond, folio) VM_BUG_ON(cond)
 
 // from linux/stddef.h
-#define offsetof(TYPE, MEMBER)	__builtin_offsetof(TYPE, MEMBER)
+#define offsetof(TYPE, MEMBER) __builtin_offsetof(TYPE, MEMBER)
 
 // from linux/container_of.h
-#define container_of(ptr, type, member) ({				\
-    void *__mptr = (void *)(ptr);					\
-    ((type *)(__mptr - offsetof(type, member))); })
+#define container_of(ptr, type, member)              \
+    ({                                               \
+        void *__mptr = (void *)(ptr);                \
+        ((type *)(__mptr - offsetof(type, member))); \
+    })
 
 // from linux/list.h
 #define LIST_HEAD_INIT(name) \
@@ -259,24 +265,23 @@ typedef struct {
 
 #define list_next_entry(pos, member) list_entry((pos)->member.next, typeof(*(pos)), member)
 
-#define list_for_each_entry(pos, head, member) \
+#define list_for_each_entry(pos, head, member)                                                             \
     for ((pos) = list_first_entry(head, typeof(*(pos)), member); !list_entry_is_head((pos), head, member); \
-        (pos) = list_next_entry((pos), member))
+         (pos) = list_next_entry((pos), member))
 
 #define hlist_entry(ptr, type, member) container_of(ptr, type, member)
-#define hlist_entry_safe(ptr, type, member) \
-    ({ typeof(ptr) ____ptr = (ptr); \
-       ____ptr ? hlist_entry(____ptr, type, member) : NULL; \
+#define hlist_entry_safe(ptr, type, member)                  \
+    ({                                                       \
+        typeof(ptr) ____ptr = (ptr);                         \
+        ____ptr ? hlist_entry(____ptr, type, member) : NULL; \
     })
-#define hlist_for_each_entry(pos, head, member)				\
-    for ((pos) = hlist_entry_safe((head)->first, typeof(*(pos)), member); \
-        (pos);							\
-        (pos) = hlist_entry_safe((pos)->member.next, typeof(*(pos)), member))
+#define hlist_for_each_entry(pos, head, member)                                  \
+    for ((pos) = hlist_entry_safe((head)->first, typeof(*(pos)), member); (pos); \
+         (pos) = hlist_entry_safe((pos)->member.next, typeof(*(pos)), member))
 
-#define hlist_for_each_entry(pos, head, member)				\
-    for ((pos) = hlist_entry_safe((head)->first, typeof(*(pos)), member); \
-        (pos);							\
-        (pos) = hlist_entry_safe((pos)->member.next, typeof(*(pos)), member))
+#define hlist_for_each_entry(pos, head, member)                                  \
+    for ((pos) = hlist_entry_safe((head)->first, typeof(*(pos)), member); (pos); \
+         (pos) = hlist_entry_safe((pos)->member.next, typeof(*(pos)), member))
 
 static inline void __list_add(struct list_head *c_new, struct list_head *prev, struct list_head *c_next)
 {
@@ -354,7 +359,7 @@ typedef struct folio *new_folio_t(struct folio *folio, unsigned long c_private);
 typedef void free_folio_t(struct folio *folio, unsigned long c_private);
 
 int migrate_pages(struct list_head *from, new_folio_t get_new_folio, free_folio_t put_new_folio, unsigned long private,
-    enum migrate_mode mode, int reason, unsigned int *ret_succeeded);
+                  enum migrate_mode mode, int reason, unsigned int *ret_succeeded);
 struct folio *alloc_migration_target(struct folio *src, unsigned long c_private);
 void putback_movable_pages(struct list_head *l);
 
@@ -480,8 +485,7 @@ static inline void folio_put(struct folio *folio)
 typedef struct spinlock {
     int lock;
 } spinlock_t;
-#define DEFINE_SPINLOCK(name) \
-    spinlock_t name
+#define DEFINE_SPINLOCK(name) spinlock_t name
 
 // from linux/mmzone.h
 enum node_stat_item {
@@ -543,7 +547,8 @@ enum node_stat_item {
     NR_VM_NODE_STAT_ITEMS
 };
 
-typedef struct pglist_data {} pg_data_t;
+typedef struct pglist_data {
+} pg_data_t;
 
 #define LRU_BASE 0
 #define LRU_ACTIVE 1
@@ -575,41 +580,31 @@ static inline void node_stat_add_folio(struct folio *folio, enum node_stat_item 
 }
 
 // from linux/spinlock.h
-static inline void spin_lock(spinlock_t *lock)
-{
-}
-static inline void spin_unlock(spinlock_t *lock)
-{
-}
+static inline void spin_lock(spinlock_t *lock) {}
+static inline void spin_unlock(spinlock_t *lock) {}
 
-static inline void spin_lock_irq(spinlock_t *lock)
-{
-}
+static inline void spin_lock_irq(spinlock_t *lock) {}
 
-static inline void spin_unlock_irq(spinlock_t *lock)
-{
-}
+static inline void spin_unlock_irq(spinlock_t *lock) {}
 
 // from linux/xarray.h
-struct xarray {
-};
+struct xarray {};
 
 // from linux/radix-tree.h
-#define radix_tree_root    xarray
+#define radix_tree_root xarray
 
 // from linux/idr.h
 struct idr {
-    struct radix_tree_root	idr_rt;
-    unsigned int		idr_base;
-    unsigned int		idr_next;
+    struct radix_tree_root idr_rt;
+    unsigned int idr_base;
+    unsigned int idr_next;
 };
-#define IDR_INIT_BASE(name, base) {					\
-    .idr_rt = {},			\
-    .idr_base = (base),						\
-    .idr_next = 0,							\
-}
-#define IDR_INIT(name)	IDR_INIT_BASE(name, 0)
-#define DEFINE_IDR(name)	struct idr name = IDR_INIT(name)
+#define IDR_INIT_BASE(name, base)                        \
+    {                                                    \
+        .idr_rt = {}, .idr_base = (base), .idr_next = 0, \
+    }
+#define IDR_INIT(name) IDR_INIT_BASE(name, 0)
+#define DEFINE_IDR(name) struct idr name = IDR_INIT(name)
 
 static inline int idr_alloc(struct idr *idr, void *ptr, int start, int end, unsigned int type)
 {
@@ -622,8 +617,7 @@ inline void *idr_find(const struct idr *idr, unsigned long id)
 
 void *idr_get_next(struct idr *idr, int *pos);
 
-#define idr_for_each_entry(idr, entry, id)			\
-	for ((id) = 0; ((entry) = idr_get_next(idr, &(id))) != NULL; (id) += 1U)
+#define idr_for_each_entry(idr, entry, id) for ((id) = 0; ((entry) = idr_get_next(idr, &(id))) != NULL; (id) += 1U)
 
 /* from linux/fdtable.h. */
 struct fdtable {
@@ -663,28 +657,23 @@ enum pid_type {
 
 struct pid {};
 
-static inline struct task_struct *pid_task(struct pid * pid, enum pid_type type)
+static inline struct task_struct *pid_task(struct pid *pid, enum pid_type type)
 {
     return NULL;
 }
 struct pid *find_vpid(int nr);
 
 // from linux/printk.h
-#define pr_err(fmt, ...) \
-    printf("err: " fmt, ##__VA_ARGS__)
-#define pr_info(fmt, ...) \
-    printf("info: " fmt, ##__VA_ARGS__)
-#define pr_warn(fmt, ...) \
-	printf("warn: " fmt, ##__VA_ARGS__)
+#define pr_err(fmt, ...) printf("err: " fmt, ##__VA_ARGS__)
+#define pr_info(fmt, ...) printf("info: " fmt, ##__VA_ARGS__)
+#define pr_warn(fmt, ...) printf("warn: " fmt, ##__VA_ARGS__)
 
 // from linux/export.h
 #define EXPORT_SYMBOL(sym)
 
-static inline void rcu_read_lock(void) {
-}
+static inline void rcu_read_lock(void) {}
 
-static inline void rcu_read_unlock(void) {
-}
+static inline void rcu_read_unlock(void) {}
 
 // from linux/slab.h
 void *kmalloc(size_t size, unsigned int gfp);
@@ -701,30 +690,30 @@ static inline bool numa_is_remote_node(int nid)
 }
 /* from /usr/include/bits/types.h. */
 #if __WORDSIZE == 32
-# define __SQUAD_TYPE __int64_t
-# define __UQUAD_TYPE __uint64_t
-# define __SWORD_TYPE int
-# define __UWORD_TYPE unsigned int
-# define __SLONG32_TYPE long int
-# define __ULONG32_TYPE unsigned long int
-# define __S64_TYPE __int64_t
-# define __U64_TYPE __uint64_t
+#define __SQUAD_TYPE __int64_t
+#define __UQUAD_TYPE __uint64_t
+#define __SWORD_TYPE int
+#define __UWORD_TYPE unsigned int
+#define __SLONG32_TYPE long int
+#define __ULONG32_TYPE unsigned long int
+#define __S64_TYPE __int64_t
+#define __U64_TYPE __uint64_t
 /* We want __extension__ before typedef's that use nonstandard base types
    such as `long long' in C89 mode.  */
-# define __STD_TYPE __extension__ typedef
+#define __STD_TYPE __extension__ typedef
 #elif __WORDSIZE == 64
-# define __U64_TYPE unsigned long int
-# define __S64_TYPE long int
-# define __ULONG32_TYPE unsigned int
-# define __SLONG32_TYPE int
-# define __UWORD_TYPE unsigned long int
-# define __SWORD_TYPE long int
-# define __UQUAD_TYPE unsigned long int
-# define __SQUAD_TYPE long int
+#define __U64_TYPE unsigned long int
+#define __S64_TYPE long int
+#define __ULONG32_TYPE unsigned int
+#define __SLONG32_TYPE int
+#define __UWORD_TYPE unsigned long int
+#define __SWORD_TYPE long int
+#define __UQUAD_TYPE unsigned long int
+#define __SQUAD_TYPE long int
 /* No need to mark the typedef with __extension__.   */
-# define __STD_TYPE typedef
+#define __STD_TYPE typedef
 #else
-# error
+#error
 #endif
 #define __OFF64_T_TYPE __SQUAD_TYPE
 __STD_TYPE __OFF64_T_TYPE __off64_t;
@@ -752,8 +741,8 @@ static inline loff_t i_size_read(const struct inode *inode)
 
 struct file_operations {
     struct module *owner;
-    int (*open) (struct inode *, struct file *);
-    long (*unlocked_ioctl) (struct file *, unsigned int, unsigned long);
+    int (*open)(struct inode *, struct file *);
+    long (*unlocked_ioctl)(struct file *, unsigned int, unsigned long);
 };
 
 void unregister_chrdev_region(dev_t, unsigned);
@@ -831,7 +820,7 @@ struct kretprobe {
 struct readahead_control {
     struct file *file;
     struct address_space *mapping;
-// /* private: use the readahead_* accessors instead */
+    // /* private: use the readahead_* accessors instead */
     pgoff_t _index;
     unsigned int _nr_pages;
     unsigned int _batch_count;
@@ -864,34 +853,31 @@ bool folio_test_hugetlb(const struct folio *folio);
 bool isolate_hugetlb(struct folio *folio, struct list_head *list);
 
 // from linux/ioctl.h
-#define _IOC_NRBITS	8
-#define _IOC_TYPEBITS	8
-#define _IOC_SIZEBITS	13
+#define _IOC_NRBITS 8
+#define _IOC_TYPEBITS 8
+#define _IOC_SIZEBITS 13
 
-#define _IOC_NRSHIFT	0
-#define _IOC_TYPESHIFT	(_IOC_NRSHIFT+_IOC_NRBITS)
-#define _IOC_SIZESHIFT	(_IOC_TYPESHIFT+_IOC_TYPEBITS)
-#define _IOC_DIRSHIFT	(_IOC_SIZESHIFT+_IOC_SIZEBITS)
+#define _IOC_NRSHIFT 0
+#define _IOC_TYPESHIFT (_IOC_NRSHIFT + _IOC_NRBITS)
+#define _IOC_SIZESHIFT (_IOC_TYPESHIFT + _IOC_TYPEBITS)
+#define _IOC_DIRSHIFT (_IOC_SIZESHIFT + _IOC_SIZEBITS)
 
-#define _IOC(dir, type, nr, size)			\
-	((unsigned int)				\
-	 (((dir)  << _IOC_DIRSHIFT) |		\
-	  ((type) << _IOC_TYPESHIFT) |		\
-	  ((nr)   << _IOC_NRSHIFT) |		\
-	  ((size) << _IOC_SIZESHIFT)))
-#define _IOC_READ	2U
-#define _IOC_WRITE	4U
-#define _IOW(type, nr, size)	_IOC(_IOC_WRITE, (type), (nr), sizeof(size))
-#define _IOWR(type, nr, size)	_IOC(_IOC_READ|_IOC_WRITE, (type), (nr), sizeof(size))
+#define _IOC(dir, type, nr, size)                                                                    \
+    ((unsigned int)(((dir) << _IOC_DIRSHIFT) | ((type) << _IOC_TYPESHIFT) | ((nr) << _IOC_NRSHIFT) | \
+                    ((size) << _IOC_SIZESHIFT)))
+#define _IOC_READ 2U
+#define _IOC_WRITE 4U
+#define _IOW(type, nr, size) _IOC(_IOC_WRITE, (type), (nr), sizeof(size))
+#define _IOWR(type, nr, size) _IOC(_IOC_READ | _IOC_WRITE, (type), (nr), sizeof(size))
 
 // from linux/kdev_t.h
-#define MINORBITS	20
-#define MAJOR(dev)	((unsigned int) ((dev) >> MINORBITS))
-#define MKDEV(ma, mi)	(((ma) << MINORBITS) | (mi))
+#define MINORBITS 20
+#define MAJOR(dev) ((unsigned int)((dev) >> MINORBITS))
+#define MKDEV(ma, mi) (((ma) << MINORBITS) | (mi))
 
 // from linux/class.h
 struct class1 {
-    const char* name;
+    const char *name;
 };
 void class_destroy(struct class1 *cls);
 
@@ -902,7 +888,7 @@ inline struct class1 *class_create(const char *name)
 
 // from linux/device.h
 struct device {
-    struct device* parent;
+    struct device *parent;
 };
 
 struct device *device_create(struct class1 *cls, struct device *parent, dev_t devt, void *drvdata, const char *fmt,
@@ -917,7 +903,8 @@ static inline long folio_nr_pages(struct folio *folio)
 }
 
 static inline int isolate_and_migrate_folios(struct folio **folios, unsigned int nr_folios, new_folio_t get_new_folio,
-    free_folio_t put_new_folio, unsigned long c_private, enum migrate_mode mode, unsigned int *nr_succeeded)
+                                             free_folio_t put_new_folio, unsigned long c_private,
+                                             enum migrate_mode mode, unsigned int *nr_succeeded)
 {
     return 0;
 }

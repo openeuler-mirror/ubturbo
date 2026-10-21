@@ -2,8 +2,8 @@
  * Description: smap5.0 user migration ut code
  */
 
-#include <cstdlib>
 #include <errno.h>
+#include <cstdlib>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
@@ -828,7 +828,8 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansUsesRemainingBidirectionalBudget)
     process.scanAttr.actcLen[2] = 10;
     process.scanAttr.actCount[0].freqBuckets[0] = 10;
     process.scanAttr.actCount[2].freqBuckets[5] = 10;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &process);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &process);
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
     PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 10);
@@ -859,7 +860,8 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansAllowsUnconvergedPair)
     process.scanAttr.actcLen[2] = 10;
     process.scanAttr.actCount[0].freqBuckets[0] = 10;
     process.scanAttr.actCount[2].freqBuckets[5] = 10;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &process);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &process);
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
     PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 8);
@@ -892,7 +894,8 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansFillsRemoteHotGuarantee)
     process.scanAttr.actCount[0].freqBuckets[5] = 10;
     process.scanAttr.actCount[2].freqBuckets[5] = 10;
     process.scanAttr.actCount[2].remoteHotNum = 4;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &process);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &process);
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
     PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 10);
@@ -924,7 +927,8 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansRejectsAmbiguousSharedRemote)
     process.scanAttr.actCount[1].freqBuckets[0] = 4;
     process.scanAttr.actCount[2].freqBuckets[5] = 4;
     process.scanAttr.actCount[2].remoteHotNum = 4;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &process);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &process);
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
     PairPlan plans[] = {
@@ -995,7 +999,8 @@ TEST_F(MigrationTest, TestApplyPairPlansForStateRebuildsMigratingMatrixOnly)
     grouped.groupPolicy.enabled = true;
     first.next = &second;
     second.next = &grouped;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &first);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &first);
     PidSlotAdd(&manager, &second);
     PidSlotAdd(&manager, &grouped);
     first.strategyAttr.nrMigratePages[7][7] = 7;
@@ -1027,7 +1032,8 @@ TEST_F(MigrationTest, TestApplyPairPlansForStateFailureKeepsOldMatrix)
     manager.nrLocalNuma = 2;
     ProcessAttr process = {.pid = 100, .scanType = NORMAL_SCAN};
     process.state = PROC_MIGRATE;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &process);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &process);
     process.strategyAttr.nrMigratePages[0][2] = 7;
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
@@ -1090,9 +1096,11 @@ TEST_F(MigrationTest, TestUpdateScanTime)
 extern "C" void UpdateScene(struct ProcessManager *manager);
 TEST_F(MigrationTest, TestUpdateScene)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &current);
     current.type = VM_TYPE;
     current.scanType = NORMAL_SCAN;
     current.sceneInfo.currScene = LIGHT_STABLE_SCENE;
@@ -1107,9 +1115,11 @@ TEST_F(MigrationTest, TestUpdateScene)
 extern "C" int HandleScene(struct ProcessManager *manager);
 TEST_F(MigrationTest, TestHandleSceneFirstScanNoPages)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &current);
     current.next = nullptr;
     current.isFirstScan = true;
     current.walkPage.nrPage = 0;
@@ -1125,9 +1135,11 @@ TEST_F(MigrationTest, TestHandleSceneFirstScanNoPages)
 
 TEST_F(MigrationTest, TestHandleSceneFirstScanWithPages)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &current);
     current.next = nullptr;
     current.isFirstScan = true;
     current.walkPage.nrPage = 1;
@@ -1144,9 +1156,11 @@ TEST_F(MigrationTest, TestHandleSceneFirstScanWithPages)
 
 TEST_F(MigrationTest, TestHandleSceneFirstScanUpdateScanTimeFail)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &current);
     current.next = nullptr;
     current.isFirstScan = true;
     current.walkPage.nrPage = 1;
@@ -1163,7 +1177,8 @@ TEST_F(MigrationTest, TestHandleSceneFirstScanUpdateScanTimeFail)
 
 TEST_F(MigrationTest, TestUodatePeriodFromConfig)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     manager.migPeriod = 500;
     MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(true));
     MOCKER(GetScanPeriodChanged).stubs().will(returnValue(false));
@@ -1180,9 +1195,11 @@ TEST_F(MigrationTest, TestUodatePeriodFromConfig)
 
 TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanNoPages)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &current);
     manager.migPeriod = 500;
     current.next = nullptr;
     current.isFirstScan = true;
@@ -1203,9 +1220,11 @@ TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanNoPages)
 
 TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanWithPages)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &current);
     manager.migPeriod = 500;
     current.next = nullptr;
     current.isFirstScan = true;
@@ -1247,7 +1266,8 @@ TEST_F(MigrationTest, TestUpdateMigResultLocalToRemote)
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(170, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
@@ -1275,7 +1295,8 @@ TEST_F(MigrationTest, TestUpdateMigResultSubtractsIsolatedFailure)
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(150, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
@@ -1303,7 +1324,8 @@ TEST_F(MigrationTest, TestUpdateMigResultSettlesPairSwapByEachDirectionSuccess)
 
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
 
     UpdateMigResult(&mMsg, &manager);
@@ -1337,7 +1359,8 @@ TEST_F(MigrationTest, TestUpdateMigResultPromoteSubtractsOnlySuccessfulPages)
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
 
     UpdateMigResult(&mMsg, &manager);
@@ -1363,7 +1386,8 @@ TEST_F(MigrationTest, TestUpdateMigResultUpdatesExactDemotePair)
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
 
     UpdateMigResult(&mMsg, &manager);
@@ -1394,7 +1418,8 @@ TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalUnexpectedMigCount)
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
@@ -1422,7 +1447,8 @@ TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalExpectedMigCount)
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(30, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
@@ -1447,7 +1473,8 @@ TEST_F(MigrationTest, TestUpdateMigResultTwo)
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(60, attr.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
@@ -1474,7 +1501,8 @@ TEST_F(MigrationTest, TestUpdateMigResultThree)
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
@@ -1501,7 +1529,8 @@ TEST_F(MigrationTest, TestUpdateMigResultFour)
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(1099, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
@@ -1540,9 +1569,11 @@ TEST_F(MigrationTest, TestUpdateMigResultFive)
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     PidSlotAdd(&manager, &attr2);
-    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotAdd(&g_processManager, &attr);
     PidSlotAdd(&g_processManager, &attr2);
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(199, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
@@ -1570,7 +1601,8 @@ TEST_F(MigrationTest, TestUpdateMigResultSix)
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(30, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
@@ -1609,9 +1641,11 @@ TEST_F(MigrationTest, TestUpdateMigResultSeven)
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     PidSlotAdd(&manager, &attr2);
-    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotAdd(&g_processManager, &attr);
     PidSlotAdd(&g_processManager, &attr2);
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(1, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
@@ -1650,9 +1684,11 @@ TEST_F(MigrationTest, TestUpdateMigResultEight)
 
     ProcessManager manager = {};
     manager.nrLocalNuma = 4;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     PidSlotAdd(&manager, &attr2);
-    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots)); PidSlotAdd(&g_processManager, &attr);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotAdd(&g_processManager, &attr);
     PidSlotAdd(&g_processManager, &attr2);
     UpdateMigResult(&mMsg, &manager);
     EXPECT_EQ(199, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
@@ -1718,7 +1754,8 @@ extern "C" int MigrateRemoteNuma(struct ProcessManager *manager, struct MigrateN
 TEST_F(MigrationTest, TestApplyUbBwStopThresholdZero)
 {
     ProcessAttr current = {};
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     manager.ubBwMonitor.ubBwThreshold = 0;
     manager.ubBwMonitor.currentFluxRet = 0;
     current.strategyAttr.nrMigratePages[0][1] = 100;
@@ -1732,7 +1769,8 @@ TEST_F(MigrationTest, TestApplyUbBwStopThresholdZero)
 TEST_F(MigrationTest, TestApplyUbBwStopFluxRetFailed)
 {
     ProcessAttr current = {};
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     manager.ubBwMonitor.ubBwThreshold = 1000;
     manager.ubBwMonitor.currentFluxRet = -1;
     current.strategyAttr.nrMigratePages[0][1] = 100;
@@ -1744,7 +1782,8 @@ TEST_F(MigrationTest, TestApplyUbBwStopFluxRetFailed)
 TEST_F(MigrationTest, TestApplyUbBwStopBwExceedThreshold)
 {
     ProcessAttr current = {};
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     manager.ubBwMonitor.ubBwThreshold = 500;
     manager.ubBwMonitor.currentFluxRet = 0;
     manager.ubBwMonitor.currentFluxMb.len = 1;
@@ -1767,7 +1806,8 @@ TEST_F(MigrationTest, TestApplyUbBwStopBwExceedThreshold)
 TEST_F(MigrationTest, TestApplyUbBwStopBwBelowThreshold)
 {
     ProcessAttr current = {};
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     manager.ubBwMonitor.ubBwThreshold = 1000;
     manager.ubBwMonitor.currentFluxRet = 0;
     manager.ubBwMonitor.currentFluxMb.len = 1;
@@ -1784,7 +1824,8 @@ TEST_F(MigrationTest, TestApplyUbBwStopBwBelowThreshold)
 TEST_F(MigrationTest, TestApplyUbBwStopMultipleNumaMixed)
 {
     ProcessAttr current = {};
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     manager.ubBwMonitor.ubBwThreshold = 500;
     manager.ubBwMonitor.currentFluxRet = 0;
     manager.ubBwMonitor.currentFluxMb.len = 2;

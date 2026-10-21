@@ -1764,8 +1764,7 @@ static int BuildPidPairPlans(struct ProcessManager *manager, ProcessAttr *proces
         uint64_t swapPages;
 
         if (!process->enableSwap || IsNodeForbidden(plan->remoteNid) || !IsOnlyLocalForRemote(plans, targetCnt, i) ||
-            plan->promotePages > 0 ||
-            (plan->targetPages == 0 && plan->demotePages == 0 && plan->promotePages == 0)) {
+            plan->promotePages > 0 || (plan->targetPages == 0 && plan->demotePages == 0 && plan->promotePages == 0)) {
             /* promote 方向（目标要求把远端页迁回本地）不做 swap：swap 会把本地
              * 冷页再送回远端，与本周期的 promote 目标反向抵消，远端清空目标
              * 永远无法达成，只能靠周期性长尾收敛（远端页数每周期仅减 swap 缺口）。 */

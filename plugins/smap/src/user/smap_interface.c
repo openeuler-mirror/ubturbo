@@ -951,8 +951,7 @@ static void DiscardMigrateOutCandidates(ProcessManageCandidate *candidates, int 
 }
 
 static int PrepareMigrateOutCandidatesWithCapacityPolicy(struct MigrateOutMsg *msg, int pageType,
-                                                         ProcessManageCandidate *candidates,
-                                                         bool ignoreRemoteCapacity)
+                                                         ProcessManageCandidate *candidates, bool ignoreRemoteCapacity)
 {
     int firstError = 0;
     for (int i = 0; i < msg->count; i++) {
@@ -1368,7 +1367,6 @@ static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pageType)
     }
     return 0;
 }
-
 
 /* Partial remove cannot safely update grouped policy state, so reject it. */
 static int CheckSmapRemoveGroupedPidLocked(struct RemoveMsg *msg)

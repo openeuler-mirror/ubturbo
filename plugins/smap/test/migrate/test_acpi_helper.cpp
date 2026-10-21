@@ -40,12 +40,8 @@ extern "C" unsigned long acpi_get_subtable_header_length(struct acpi_subtable_en
 
 TEST_F(AcpiHelperTest, AcpiGetSubtableHeaderLength)
 {
-    struct acpi_subtable_entry entry1 = {
-        .type = SUBTABLE_COMMON
-    };
-    struct acpi_subtable_entry entry2 = {
-        .type = SUBTABLE_HMAT
-    };
+    struct acpi_subtable_entry entry1 = {.type = SUBTABLE_COMMON};
+    struct acpi_subtable_entry entry2 = {.type = SUBTABLE_HMAT};
     struct acpi_subtable_entry *entryPoint1 = &entry1;
     struct acpi_subtable_entry *entryPoint2 = &entry2;
     unsigned long sizeof1 = acpi_get_subtable_header_length(entryPoint1);
@@ -58,22 +54,16 @@ extern "C" unsigned long acpi_get_entry_type(struct acpi_subtable_entry *entry);
 
 TEST_F(AcpiHelperTest, AcpiGetEntryType)
 {
-    union acpi_subtable_headers* headers1 =
-        (union acpi_subtable_headers *)kmalloc(sizeof(union acpi_subtable_headers),  GFP_KERNEL);
+    union acpi_subtable_headers *headers1 =
+        (union acpi_subtable_headers *)kmalloc(sizeof(union acpi_subtable_headers), GFP_KERNEL);
     ASSERT_NE(nullptr, headers1);
-    union acpi_subtable_headers* headers2 =
-        (union acpi_subtable_headers *)kmalloc(sizeof(union acpi_subtable_headers),  GFP_KERNEL);
+    union acpi_subtable_headers *headers2 =
+        (union acpi_subtable_headers *)kmalloc(sizeof(union acpi_subtable_headers), GFP_KERNEL);
     ASSERT_NE(nullptr, headers2);
     headers1->common.type = 1;
     headers2->hmat.type = 2;
-    struct acpi_subtable_entry entry1 = {
-        .hdr = headers1,
-        .type = SUBTABLE_COMMON
-    };
-    struct acpi_subtable_entry entry2 = {
-        .hdr = headers2,
-        .type = SUBTABLE_HMAT
-    };
+    struct acpi_subtable_entry entry1 = {.hdr = headers1, .type = SUBTABLE_COMMON};
+    struct acpi_subtable_entry entry2 = {.hdr = headers2, .type = SUBTABLE_HMAT};
     struct acpi_subtable_entry *entryPoint1 = &entry1;
     struct acpi_subtable_entry *entryPoint2 = &entry2;
     unsigned long type1 = acpi_get_entry_type(entryPoint1);
@@ -86,22 +76,16 @@ extern "C" unsigned long acpi_get_entry_length(struct acpi_subtable_entry *entry
 
 TEST_F(AcpiHelperTest, AcpiGetEntryLength)
 {
-    union acpi_subtable_headers* headers1 =
-        (union acpi_subtable_headers *)kmalloc(sizeof(union acpi_subtable_headers),  GFP_KERNEL);
+    union acpi_subtable_headers *headers1 =
+        (union acpi_subtable_headers *)kmalloc(sizeof(union acpi_subtable_headers), GFP_KERNEL);
     ASSERT_NE(nullptr, headers1);
-    union acpi_subtable_headers* headers2 =
-        (union acpi_subtable_headers *)kmalloc(sizeof(union acpi_subtable_headers),  GFP_KERNEL);
+    union acpi_subtable_headers *headers2 =
+        (union acpi_subtable_headers *)kmalloc(sizeof(union acpi_subtable_headers), GFP_KERNEL);
     ASSERT_NE(nullptr, headers2);
     headers1->common.length = 1;
     headers2->hmat.length = 2;
-    struct acpi_subtable_entry entry1 = {
-        .hdr = headers1,
-        .type = SUBTABLE_COMMON
-    };
-    struct acpi_subtable_entry entry2 = {
-        .hdr = headers2,
-        .type = SUBTABLE_HMAT
-    };
+    struct acpi_subtable_entry entry1 = {.hdr = headers1, .type = SUBTABLE_COMMON};
+    struct acpi_subtable_entry entry2 = {.hdr = headers2, .type = SUBTABLE_HMAT};
     struct acpi_subtable_entry *entryPoint1 = &entry1;
     struct acpi_subtable_entry *entryPoint2 = &entry2;
     unsigned long length1 = acpi_get_entry_length(entryPoint1);
@@ -117,12 +101,8 @@ TEST_F(AcpiHelperTest, AcpiParseEntriesArray)
 
     unsigned long tableSize = 1;
 
-    struct acpi_table_header table_header1 = {
-        .length = 1
-    };
-    struct acpi_table_header table_header2 = {
-        .length = 10
-    };
+    struct acpi_table_header table_header1 = {.length = 1};
+    struct acpi_table_header table_header2 = {.length = 10};
 
     struct acpi_subtable_proc proc[3] = {};
     proc[0].id = 1;

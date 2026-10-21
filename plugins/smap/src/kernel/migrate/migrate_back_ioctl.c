@@ -33,8 +33,8 @@ static int dup_task(unsigned long long task_id, struct list_head *head)
 	return NORMAL_ID;
 }
 
-static struct migrate_back_task *find_task_by_id_locked(
-	unsigned long long task_id)
+static struct migrate_back_task *
+find_task_by_id_locked(unsigned long long task_id)
 {
 	struct migrate_back_task *t;
 
@@ -66,7 +66,8 @@ static int wait_migrate_back_result(unsigned long long task_id)
 	left = wait_for_completion_timeout(
 		&t->done, msecs_to_jiffies(MIGBACK_SYNC_WAIT_MS));
 	spin_lock(&migrate_back_task_lock);
-	status = find_task_by_id_locked(task_id) == t ? (int)t->status : MB_TASK_DONE;
+	status = find_task_by_id_locked(task_id) == t ? (int)t->status
+						      : MB_TASK_DONE;
 	spin_unlock(&migrate_back_task_lock);
 	kref_put(&t->ref, migrate_back_task_release);
 

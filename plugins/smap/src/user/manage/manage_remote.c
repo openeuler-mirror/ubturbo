@@ -583,7 +583,6 @@ static uint32_t BuildCandidateRemoteDrainNodes(ProcessAttr *candidate, const Pro
 static int PrepareProcessTargetCandidate(ProcessAttr *candidate, const ProcessTargetConfig *config,
                                          const ManagedLocalObservation *observation, bool skipRemoteResidencyCheck)
 {
-
     ProcessTargetConfig targetConfig;
     uint32_t drainNodes = 0;
     int ret = CopyProcessTargetConfig(&targetConfig, config);

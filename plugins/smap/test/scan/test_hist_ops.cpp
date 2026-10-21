@@ -6,21 +6,21 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include <asm/types.h>
 #include <asm/io.h>
+#include <asm/types.h>
 #include <linux/byteorder/generic.h>
 #include <linux/kthread.h>
+#include <linux/rwsem.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
-#include <linux/rwsem.h>
 extern "C" {
 #include <linux/delay.h>
 }
 
-#include "iomem.h"
-#include "ub_hist.h"
 #include "hist_ops.h"
 #include "hist_tracking.h"
+#include "iomem.h"
+#include "ub_hist.h"
 
 using namespace std;
 class HistOpsTest : public ::testing::Test {
@@ -80,10 +80,7 @@ TEST_F(HistOpsTest, addr_seg_is_valid)
 {
     bool ret;
     struct addr_seg seg;
-    struct segs_info seg_info = {
-        .cnt = 0,
-        .segs = NULL
-    };
+    struct segs_info seg_info = {.cnt = 0, .segs = NULL};
     struct ub_hist_ba_info ba_info = {
         .ba_tag = 0,
     };
@@ -139,8 +136,8 @@ TEST_F(HistOpsTest, addr_seg_cmp_max)
     EXPECT_EQ(1, ret);
 }
 
-extern "C" bool addr_seg_is_continuous_scan_wins(struct addr_seg *seg1,
-    struct addr_seg *seg2, enum ub_hist_sts_size sts_size);
+extern "C" bool addr_seg_is_continuous_scan_wins(struct addr_seg *seg1, struct addr_seg *seg2,
+                                                 enum ub_hist_sts_size sts_size);
 TEST_F(HistOpsTest, addr_seg_is_continuous_scan_wins)
 {
     bool ret;
@@ -285,18 +282,9 @@ TEST_F(HistOpsTest, is_intersect)
     bool ret;
     u64 inter_start;
     u64 inter_end;
-    struct addr_seg seg1 = {
-        .start = 0,
-        .size = 0x1000
-    };
-    struct addr_seg seg2 = {
-        .start = 0x10,
-        .size = 0x1000
-    };
-    struct addr_seg seg3 = {
-        .start = 0x10000,
-        .size = 0x1000
-    };
+    struct addr_seg seg1 = {.start = 0, .size = 0x1000};
+    struct addr_seg seg2 = {.start = 0x10, .size = 0x1000};
+    struct addr_seg seg3 = {.start = 0x10000, .size = 0x1000};
     ret = is_intersect(&seg1, &seg2, &inter_start, &inter_end);
     EXPECT_EQ(true, ret);
 
@@ -331,8 +319,8 @@ TEST_F(HistOpsTest, calc_4k_scan_hot_wins)
     free(buf);
 }
 
-extern "C" int generate_aligned_scan_wins_info(struct segs_info *win_info,
-    struct segs_info *info, enum ub_hist_sts_size sts_size);
+extern "C" int generate_aligned_scan_wins_info(struct segs_info *win_info, struct segs_info *info,
+                                               enum ub_hist_sts_size sts_size);
 TEST_F(HistOpsTest, generate_aligned_scan_wins_info_2m)
 {
     int ret;
@@ -398,8 +386,7 @@ TEST_F(HistOpsTest, generate_aligned_scan_wins_info_4k_seq_loop)
     free(g_smap_hist_dev.ba_info);
 }
 
-extern "C" int generate_aligned_4k_scan_wins_info(struct segs_info *win_info,
-    struct segs_info *info, u16 *buf);
+extern "C" int generate_aligned_4k_scan_wins_info(struct segs_info *win_info, struct segs_info *info, u16 *buf);
 extern "C" int filter_4k_scan_hot_wins(struct segs_info *win_info, u32 max_wins_4k_per_ba);
 TEST_F(HistOpsTest, generate_aligned_4k_scan_wins_info)
 {
@@ -434,10 +421,10 @@ TEST_F(HistOpsTest, generate_aligned_4k_scan_wins_info)
     free(g_smap_hist_dev.ba_info);
 }
 
-extern "C" int do_hist_scan_sliding(struct segs_info *info, bool do_multi_gran, u16 *buf,
-    u32 buf_len, enum ub_hist_sts_size sts_size, bool direct_update);
-extern "C" void copy_actc_to_buf(struct segs_info *info, struct addr_seg *seg,
-    u16 *dst_buf, u16 *freq, u32 buf_len, enum ub_hist_sts_size sts_size);
+extern "C" int do_hist_scan_sliding(struct segs_info *info, bool do_multi_gran, u16 *buf, u32 buf_len,
+                                    enum ub_hist_sts_size sts_size, bool direct_update);
+extern "C" void copy_actc_to_buf(struct segs_info *info, struct addr_seg *seg, u16 *dst_buf, u16 *freq, u32 buf_len,
+                                 enum ub_hist_sts_size sts_size);
 extern "C" int hist_scan_sliding(struct segs_info *info, u32 scan_time_total, u32 pgsize);
 
 TEST_F(HistOpsTest, hist_scan_sliding_seq_loop)
@@ -545,7 +532,7 @@ TEST_F(HistOpsTest, addr_segs_deinit)
     struct segs_info info = {
         .cnt = 1,
     };
-    info.segs =(struct addr_seg *)malloc(sizeof(struct addr_seg) * info.cnt);
+    info.segs = (struct addr_seg *)malloc(sizeof(struct addr_seg) * info.cnt);
     struct smap_hist_dev dev = {
         .info = info,
     };
@@ -657,8 +644,8 @@ TEST_F(HistOpsTest, hist_init)
  * New test cases for commit d3c1f37 and 48795d4 features
  * ============================================================ */
 
-extern "C" void update_actc_direct(struct segs_info *rmem_info,
-    struct addr_seg *seg, u16 *freq, u32 buf_len, enum ub_hist_sts_size sts_size);
+extern "C" void update_actc_direct(struct segs_info *rmem_info, struct addr_seg *seg, u16 *freq, u32 buf_len,
+                                   enum ub_hist_sts_size sts_size);
 
 /*
  * Test Case 1: 4K顺序滑窗模式生成扫描窗口的功能正常
@@ -1067,8 +1054,7 @@ TEST_F(HistOpsTest, pick_one_seg_seq_loop_no_wrap)
 extern "C" int ub_watch_config(uint32_t duration_ms);
 extern "C" int ub_watch(struct ub_flux_mb *result);
 extern "C" void ub_watch_dwork_func(struct work_struct *work);
-extern "C" bool queue_delayed_work(struct workqueue_struct *wq,
-                                   struct delayed_work *dwork, unsigned long delay);
+extern "C" bool queue_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork, unsigned long delay);
 extern "C" bool cancel_delayed_work_sync(struct delayed_work *dwork);
 extern "C" unsigned int ub_watch_perf_prd_ms;
 extern "C" unsigned int ub_watch_sample_interval_ms;

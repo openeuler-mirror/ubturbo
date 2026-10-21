@@ -7,16 +7,16 @@
 #include "mockcpp/mokc.h"
 
 #include <asm/pgtable.h>
-#include <linux/slab.h>
-#include <linux/vmalloc.h>
-#include <linux/spinlock.h>
-#include <linux/hugetlb.h>
-#include <linux/list.h>
-#include <linux/mmap_lock.h>
 #include <linux/errno.h>
-#include <linux/pid.h>
-#include <linux/mm_types.h>
+#include <linux/hugetlb.h>
 #include <linux/kvm_host.h>
+#include <linux/list.h>
+#include <linux/mm_types.h>
+#include <linux/mmap_lock.h>
+#include <linux/pid.h>
+#include <linux/slab.h>
+#include <linux/spinlock.h>
+#include <linux/vmalloc.h>
 #include <linux/workqueue.h>
 
 #include "acpi_mem.h"
@@ -28,8 +28,7 @@ using namespace std;
 
 extern "C" int init_acpi_mem(void);
 extern "C" bool cancel_delayed_work_sync(struct delayed_work *dwork);
-extern "C" bool queue_delayed_work(struct workqueue_struct *wq,
-    struct delayed_work *dwork, unsigned long delay);
+extern "C" bool queue_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork, unsigned long delay);
 
 class AccessTrackingTest : public ::testing::Test {
 protected:

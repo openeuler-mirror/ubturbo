@@ -8,8 +8,8 @@
 #include <asm/page-def.h>
 #include <linux/slab.h>
 
-#include "smap_debugfs.h"
 #include "migrate_main.h"
+#include "smap_debugfs.h"
 
 using namespace std;
 

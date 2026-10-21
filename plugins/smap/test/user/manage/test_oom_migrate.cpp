@@ -142,7 +142,8 @@ extern "C" struct ProcessManager *GetProcessManager(void);
 /* size < pageSize：budget=0，直接返回，不调 OpenNumaMaps */
 TEST_F(OomMigrateTest, TestFindPidMigrateSize_SizeTooSmall)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     manager.tracking.pageSize = PAGESIZE_4K;
     EnvMutexInit(&manager.threadLock);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
@@ -167,7 +168,8 @@ TEST_F(OomMigrateTest, TestFindPidMigrateSize_IdleNotSkippedLogic)
 /* PROC_MIGRATE 状态被跳过：OpenNumaMaps 不应被调 */
 TEST_F(OomMigrateTest, TestFindPidMigrateSize_SkipMigrating)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     manager.tracking.pageSize = PAGESIZE_4K;
     manager.nrLocalNuma = 2;
     EnvMutexInit(&manager.threadLock);
@@ -177,7 +179,8 @@ TEST_F(OomMigrateTest, TestFindPidMigrateSize_SkipMigrating)
     SetAttrL2(&attr, 2);
     attr.next = nullptr;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(OpenNumaMaps).expects(never());
     FindPidMigrateSize(8192);
@@ -186,7 +189,8 @@ TEST_F(OomMigrateTest, TestFindPidMigrateSize_SkipMigrating)
 /* PROC_MOVE 逃生态被跳过 */
 TEST_F(OomMigrateTest, TestFindPidMigrateSize_SkipMove)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     manager.tracking.pageSize = PAGESIZE_4K;
     manager.nrLocalNuma = 2;
     EnvMutexInit(&manager.threadLock);
@@ -195,7 +199,8 @@ TEST_F(OomMigrateTest, TestFindPidMigrateSize_SkipMove)
     SetAttrL2(&attr, 2);
     attr.next = nullptr;
     attr.pid = 123;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(OpenNumaMaps).expects(never());
     FindPidMigrateSize(8192);
@@ -204,7 +209,8 @@ TEST_F(OomMigrateTest, TestFindPidMigrateSize_SkipMove)
 /* 远端(L2)已有页：跳过紧急腾挪，不重复介入 */
 TEST_F(OomMigrateTest, TestFindPidMigrateSize_RemoteHasPages)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     manager.tracking.pageSize = PAGESIZE_4K;
     manager.nrLocalNuma = 2;
     EnvMutexInit(&manager.threadLock);
@@ -213,7 +219,8 @@ TEST_F(OomMigrateTest, TestFindPidMigrateSize_RemoteHasPages)
     SetAttrL2(&attr, 2);
     attr.scanAttr.actcLen[2] = 100; /* L2 节点 2 上已有页 */
     attr.next = nullptr;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(OpenNumaMaps).expects(never());
     FindPidMigrateSize(8192);
@@ -230,7 +237,8 @@ TEST_F(OomMigrateTest, TestFindPidMigrateSize_NullManager)
 /* pageSize 为 0：直接返回，不迁移 */
 TEST_F(OomMigrateTest, TestFindPidMigrateSize_ZeroPageSize)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     manager.tracking.pageSize = 0; /* 未初始化 */
     EnvMutexInit(&manager.threadLock);
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));

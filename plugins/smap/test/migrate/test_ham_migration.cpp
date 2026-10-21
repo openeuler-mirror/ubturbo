@@ -20,18 +20,16 @@ extern "C" void mmput(struct mm_struct *);
 
 using namespace std;
 
-extern "C" int init_numa_page_map(struct ham_migrate_task *mig_task,
-    struct migration_param *arg);
-extern "C" struct folio *alloc_folio_with_retry(int nid,
-    struct ham_migrate_task *mig_task, struct migration_param *param);
-extern "C" int create_numa_map(struct ham_migrate_task *mig_task,
-    struct migration_param *param);
-extern "C" int fill_folios_hugetlb(pte_t *pte, unsigned long hmask,
-    unsigned long addr, unsigned long end, struct mm_walk *walk);
+extern "C" int init_numa_page_map(struct ham_migrate_task *mig_task, struct migration_param *arg);
+extern "C" struct folio *alloc_folio_with_retry(int nid, struct ham_migrate_task *mig_task,
+                                                struct migration_param *param);
+extern "C" int create_numa_map(struct ham_migrate_task *mig_task, struct migration_param *param);
+extern "C" int fill_folios_hugetlb(pte_t *pte, unsigned long hmask, unsigned long addr, unsigned long end,
+                                   struct mm_walk *walk);
 extern "C" void sort_hpm_list(struct list_head *head, unsigned int nr_hpm);
-extern "C" int handle_ham_migration(struct list_head *hpm_list,
-    unsigned int nr_hpm_max, struct folio *(*get_migration_folio)(struct ham_page_map *hpm),
-    new_folio_t get_new_folio, free_folio_t put_new_folio);
+extern "C" int handle_ham_migration(struct list_head *hpm_list, unsigned int nr_hpm_max,
+                                    struct folio *(*get_migration_folio)(struct ham_page_map *hpm),
+                                    new_folio_t get_new_folio, free_folio_t put_new_folio);
 extern "C" struct folio *get_folio_migrate_out(struct ham_page_map *hpm);
 extern "C" struct folio *get_folio_migrate_back(struct ham_page_map *hpm);
 extern "C" struct folio *get_new_folio(struct folio *folio, unsigned long private_data);
@@ -42,10 +40,11 @@ extern "C" int ham_cache_clear(pid_t pid, struct ham_migrate_task *mig_task);
 extern "C" int src_suspend_pgtable_maintain(struct ham_migrate_task *mig_task);
 extern "C" int src_pgtable_maintain_rollback(struct ham_migrate_task *mig_task);
 extern "C" int dst_resume_pgtable_maintain(struct ham_migrate_task *mig_task);
-extern "C" unsigned int queue_qualified_pages(struct ham_migrate_task *mig_task,
-    bool migrated, struct list_head *ret_hpm_list);
+extern "C" unsigned int queue_qualified_pages(struct ham_migrate_task *mig_task, bool migrated,
+                                              struct list_head *ret_hpm_list);
 extern "C" unsigned int construct_page_list(struct list_head *hpm_list,
-    struct folio *(*get_migration_folio)(struct ham_page_map *hpm), struct folio **folios);
+                                            struct folio *(*get_migration_folio)(struct ham_page_map *hpm),
+                                            struct folio **folios);
 extern "C" int get_folios_freqs(struct ham_migrate_task *mig_task);
 extern "C" long ioctl_start_migration(unsigned long arg);
 extern "C" long ioctl_migration_pages(unsigned long arg);
@@ -58,35 +57,30 @@ extern "C" int ham_open(struct inode *inode, struct file *file);
 extern "C" int ham_release(struct inode *inode, struct file *file);
 extern "C" ssize_t ham_read(struct file *file, char __user *buf, size_t size, loff_t *ppos);
 extern "C" ssize_t ham_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos);
-extern "C" ssize_t global_cache_mnt_show(struct device *dev,
-    struct device_attribute *attr, char *buf);
-extern "C" ssize_t global_cache_mnt_store(struct device *dev,
-    struct device_attribute *attr, const char *buf, size_t count);
+extern "C" ssize_t global_cache_mnt_show(struct device *dev, struct device_attribute *attr, char *buf);
+extern "C" ssize_t global_cache_mnt_store(struct device *dev, struct device_attribute *attr, const char *buf,
+                                          size_t count);
 extern "C" struct folio *ham_alloc_huge_page_node(int nid);
 extern "C" int flush_cache_by_pa(unsigned long start, unsigned long size, unsigned int op_type);
-extern "C" int task_pgtable_within_pid_set_cacheable(pid_t pid, unsigned long start,
-    unsigned long size, bool cacheable);
-extern "C" int kernel_pgtable_within_pid_set_valid(pid_t pid, unsigned long start,
-    unsigned long size, bool valid);
+extern "C" int task_pgtable_within_pid_set_cacheable(pid_t pid, unsigned long start, unsigned long size,
+                                                     bool cacheable);
+extern "C" int kernel_pgtable_within_pid_set_valid(pid_t pid, unsigned long start, unsigned long size, bool valid);
 extern "C" int set_pid_pgtable_cacheable(pid_t pid, unsigned long start, unsigned long size);
-extern "C" int get_ham_pages_freqs(pid_t pid, struct freq_info **freq_info_array,
-    uint64_t *freq_info_num);
+extern "C" int get_ham_pages_freqs(pid_t pid, struct freq_info **freq_info_array, uint64_t *freq_info_num);
 extern "C" unsigned long copy_from_user(void *to, const void *from, unsigned long n);
-extern "C" int config_system_huge_page(unsigned long huge_page_number,
-    unsigned int node_id, struct hstate *h);
+extern "C" int config_system_huge_page(unsigned long huge_page_number, unsigned int node_id, struct hstate *h);
 extern "C" int compare_page_list(const void *a, const void *b);
 extern "C" int compare_page_freq(const void *a, const void *b);
 extern "C" int fill_task_pages(struct ham_migrate_task *mig_task);
 extern "C" int check_migration_param(struct migration_param param, struct hstate **h);
 extern "C" bool pid_legally(pid_t pid);
 extern "C" int check_rmt_numa_info(struct ram_block_info *rbi);
-extern "C" struct ham_migrate_task *init_migrate_task(struct migration_param *arg,
-    struct hstate *h);
+extern "C" struct ham_migrate_task *init_migrate_task(struct migration_param *arg, struct hstate *h);
 extern "C" struct file *filp_open(const char *filename, int flags, umode_t mode);
 extern "C" int filp_close(struct file *filp, fl_owner_t id);
 extern "C" struct mm_struct *find_get_mm_by_vpid(pid_t pid);
-extern "C" int walk_page_range(struct mm_struct *mm, unsigned long start,
-    unsigned long end, const struct mm_walk_ops *ops, void *private_data);
+extern "C" int walk_page_range(struct mm_struct *mm, unsigned long start, unsigned long end,
+                               const struct mm_walk_ops *ops, void *private_data);
 extern "C" struct vm_area_struct *find_vma(struct mm_struct *mm_s, unsigned long vaddr);
 extern "C" struct hstate *hstate_vma(struct vm_area_struct *vma);
 extern "C" unsigned long huge_page_size(struct hstate *h);
@@ -108,9 +102,9 @@ protected:
     }
 };
 
-static int mock_isolate_success(struct folio **folios, unsigned int nr_folios,
-    new_folio_t get_new_folio_cb, free_folio_t put_new_folio_cb,
-    unsigned long private_data, enum migrate_mode mode, unsigned int *nr_succeeded)
+static int mock_isolate_success(struct folio **folios, unsigned int nr_folios, new_folio_t get_new_folio_cb,
+                                free_folio_t put_new_folio_cb, unsigned long private_data, enum migrate_mode mode,
+                                unsigned int *nr_succeeded)
 {
     *nr_succeeded = nr_folios << (PMD_SHIFT - PAGE_SHIFT);
     return 0;
@@ -122,8 +116,7 @@ static struct folio *mock_get_null_folio(struct ham_page_map *hpm)
     return nullptr;
 }
 
-static unsigned long mock_copy_from_user_set_param(void *to, const void *from,
-    unsigned long n)
+static unsigned long mock_copy_from_user_set_param(void *to, const void *from, unsigned long n)
 {
     if (n == sizeof(struct migration_param)) {
         struct migration_param *p = (struct migration_param *)to;
@@ -145,8 +138,7 @@ static unsigned long mock_copy_from_user_set_param(void *to, const void *from,
     return 0;
 }
 
-static unsigned long mock_copy_from_user_remote_node(void *to, const void *from,
-    unsigned long n)
+static unsigned long mock_copy_from_user_remote_node(void *to, const void *from, unsigned long n)
 {
     if (n == sizeof(struct migration_param)) {
         struct migration_param *p = (struct migration_param *)to;
@@ -160,8 +152,7 @@ static unsigned long mock_copy_from_user_remote_node(void *to, const void *from,
     return 0;
 }
 
-static unsigned long mock_copy_from_user_non_cacheable(void *to, const void *from,
-    unsigned long n)
+static unsigned long mock_copy_from_user_non_cacheable(void *to, const void *from, unsigned long n)
 {
     if (n == sizeof(maintain_info)) {
         maintain_info *mi = (maintain_info *)to;
@@ -174,8 +165,7 @@ static unsigned long mock_copy_from_user_non_cacheable(void *to, const void *fro
 
 static struct ham_migrate_task g_mock_mig_task;
 
-static struct ham_migrate_task *mock_init_migrate_task_success(
-    struct migration_param *arg, struct hstate *h)
+static struct ham_migrate_task *mock_init_migrate_task_success(struct migration_param *arg, struct hstate *h)
 {
     memset(&g_mock_mig_task, 0, sizeof(struct ham_migrate_task));
     g_mock_mig_task.pid = arg->pid;
@@ -210,9 +200,7 @@ TEST_F(HamMigrationTest, AllocFolioWithRetrySuccessAndFailure)
     param.cnt = 1;
     param.ram_blocks[0].rmt_numa_id = 1;
 
-    MOCKER(ham_alloc_huge_page_node).stubs()
-        .will(returnValue((struct folio *)nullptr))
-        .then(returnValue(&expected));
+    MOCKER(ham_alloc_huge_page_node).stubs().will(returnValue((struct folio *)nullptr)).then(returnValue(&expected));
     EXPECT_EQ(&expected, alloc_folio_with_retry(1, &mig_task, &param));
 
     GlobalMockObject::verify();
@@ -260,8 +248,7 @@ TEST_F(HamMigrationTest, FillFoliosHugetlbCoversBranches)
     map.hpms = (struct ham_page_map *)calloc(1, sizeof(struct ham_page_map));
     walk.private_data = &map;
 
-    EXPECT_EQ(-EINVAL, fill_folios_hugetlb(&pte, 0, map.hva_start + PMD_SIZE,
-        map.hva_start + PMD_SIZE, &walk));
+    EXPECT_EQ(-EINVAL, fill_folios_hugetlb(&pte, 0, map.hva_start + PMD_SIZE, map.hva_start + PMD_SIZE, &walk));
 
     EXPECT_EQ(0, fill_folios_hugetlb(&pte, 0, map.hva_start, map.hva_start, &walk));
 
@@ -378,8 +365,7 @@ TEST_F(HamMigrationTest, HandleMigrationAndRollbackHelpers)
     struct folio rollback = {};
 
     INIT_LIST_HEAD(&hpm_list);
-    EXPECT_EQ(0, handle_ham_migration(&hpm_list, 1, get_folio_migrate_out,
-        get_new_folio, put_new_folio));
+    EXPECT_EQ(0, handle_ham_migration(&hpm_list, 1, get_folio_migrate_out, get_new_folio, put_new_folio));
 
     INIT_LIST_HEAD(&hpm.list);
     hpm.src_folio = &src;
@@ -388,8 +374,7 @@ TEST_F(HamMigrationTest, HandleMigrationAndRollbackHelpers)
     list_add_tail(&hpm.list, &hpm_list);
 
     MOCKER(isolate_and_migrate_folios).stubs().will(invoke(mock_isolate_success));
-    EXPECT_EQ(0, handle_ham_migration(&hpm_list, 1, get_folio_migrate_out,
-        get_new_folio, put_new_folio));
+    EXPECT_EQ(0, handle_ham_migration(&hpm_list, 1, get_folio_migrate_out, get_new_folio, put_new_folio));
 
     hpm_set_migrate(&hpm);
     hpm.src_numa_id = 2;
@@ -471,8 +456,7 @@ TEST_F(HamMigrationTest, PgtableRollbackAndResume)
     EXPECT_EQ(-EIO, dst_resume_pgtable_maintain(&mig_task));
 }
 
-static int mock_get_ham_pages_freqs_error(pid_t pid, struct freq_info **freq_info_array,
-    uint64_t *freq_info_num)
+static int mock_get_ham_pages_freqs_error(pid_t pid, struct freq_info **freq_info_array, uint64_t *freq_info_num)
 {
     (void)pid;
     (void)freq_info_array;
@@ -480,8 +464,7 @@ static int mock_get_ham_pages_freqs_error(pid_t pid, struct freq_info **freq_inf
     return -EINVAL;
 }
 
-static int mock_get_ham_pages_freqs_null(pid_t pid, struct freq_info **freq_info_array,
-    uint64_t *freq_info_num)
+static int mock_get_ham_pages_freqs_null(pid_t pid, struct freq_info **freq_info_array, uint64_t *freq_info_num)
 {
     (void)pid;
     *freq_info_array = nullptr;

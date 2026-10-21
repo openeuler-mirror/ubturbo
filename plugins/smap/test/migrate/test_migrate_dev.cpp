@@ -6,20 +6,20 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include <linux/init.h>
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/errno.h>
-#include <linux/slab.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
-#include <linux/ioctl.h>
+#include <linux/errno.h>
 #include <linux/fs.h>
+#include <linux/init.h>
+#include <linux/ioctl.h>
+#include <linux/kernel.h>
 #include <linux/mm.h>
+#include <linux/module.h>
+#include <linux/slab.h>
 #include <linux/vmalloc.h>
 
-#include "migrate_dev.h"
 #include "err.h"
+#include "migrate_dev.h"
 #include "obmm_monitor.h"
 
 using namespace std;
@@ -104,8 +104,8 @@ TEST_F(MigInitTest, InitMigrateListAddrVzallocExceptionBranch)
     struct mig_list *mlist = nullptr;
     mlist = (struct mig_list *)malloc(sizeof(struct mig_list) * 2);
     ASSERT_NE(nullptr, mlist);
-    u64 addr1[1] = { 0x1 };
-    u64 addr2[1] = { 0x2 };
+    u64 addr1[1] = {0x1};
+    u64 addr2[1] = {0x2};
     u64 *tmp = (u64 *)malloc(sizeof(u64));
     ASSERT_NE(nullptr, tmp);
 
@@ -130,7 +130,7 @@ TEST_F(MigInitTest, InitMigrateListAddrCopyExceptionBranch)
     mlist = (struct mig_list *)malloc(sizeof(struct mig_list));
     ASSERT_NE(nullptr, mlist);
 
-    u64 addr[1] = { 0x1 };
+    u64 addr[1] = {0x1};
     mlist[0].nr = 1;
     mlist[0].addr = addr;
     MOCKER(vzalloc).stubs().will(returnValue((void *)tmp));
@@ -278,9 +278,7 @@ TEST_F(MigInitTest, __IoctlMigrateNumaWithValidMsgCount)
 {
     nr_local_numa = 4;
     struct migrate_numa_msg msg = {.src_nid = 4, .dest_nid = 5, .count = 2};
-    MOCKER(copy_from_user).stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
-        .will(returnValue(0UL));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
     MOCKER(find_range_by_memid).stubs().will(returnValue(0));
     MOCKER(smap_is_remote_addr_valid).stubs().will(returnValue(0));
     MOCKER(smap_migrate_numa).stubs().will(returnValue(0UL));
@@ -299,9 +297,7 @@ TEST_F(MigInitTest, __IoctlMigrateNumaWithInvalidMsgCount)
     nr_local_numa = 4;
     u64 memids[MAX_NR_MIGNUMA];
     struct migrate_numa_msg msg = {.src_nid = 4, .dest_nid = 5, .count = MAX_NR_MIGNUMA + 1};
-    MOCKER(copy_from_user).stubs()
-        .with(outBoundP((void*)&msg, sizeof(msg)))
-        .will(returnValue(0UL));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
     MOCKER(find_range_by_memid).stubs().will(returnValue(0));
     MOCKER(smap_is_remote_addr_valid).stubs().will(returnValue(0));
     MOCKER(smap_migrate_numa).stubs().will(returnValue(0UL));
@@ -346,7 +342,7 @@ TEST_F(MigInitTest, __IoctlSetPagetypeNormal)
     uint32_t pageType = 1;
     MOCKER(copy_from_user)
         .stubs()
-        .with(outBoundP(static_cast<void*>(&pageType), sizeof(uint32_t)))
+        .with(outBoundP(static_cast<void *>(&pageType), sizeof(uint32_t)))
         .will(returnValue(0UL));
     int ret = __ioctl_set_pagetype(NULL);
     EXPECT_EQ(0, ret);
@@ -354,9 +350,7 @@ TEST_F(MigInitTest, __IoctlSetPagetypeNormal)
 
 TEST_F(MigInitTest, __IoctlSetPagetypeCopyFail)
 {
-    MOCKER(copy_from_user)
-        .stubs()
-        .will(returnValue(1UL));
+    MOCKER(copy_from_user).stubs().will(returnValue(1UL));
     int ret = __ioctl_set_pagetype(NULL);
     EXPECT_EQ(-EFAULT, ret);
 }
@@ -366,7 +360,7 @@ TEST_F(MigInitTest, __IoctlSetPagetypeInvalid)
     uint32_t pageType = 2;
     MOCKER(copy_from_user)
         .stubs()
-        .with(outBoundP(static_cast<void*>(&pageType), sizeof(uint32_t)))
+        .with(outBoundP(static_cast<void *>(&pageType), sizeof(uint32_t)))
         .will(returnValue(0UL));
     int ret = __ioctl_set_pagetype(NULL);
     EXPECT_EQ(-EINVAL, ret);
@@ -375,7 +369,7 @@ TEST_F(MigInitTest, __IoctlSetPagetypeInvalid)
 extern "C" void walkpage_and_migrate(struct mig_payload *payloads, int len, int *mig_res);
 TEST_F(MigInitTest, walkpage_and_migrate_Success)
 {
-    struct pagemapread pm = { 0 };
+    struct pagemapread pm = {0};
     pm.mig_info.mig_cnt = 1;
     pm.mig_info.page_cnt = 4;
     struct mig_payload payload = {
@@ -390,8 +384,7 @@ TEST_F(MigInitTest, walkpage_and_migrate_Success)
     int successful_pids[1] = {0};
 
     MOCKER(get_node_page_cnt_iomem).stubs().will(returnValue(1));
-    MOCKER(walk_pid_pagemap).stubs()
-        .with(outBoundP(&pm, sizeof(pm))).will(ignoreReturnValue());
+    MOCKER(walk_pid_pagemap).stubs().with(outBoundP(&pm, sizeof(pm))).will(ignoreReturnValue());
     MOCKER(smap_migrate).stubs().will(returnValue(0));
 
     walkpage_and_migrate(&payload, 1, successful_pids);
@@ -471,10 +464,7 @@ TEST_F(MigInitTest, InitMigDevFour)
     MOCKER(alloc_chrdev_region).stubs().will(returnValue(0));
     MOCKER(cdev_init).stubs().will(ignoreReturnValue());
     MOCKER(cdev_add).stubs().will(returnValue(0));
-    MOCKER(IS_ERR)
-        .stubs()
-        .will(returnValue(false))
-        .then(returnValue(true));
+    MOCKER(IS_ERR).stubs().will(returnValue(false)).then(returnValue(true));
     MOCKER(PTR_ERR).stubs().will(returnValue(3));
     MOCKER(class_destroy).stubs().will(ignoreReturnValue());
     ret = init_mig_dev();
@@ -487,10 +477,7 @@ TEST_F(MigInitTest, InitMigDevFive)
     MOCKER(alloc_chrdev_region).stubs().will(returnValue(0));
     MOCKER(cdev_init).stubs().will(ignoreReturnValue());
     MOCKER(cdev_add).stubs().will(returnValue(0));
-    MOCKER(IS_ERR)
-        .stubs()
-        .will(returnValue(false))
-        .then(returnValue(false));
+    MOCKER(IS_ERR).stubs().will(returnValue(false)).then(returnValue(false));
     ret = init_mig_dev();
     EXPECT_EQ(0, ret);
 }
@@ -536,14 +523,16 @@ extern "C" int smap_check_huge_page_for_migration(struct page *page, pid_t pid);
 // __ioctl_migrate end-to-end test MOCKER here
 // msg->mig_list, msg->mig_list->addr should be alloced by caller
 static void IoctlMigrateE2ETestMock(struct migrate_msg *msg, unsigned int pageSize,
-    unsigned int mockSuccessMig4KPageNrEachMigList, unsigned int mockCanMig2MPageNrEachMigList)
+                                    unsigned int mockSuccessMig4KPageNrEachMigList,
+                                    unsigned int mockCanMig2MPageNrEachMigList)
 {
     smap_pgtype = pageSize;
     if (pageSize == HUGE_PAGE) {
         MOCKER(PageHuge).stubs().will(returnValue(1));
         MOCKER(is_filter_4k).stubs().will(returnValue(-1));
         for (int i = 0; i < msg->cnt; ++i) {
-            MOCKER(smap_check_huge_page_for_migration).stubs()
+            MOCKER(smap_check_huge_page_for_migration)
+                .stubs()
                 .with(any(), eq(msg->mig_list[i].pid))
                 .will(repeat(0, mockCanMig2MPageNrEachMigList))
                 .then(returnValue(1));
@@ -553,20 +542,22 @@ static void IoctlMigrateE2ETestMock(struct migrate_msg *msg, unsigned int pageSi
     }
     struct mig_list *migList = msg->mig_list;
     struct page page = {0};
-    MOCKER(copy_from_user).stubs()
-        .with(outBoundP(static_cast<void*>(msg), sizeof(struct migrate_msg)))
+    MOCKER(copy_from_user)
+        .stubs()
+        .with(outBoundP(static_cast<void *>(msg), sizeof(struct migrate_msg)))
         .will(returnValue(0UL));
-    MOCKER(build_migrate_list).stubs()
-        .with(any(), outBoundP(static_cast<struct mig_list**>(&migList), sizeof(struct mig_list**)))
+    MOCKER(build_migrate_list)
+        .stubs()
+        .with(any(), outBoundP(static_cast<struct mig_list **>(&migList), sizeof(struct mig_list **)))
         .will(returnValue(0));
     MOCKER(pfn_to_online_page).stubs().will(returnValue(&page));
     MOCKER(IS_ERR).stubs().will(returnValue(false));
-    MOCKER(isolate_and_migrate_folios).stubs()
+    MOCKER(isolate_and_migrate_folios)
+        .stubs()
         .with(any(), any(), any(), any(), any(), any(),
-             outBoundP(static_cast<unsigned int*>(&mockSuccessMig4KPageNrEachMigList), sizeof(unsigned int)))
+              outBoundP(static_cast<unsigned int *>(&mockSuccessMig4KPageNrEachMigList), sizeof(unsigned int)))
         .will(returnValue(0));
-    MOCKER(copy_to_user).stubs()
-        .will(returnValue(0UL));
+    MOCKER(copy_to_user).stubs().will(returnValue(0UL));
     MOCKER(free_migrate_list_addr).stubs().will(ignoreReturnValue());
     MOCKER(free_migrate_list).stubs().will(ignoreReturnValue());
 }
@@ -580,7 +571,7 @@ TEST_F(MigInitTest, __IoctlMigrateE2ETest)
     struct migrate_msg argp;
     struct migrate_msg msg;
     g_pagesize_huge = PMD_SIZE;
-    migList = (struct mig_list*)vzalloc(cnt * sizeof(struct mig_list));
+    migList = (struct mig_list *)vzalloc(cnt * sizeof(struct mig_list));
     ASSERT_NE(nullptr, migList);
     u64 startAddr = 0x100000000;
     int addCnt = 0;
@@ -588,8 +579,8 @@ TEST_F(MigInitTest, __IoctlMigrateE2ETest)
         migList[i].from = 0;
         migList[i].to = 5;
         migList[i].pid = 105428 + i;
-        migList[i].nr = 5120 * (i + 1);  // 5120, 10240, 15360 etc
-        migList[i].addr = (u64*)vzalloc(migList[i].nr * sizeof(u64));
+        migList[i].nr = 5120 * (i + 1); // 5120, 10240, 15360 etc
+        migList[i].addr = (u64 *)vzalloc(migList[i].nr * sizeof(u64));
         EXPECT_NE(nullptr, migList[i].addr);
         for (int j = 0; j < migList[i].nr; ++j) {
             migList[i].addr[j] = startAddr + 4096 * (addCnt);

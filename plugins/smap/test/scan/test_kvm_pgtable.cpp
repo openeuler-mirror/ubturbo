@@ -6,11 +6,11 @@
 #include "mockcpp/mokc.h"
 
 #include <asm/kvm_pgtable.h>
-#include <linux/list.h>
 #include <linux/dmi.h>
-#include <linux/ioport.h>
-#include <linux/slab.h>
 #include <linux/errno.h>
+#include <linux/ioport.h>
+#include <linux/list.h>
+#include <linux/slab.h>
 
 #include "kvm_pgtable.h"
 
@@ -62,7 +62,7 @@ TEST_F(KvmPgTableTest, PteTableTestTwo)
     EXPECT_EQ(false, ret);
 }
 
-static void* stubFunc(phys_addr_t phys)
+static void *stubFunc(phys_addr_t phys)
 {
     return NULL;
 }
@@ -78,13 +78,12 @@ TEST_F(KvmPgTableTest, PteFollowTest)
     EXPECT_EQ(nullptr, ret);
 }
 
-static int my_callback_function(const struct kvm_pgtable_visit_ctx *ctx,
-    enum kvm_pgtable_walk_flags visit)
+static int my_callback_function(const struct kvm_pgtable_visit_ctx *ctx, enum kvm_pgtable_walk_flags visit)
 {
     return 0;
 }
-extern "C" int kvm_pgtable_visitor_cb(struct kvm_pgtable_walk_data *data,
-    const struct kvm_pgtable_visit_ctx *ctx, enum kvm_pgtable_walk_flags visit);
+extern "C" int kvm_pgtable_visitor_cb(struct kvm_pgtable_walk_data *data, const struct kvm_pgtable_visit_ctx *ctx,
+                                      enum kvm_pgtable_walk_flags visit);
 extern "C" u32 kvm_pgtable_idx(struct kvm_pgtable_walk_data *data, u32 level);
 TEST_F(KvmPgTableTest, PgtableIdxTest)
 {
@@ -96,10 +95,10 @@ TEST_F(KvmPgTableTest, PgtableIdxTest)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" int __kvm_pgtable_visit(struct kvm_pgtable_walk_data *data,
-    struct kvm_pgtable_mm_ops *mm_ops, kvm_pteref_t pteref, u32 level);
-extern "C" int __kvm_pgtable_walk(struct kvm_pgtable_walk_data *data,
-    struct kvm_pgtable_mm_ops *mm_ops, kvm_pteref_t pgtable, u32 level);
+extern "C" int __kvm_pgtable_visit(struct kvm_pgtable_walk_data *data, struct kvm_pgtable_mm_ops *mm_ops,
+                                   kvm_pteref_t pteref, u32 level);
+extern "C" int __kvm_pgtable_walk(struct kvm_pgtable_walk_data *data, struct kvm_pgtable_mm_ops *mm_ops,
+                                  kvm_pteref_t pgtable, u32 level);
 TEST_F(KvmPgTableTest, PgtableWalkTest)
 {
     struct kvm_pgtable_walk_data data;
@@ -155,8 +154,7 @@ TEST_F(KvmPgTableTest, KvmPgtableWalkTestTwo)
     free(pgt.pgd);
 }
 
-extern "C" int kvm_pgtable_walk(struct kvm_pgtable *pgt, u64 addr, u64 size,
-                                struct kvm_pgtable_walker *walker);
+extern "C" int kvm_pgtable_walk(struct kvm_pgtable *pgt, u64 addr, u64 size, struct kvm_pgtable_walker *walker);
 TEST_F(KvmPgTableTest, WalkTest)
 {
     struct kvm_pgtable pgt;
@@ -251,10 +249,9 @@ TEST_F(KvmPgTableTest, KvmPgtableWalkOutOfRange)
     free(pgt.pgd);
 }
 
-extern "C" int smap_stage2_test_clear_young(struct kvm_pgtable *pgt, u64 addr,
-    u64 size, kvm_pte_t attr_set, kvm_pte_t attr_clr, bool mkold,
-    kvm_pte_t *orig_pte, int *level, bool *young,
-    enum kvm_pgtable_walk_flags flags);
+extern "C" int smap_stage2_test_clear_young(struct kvm_pgtable *pgt, u64 addr, u64 size, kvm_pte_t attr_set,
+                                            kvm_pte_t attr_clr, bool mkold, kvm_pte_t *orig_pte, int *level,
+                                            bool *young, enum kvm_pgtable_walk_flags flags);
 TEST_F(KvmPgTableTest, Stage2ClearYoungPropagatesWalkError)
 {
     struct kvm_pgtable pgt = {};
@@ -263,8 +260,8 @@ TEST_F(KvmPgTableTest, Stage2ClearYoungPropagatesWalkError)
     int level = -1;
 
     MOCKER(kvm_pgtable_walk).stubs().will(returnValue(-EINVAL));
-    EXPECT_EQ(-EINVAL, smap_stage2_test_clear_young(&pgt, 0, 1, 0, 0, true,
-        &orig, &level, &young, KVM_PGTABLE_WALK_LEAF));
+    EXPECT_EQ(-EINVAL,
+              smap_stage2_test_clear_young(&pgt, 0, 1, 0, 0, true, &orig, &level, &young, KVM_PGTABLE_WALK_LEAF));
     EXPECT_EQ(false, young);
     EXPECT_EQ(-1, level);
     EXPECT_EQ(0, orig);
@@ -297,8 +294,8 @@ TEST_F(KvmPgTableTest, Stage2PteExecutableWithXn)
     EXPECT_EQ(false, ret);
 }
 
-extern "C" int kvm_pgtable_visitor_cb(struct kvm_pgtable_walk_data *data,
-    const struct kvm_pgtable_visit_ctx *ctx, enum kvm_pgtable_walk_flags visit);
+extern "C" int kvm_pgtable_visitor_cb(struct kvm_pgtable_walk_data *data, const struct kvm_pgtable_visit_ctx *ctx,
+                                      enum kvm_pgtable_walk_flags visit);
 TEST_F(KvmPgTableTest, VisitorCbCallsWalkerCb)
 {
     /* Directly call kvm_pgtable_visitor_cb, do NOT mock it */
@@ -322,8 +319,7 @@ TEST_F(KvmPgTableTest, VisitorCbCallsWalkerCb)
     EXPECT_EQ(0, ret);
 }
 
-static int stub_visitor_cb_return_neg1(const struct kvm_pgtable_visit_ctx *ctx,
-    enum kvm_pgtable_walk_flags visit)
+static int stub_visitor_cb_return_neg1(const struct kvm_pgtable_visit_ctx *ctx, enum kvm_pgtable_walk_flags visit)
 {
     return -1;
 }
@@ -350,8 +346,8 @@ TEST_F(KvmPgTableTest, VisitorCbReturnsWalkerError)
     EXPECT_EQ(-1, ret);
 }
 
-extern "C" int __kvm_pgtable_visit(struct kvm_pgtable_walk_data *data,
-    struct kvm_pgtable_mm_ops *mm_ops, kvm_pteref_t pteref, u32 level);
+extern "C" int __kvm_pgtable_visit(struct kvm_pgtable_walk_data *data, struct kvm_pgtable_mm_ops *mm_ops,
+                                   kvm_pteref_t pteref, u32 level);
 TEST_F(KvmPgTableTest, VisitLeafCallbackWithContinue)
 {
     /* __kvm_pgtable_visit: table=false, no leaf flags, walk_continue returns true */
@@ -475,7 +471,7 @@ TEST_F(KvmPgTableTest, VisitTablePostCallback)
 }
 
 extern "C" int smap_stage2_test_clear_young_walker(const struct kvm_pgtable_visit_ctx *ctx,
-    enum kvm_pgtable_walk_flags visit);
+                                                   enum kvm_pgtable_walk_flags visit);
 TEST_F(KvmPgTableTest, WalkerInvalidPteReturnsZero)
 {
     /* ctx->old=0 (invalid pte in DT: kvm_pte_valid=false) -> returns 0, data->young not set */
@@ -532,10 +528,9 @@ TEST_F(KvmPgTableTest, WalkerMkoldFalseWithValidPtePath)
     EXPECT_EQ(false, young_data.young);
 }
 
-extern "C" int smap_stage2_test_clear_young(struct kvm_pgtable *pgt, u64 addr,
-    u64 size, kvm_pte_t attr_set, kvm_pte_t attr_clr, bool mkold,
-    kvm_pte_t *orig_pte, int *level, bool *young,
-    enum kvm_pgtable_walk_flags flags);
+extern "C" int smap_stage2_test_clear_young(struct kvm_pgtable *pgt, u64 addr, u64 size, kvm_pte_t attr_set,
+                                            kvm_pte_t attr_clr, bool mkold, kvm_pte_t *orig_pte, int *level,
+                                            bool *young, enum kvm_pgtable_walk_flags flags);
 TEST_F(KvmPgTableTest, Stage2ClearYoungSuccessPath)
 {
     /* mock kvm_pgtable_walk返回0 -> 设置young/level/orig_pte输出参数 */
@@ -545,8 +540,7 @@ TEST_F(KvmPgTableTest, Stage2ClearYoungSuccessPath)
     int level = -1;
 
     MOCKER(kvm_pgtable_walk).stubs().will(returnValue(0));
-    int ret = smap_stage2_test_clear_young(&pgt, 0, 1, 0, 0, true,
-        &orig_pte, &level, &young, KVM_PGTABLE_WALK_LEAF);
+    int ret = smap_stage2_test_clear_young(&pgt, 0, 1, 0, 0, true, &orig_pte, &level, &young, KVM_PGTABLE_WALK_LEAF);
     EXPECT_EQ(0, ret);
     /* After successful walk, output params are set from data */
     EXPECT_EQ(false, young);
@@ -558,8 +552,7 @@ TEST_F(KvmPgTableTest, Stage2ClearYoungSuccessNullOutputs)
     struct kvm_pgtable pgt = {};
 
     MOCKER(kvm_pgtable_walk).stubs().will(returnValue(0));
-    int ret = smap_stage2_test_clear_young(&pgt, 0, 1, 0, 0, true,
-        NULL, NULL, NULL, KVM_PGTABLE_WALK_LEAF);
+    int ret = smap_stage2_test_clear_young(&pgt, 0, 1, 0, 0, true, NULL, NULL, NULL, KVM_PGTABLE_WALK_LEAF);
     EXPECT_EQ(0, ret);
 }
 
@@ -597,16 +590,11 @@ TEST_F(KvmPgTableTest, Stage2TrySetPteNonSharedPath)
     EXPECT_EQ(true, ret);
 }
 
-extern "C" int smap_stage2_range_walker(const struct kvm_pgtable_visit_ctx *ctx,
-    enum kvm_pgtable_walk_flags visit);
+extern "C" int smap_stage2_range_walker(const struct kvm_pgtable_visit_ctx *ctx, enum kvm_pgtable_walk_flags visit);
 
-static void stub_on_pte_young(u64 gpa, bool is_young, bool pte_valid, void *arg)
-{
-}
+static void stub_on_pte_young(u64 gpa, bool is_young, bool pte_valid, void *arg) {}
 
-static void stub_on_hole(u64 gpa_start, u64 gpa_end, void *arg)
-{
-}
+static void stub_on_hole(u64 gpa_start, u64 gpa_end, void *arg) {}
 
 TEST_F(KvmPgTableTest, RangeWalkerHoleLevel)
 {
@@ -754,9 +742,8 @@ TEST_F(KvmPgTableTest, RangeWalkerLeafYoungPteValidSetPteFail)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" int smap_kvm_pgtable_stage2_mkold_range(
-    struct kvm_pgtable *pgt, u64 addr, u64 size,
-    struct smap_stage2_range_mkold_data *data);
+extern "C" int smap_kvm_pgtable_stage2_mkold_range(struct kvm_pgtable *pgt, u64 addr, u64 size,
+                                                   struct smap_stage2_range_mkold_data *data);
 
 TEST_F(KvmPgTableTest, MkoldRangeWalkSuccess)
 {

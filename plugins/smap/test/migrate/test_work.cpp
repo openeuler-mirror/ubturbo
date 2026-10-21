@@ -1,19 +1,19 @@
 /*
  * Description: SMAP3.0 work module test code
  */
- 
+
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
- 
-#include <linux/spinlock.h>
+
 #include <linux/list.h>
 #include <linux/slab.h>
-#include "migrate_task.h"
+#include <linux/spinlock.h>
 #include "migrate_back_debugfs.h"
+#include "migrate_task.h"
 #include "work.h"
- 
+
 using namespace std;
- 
+
 class WorkTest : public ::testing::Test {
 protected:
     void SetUp() override
@@ -26,7 +26,8 @@ protected:
         struct migrate_back_task *t;
         struct migrate_back_task *tmp;
         cout << "[Phase TearDown Begin]" << endl;
-        list_for_each_entry_safe(t, tmp, &migrate_back_task_list, task_node) {
+        list_for_each_entry_safe(t, tmp, &migrate_back_task_list, task_node)
+        {
             list_del(&t->task_node);
             kfree(t);
         }
@@ -34,7 +35,7 @@ protected:
         cout << "[Phase TearDown End]" << endl;
     }
 };
- 
+
 extern "C" int start_migrate_back_work(void);
 TEST_F(WorkTest, StartMigrateBackWork)
 {
@@ -43,14 +44,14 @@ TEST_F(WorkTest, StartMigrateBackWork)
     struct migrate_back_task *t1 = NULL;
     struct migrate_back_task *t2 = NULL;
     struct migrate_back_task *t = NULL;
- 
-    t1 = (struct migrate_back_task*)kmalloc(sizeof(*t1), GFP_KERNEL);
-    t2 = (struct migrate_back_task*)kmalloc(sizeof(*t2), GFP_KERNEL);
-    t = (struct migrate_back_task*)kmalloc(sizeof(*t), GFP_KERNEL);
+
+    t1 = (struct migrate_back_task *)kmalloc(sizeof(*t1), GFP_KERNEL);
+    t2 = (struct migrate_back_task *)kmalloc(sizeof(*t2), GFP_KERNEL);
+    t = (struct migrate_back_task *)kmalloc(sizeof(*t), GFP_KERNEL);
     ASSERT_NE(nullptr, t1);
     ASSERT_NE(nullptr, t2);
     ASSERT_NE(nullptr, t);
- 
+
     MOCKER(spin_lock).stubs().will(ignoreReturnValue());
     ASSERT_TRUE(list_empty(&migrate_back_task_list));
     // the list displays as : head -> t2 -> t1
@@ -63,7 +64,8 @@ TEST_F(WorkTest, StartMigrateBackWork)
     ret = start_migrate_back_work();
     ASSERT_EQ(0, ret);
     i = 0;
-    list_for_each_entry(t, &migrate_back_task_list, task_node) {
+    list_for_each_entry(t, &migrate_back_task_list, task_node)
+    {
         if (i == 0) {
             EXPECT_EQ(MB_TASK_DONE, t->status);
         } else if (i == 1) {

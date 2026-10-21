@@ -7,8 +7,8 @@
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
 
-#include "coherence_maintain.h"
 #include "basic.h"
+#include "coherence_maintain.h"
 
 extern "C" pte_t g_tmp_pte;
 extern "C" int hisi_soc_cache_maintain(phys_addr_t addr, size_t size, enum hisi_soc_cache_maint_type mnt_type);
@@ -45,8 +45,7 @@ protected:
     }
 };
 
-static int fake_hisi_soc_cache_maintain(phys_addr_t addr, size_t size,
-    enum hisi_soc_cache_maint_type mnt_type)
+static int fake_hisi_soc_cache_maintain(phys_addr_t addr, size_t size, enum hisi_soc_cache_maint_type mnt_type)
 {
     static int calls = 0;
 
@@ -64,7 +63,7 @@ TEST_F(CoherenceMaintainTest, HamFlushTlb)
 }
 
 extern "C" int modify_hugetlb_prot(pte_t *pte, unsigned long hmask __always_unused, unsigned long addr,
-    unsigned long next __always_unused, struct mm_walk *walk);
+                                   unsigned long next __always_unused, struct mm_walk *walk);
 TEST_F(CoherenceMaintainTest, ModifyHugetlbProt)
 {
     int ret;
@@ -123,10 +122,7 @@ TEST_F(CoherenceMaintainTest, TaskPgtalbWithinPidFailFast)
     unsigned long start = 0;
     unsigned long size = 1024;
 
-    MOCKER(find_get_task_by_vpid)
-        .expects(once())
-        .with(eq(pid))
-        .will(returnValue((struct task_struct *)nullptr));
+    MOCKER(find_get_task_by_vpid).expects(once()).with(eq(pid)).will(returnValue((struct task_struct *)nullptr));
     EXPECT_EQ(-EINVAL, task_pgtable_within_pid_set_cacheable(pid, start, size, false));
 
     GlobalMockObject::verify();
@@ -136,8 +132,7 @@ TEST_F(CoherenceMaintainTest, TaskPgtalbWithinPidFailFast)
     EXPECT_EQ(-EINVAL, task_pgtable_within_pid_set_cacheable(pid, start, size, true));
 }
 
-extern "C" int kernel_pgtable_within_pid_set_valid(pid_t pid, unsigned long start,
-    unsigned long size, bool valid);
+extern "C" int kernel_pgtable_within_pid_set_valid(pid_t pid, unsigned long start, unsigned long size, bool valid);
 TEST_F(CoherenceMaintainTest, KernelPgtableWithinPidPaths)
 {
     pid_t pid = 3;
@@ -146,10 +141,7 @@ TEST_F(CoherenceMaintainTest, KernelPgtableWithinPidPaths)
     struct task_struct task = {};
     struct mm_struct mm = {};
 
-    MOCKER(find_get_task_by_vpid)
-        .expects(once())
-        .with(eq(pid))
-        .will(returnValue((struct task_struct *)nullptr));
+    MOCKER(find_get_task_by_vpid).expects(once()).with(eq(pid)).will(returnValue((struct task_struct *)nullptr));
     EXPECT_EQ(-EINVAL, kernel_pgtable_within_pid_set_valid(pid, start, size, true));
 
     GlobalMockObject::verify();
@@ -164,8 +156,8 @@ TEST_F(CoherenceMaintainTest, KernelPgtableWithinPidPaths)
     EXPECT_EQ(0, kernel_pgtable_within_pid_set_valid(pid, start, size, true));
 }
 
-extern "C" int kernel_pgtable_within_mm_set_valid(struct mm_struct *mm,
-    unsigned long start, unsigned long size, bool valid);
+extern "C" int kernel_pgtable_within_mm_set_valid(struct mm_struct *mm, unsigned long start, unsigned long size,
+                                                  bool valid);
 TEST_F(CoherenceMaintainTest, KernelPgtableWithinMmSetValidWalkFailure)
 {
     struct mm_struct mm = {};
@@ -180,10 +172,7 @@ TEST_F(CoherenceMaintainTest, SetPidPgtableCacheablePaths)
     pid_t pid = 4;
     struct mm_struct mm = {};
 
-    MOCKER(find_get_mm_by_vpid)
-        .expects(once())
-        .with(eq(pid))
-        .will(returnValue((struct mm_struct *)nullptr));
+    MOCKER(find_get_mm_by_vpid).expects(once()).with(eq(pid)).will(returnValue((struct mm_struct *)nullptr));
     EXPECT_EQ(-EINVAL, set_pid_pgtable_cacheable(pid, 0, PAGE_SIZE));
 
     GlobalMockObject::verify();
@@ -194,9 +183,7 @@ TEST_F(CoherenceMaintainTest, SetPidPgtableCacheablePaths)
 
 TEST_F(CoherenceMaintainTest, FlushCacheByPaHandlesBusyAndError)
 {
-    MOCKER(hisi_soc_cache_maintain)
-        .stubs()
-        .will(invoke(fake_hisi_soc_cache_maintain));
+    MOCKER(hisi_soc_cache_maintain).stubs().will(invoke(fake_hisi_soc_cache_maintain));
     EXPECT_EQ(0, flush_cache_by_pa(0, PAGE_SIZE, HISI_CACHE_MAINT_CLEANINVALID));
 
     GlobalMockObject::verify();

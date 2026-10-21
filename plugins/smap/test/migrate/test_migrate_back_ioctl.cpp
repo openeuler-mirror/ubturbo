@@ -5,20 +5,19 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include <linux/list.h>
-#include <linux/fs.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
-#include <linux/slab.h>
 #include <linux/device/class.h>
+#include <linux/fs.h>
+#include <linux/list.h>
+#include <linux/slab.h>
 
-#include "obmm_monitor.h"
-#include "migrate_task.h"
 #include "migrate_back_ioctl.h"
 #include "migrate_dev.h"
+#include "migrate_task.h"
+#include "obmm_monitor.h"
 
 using namespace std;
-
 
 class PidIoctlTest : public ::testing::Test {
 protected:
@@ -41,10 +40,22 @@ TEST_F(PidIoctlTest, DupTask)
     int ret;
     LIST_HEAD(head);
     struct migrate_back_task taskArr[] = {
-        { .task_id = 1, .status = MB_TASK_CREATED, },
-        { .task_id = 2, .status = MB_TASK_WAITING, },
-        { .task_id = 3, .status = MB_TASK_DONE, },
-        { .task_id = 4, .status = MB_TASK_ERR, },
+        {
+            .task_id = 1,
+            .status = MB_TASK_CREATED,
+        },
+        {
+            .task_id = 2,
+            .status = MB_TASK_WAITING,
+        },
+        {
+            .task_id = 3,
+            .status = MB_TASK_DONE,
+        },
+        {
+            .task_id = 4,
+            .status = MB_TASK_ERR,
+        },
     };
     list_add_tail(&taskArr[0].task_node, &head);
     list_add_tail(&taskArr[1].task_node, &head);
@@ -69,24 +80,21 @@ TEST_F(PidIoctlTest, DupTask)
 }
 
 extern "C" int smap_ioctl_migrate_back(struct migrate_back_msg *msg);
-extern "C" int init_migrate_back_subtask(struct migrate_back_task *task,
-    struct migrate_back_inner_payload *p,
-    struct migrate_back_subtask **result);
+extern "C" int init_migrate_back_subtask(struct migrate_back_task *task, struct migrate_back_inner_payload *p,
+                                         struct migrate_back_subtask **result);
 extern "C" int start_migrate_back_work(void);
 TEST_F(PidIoctlTest, SmapIoctlMigrateBack)
 {
     int ret;
-    struct migrate_back_msg mb_msg = { 1, 0, { { 2, 0 } } };
-    struct migrate_back_task task = {
-        .subtask = LIST_HEAD_INIT(task.subtask)
-    };
+    struct migrate_back_msg mb_msg = {1, 0, {{2, 0}}};
+    struct migrate_back_task task = {.subtask = LIST_HEAD_INIT(task.subtask)};
     struct migrate_back_subtask *subtask;
 
     ret = smap_ioctl_migrate_back(&mb_msg);
     EXPECT_EQ(0, ret);
 
     mb_msg.count = 1;
-    MOCKER(init_migrate_back_task).stubs().will(returnValue((struct migrate_back_task*)NULL));
+    MOCKER(init_migrate_back_task).stubs().will(returnValue((struct migrate_back_task *)NULL));
     ret = smap_ioctl_migrate_back(&mb_msg);
     EXPECT_EQ(-ENOMEM, ret);
 
@@ -171,12 +179,9 @@ TEST_F(PidIoctlTest, IoctlMigrateBackCopyFromUserError)
 TEST_F(PidIoctlTest, IoctlMigrateBackParamInvalid)
 {
     int ret;
-    struct migrate_back_msg mb_msg = { 1, 1, { SMAP_MAX_NUMNODES, 0, 1 } };
+    struct migrate_back_msg mb_msg = {1, 1, {SMAP_MAX_NUMNODES, 0, 1}};
 
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&mb_msg, sizeof(mb_msg)))
-        .will(returnValue((unsigned long)0));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&mb_msg, sizeof(mb_msg))).will(returnValue((unsigned long)0));
     ret = __ioctl_migrate_back(NULL);
     EXPECT_EQ(-EINVAL, ret);
 
@@ -189,12 +194,9 @@ TEST_F(PidIoctlTest, IoctlMigrateBackParamInvalid)
 TEST_F(PidIoctlTest, IoctlMigrateBackFindRangeError)
 {
     int ret;
-    struct migrate_back_msg mb_msg = { 1, 1, { SMAP_MAX_NUMNODES - 1, 0, 1 } };
+    struct migrate_back_msg mb_msg = {1, 1, {SMAP_MAX_NUMNODES - 1, 0, 1}};
 
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&mb_msg, sizeof(mb_msg)))
-        .will(returnValue((unsigned long)0));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&mb_msg, sizeof(mb_msg))).will(returnValue((unsigned long)0));
     MOCKER(find_range_by_memid).stubs().will(returnValue(-EINVAL));
     ret = __ioctl_migrate_back(NULL);
     EXPECT_EQ(-EINVAL, ret);
@@ -203,12 +205,9 @@ TEST_F(PidIoctlTest, IoctlMigrateBackFindRangeError)
 TEST_F(PidIoctlTest, IoctlMigrateBackAddrInvalid)
 {
     int ret;
-    struct migrate_back_msg mb_msg = { 1, 1, { SMAP_MAX_NUMNODES - 1, 0, 1 } };
+    struct migrate_back_msg mb_msg = {1, 1, {SMAP_MAX_NUMNODES - 1, 0, 1}};
 
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&mb_msg, sizeof(mb_msg)))
-        .will(returnValue((unsigned long)0));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&mb_msg, sizeof(mb_msg))).will(returnValue((unsigned long)0));
     MOCKER(find_range_by_memid).stubs().will(returnValue(0));
     MOCKER(smap_is_remote_addr_valid).stubs().will(returnValue(-EINVAL));
     ret = __ioctl_migrate_back(NULL);
@@ -218,12 +217,9 @@ TEST_F(PidIoctlTest, IoctlMigrateBackAddrInvalid)
 TEST_F(PidIoctlTest, IoctlMigrateBackIoctlError)
 {
     int ret;
-    struct migrate_back_msg mb_msg = { 1, 1, { SMAP_MAX_NUMNODES - 1, 0, 1 } };
+    struct migrate_back_msg mb_msg = {1, 1, {SMAP_MAX_NUMNODES - 1, 0, 1}};
 
-    MOCKER(copy_from_user)
-        .stubs()
-        .with(outBoundP((void*)&mb_msg, sizeof(mb_msg)))
-        .will(returnValue((unsigned long)0));
+    MOCKER(copy_from_user).stubs().with(outBoundP((void *)&mb_msg, sizeof(mb_msg))).will(returnValue((unsigned long)0));
     MOCKER(find_range_by_memid).stubs().will(returnValue(0));
     MOCKER(smap_is_remote_addr_valid).stubs().will(returnValue(0));
     MOCKER(smap_ioctl_migrate_back).stubs().will(returnValue(-EINVAL));

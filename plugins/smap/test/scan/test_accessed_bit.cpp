@@ -24,12 +24,11 @@
 #include <linux/proc_fs.h>
 #include <linux/slab.h>
 
-#include "kvm_pgtable.h"
 #include "access_pid.h"
-#include "accessed_bit.h"
 #include "access_tracking_wrapper.h"
-#include "iomem.h"
+#include "accessed_bit.h"
 #include "hist_tracking.h"
+#include "iomem.h"
 #include "kvm_pgtable.h"
 
 using namespace std;
@@ -1089,7 +1088,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmFindPidFail)
     struct access_pid ap;
     ap.pid = 1;
     ap.type = NORMAL_SCAN;
-    MOCKER(find_get_pid).stubs().will(returnValue((struct pid*)nullptr));
+    MOCKER(find_get_pid).stubs().will(returnValue((struct pid *)nullptr));
     int ret = scan_accessed_bit_forward_vm(&ap, PMD_SIZE);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -1101,7 +1100,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmGetTaskFail)
     ap.pid = 1;
     ap.type = NORMAL_SCAN;
     MOCKER(find_get_pid).stubs().will(returnValue(&pid_s));
-    MOCKER(get_pid_task).stubs().will(returnValue((struct task_struct*)nullptr));
+    MOCKER(get_pid_task).stubs().will(returnValue((struct task_struct *)nullptr));
     int ret = scan_accessed_bit_forward_vm(&ap, PMD_SIZE);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -1115,7 +1114,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmGetKvmFileFail)
     ap.type = NORMAL_SCAN;
     MOCKER(find_get_pid).stubs().will(returnValue(&pid_s));
     MOCKER(get_pid_task).stubs().will(returnValue(&task));
-    MOCKER(get_kvm_file_from_task).stubs().will(returnValue((struct file*)nullptr));
+    MOCKER(get_kvm_file_from_task).stubs().will(returnValue((struct file *)nullptr));
     int ret = scan_accessed_bit_forward_vm(&ap, PMD_SIZE);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -1139,7 +1138,7 @@ TEST_F(AccessedBitTest, FillPteVaPaddrZero)
     pte_t pte;
     pte.pte = 0;
     struct mm_walk walk;
-    struct pte_walk pw = { .index = 0, .page_size = PAGE_SIZE };
+    struct pte_walk pw = {.index = 0, .page_size = PAGE_SIZE};
     walk.private_data = &pw;
     int ret = fill_pte_va(&pte, 0x1000, 0x2000, &walk);
     EXPECT_EQ(0, ret);

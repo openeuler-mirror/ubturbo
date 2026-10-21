@@ -7,8 +7,8 @@
 
 #include <linux/fs.h>
 #include <linux/kmod.h>
-#include <linux/umh.h>
 #include <linux/slab.h>
+#include <linux/umh.h>
 #include "dump_info.h"
 
 extern struct list_head pid_list;
@@ -31,7 +31,7 @@ protected:
 extern "C" int check_and_create_dir(char *dir);
 extern "C" bool IS_ERR(const void *ptr);
 extern "C" long __must_check PTR_ERR(__force const void *ptr);
-extern "C" int call_usermodehelper(char const*, char**, char**, int);
+extern "C" int call_usermodehelper(char const *, char **, char **, int);
 TEST_F(DumpInfoTest, check_and_create_dir_dt)
 {
     char dir[] = "qwe";

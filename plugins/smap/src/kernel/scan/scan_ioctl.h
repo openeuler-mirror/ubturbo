@@ -27,7 +27,7 @@ struct actc_data {
 #define ACTC_WHITE_LIST_BIT BIT(0)
 #define ACTC_SELECT_BIT BIT(1)
 #define ACTC_PRIOR_GET(f) (((f) >> 2) & 0x3F)
-#define ACTC_PRIOR_SET(p) (((p) & 0x3F) << 2)
+#define ACTC_PRIOR_SET(p) (((p)&0x3F) << 2)
 
 typedef enum {
 	NO_SCAN = -1,
@@ -115,7 +115,9 @@ struct smap_pid_page_num {
 #define SMAP_ACCESS_SET_SCAN_CPU \
 	_IOW(SMAP_ACCESS_MAGIC, 9, struct smap_scan_cpu_range)
 
-#define SMAP_IOCTL_TRACKING_CMD _IOW(SMAP_ACCESS_MAGIC, 0, unsigned long)/* arg = pid: restart that pid's next scan window */
+#define SMAP_IOCTL_TRACKING_CMD    \
+	_IOW(SMAP_ACCESS_MAGIC, 0, \
+	     unsigned long) /* arg = pid: restart that pid's next scan window */
 #define SMAP_IOCTL_PAGE_SIZE_SET_CMD _IOW(SMAP_ACCESS_MAGIC, 10, unsigned long)
 #define SMAP_IOCTL_UB_WATCH_CMD \
 	_IOR(SMAP_ACCESS_MAGIC, 11, struct ub_flux_mb_statistic)

@@ -3,17 +3,17 @@
  * Create: 2025-04-06
  */
 
-#include <cstdlib>
-#include <cstring>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <cstdlib>
+#include <cstring>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include "securec.h"
-#include "manage/manage.h"
 #include "advanced-strategy/scene.h"
+#include "manage/manage.h"
 #include "manage/smap_config.h"
+#include "securec.h"
 
 using namespace std;
 
@@ -102,7 +102,7 @@ extern "C" size_t GetProcessConfigLen(struct PayloadHeader *header);
 TEST_F(SmapConfigTest, TestGetProcessConfigLen)
 {
     int ret;
-    struct PayloadHeader header = { .len = 20 };
+    struct PayloadHeader header = {.len = 20};
 
     ret = GetProcessConfigLen(&header);
     EXPECT_EQ(header.len + PAYLOAD_HEADER_LEN, ret);
@@ -282,7 +282,7 @@ TEST_F(SmapConfigTest, TestMapConfig)
 extern "C" void WriteRunMode(char *addr, RunMode mode);
 TEST_F(SmapConfigTest, TestWriteRunMode)
 {
-    struct SmapConfigHeader header = { .runMode = WATERLINE_MODE };
+    struct SmapConfigHeader header = {.runMode = WATERLINE_MODE};
     RunMode runMode = MEM_POOL_MODE;
     WriteRunMode((char *)&header, runMode);
     EXPECT_EQ(header.runMode, runMode);
@@ -294,7 +294,7 @@ TEST_F(SmapConfigTest, TestWriteHeader)
     int ret;
     RunMode runMode = MEM_POOL_MODE;
     size_t len = 20;
-    struct SmapConfigHeader header = { 0 };
+    struct SmapConfigHeader header = {0};
 
     ASSERT_EQ(0, header.ver);
     ASSERT_EQ(0, header.headerLen);
@@ -313,7 +313,8 @@ TEST_F(SmapConfigTest, TestWriteNumaConfig)
     int ret;
     int nrLocal = 4;
     struct PayloadHeader header;
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     manager.remoteNumaInfo.privateSize[0][0] = 128;
     struct NumaPayload *payload = (struct NumaPayload *)calloc((nrLocal + 1) * REMOTE_NUMA_NUM, sizeof(*payload));
 
@@ -376,7 +377,7 @@ TEST_F(SmapConfigTest, TestIsConfigHeaderValid)
     bool ret;
     size_t numaConfigLen = 20;
     size_t minLen = CONFIG_HEADER_LEN + numaConfigLen;
-    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER, .headerLen = CONFIG_HEADER_LEN, .totalLen = minLen };
+    struct SmapConfigHeader header = {.ver = SMAP_CONFIG_VER, .headerLen = CONFIG_HEADER_LEN, .totalLen = minLen};
 
     MOCKER(CalcNumaConfigLen).stubs().will(returnValue(numaConfigLen));
     ret = IsConfigHeaderValid(&header);
@@ -390,7 +391,7 @@ TEST_F(SmapConfigTest, TestIsConfigHeaderValid)
 TEST_F(SmapConfigTest, TestIsConfigHeaderInValid)
 {
     bool ret;
-    struct SmapConfigHeader header = { .ver = 0 };
+    struct SmapConfigHeader header = {.ver = 0};
     ret = IsConfigHeaderValid(&header);
     EXPECT_FALSE(ret);
 }
@@ -399,7 +400,7 @@ extern "C" bool IsRunModeValid(RunMode runMode);
 TEST_F(SmapConfigTest, TestIsConfigHeaderValidTwo)
 {
     bool ret;
-    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER };
+    struct SmapConfigHeader header = {.ver = SMAP_CONFIG_VER};
     MOCKER(IsRunModeValid).stubs().will(returnValue(false));
     ret = IsConfigHeaderValid(&header);
     EXPECT_FALSE(ret);
@@ -415,12 +416,8 @@ extern "C" void ReadHeader(char *addr, struct SmapConfigHeader *header);
 TEST_F(SmapConfigTest, TestReadHeader)
 {
     struct SmapConfigHeader src = {
-        .ver = SMAP_CONFIG_VER,
-        .runMode = MEM_POOL_MODE,
-        .headerLen = CONFIG_HEADER_LEN,
-        .totalLen = 30
-    };
-    struct SmapConfigHeader dest = { 0 };
+        .ver = SMAP_CONFIG_VER, .runMode = MEM_POOL_MODE, .headerLen = CONFIG_HEADER_LEN, .totalLen = 30};
+    struct SmapConfigHeader dest = {0};
 
     ReadHeader((char *)&src, &dest);
     EXPECT_EQ(src.ver, dest.ver);
@@ -495,7 +492,7 @@ TEST_F(SmapConfigTest, TestIsNumaConfigValid)
     bool ret;
     size_t totalLen;
     size_t numaPayloadLen = 32;
-    struct PayloadHeader header = { 0 };
+    struct PayloadHeader header = {0};
 
     header.len = (uint32_t)numaPayloadLen;
     totalLen = (size_t)numaPayloadLen + PAYLOAD_HEADER_LEN + CONFIG_HEADER_LEN;
@@ -519,10 +516,11 @@ TEST_F(SmapConfigTest, TestRecoverNumaConfig)
     int remote1 = 5;
     int remote2 = 7;
     char numaBase;
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     struct NumaPayload *payload = (struct NumaPayload *)calloc((nrLocal + 1) * REMOTE_NUMA_NUM, sizeof(*payload));
     payload[local1 * REMOTE_NUMA_NUM + remote1 - nrLocal].size = 1024; // local1-remote1 has 1024MB
-    payload[local2 * REMOTE_NUMA_NUM + remote2 - nrLocal].size = 512; // local2-remote2 has 512MB
+    payload[local2 * REMOTE_NUMA_NUM + remote2 - nrLocal].size = 512;  // local2-remote2 has 512MB
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(nrLocal));
@@ -541,7 +539,7 @@ TEST_F(SmapConfigTest, TestWriteOneNumaConfig)
     uint8_t remoteNid = 6;
     uint32_t size = 128;
     char numaBase;
-    struct NumaPayload np = { .local = localNid, .remote = remoteNid, .size = size };
+    struct NumaPayload np = {.local = localNid, .remote = remoteNid, .size = size};
     struct NumaPayload *payload;
 
     payload = (struct NumaPayload *)calloc((nrLocal + 1) * REMOTE_NUMA_NUM, sizeof(*payload));
@@ -636,7 +634,7 @@ TEST_F(SmapConfigTest, TestIsProcessConfigValid)
     int nrProcess = 2;
     size_t totalLen;
     size_t numaConfigLen = 10;
-    struct PayloadHeader header = { 0 };
+    struct PayloadHeader header = {0};
 
     header.len = (uint32_t)nrProcess * CONFIG_PROC_LEN;
     totalLen = (size_t)header.len + PAYLOAD_HEADER_LEN + CONFIG_HEADER_LEN + numaConfigLen;
@@ -673,7 +671,8 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfig)
     int nrProcess = 2;
     ProcessAttr *attr;
     struct PayloadHeader header = {.len = nrProcess * CONFIG_PROC_LEN};
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     struct ProcessPayload payload[2] = {};
     payload[0] = {.pid = 1025,
                   .scanType = NORMAL_SCAN,
@@ -719,7 +718,8 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigTwo)
     int ret;
     int nrProcess = 1;
     struct PayloadHeader header = {.len = nrProcess * CONFIG_PROC_LEN};
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     struct ProcessPayload payload[] = {{.pid = 1025,
                                         .scanType = NORMAL_SCAN,
                                         .type = PROCESS_TYPE,
@@ -746,7 +746,8 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigPidNotExist)
     int ret;
     int nrProcess = 1;
     struct PayloadHeader header = {.len = nrProcess * CONFIG_PROC_LEN};
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     struct ProcessPayload payload[] = {{.pid = 1025,
                                         .scanType = NORMAL_SCAN,
                                         .type = PROCESS_TYPE,
@@ -771,7 +772,8 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigPidNotExist)
 TEST_F(SmapConfigTest, TestRecoverProcessConfigRestoresPairMultiRemoteTarget)
 {
     struct PayloadHeader header = {.len = CONFIG_PROC_LEN};
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     struct ProcessPayload payload = {
         .pid = 1234,
         .scanType = NORMAL_SCAN,
@@ -812,10 +814,8 @@ TEST_F(SmapConfigTest, TestWriteProcessConfig)
     int ret;
     int nrProcess = 2;
     struct PayloadHeader header;
-    struct ProcessPayload np[] = {
-        { 1025, 25, NORMAL_SCAN, VM_TYPE, { 1 }, { 5 }, 200 },
-        { 1026, 15, NORMAL_SCAN, VM_TYPE, { 2 }, { 6 }, 200 }
-    };
+    struct ProcessPayload np[] = {{1025, 25, NORMAL_SCAN, VM_TYPE, {1}, {5}, 200},
+                                  {1026, 15, NORMAL_SCAN, VM_TYPE, {2}, {6}, 200}};
     struct ProcessPayload *payload;
 
     payload = (struct ProcessPayload *)calloc(nrProcess, sizeof(*payload));
@@ -836,7 +836,10 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
     int ret;
     int nrProcess = 2;
     int len;
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager)); manager.nr[0] = 0; manager.nr[1] = 2;
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
+    manager.nr[0] = 0;
+    manager.nr[1] = 2;
     ProcessAttr *attr;
     ProcessAttr *attr1 = nullptr;
     ProcessAttr *attr2 = nullptr;
@@ -889,7 +892,10 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
 {
     int ret;
     int len;
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager)); manager.nr[0] = 0; manager.nr[1] = 2;
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
+    manager.nr[0] = 0;
+    manager.nr[1] = 2;
     ProcessAttr *attr;
     ProcessAttr *attr1 = nullptr;
     ProcessAttr *attr2 = nullptr;
@@ -940,7 +946,8 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
 
 TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffectiveTarget)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     ProcessAttr attr = {};
     struct ProcessPayload *payload = nullptr;
     int len = 0;
@@ -957,7 +964,8 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffe
     attr.pendingTargetConfig.migrateMode = MIG_MEMSIZE_MODE;
     attr.pendingTargetConfig.count = 1;
     attr.pendingTargetConfig.targets[0] = {8, 0, 8192};
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
@@ -978,7 +986,8 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffe
 
 TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsIgnoreRemoteCapacity)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     ProcessAttr attr = {};
     struct ProcessPayload *payload = nullptr;
     int len = 0;
@@ -988,7 +997,8 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsIgnoreRemoteCapacity)
     attr.state = PROC_IDLE;
     attr.migrateMode = MIG_RATIO_MODE;
     attr.ignoreRemoteCapacity = true;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
@@ -1002,7 +1012,8 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsIgnoreRemoteCapacity)
 
 TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingIgnoreRemoteCapacity)
 {
-    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct ProcessManager manager;
+    memset(&manager, 0, sizeof(manager));
     ProcessAttr attr = {};
     struct ProcessPayload *payload = nullptr;
     int len = 0;
@@ -1014,7 +1025,8 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingIgnoreRemoteCapa
     attr.ignoreRemoteCapacity = false;
     attr.pendingTargetConfigValid = true;
     attr.pendingIgnoreRemoteCapacity = true;
-    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
@@ -1085,7 +1097,7 @@ TEST_F(SmapConfigTest, TestChangeProcessConfigExtendFile)
     int fd;
     size_t oldLen = 30;
     size_t newLen = 48;
-    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER, .headerLen = CONFIG_HEADER_LEN, .totalLen = oldLen };
+    struct SmapConfigHeader header = {.ver = SMAP_CONFIG_VER, .headerLen = CONFIG_HEADER_LEN, .totalLen = oldLen};
 
     MOCKER(ParseHeader).stubs().with(any(), outBoundP(&header, sizeof(header))).will(returnValue(0));
     MOCKER(BuildAllProcessPayload).stubs().will(returnValue(0));
@@ -1102,7 +1114,7 @@ TEST_F(SmapConfigTest, TestChangeProcessConfigShrinkFile)
     int fd;
     size_t oldLen = 30;
     size_t newLen = 20;
-    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER, .headerLen = CONFIG_HEADER_LEN, .totalLen = oldLen };
+    struct SmapConfigHeader header = {.ver = SMAP_CONFIG_VER, .headerLen = CONFIG_HEADER_LEN, .totalLen = oldLen};
 
     MOCKER(ParseHeader).stubs().with(any(), outBoundP(&header, sizeof(header))).will(returnValue(0));
     MOCKER(BuildAllProcessPayload).stubs().will(returnValue(0));
@@ -1135,7 +1147,7 @@ TEST_F(SmapConfigTest, TestParseConfigOne)
     int fd;
     char base;
     char numaBase;
-    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER_V1 };
+    struct SmapConfigHeader header = {.ver = SMAP_CONFIG_VER_V1};
 
     MOCKER(MapConfig).stubs().will(returnValue(static_cast<char *>(nullptr)));
     ret = ParseConfig(fd, &header);
@@ -1161,7 +1173,7 @@ TEST_F(SmapConfigTest, TestParseConfigTwo)
     char base;
     char numaBase;
     char processBase;
-    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER_V1 };
+    struct SmapConfigHeader header = {.ver = SMAP_CONFIG_VER_V1};
 
     MOCKER(MapConfig).stubs().will(returnValue(reinterpret_cast<char *>(&base)));
     MOCKER(IsRunModeValid).stubs().will(returnValue(true));
@@ -1198,7 +1210,7 @@ TEST_F(SmapConfigTest, TestParseConfigThree)
     int fd;
     char base;
     char numaBase;
-    struct SmapConfigHeader header = { .ver = SMAP_CONFIG_VER_V1 };
+    struct SmapConfigHeader header = {.ver = SMAP_CONFIG_VER_V1};
     MOCKER(MapConfig).stubs().will(returnValue(reinterpret_cast<char *>(&base)));
     MOCKER(IsRunModeValid).stubs().will(returnValue(false));
     ret = ParseConfig(fd, &header);

@@ -8,11 +8,11 @@
 #include <asm/types.h>
 #include <linux/acpi.h>
 #include <linux/fs.h>
+#include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
-#include <linux/string.h>
 #include <linux/platform_device.h>
-#include <linux/io.h>
+#include <linux/string.h>
 
 #include "ub_hist.h"
 
@@ -33,12 +33,8 @@ struct ub_hist_ba_device {
 
 struct platform_device *pdev[DEFAULT_NUMA_NODE];
 
-static uint64_t reg_base_cpp_addrs[] = {
-    REG_BASE_CPP_ADDR_0,
-    REG_BASE_CPP_ADDR_1,
-    REG_BASE_CPP_ADDR_2,
-    REG_BASE_CPP_ADDR_3
-};
+static uint64_t reg_base_cpp_addrs[] = {REG_BASE_CPP_ADDR_0, REG_BASE_CPP_ADDR_1, REG_BASE_CPP_ADDR_2,
+                                        REG_BASE_CPP_ADDR_3};
 
 extern "C" int ub_hist_ba_init(struct ub_hist_ba_device *ba_dev);
 extern "C" int ub_hist_probe(struct platform_device *pdev);

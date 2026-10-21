@@ -126,7 +126,7 @@ TEST_F(DriversAcpiMemTest, AcpiParseMemoryAffinity)
 }
 
 extern "C" int acpi_parse_entries_array(char *id, unsigned long table_size, struct acpi_table_header *table_header,
-    struct acpi_subtable_proc *proc, int proc_num, unsigned int max_entries);
+                                        struct acpi_subtable_proc *proc, int proc_num, unsigned int max_entries);
 extern "C" int init_acpi_mem(void);
 TEST_F(DriversAcpiMemTest, InitAcpiMem)
 {
@@ -160,7 +160,8 @@ TEST_F(DriversAcpiMemTest, GetNodeActcLen)
     mem.node = 1;
     mem.start = 0;
     mem.end = 4194303;
-    list_for_each_entry_safe(am, tmp, &acpi_mem.mem, segment) {
+    list_for_each_entry_safe(am, tmp, &acpi_mem.mem, segment)
+    {
         list_del(&am->segment);
         kfree(am);
     }

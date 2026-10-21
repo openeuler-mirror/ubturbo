@@ -9,21 +9,20 @@
 #include "mockcpp/mokc.h"
 
 #include <asm/types.h>
-#include <linux/fs.h>
-#include <linux/slab.h>
-#include <linux/ktime.h>
-#include <linux/device.h>
-#include <linux/workqueue.h>
 #include <linux/container_of.h>
+#include <linux/device.h>
+#include <linux/fs.h>
+#include <linux/ktime.h>
+#include <linux/slab.h>
 #include <linux/vmalloc.h>
+#include <linux/workqueue.h>
 
+#include "acpi_mem.h"
 #include "check.h"
 #include "hist_ops.h"
-#include "iomem.h"
-#include "acpi_mem.h"
-#include "scan_main.h"
-#include "iomem.h"
 #include "hist_tracking.h"
+#include "iomem.h"
+#include "scan_main.h"
 
 using namespace std;
 

@@ -60,8 +60,7 @@ struct folio *ham_alloc_huge_page_node(int nid)
 	if (nid != NUMA_NO_NODE)
 		gfp_mask |= __GFP_THISNODE;
 
-	return get_hugetlb_folio_nodemask(PMD_SIZE, nid, NULL, gfp_mask,
-					  NULL);
+	return get_hugetlb_folio_nodemask(PMD_SIZE, nid, NULL, gfp_mask, NULL);
 }
 
 static int config_system_huge_page(unsigned long huge_page_number,

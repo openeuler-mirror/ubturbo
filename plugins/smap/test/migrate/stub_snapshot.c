@@ -5,5 +5,5 @@
 
 int node_state(int node, enum node_states state)
 {
-	return 0;
+    return 0;
 }

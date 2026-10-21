@@ -12,29 +12,27 @@ using namespace std;
 
 class AccessTrackingWrapperTest : public ::testing::Test {
 protected:
-	void SetUp() override
-	{
+    void SetUp() override
+    {
         cout << "[Phase SetUp Begin]" << endl;
         cout << "[Phase SetUp End]" << endl;
     }
     void TearDown() override
-	{
+    {
         cout << "[Phase TearDown Begin]" << endl;
         GlobalMockObject::verify();
         cout << "[Phase TearDown End]" << endl;
     }
 };
 
-extern "C" pte_t *smap__pte_offset_map_lock(struct mm_struct *mm,
-    pmd_t *pmd, unsigned long addr, spinlock_t **ptlp);
+extern "C" pte_t *smap__pte_offset_map_lock(struct mm_struct *mm, pmd_t *pmd, unsigned long addr, spinlock_t **ptlp);
 TEST_F(AccessTrackingWrapperTest, PteOffestMapLock)
 {
     pte_t *ret = smap__pte_offset_map_lock(nullptr, nullptr, 0, nullptr);
     EXPECT_EQ(nullptr, ret);
 }
 
-extern "C" pte_t *smap__pte_offset_map(pmd_t *pmd, unsigned long addr,
-    pmd_t *pmdvalp);
+extern "C" pte_t *smap__pte_offset_map(pmd_t *pmd, unsigned long addr, pmd_t *pmdvalp);
 TEST_F(AccessTrackingWrapperTest, PteOffsetMap)
 {
     pmd_t pmd = {};

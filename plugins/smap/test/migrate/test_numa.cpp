@@ -5,10 +5,10 @@
 #include "mockcpp/mokc.h"
 
 #include <linux/gfp.h>
-#include <linux/slab.h>
-#include <linux/numa.h>
-#include <linux/mm.h>
 #include <linux/list.h>
+#include <linux/mm.h>
+#include <linux/numa.h>
+#include <linux/slab.h>
 
 #include "numa.h"
 

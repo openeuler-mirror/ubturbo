@@ -2,20 +2,19 @@
  * Description: smap5.0 user device ut code
  */
 
-#include <cstdlib>
-#include <cerrno>
-#include <cstdio>
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include <dirent.h>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
 
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include "manage/manage.h"
 #include "manage/device.h"
+#include "manage/manage.h"
 #include "securec.h"
-
 
 using namespace std;
 
@@ -26,7 +25,6 @@ static struct dirent MakeDirent(const char *name)
     (void)snprintf(entry.d_name, sizeof(entry.d_name), "%s", name);
     return entry;
 }
-
 
 class DeviceTest : public ::testing::Test {
 protected:
@@ -49,7 +47,8 @@ int OpenAndFlockFd(int *fd, const char *device);
 }
 TEST_F(DeviceTest, TestIInitTrackingDevOne)
 {
-    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
+    struct ProcessManager pm;
+    memset(&pm, 0, sizeof(pm));
     int ret;
 
     MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(-1));
@@ -61,7 +60,8 @@ extern "C" int ConfigureTrackingDevices(struct ProcessManager *manager);
 TEST_F(DeviceTest, TestIInitTrackingDevThree)
 {
     int ret;
-    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
+    struct ProcessManager pm;
+    memset(&pm, 0, sizeof(pm));
 
     MOCKER(reinterpret_cast<int (*)(const char *, int)>(open)).stubs().will(returnValue(0));
     MOCKER(ConfigureTrackingDevices).stubs().will(returnValue(0));
@@ -86,8 +86,10 @@ TEST_F(DeviceTest, TestConfigTrackingDev)
 
 TEST_F(DeviceTest, TestDeinitTrackingDev)
 {
-    struct ProcessManager pm; memset(&pm, 0, sizeof(pm));
-    pm.fds.migrate = 3; pm.fds.access = 4;
+    struct ProcessManager pm;
+    memset(&pm, 0, sizeof(pm));
+    pm.fds.migrate = 3;
+    pm.fds.access = 4;
 
     MOCKER(static_cast<int (*)(int)>(close)).expects(exactly(2)).will(ignoreReturnValue());
     DeinitTrackingDev(&pm);
@@ -104,9 +106,7 @@ TEST_F(DeviceTest, TestIsLocalNumaExceedLocalNumaNum)
 
 TEST_F(DeviceTest, TestIsLocalNumaBuildFailed)
 {
-    MOCKER((int (*)(char *, size_t, size_t, char const *, void *))snprintf_s)
-        .stubs()
-        .will(returnValue(-1));
+    MOCKER((int (*)(char *, size_t, size_t, char const *, void *))snprintf_s).stubs().will(returnValue(-1));
     bool ret = IsLocalNuma(0);
     EXPECT_FALSE(ret);
 }
@@ -114,9 +114,7 @@ TEST_F(DeviceTest, TestIsLocalNumaBuildFailed)
 extern "C" FILE *fopen(const char *filename, const char *modes);
 TEST_F(DeviceTest, TestIsLocalNumaOpenFailed)
 {
-    MOCKER((int (*)(char *, size_t, size_t, char const *, void *))snprintf_s)
-        .stubs()
-        .will(returnValue(0));
+    MOCKER((int (*)(char *, size_t, size_t, char const *, void *))snprintf_s).stubs().will(returnValue(0));
     MOCKER(fopen).stubs().will(returnValue((FILE *)nullptr));
     bool ret = IsLocalNuma(0);
     EXPECT_FALSE(ret);
@@ -128,9 +126,7 @@ TEST_F(DeviceTest, TestIsLocalNumaReadFailed)
 {
     FILE tmpFile;
 
-    MOCKER((int (*)(char *, size_t, size_t, char const *, void *))snprintf_s)
-        .stubs()
-        .will(returnValue(0));
+    MOCKER((int (*)(char *, size_t, size_t, char const *, void *))snprintf_s).stubs().will(returnValue(0));
     MOCKER(fopen).stubs().will(returnValue(&tmpFile));
     MOCKER(fgetc).stubs().will(returnValue(EOF));
     MOCKER(fclose).stubs().will(returnValue(0));
@@ -143,9 +139,7 @@ TEST_F(DeviceTest, TestIsLocalNumaReadRemote)
     FILE tmpFile;
     int remoteValue = '1';
 
-    MOCKER((int (*)(char *, size_t, size_t, char const *, void *))snprintf_s)
-        .stubs()
-        .will(returnValue(0));
+    MOCKER((int (*)(char *, size_t, size_t, char const *, void *))snprintf_s).stubs().will(returnValue(0));
     MOCKER(fopen).stubs().will(returnValue(&tmpFile));
     MOCKER(fgetc).stubs().will(returnValue(remoteValue));
     MOCKER(fclose).stubs().will(returnValue(0));
@@ -158,9 +152,7 @@ TEST_F(DeviceTest, TestIsLocalNumaReadLocal)
     FILE tmpFile;
     int localValue = '0';
 
-    MOCKER((int (*)(char *, size_t, size_t, char const *, void *))snprintf_s)
-        .stubs()
-        .will(returnValue(0));
+    MOCKER((int (*)(char *, size_t, size_t, char const *, void *))snprintf_s).stubs().will(returnValue(0));
     MOCKER(fopen).stubs().will(returnValue(&tmpFile));
     MOCKER(fgetc).stubs().will(returnValue(localValue));
     MOCKER(fclose).stubs().will(returnValue(0));
@@ -292,9 +284,7 @@ TEST_F(DeviceTest, TestGetUbFluxMbSuccess)
     pm->fds.access = 10;
     pm->ubBwMonitor.ubBwThreshold = 500;
 
-    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl))
-        .stubs()
-        .will(returnValue(0));
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
 
     GetUbFluxMb();
     EXPECT_EQ(0, pm->ubBwMonitor.currentFluxRet);
@@ -321,9 +311,7 @@ TEST_F(DeviceTest, TestConfigUbWatchSuccess)
     int savedFd = pm->fds.access;
     pm->fds.access = 10;
 
-    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl))
-        .stubs()
-        .will(returnValue(0));
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
 
     int ret = ConfigUbWatch(2000);
     EXPECT_EQ(0, ret);

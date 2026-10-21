@@ -30,7 +30,7 @@ extern "C" struct migrate_back_task *init_migrate_back_task(unsigned long long t
 TEST_F(MigrateTaskTest, InitMigrateBackTask)
 {
     struct migrate_back_task *ret = nullptr;
-    ret = (struct migrate_back_task*)kmalloc(sizeof(struct migrate_back_task), GFP_KERNEL);
+    ret = (struct migrate_back_task *)kmalloc(sizeof(struct migrate_back_task), GFP_KERNEL);
     ASSERT_NE(nullptr, ret);
 
     ret = init_migrate_back_task(10);
@@ -44,15 +44,15 @@ TEST_F(MigrateTaskTest, FreeAllMigrateBackTask)
     free_all_migrate_back_task();
 }
 
-extern "C" int init_migrate_back_subtask(struct migrate_back_task *task,
-    struct migrate_back_inner_payload *p, struct migrate_back_subtask **result);
+extern "C" int init_migrate_back_subtask(struct migrate_back_task *task, struct migrate_back_inner_payload *p,
+                                         struct migrate_back_subtask **result);
 TEST_F(MigrateTaskTest, InitMigrateBackSubtask)
 {
     int ret;
     struct migrate_back_task task;
     struct migrate_back_inner_payload p;
     struct migrate_back_subtask **result = nullptr;
-    result = static_cast<struct migrate_back_subtask**>(kmalloc(sizeof(*result), GFP_KERNEL));
+    result = static_cast<struct migrate_back_subtask **>(kmalloc(sizeof(*result), GFP_KERNEL));
     ASSERT_NE(nullptr, result);
 
     p.src_nid = 1;
@@ -69,11 +69,11 @@ TEST_F(MigrateTaskTest, InitMigrateBackSubtaskTwo)
     struct migrate_back_task task;
     struct migrate_back_inner_payload p;
     struct migrate_back_subtask **result = nullptr;
-    result = static_cast<struct migrate_back_subtask**>(kmalloc(sizeof(*result), GFP_KERNEL));
+    result = static_cast<struct migrate_back_subtask **>(kmalloc(sizeof(*result), GFP_KERNEL));
     ASSERT_NE(nullptr, result);
 
     p.src_nid = 1;
-    MOCKER(kzalloc).stubs().will(returnValue((void*)NULL));
+    MOCKER(kzalloc).stubs().will(returnValue((void *)NULL));
     ret = init_migrate_back_subtask(&task, &p, result);
     EXPECT_EQ(-ENOMEM, ret);
 

@@ -5,16 +5,16 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include <linux/list.h>
 #include <linux/dmi.h>
-#include <linux/ioport.h>
-#include <linux/slab.h>
 #include <linux/errno.h>
+#include <linux/ioport.h>
+#include <linux/list.h>
 #include <linux/memory.h>
 #include <linux/pfn.h>
+#include <linux/slab.h>
 
-#include "scan_main.h"
 #include "iomem.h"
+#include "scan_main.h"
 
 using namespace std;
 
@@ -74,7 +74,7 @@ TEST_F(AccessIomemTest, insert_remote_ram)
     u64 start;
     u64 end;
     unsigned long pfn[2];
-    int remoteNid[2] = { 4, 5 };
+    int remoteNid[2] = {4, 5};
 
     start = 0;
     end = start + 2 * MIN_MEMORY_BLOCK_SIZE - 1;
@@ -85,7 +85,8 @@ TEST_F(AccessIomemTest, insert_remote_ram)
     MOCKER(page_to_nid).stubs().will(returnValue(remoteNid[0])).then(returnValue(remoteNid[1]));
     ret = insert_remote_ram(start, end, &head);
     EXPECT_EQ(0, ret);
-    list_for_each_entry_safe(seg, tmp, &head, node) {
+    list_for_each_entry_safe(seg, tmp, &head, node)
+    {
         if (len++ == 0) {
             EXPECT_EQ(remoteNid[0], seg->numa_node);
             EXPECT_EQ(start, seg->start);
@@ -147,8 +148,8 @@ TEST_F(AccessIomemTest, update_resource_two)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" int walk_iomem_res_desc(unsigned long desc, unsigned long flags, u64 start,
-    u64 end, void *arg, int (*func)(struct resource *, void *));
+extern "C" int walk_iomem_res_desc(unsigned long desc, unsigned long flags, u64 start, u64 end, void *arg,
+                                   int (*func)(struct resource *, void *));
 extern "C" int walk_system_ram_remote_range(struct list_head *head);
 TEST_F(AccessIomemTest, walk_system_ram_remote_range)
 {
@@ -202,9 +203,17 @@ TEST_F(AccessIomemTest, get_node_page_cnt_iomem)
 {
     u64 ret;
     u64 len = 0;
-    struct ram_segment seg1 = { .numa_node = 0 };
-    struct ram_segment seg2 = { .numa_node = 1, .start = 0x0, .end = 0xfffff, };
-    struct ram_segment seg3 = { .numa_node = 1, .start = 0x200000, .end = 0x3fffff, };
+    struct ram_segment seg1 = {.numa_node = 0};
+    struct ram_segment seg2 = {
+        .numa_node = 1,
+        .start = 0x0,
+        .end = 0xfffff,
+    };
+    struct ram_segment seg3 = {
+        .numa_node = 1,
+        .start = 0x200000,
+        .end = 0x3fffff,
+    };
 
     nr_local_numa = 1;
     ret = get_node_page_cnt_iomem(0, PMD_SIZE);
@@ -235,7 +244,11 @@ TEST_F(AccessIomemTest, CalcPaddrAcidxIomemTest)
     int ret = calc_paddr_acidx_iomem(pa, &nid, &index, pagesize);
     EXPECT_EQ(-ERANGE, ret);
 
-    struct ram_segment seg = { .numa_node = 1, .start = 0x0, .end = 0xfffff, };
+    struct ram_segment seg = {
+        .numa_node = 1,
+        .start = 0x0,
+        .end = 0xfffff,
+    };
     list_add(&seg.node, &remote_ram_list);
     pa = 0x1000;
     ret = calc_paddr_acidx_iomem(pa, &nid, &index, pagesize);
@@ -255,7 +268,11 @@ TEST_F(AccessIomemTest, smap_is_remote_addr_valid)
 
 TEST_F(AccessIomemTest, smap_is_remote_addr_valid_two)
 {
-    struct ram_segment seg = { .numa_node = 1, .start = 0x0, .end = 0xfffff, };
+    struct ram_segment seg = {
+        .numa_node = 1,
+        .start = 0x0,
+        .end = 0xfffff,
+    };
     list_add(&seg.node, &remote_ram_list);
 
     int ret = smap_is_remote_addr_valid(0, 0x10, 0x100);

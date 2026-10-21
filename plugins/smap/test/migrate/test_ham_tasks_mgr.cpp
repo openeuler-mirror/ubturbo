@@ -4,11 +4,11 @@
 
 #include <linux/fs.h>
 #include <linux/hugetlb.h>
-#include <linux/sort.h>
-#include <linux/slab.h>
-#include <linux/mm.h>
-#include <linux/timer.h>
 #include <linux/jiffies.h>
+#include <linux/mm.h>
+#include <linux/slab.h>
+#include <linux/sort.h>
+#include <linux/timer.h>
 #include "ham_tasks_mgr.h"
 
 using namespace std;
@@ -38,11 +38,11 @@ TEST_F(HamTasksMgrTest, ReleaseMigrateTask)
     mig_task->is_finish = true;
     mig_task->pid = 1;
 
-    struct ham_page_map *hpms = (struct ham_page_map *) calloc(3, sizeof(struct ham_page_map));
+    struct ham_page_map *hpms = (struct ham_page_map *)calloc(3, sizeof(struct ham_page_map));
     hpms[1].dst_folio = reinterpret_cast<folio *>(1);
     hpms[2].dst_folio = reinterpret_cast<folio *>(1);
 
-    struct ram_block_map *ram_maps = (struct ram_block_map *) calloc(2, sizeof(struct ram_block_map));
+    struct ram_block_map *ram_maps = (struct ram_block_map *)calloc(2, sizeof(struct ram_block_map));
     ram_maps[0].hpms = nullptr;
     ram_maps[1].hpms = hpms;
     ram_maps[1].page_num = 3;
@@ -150,4 +150,3 @@ TEST_F(HamTasksMgrTest, CheckTaskStatus)
     ret = check_task_status(mig_task, HAM_TASK_MIGRATED);
     EXPECT_EQ(ret, -EINVAL);
 }
-
