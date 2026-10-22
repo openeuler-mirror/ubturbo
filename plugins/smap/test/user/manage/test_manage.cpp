@@ -4430,13 +4430,13 @@ TEST_F(ManageTest, TestSetLocalNumaByCpu)
     EXPECT_EQ(0, ret);
 }
 
-extern "C" bool IsRemoteNidValid(int nid);
+extern "C" bool IsRemoteNid(int nid);
 TEST_F(ManageTest, TestIsRemoteNidValid)
 {
     g_processManager.nrLocalNuma = 4;
-    bool ret = IsRemoteNidValid(4);
+    bool ret = IsRemoteNid(4);
     EXPECT_EQ(true, ret);
-    ret = IsRemoteNidValid(0);
+    ret = IsRemoteNid(0);
     EXPECT_EQ(false, ret);
 }
 

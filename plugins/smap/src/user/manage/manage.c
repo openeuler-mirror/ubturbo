@@ -503,7 +503,7 @@ static uint32_t BuildManagedTrackingNodes(const ProcessAttr *attr)
  * range check only; callers that require online-node validation should do that
  * separately.
  */
-bool IsRemoteNidValid(int nid)
+bool IsRemoteNid(int nid)
 {
     struct ProcessManager *manager = GetProcessManager();
     if (!manager) {

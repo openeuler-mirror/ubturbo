@@ -14,6 +14,8 @@
 #include <sys/ioctl.h>
 #include <sys/param.h>
 #include <sys/time.h>
+#include <errno.h>
+#include <string.h>
 #include <math.h>
 #include "manage/access_ioctl.h"
 #include "smap_user_log.h"
@@ -1835,6 +1837,11 @@ int MigrateRemoteNuma(struct ProcessManager *manager, struct MigrateNumaIoctlMsg
     }
 
     int ret = ioctl(manager->fds.migrate, SMAP_MIG_MIGRATE_NUMA, msg);
-    SMAP_LOGGER_INFO("migrate numa ioctl ret: %d.", ret);
-    return ret ? -ENOMEM : 0;
+    if (ret < 0) {
+        int err = errno;
+        SMAP_LOGGER_ERROR("migrate numa ioctl failed, ret: %d, errno: %d(%s).", ret, err, strerror(err));
+        return err == EINVAL ? -EINVAL : -ENOMEM;
+    }
+    SMAP_LOGGER_INFO("migrate numa ioctl success.");
+    return 0;
 }

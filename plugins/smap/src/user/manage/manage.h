@@ -53,7 +53,6 @@
 
 #define DEFAULT_L1_NODE (-1)
 #define DEFAULT_L2_NODE (-1)
-#define DEFAULT_DEST_NODE (-1)
 
 #define BIT_TO_BYTE 8
 #define CPU_NUMA_PATH "/sys/devices/system/cpu/cpu%d/node%d"
@@ -549,7 +548,7 @@ void DebugProcessAttr(struct ProcessManager *manager);
 int GetNrLocalNuma(void);
 
 /* Range-check a remote NUMA id against the manager's local/remote layout. */
-bool IsRemoteNidValid(int nid);
+bool IsRemoteNid(int nid);
 
 void InitProcessTargetConfig(ProcessTargetConfig *config);
 void ClearProcessTargetConfig(ProcessTargetConfig *config);
@@ -639,19 +638,6 @@ void SetRunMode(RunMode runMode);
 
 void LinkedListAdd(ProcessAttr **head, ProcessAttr **add);
 void LinkedListRemove(ProcessAttr **remove, ProcessAttr **head);
-
-static inline bool IsNodeInvalid(int nid)
-{
-    return nid < 0 || nid >= MAX_NODES;
-}
-
-static inline bool IsDestNodeInvalid(int nid)
-{
-    if (nid == DEFAULT_DEST_NODE) {
-        return false;
-    }
-    return IsNodeInvalid(nid);
-}
 
 static inline void SetNodeForbidden(int nid)
 {

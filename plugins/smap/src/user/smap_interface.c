@@ -122,10 +122,6 @@ static int CheckPidtype(uint32_t pageType)
 static bool IsPidTypeValid(int pidType)
 {
     struct ProcessManager *pm = GetProcessManager();
-    if (!pm) {
-        SMAP_LOGGER_ERROR("process manager is null.");
-        return false;
-    }
     int size = GetNormalPageSize();
     int type = pm->tracking.pageSize == size ? PAGETYPE_NORMAL : PAGETYPE_HUGE;
     return pidType == type;
@@ -179,9 +175,9 @@ static bool IsNidInNumastat(int nid)
 }
 
 /* Validate that a remote nid is in range and currently visible in numastat. */
-static bool IsOnlineRemoteNidValid(int nid)
+static bool IsRemoteNidValid(int nid)
 {
-    if (!IsRemoteNidValid(nid)) {
+    if (!IsRemoteNid(nid)) {
         return false;
     }
 
@@ -240,7 +236,7 @@ static int InitAllThreads(struct ProcessManager *manager)
     return ret;
 }
 
-static bool IsDestNidVaild(int nid, pid_t pid)
+static bool IsDestNidValid(int nid, pid_t pid)
 {
     ProcessAttr *attr;
     attr = GetProcessAttrLocked(pid);
@@ -266,14 +262,35 @@ static bool IsDestNidUnique(struct MigrateOutPayload *payload)
     return true;
 }
 
+static bool CheckRemoteNumaInclusion(pid_t pid, uint32_t nodeBitmap)
+{
+    ProcessAttr *attr = GetProcessAttrLocked(pid);
+    if (!attr) {
+        return true;
+    }
+    const ProcessTargetConfig *lastConfig = attr->pendingTargetConfigValid ? &attr->pendingTargetConfig :
+                                                                            &attr->targetConfig;
+    int offset = LOCAL_NUMA_BITS - GetNrLocalNuma();
+    for (uint32_t i = 0; i < lastConfig->count; i++) {
+        int lastNid = lastConfig->targets[i].remoteNid;
+        if (!InL2(nodeBitmap, lastNid + offset)) {
+            SMAP_LOGGER_ERROR("pid %d migrate out destNids do not include last config destNid %d.", pid, lastNid);
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool CheckMigOutPayloadItems(struct MigrateOutPayload *payload, uint64_t *totalRatio)
 {
     MigrateMode migrateMode = payload->inner[0].migrateMode;
     uint64_t pageSizeKB = IsHugeMode() ? KB_PER_2MB : KB_PER_4KB;
+    uint32_t nodeBitmap = 0;
 
     *totalRatio = 0;
     for (int i = 0; i < payload->count; i++) {
-        if (!IsOnlineRemoteNidValid(payload->inner[i].destNid)) {
+        AddL2ByNid(&nodeBitmap, payload->inner[i].destNid);
+        if (!IsRemoteNidValid(payload->inner[i].destNid)) {
             SMAP_LOGGER_ERROR("mig para pid:%d destnode%d invalid.", payload->pid, payload->inner[i].destNid);
             return false;
         }
@@ -313,6 +330,9 @@ static bool CheckMigOutPayloadItems(struct MigrateOutPayload *payload, uint64_t 
         if (migrateMode == MIG_RATIO_MODE) {
             *totalRatio += payload->inner[i].ratio;
         }
+    }
+    if (!CheckRemoteNumaInclusion(payload->pid, nodeBitmap)) {
+        return false;
     }
     return true;
 }
@@ -451,7 +471,7 @@ static int CheckGroupedTarget(const struct MigrationGroup *group, int payloadIdx
     }
     for (int i = 0; i < group->targetCount; i++) {
         int nid = group->targets[i].nid;
-        if (!IsOnlineRemoteNidValid(nid)) {
+        if (!IsRemoteNidValid(nid)) {
             SMAP_LOGGER_ERROR("[%d:%d:%d] grouped target nid %d invalid.", payloadIdx, groupIdx, i, nid);
             return -EINVAL;
         }
@@ -1039,11 +1059,11 @@ static int CheckMigrateBackMsg(struct MigrateBackMsg *msg)
         struct MigrateBackPayload *payload = &msg->payload[i];
         int srcNid = payload->srcNid;
         int destNid = payload->destNid;
-        if (IsNodeInvalid(srcNid)) {
+        if (!IsRemoteNidValid(srcNid)) {
             SMAP_LOGGER_ERROR("mig back msg num: [%d] srcNode %d invalid.", i, srcNid);
             return -EINVAL;
         }
-        if (IsDestNodeInvalid(destNid)) {
+        if (destNid != NUMA_NO_NODE && !IsLocalNidValid(destNid)) {
             SMAP_LOGGER_ERROR("mig back msg num: [%d] destNode %d invalid.", i, destNid);
             return -EINVAL;
         }
@@ -1229,7 +1249,7 @@ static int CheckSmapRemoveMsg(struct RemoveMsg *msg, int pidType)
             return -EINVAL;
         }
         for (int j = 0; j < payload->count; j++) {
-            if (!IsRemoteNidValid(payload->nid[j])) {
+            if (!IsRemoteNid(payload->nid[j])) {
                 SMAP_LOGGER_ERROR("[%d] pid:%d remote node %d invalid.", i, payload->pid, payload->nid[j]);
                 return -EINVAL;
             }
@@ -1655,7 +1675,7 @@ int ubturbo_smap_node_enable(struct EnableNodeMsg *msg)
         SMAP_LOGGER_ERROR("Smap enable node msg is null.");
         return -EINVAL;
     }
-    if (msg->nid < pm->nrLocalNuma || msg->nid >= MAX_NODES) {
+    if (!IsRemoteNid(msg->nid)) {
         SMAP_LOGGER_ERROR("Smap enable node nid %d is invalid.", msg->nid);
         return -EINVAL;
     }
@@ -1984,6 +2004,10 @@ void ubturbo_smap_urgent_migrate_out(uint64_t size)
         SMAP_LOGGER_ERROR("Smap is not running.");
         return;
     }
+    if (size == 0) {
+        SMAP_LOGGER_ERROR("ubturbo_smap_urgent_migrate_out size is zero.");
+        return;
+    }
 
     // 遍历pid看是否有足够的size，有则立即进行迁移
     SMAP_LOGGER_INFO("ubturbo_smap_urgent_migrate_out size = %llu.", size);
@@ -2004,11 +2028,11 @@ int ubturbo_smap_remote_numa_info_set(struct SetRemoteNumaInfoMsg *msg)
         SMAP_LOGGER_ERROR("Set smap remote numa info msg is null.");
         return -EINVAL;
     }
-    if (!IsLocalNidValid(msg->srcNid)) {
+    if (msg->srcNid != NUMA_NO_NODE && !IsLocalNidValid(msg->srcNid)) {
         SMAP_LOGGER_ERROR("Set smap remote numa info src node%d invalid.", msg->srcNid);
         return -EINVAL;
     }
-    if (!IsOnlineRemoteNidValid(msg->destNid)) {
+    if (!IsRemoteNidValid(msg->destNid)) {
         SMAP_LOGGER_ERROR("Set smap remote numa info dest node%d invalid.", msg->destNid);
         return -EINVAL;
     }
@@ -2056,7 +2080,8 @@ static int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint32_t lengthIn, 
         return -EINVAL;
     }
     if (time(&currentTime) == (time_t)-1) {
-        SMAP_LOGGER_ERROR("get time error");
+        SMAP_LOGGER_ERROR("get time failed: %s.", strerror(errno));
+        return -EINVAL;
     }
     SMAP_LOGGER_INFO("Current time: %s\n", ctime(&currentTime));
     if (dataSource == STATISTIC_DATA_SOURCE && (currentTime - attr->scanStart < attr->duration)) {
@@ -2271,7 +2296,7 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
             for (int remoteNid = nrLocalNuma; remoteNid < nrLocalNuma + REMOTE_NUMA_NUM; remoteNid++) {
                 if (InAttrL2(attr, remoteNid)) {
                     hasRemoteTracking = true;
-                    if (scanType == NORMAL_SCAN && !IsOnlineRemoteNidValid(remoteNid)) {
+                    if (scanType == NORMAL_SCAN && !IsRemoteNidValid(remoteNid)) {
                         SMAP_LOGGER_ERROR("pid %d remote node %d is invalid, scan type is %d.", attr->pid, remoteNid,
                                           scanType);
                         free(payload);
@@ -2307,7 +2332,7 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
     int ret = 0;
     struct ProcessManager *manager = GetProcessManager();
     SMAP_LOGGER_INFO("Receive ubturbo_smap_process_tracking_add msg, len:%d, scanType:%d.", len, scanType);
-    if (EnvAtomicRead(&g_status) != RUNNING) {
+    if (!ubturbo_smap_is_running()) {
         SMAP_LOGGER_ERROR("Smap isn't running, add process tracking failed.");
         return -EPERM;
     }
@@ -2409,7 +2434,7 @@ int ubturbo_smap_process_tracking_remove(pid_t *pidArr, int len, int flag)
 {
     int ret = 0;
     SMAP_LOGGER_INFO("Receive ubturbo_smap_process_tracking_remove msg, len:%d, flag:%d.", len, flag);
-    if (EnvAtomicRead(&g_status) != RUNNING) {
+    if (!ubturbo_smap_is_running()) {
         SMAP_LOGGER_ERROR("Smap isn't running, remove process tracking failed.");
         return -EPERM;
     }
@@ -2451,7 +2476,7 @@ int ubturbo_smap_process_migrate_enable(pid_t *pidArr, int len, int enable, int 
 {
     SMAP_LOGGER_INFO("Receive ubturbo_smap_process_migrate_enable msg, len:%d, enable:%d, flags:%d.", len, enable,
                      flags);
-    if (EnvAtomicRead(&g_status) != RUNNING) {
+    if (!ubturbo_smap_is_running()) {
         SMAP_LOGGER_ERROR("ubturbo_smap_process_migrate_enable smap isn't running.");
         return -EPERM;
     }
@@ -2480,11 +2505,11 @@ static int CheckMigrateNumaMsg(struct MigrateNumaMsg *msg)
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate srcNid = destNid.");
         return -EINVAL;
     }
-    if (!IsOnlineRemoteNidValid(msg->srcNid)) {
+    if (!IsRemoteNidValid(msg->srcNid)) {
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate invalid srcNid %d.", msg->srcNid);
         return -EINVAL;
     }
-    if (!IsOnlineRemoteNidValid(msg->destNid)) {
+    if (!IsRemoteNidValid(msg->destNid)) {
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate invalid destNid %d.", msg->destNid);
         return -EINVAL;
     }
@@ -2508,7 +2533,7 @@ int ubturbo_smap_remote_numa_migrate(struct MigrateNumaMsg *msg)
 {
     struct ProcessManager *manager = GetProcessManager();
     SMAP_LOGGER_INFO("Receive ubturbo_smap_remote_numa_migrate msg.");
-    if (EnvAtomicRead(&g_status) != RUNNING) {
+    if (!ubturbo_smap_is_running()) {
         SMAP_LOGGER_ERROR("smap isn't running, migrate remote numa failed.");
         return -EPERM;
     }
@@ -2539,7 +2564,7 @@ static int CheckSameMigrateNumaMsg(struct MigrateNumaMsg *msg)
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate srcNid = destNid.");
         return -EINVAL;
     }
-    if (!IsOnlineRemoteNidValid(msg->srcNid)) {
+    if (!IsRemoteNidValid(msg->srcNid)) {
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_migrate invalid srcNid %d.", msg->srcNid);
         return -EINVAL;
     }
@@ -2559,7 +2584,7 @@ int ubturbo_smap_same_remote_numa_migrate(struct MigrateNumaMsg *msg)
 {
     struct ProcessManager *manager = GetProcessManager();
     SMAP_LOGGER_INFO("Receive ubturbo_smap_same_remote_numa_migrate msg.");
-    if (EnvAtomicRead(&g_status) != RUNNING) {
+    if (!ubturbo_smap_is_running()) {
         SMAP_LOGGER_ERROR("smap isn't running, migrate remote numa failed.");
         return -EPERM;
     }
@@ -2693,13 +2718,45 @@ static int CheckMigOutSyncResult(struct MigrateOutMsg *msg, int *invalidPidNum, 
     return 0;
 }
 
+static int WaitForMigrate(struct MigrateOutMsg *msg, uint64_t maxWaitTime)
+{
+    uint64_t waitTime = 0;
+    while (maxWaitTime == 0 || waitTime < maxWaitTime) {
+        int invalidPidNum = 0;
+        bool allPidSuccess = true;
+        SMAP_LOGGER_INFO("ubturbo_smap_migrate_out_sync waitTime %llu.", waitTime);
+        int ret = CheckMigOutSyncResult(msg, &invalidPidNum, &allPidSuccess, maxWaitTime);
+        if (ret) {
+            return ret;
+        }
+        if (invalidPidNum == msg->count) {
+            SMAP_LOGGER_ERROR("ubturbo_smap_migrate_out_sync all pid is invalid.");
+            return -ESRCH;
+        }
+        if (allPidSuccess && !invalidPidNum) {
+            SMAP_LOGGER_INFO("ubturbo_smap_migrate_out_sync all pid success.");
+            return 0;
+        }
+        if (allPidSuccess && invalidPidNum) {
+            SMAP_LOGGER_INFO("ubturbo_smap_migrate_out_sync partial pid success.");
+            return -ESRCH;
+        }
+        waitTime += WAIT_TIME;
+        EnvMsleep(WAIT_TIME);
+    }
+    SMAP_LOGGER_ERROR("Migration timed out.");
+    return -EBUSY;
+}
+
 int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime)
 {
     int ret;
-    uint64_t waitTime = 0;
-    bool allPidSuccess = true;
-    int invalidPidNum;
     bool syncWaitProtected = false;
+
+    if (!ubturbo_smap_is_running()) {
+        SMAP_LOGGER_ERROR("Smap isn't running, ubturbo_smap_migrate_out_sync failed.");
+        return -EPERM;
+    }
 
     ret = CheckMigOutSyncMsg(pidType, maxWaitTime);
     if (ret) {
@@ -2716,33 +2773,7 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64
     }
     SMAP_LOGGER_INFO("Smap migrate out done.");
 
-    while (maxWaitTime == 0 || waitTime < maxWaitTime) {
-        waitTime += WAIT_TIME;
-        invalidPidNum = 0;
-        SMAP_LOGGER_INFO("ubturbo_smap_migrate_out_sync waitTime %llu.", waitTime);
-        ret = CheckMigOutSyncResult(msg, &invalidPidNum, &allPidSuccess, maxWaitTime);
-        if (ret) {
-            goto out;
-        }
-        if (invalidPidNum == msg->count) {
-            SMAP_LOGGER_ERROR("ubturbo_smap_migrate_out_sync all pid is invalid.");
-            ret = -ESRCH;
-            goto out;
-        }
-        if (allPidSuccess && !invalidPidNum) {
-            SMAP_LOGGER_INFO("ubturbo_smap_migrate_out_sync all pid success.");
-            ret = 0;
-            goto out;
-        } else if (allPidSuccess && invalidPidNum) {
-            SMAP_LOGGER_INFO("ubturbo_smap_migrate_out_sync partial pid success.");
-            ret = -ESRCH;
-            goto out;
-        }
-        allPidSuccess = true;
-        EnvMsleep(WAIT_TIME);
-    }
-    SMAP_LOGGER_ERROR("Migration timed out. pidType %d, ret %d.", pidType, ret);
-    ret = -EBUSY;
+    ret = WaitForMigrate(msg, maxWaitTime);
 
 out:
     if (syncWaitProtected) {
@@ -2914,11 +2945,11 @@ static int SmapMigratePidRemoteNumaCheck(struct MigrateEscapeMsg *msg)
             SMAP_LOGGER_ERROR("[%d] srcNid == destNid == %d", i, msg->payload[i].srcNid);
             return -EINVAL;
         }
-        if (!IsOnlineRemoteNidValid(msg->payload[i].srcNid)) {
+        if (!IsRemoteNidValid(msg->payload[i].srcNid)) {
             SMAP_LOGGER_ERROR("[%d] srcNid %d invalid, migrate pid remote numa failed.", i, msg->payload[i].srcNid);
             return -EINVAL;
         }
-        if (!IsOnlineRemoteNidValid(msg->payload[i].destNid)) {
+        if (!IsRemoteNidValid(msg->payload[i].destNid)) {
             SMAP_LOGGER_ERROR("[%d] destNid %d invalid, migrate pid remote numa failed.", i, msg->payload[i].destNid);
             return -EINVAL;
         }
@@ -3002,7 +3033,7 @@ int ubturbo_smap_pid_remote_numa_migrate(struct MigrateEscapeMsg *msg)
 {
     int ret;
     SMAP_LOGGER_INFO("received ubturbo_smap_pid_remote_numa_migrate msg.");
-    if (EnvAtomicRead(&g_status) != RUNNING) {
+    if (!ubturbo_smap_is_running()) {
         SMAP_LOGGER_ERROR("smap isn't running, migrate pid remote numa failed.");
         return -EPERM;
     }
@@ -3077,7 +3108,7 @@ static int AssignOldProcessPayload(struct OldProcessPayload *result, ProcessAttr
 
 static int CheckSmapQueryProcessConfig(int nid, struct OldProcessPayload *result, int inLen, int *outLen)
 {
-    if (!IsOnlineRemoteNidValid(nid)) {
+    if (!IsRemoteNidValid(nid)) {
         SMAP_LOGGER_ERROR("ubturbo_smap_process_config_query invalid nid %d.", nid);
         return -EINVAL;
     }
@@ -3103,7 +3134,7 @@ int ubturbo_smap_process_config_query(int nid, struct OldProcessPayload *result,
     int ret = 0;
 
     SMAP_LOGGER_INFO("received ubturbo_smap_process_config_query msg, nid:%d, inLen:%d.", nid, inLen);
-    if (EnvAtomicRead(&g_status) != RUNNING) {
+    if (!ubturbo_smap_is_running()) {
         SMAP_LOGGER_ERROR("ubturbo_smap_process_config_query smap uninitialized.");
         return -EPERM;
     }
@@ -3145,7 +3176,7 @@ int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t
     struct ProcessManager *manager = GetProcessManager();
 
     SMAP_LOGGER_INFO("Received ubturbo_smap_remote_numa_freq_query msg, length:%u.", length);
-    if (EnvAtomicRead(&g_status) != RUNNING) {
+    if (!ubturbo_smap_is_running()) {
         SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_freq_query smap uninitialized.");
         return -EPERM;
     }
@@ -3158,7 +3189,7 @@ int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t
         return -EINVAL;
     }
     for (i = 0; i < length; i++) {
-        if (!IsOnlineRemoteNidValid(numa[i])) {
+        if (!IsRemoteNidValid(numa[i])) {
             SMAP_LOGGER_ERROR("ubturbo_smap_remote_numa_freq_query nid %u invalid.", numa[i]);
             return -EINVAL;
         }
