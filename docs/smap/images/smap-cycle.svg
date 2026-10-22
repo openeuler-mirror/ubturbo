@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="330" viewBox="0 0 1200 330" role="img" aria-labelledby="title desc" data-diagram="smap-cycle">
+  <title id="title">SMAP scan and migration cycle</title><desc id="desc">Several scan periods collect access data within one migration period. Results are aggregated, pages are selected, and migration is executed before the next migration period.</desc>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L9 3 0 6Z" fill="#40566f"/></marker><style>.b{stroke:#40566f;stroke-width:2}.t{font-family:Arial,'Noto Sans CJK SC',sans-serif;fill:#172b3a;text-anchor:middle}.h{font-size:21px;font-weight:700}.s{font-size:16px}.l{stroke:#40566f;stroke-width:2;marker-end:url(#a)}</style></defs>
+  <rect width="1200" height="330" fill="#fff"/><text class="t h" x="600" y="36">One migration period</text>
+  <rect class="b" fill="#e9f3ff" x="60" y="85" width="190" height="80"/><rect class="b" fill="#e9f3ff" x="250" y="85" width="190" height="80"/><rect class="b" fill="#e9f3ff" x="440" y="85" width="190" height="80"/><text class="t h" x="155" y="132">Scan 1</text><text class="t h" x="345" y="132">Scan 2</text><text class="t h" x="535" y="132">Scan N</text>
+  <rect class="b" fill="#ebf7ee" x="680" y="85" width="140" height="80"/><text class="t h" x="750" y="120">Aggregate</text><text class="t s" x="750" y="145">access data</text>
+  <rect class="b" fill="#fff4df" x="850" y="85" width="140" height="80"/><text class="t h" x="920" y="120">Select</text><text class="t s" x="920" y="145">pages</text>
+  <rect class="b" fill="#f3eaff" x="1020" y="85" width="140" height="80"/><text class="t h" x="1090" y="120">Migrate</text><text class="t s" x="1090" y="145">and report</text>
+  <path class="l" d="M630 125H680"/><path class="l" d="M820 125H850"/><path class="l" d="M990 125H1020"/>
+  <path d="M60 220H1160" stroke="#40566f" stroke-width="2"/><path d="M60 205V235M630 205V235M1160 205V235" stroke="#40566f" stroke-width="2"/><text class="t s" x="345" y="260">scan periods</text><text class="t s" x="895" y="260">decision and execution</text><text class="t s" x="600" y="305">Configuration acceptance does not imply immediate page convergence.</text>
+</svg>

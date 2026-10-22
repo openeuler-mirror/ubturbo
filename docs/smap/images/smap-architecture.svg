@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-labelledby="title desc" data-diagram="smap-architecture">
+  <title id="title">SMAP layered architecture</title><desc id="desc">Callers use the SMAP user library. User-space management and policy modules communicate with access-tracking and migration kernel modules. Software AF scanning is always shown, while HIST is an optional hardware path.</desc>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L9 3 0 6Z" fill="#40566f"/></marker><style>.b{fill:#f7f9fc;stroke:#40566f;stroke-width:2}.u{fill:#e9f3ff}.k{fill:#fff4df}.o{fill:#f3eaff;stroke-dasharray:7 5}.t{font-family:Arial,'Noto Sans CJK SC',sans-serif;fill:#172b3a;text-anchor:middle}.h{font-size:21px;font-weight:700}.s{font-size:16px}.l{stroke:#40566f;stroke-width:2;fill:none;marker-end:url(#a)}</style></defs>
+  <rect width="1200" height="700" fill="#fff"/><text class="t h" x="600" y="35">SMAP layered architecture</text>
+  <rect class="b" x="390" y="65" width="420" height="70" rx="10"/><text class="t h" x="600" y="108">UBTurbo / RMRS / direct caller</text>
+  <rect class="b u" x="70" y="180" width="1060" height="160" rx="14"/><text class="t h" x="600" y="210">User space · libsmap.so</text>
+  <rect class="b" x="130" y="240" width="260" height="70" rx="9"/><text class="t h" x="260" y="282">Lifecycle &amp; devices</text>
+  <rect class="b" x="470" y="240" width="260" height="70" rx="9"/><text class="t s" x="600" y="282" font-weight="700">Policy &amp; configuration</text>
+  <rect class="b" x="810" y="240" width="260" height="70" rx="9"/><text class="t h" x="940" y="282">Process / NUMA state</text>
+  <rect class="b k" x="70" y="390" width="1060" height="185" rx="14"/><text class="t h" x="600" y="420">Kernel space</text>
+  <rect class="b" x="250" y="455" width="300" height="80" rx="9"/><text class="t h" x="400" y="488">Tracking core</text><text class="t s" x="400" y="516">PID · page table · result</text>
+  <rect class="b" x="650" y="455" width="300" height="80" rx="9"/><text class="t h" x="800" y="488">Tiering</text><text class="t s" x="800" y="516">migrate out / back / remote</text>
+  <rect class="b k" x="120" y="620" width="330" height="55" rx="9"/><text class="t h" x="285" y="655">Software AF scanning</text>
+  <rect class="b o" x="520" y="620" width="330" height="55" rx="9"/><text class="t h" x="685" y="655">Optional HIST hardware</text>
+  <path class="l" d="M600 135V240"/><path class="l" d="M260 310L400 455"/><path class="l" d="M600 310L800 455"/><path class="l" d="M940 310L800 455"/><path class="l" d="M400 535L285 620"/><path class="l" d="M450 535L685 620"/>
+</svg>

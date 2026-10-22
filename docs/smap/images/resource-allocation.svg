@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc" data-diagram="resource-allocation">
+  <title id="title">Multi-process local-memory allocation</title><desc id="desc">Per-process heat and current ratios feed a demand estimator. A capacity-constrained allocator produces local-memory targets, which page migration gradually approaches.</desc>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L9 3 0 6Z" fill="#40566f"/></marker><style>.b{fill:#f7f9fc;stroke:#40566f;stroke-width:2}.t{font-family:Arial,'Noto Sans CJK SC',sans-serif;fill:#172b3a;text-anchor:middle}.h{font-size:21px;font-weight:700}.s{font-size:16px}.l{stroke:#40566f;stroke-width:2;fill:none;marker-end:url(#a)}</style></defs>
+  <rect width="1200" height="440" fill="#fff"/><text class="t h" x="600" y="36">Multi-process local-memory allocation</text>
+  <rect class="b" x="50" y="90" width="220" height="90" rx="10"/><text class="t h" x="160" y="125">Per-process input</text><text class="t s" x="160" y="152">hot pages · remote hits</text>
+  <rect class="b" x="50" y="250" width="220" height="90" rx="10"/><text class="t h" x="160" y="285">Node constraints</text><text class="t s" x="160" y="312">capacity · watermark</text>
+  <rect class="b" fill="#e9f3ff" x="370" y="150" width="230" height="110" rx="10"/><text class="t h" x="485" y="192">Demand estimator</text><text class="t s" x="485" y="222">required local pages</text>
+  <rect class="b" fill="#ebf7ee" x="700" y="150" width="230" height="110" rx="10"/><text class="t h" x="815" y="192">Allocator</text><text class="t s" x="815" y="222" style="font-size:14px">capacity-constrained targets</text>
+  <rect class="b" fill="#fff4df" x="990" y="150" width="170" height="110" rx="10"/><text class="t h" x="1075" y="192">Migration</text><text class="t s" x="1075" y="222" style="font-size:14px">gradual convergence</text>
+  <path class="l" d="M270 135L370 180"/><path class="l" d="M270 295L370 230"/><path class="l" d="M600 205H700"/><path class="l" d="M930 205H990"/>
+  <text class="t s" x="600" y="390">The policy seeks better aggregate use; it does not guarantee zero performance loss for every workload.</text>
+</svg>

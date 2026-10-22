@@ -113,6 +113,7 @@ Key interfaces in `src/user/smap_interface.h`:
 - `ubturbo_smap_process_migrate_enable` - Enable/disable per-process migration
 - `ubturbo_smap_freq_query` - Query page hot/cold frequency data
 - `ubturbo_smap_remote_numa_migrate/same_remote_numa_migrate/pid_remote_numa_migrate` - Remote-to-remote migration
+- `ubturbo_smap_process_config_query/remote_numa_freq_query` - Process configuration and remote NUMA statistics
 
 ## Security Guidelines
 

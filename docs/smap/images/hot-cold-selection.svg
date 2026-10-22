@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title desc" data-diagram="hot-cold-selection">
+  <title id="title">Hot and cold page selection</title><desc id="desc">Local pages are sorted cold to hot and remote pages hot to cold. Capacity and gain checks determine whether paired candidates are exchanged.</desc>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L9 3 0 6Z" fill="#40566f"/></marker><linearGradient id="g1"><stop stop-color="#5aa9e6"/><stop offset="1" stop-color="#ef6a6a"/></linearGradient><linearGradient id="g2"><stop stop-color="#ef6a6a"/><stop offset="1" stop-color="#5aa9e6"/></linearGradient><style>.t{font-family:Arial,'Noto Sans CJK SC',sans-serif;fill:#172b3a;text-anchor:middle}.h{font-size:22px;font-weight:700}.s{font-size:16px}.b{stroke:#40566f;stroke-width:2}.l{stroke:#40566f;stroke-width:2;fill:none;marker-end:url(#a)}</style></defs>
+  <rect width="1200" height="430" fill="#fff"/><text class="t h" x="600" y="36">Hot/cold candidate selection</text>
+  <text class="t h" x="300" y="92">Local pages: cold → hot</text><rect class="b" fill="url(#g1)" x="90" y="115" width="420" height="70" rx="8"/>
+  <text class="t h" x="900" y="92">Remote pages: hot → cold</text><rect class="b" fill="url(#g2)" x="690" y="115" width="420" height="70" rx="8"/>
+  <rect class="b" fill="#fff4df" x="440" y="245" width="320" height="85" rx="10"/><text class="t h" x="600" y="280">Capacity and gain check</text><text class="t s" x="600" y="308">limit · target · threshold</text>
+  <path class="l" d="M250 185L500 245"/><path class="l" d="M950 185L700 245"/>
+  <text class="t s" x="600" y="380">Exchange only when the remote candidate is sufficiently hotter than the local candidate.</text>
+</svg>

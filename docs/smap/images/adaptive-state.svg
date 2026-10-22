@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="430" viewBox="0 0 1100 430" role="img" aria-labelledby="title desc" data-diagram="adaptive-state">
+  <title id="title">Adaptive migration states</title><desc id="desc">Workloads transition among unstable, stable heavy and stable light states according to hot-set size and overlap. Each state selects a scan and migration cadence.</desc>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L9 3 0 6Z" fill="#40566f"/></marker><style>.b{stroke:#40566f;stroke-width:2}.t{font-family:Arial,'Noto Sans CJK SC',sans-serif;fill:#172b3a;text-anchor:middle}.h{font-size:22px;font-weight:700}.s{font-size:16px}.l{stroke:#40566f;stroke-width:2;fill:none;marker-end:url(#a)}</style></defs>
+  <rect width="1100" height="430" fill="#fff"/><text class="t h" x="550" y="38">Adaptive scan and migration states</text>
+  <rect class="b" fill="#ffe5e5" x="420" y="85" width="260" height="90" rx="12"/><text class="t h" x="550" y="123">Unstable</text><text class="t s" x="550" y="151">low overlap or changing size</text>
+  <rect class="b" fill="#fff4df" x="100" y="280" width="260" height="90" rx="12"/><text class="t h" x="230" y="318">Stable heavy</text><text class="t s" x="230" y="346">large stable hot set</text>
+  <rect class="b" fill="#ebf7ee" x="740" y="280" width="260" height="90" rx="12"/><text class="t h" x="870" y="318">Stable light</text><text class="t s" x="870" y="346">small stable hot set</text>
+  <path class="l" d="M460 175L300 280"/><path class="l" d="M640 175L800 280"/><path class="l" d="M360 325H740"/><path class="l" d="M800 280L640 175"/><path class="l" d="M300 280L460 175"/>
+</svg>
