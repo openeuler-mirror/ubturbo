@@ -78,40 +78,56 @@ sudo dnf install -y ubturbo ubturbo-rmrs
 
 ## 安装 SMAP
 
-SMAP 是 UBTurbo 的必装组件，包含 `libsmap.so` 及扫描、迁移内核模块。未安装 SMAP 包或未加载
-SMAP 驱动时，UBTurbo 服务将启动失败（日志提示 `Start module failed, name:Smap`）。推荐通过配套
-RPM 安装；安装包只部署文件，不会自动加载内核模块。需要从源码构建时，参见
-[SMAP 文档](smap/README.md)。
+SMAP 是 UBTurbo 的必装组件，包含 `libsmap.so`、udev 规则与统一的内核模块 `smap.ko`（由
+`src/kernel` 构建，内含扫描与迁移两部分）。未安装 SMAP 包或未加载 SMAP 驱动时，UBTurbo 服务将
+启动失败（日志提示 `Start module failed, name:Smap`）。推荐通过配套 RPM 安装；需要从源码构建时，
+参见 [SMAP 文档](smap/README.md)。
+
+内核模块包按 `-dkms` / `-kmod` 成对交付（二选一安装），安装时自动完成模块编译（dkms 方式）、
+部署与 depmod，无需手工 insmod / 写入 `/etc/depmod.d/` 配置：
+
+| 子包 | 内容 | 安装路径与行为 |
+| ---- | ---- | -------------- |
+| `ubturbo-smap` | SMAP 用户态库 `libsmap.so` 与 udev 规则 `99-smap.rules` | `/usr/lib64/`、`/etc/udev/rules.d/`；不含内核模块 |
+| `ubturbo-smap-dkms`（推荐） | SMAP 内核模块源码树（`src/kernel`，另含其依赖的上层 `src/common.h`）与 `dkms.conf` | 安装至 `/usr/src/ubturbo-smap-<版本>/`；安装时 dkms 对当前内核自动编译并部署至 `/lib/modules/<内核版本>/updates/`，内核升级后 dkms autoinstall 自动重新编译 |
+| `ubturbo-smap-kmod` | 构建机 `kernel-devel` 预编译的 `smap.ko` | 安装至 `/lib/modules/<内核版本>/extra/`，需与运行内核版本一致 |
+
+`-dkms` 包内不含任何 `.ko`，编译失败会导致整体安装失败（由 dnf 回滚）；两种方式路径隔离
+（depmod 优先 `updates/`），可共存，同一家族建议二选一。
 
 ```bash
-# 查询是否已安装
+# 查询是否已安装（应包含 ubturbo-smap 及 ubturbo-smap-dkms 或 ubturbo-smap-kmod）
 rpm -qa | grep '^ubturbo-smap'
 
-# 在线安装
-sudo dnf install -y ubturbo-smap
+# 在线安装（方式一：DKMS）
+sudo dnf install -y ubturbo-smap ubturbo-smap-dkms
+
+# 在线安装（方式二：预编译）
+sudo dnf install -y ubturbo-smap ubturbo-smap-kmod
 
 # 或安装本地 RPM
 sudo rpm -Uvh output/ubturbo-smap-*.aarch64.rpm
 ```
 
-加载 SMAP 内核模块：
+加载 SMAP 内核模块（包安装后经 depmod 注册，按名称解析，无需进入 ko 所在目录）：
 
 ```bash
-cd /lib/modules/smap
-sudo insmod smap.ko
+sudo modprobe smap
 ```
 
 远端扫描模式由 `/opt/ubturbo/conf/smap/period.config` 中的 `smap.remote.scan.mode` 控制：
 `0` 为纯软扫描，`1` 为软硬结合（默认），`2` 为纯硬扫描。硬件判热仅鲲鹏950机型支持，
 硬件不可用时自动降级为纯软扫描；运行期可通过配置切换，无需重插模块。
-页面类型由 `ubturbo_smap_start(pageType)` 指定，`0` 为 4K，`1` 为 2M，不通过 `insmod` 参数设置。
+页面类型由 `ubturbo_smap_start(pageType)` 指定，`0` 为 4K，`1` 为 2M，与模块加载解耦。
 加载后提供 `/dev/smap_scan_dev` 和 `/dev/smap_migrate_dev` 两个 SMAP 主设备节点，
-由 udev 配置为 `ubturbo:ubturbo`、0600 权限。
+由 udev 配置为 `ubturbo:ubturbo`、0600 权限。使用 dkms 方式时，可通过 `dkms status`
+查看模块源码树的编译/安装状态。
 
-卸载前停止所有 SMAP 使用者：
+卸载前停止所有 SMAP 使用者；包卸载脚本会自动卸载模块（`modprobe -r smap`），dkms 方式
+还会执行 `dkms remove` 清理源码树与已编译模块：
 
 ```bash
-sudo rmmod smap
+sudo modprobe -r smap
 ```
 
 ## 关闭冲突的内存管理机制
@@ -178,7 +194,7 @@ cd dist/release/bin
 
 ```bash
 rpm -qa | grep '^ubturbo'
-lsmod | grep -E 'smap|tracking'
+lsmod | grep '^smap'
 systemctl status ubturbo
 ```
 

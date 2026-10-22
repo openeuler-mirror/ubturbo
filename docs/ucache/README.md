@@ -15,7 +15,15 @@ UCache 是运行在 UBTurbo 守护进程中的页面缓存迁移插件。插件�
 
 ## 🚀 构建与启用
 
-UCache 随顶层工程构建。启用前应确保插件动态库、配置和配套驱动均已正确安装，然后在
+UCache 随顶层工程构建。内核驱动 `ucache.ko`（源码位于 `plugins/smap/src/ucache`）按模块家族以
+`ubturbo-ucache-dkms`/`ubturbo-ucache-kmod` 成对交付（二选一安装：dkms 方式部署至
+`/lib/modules/<内核版本>/updates/`，预编译方式安装至 `extra/`），使用前加载：
+
+```bash
+sudo modprobe ucache
+```
+
+启用前应确保插件动态库、配置和配套驱动均已正确安装，然后在
 `ubturbo_plugin_admission.conf` 中取消以下配置的注释：
 
 ```ini

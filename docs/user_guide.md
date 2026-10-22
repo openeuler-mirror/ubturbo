@@ -52,7 +52,7 @@ python3 tools/ubturbo_ipc/ubturbo_ipc.py is_running
 
 ```bash
 pgrep -a ub_turbo_exec
-lsmod | grep -E 'smap|tracking'
+lsmod | grep '^smap'
 ```
 
 ### 安装文件
