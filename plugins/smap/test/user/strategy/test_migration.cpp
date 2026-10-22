@@ -310,6 +310,90 @@ TEST_F(MigrationTest, TestBuildMigrationMsgAllowsNormalPromoteFromForbiddenNode)
     EnvAtomicSet(&g_forbiddenNodes[nid], 0);
 }
 
+static int BuildMigrationMsgMultiRemoteLists(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
+                                             size_t mlistSize)
+{
+    (void)process;
+    (void)mlistSize;
+    mlist[0][4].nr = 3;
+    mlist[4][0].nr = 2;
+    mlist[0][5].nr = 5;
+    return 0;
+}
+
+static int g_filterRecordFrom[4];
+static int g_filterRecordTo[4];
+static int g_filterRecordCnt;
+
+static int RecordMigListPair(struct MigrateMsg *mMsg, struct MigList *mList)
+{
+    (void)mMsg;
+    if (g_filterRecordCnt < 4) {
+        g_filterRecordFrom[g_filterRecordCnt] = mList->from;
+        g_filterRecordTo[g_filterRecordCnt] = mList->to;
+    }
+    g_filterRecordCnt++;
+    return 0;
+}
+
+TEST_F(MigrationTest, TestBuildMigrationMsgFiltersPartForbiddenRemotes)
+{
+    int ret;
+    uint64_t pages = 0;
+    ProcessAttr process = {};
+    process.numaAttr.numaNodes = 0b000110001;
+    process.groupPolicy.enabled = true;
+    struct MigrateMsg mMsg;
+    ActcData actc = {};
+    process.scanAttr.actcData[0] = &actc;
+
+    g_processManager.nrLocalNuma = 4;
+    EnvAtomicSet(&g_forbiddenNodes[4], 1);
+    EnvAtomicSet(&g_forbiddenNodes[5], 0);
+    g_filterRecordCnt = 0;
+
+    MOCKER(CheckActcDataValid).stubs().will(returnValue(0));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(IsRemoteNumaCriticalErr).stubs().will(returnValue(false));
+    MOCKER(RunStrategy).stubs().will(invoke(BuildMigrationMsgMultiRemoteLists));
+    MOCKER(AddMigList).stubs().will(invoke(RecordMigListPair));
+
+    ret = BuildMigrationMsg(&process, &mMsg, &pages);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(5U, pages);
+    EXPECT_EQ(1, g_filterRecordCnt);
+    EXPECT_EQ(0, g_filterRecordFrom[0]);
+    EXPECT_EQ(5, g_filterRecordTo[0]);
+
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+}
+
+TEST_F(MigrationTest, TestBuildMigrationMsgStopsWhenAllRemotesForbidden)
+{
+    int ret;
+    uint64_t pages = 0;
+    ProcessAttr process = {};
+    process.numaAttr.numaNodes = 0b000110001;
+    process.groupPolicy.enabled = true;
+    struct MigrateMsg mMsg;
+    ActcData actc = {};
+    process.scanAttr.actcData[0] = &actc;
+
+    g_processManager.nrLocalNuma = 4;
+    EnvAtomicSet(&g_forbiddenNodes[4], 1);
+    EnvAtomicSet(&g_forbiddenNodes[5], 1);
+
+    MOCKER(CheckActcDataValid).stubs().will(returnValue(0));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(IsRemoteNumaCriticalErr).stubs().will(returnValue(false));
+
+    ret = BuildMigrationMsg(&process, &mMsg, &pages);
+    EXPECT_EQ(-EPERM, ret);
+
+    EnvAtomicSet(&g_forbiddenNodes[4], 0);
+    EnvAtomicSet(&g_forbiddenNodes[5], 0);
+}
+
 extern "C" int RunStrategyStub(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], size_t mlistSize);
 
 static int g_addMigListOrder[2];
