@@ -40,4 +40,9 @@ struct folio *smap_alloc_huge_page_node(struct folio *folio, int nid,
 void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task);
 void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task);
 int do_migrate(struct migrate_msg *msg, struct mig_list *mig_list);
+int do_migrate_batch(struct migrate_msg *msg, struct mig_list *mig_list);
+
+int add_to_migration_disabled_procs(pid_t pid);
+int remove_from_migration_disabled_procs(pid_t pid);
+bool is_proc_migration_disabled(pid_t pid);
 #endif

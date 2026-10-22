@@ -7,6 +7,7 @@
 #ifndef _SRC_TIERING_COMMON_H
 #define _SRC_TIERING_COMMON_H
 
+#include <linux/types.h>
 #include <asm/page.h>
 #include <linux/list.h>
 
@@ -107,6 +108,16 @@ typedef enum {
 	REMOTE_MIGRATE,
 	MAX_MIGRATE_TYPE,
 } migrate_type;
+
+typedef enum {
+	SMAP_MIGRATE_DISABLE = 0,
+	SMAP_MIGRATE_ENABLE,
+} smap_migrate_status;
+
+struct migrate_status_set_msg {
+	smap_migrate_status status;
+	pid_t pid;
+};
 
 static inline u64 calc_huge_count(u64 range)
 {

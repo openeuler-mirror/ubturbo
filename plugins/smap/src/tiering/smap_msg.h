@@ -14,6 +14,8 @@
 
 extern unsigned int smap_pgtype;
 
+extern unsigned int max_pages_per_migration;
+
 enum smap_pgtype_args {
 	NORMAL_PAGE,
 	HUGE_PAGE,

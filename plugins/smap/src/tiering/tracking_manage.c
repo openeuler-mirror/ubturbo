@@ -42,6 +42,26 @@
 
 unsigned int smap_pgtype = HUGE_PAGE;
 EXPORT_SYMBOL_GPL(smap_pgtype);
+
+/*
+ * Maximum pages migrated per batch during SMAP hot/cold swap. When non-zero,
+ * the migration is split into batches of at most this many pages per pid and
+ * the paused-pid list is honored between batches. 0 keeps the legacy single
+ * batch behavior. Writable at runtime via sysfs with echo.
+ */
+unsigned int max_pages_per_migration = 0;
+EXPORT_SYMBOL_GPL(max_pages_per_migration);
+
+static const struct kernel_param_ops max_pages_per_migration_ops = {
+	.set = param_set_uint,
+	.get = param_get_uint,
+};
+
+module_param_cb(max_pages_per_migration, &max_pages_per_migration_ops,
+		&max_pages_per_migration, 0644);
+MODULE_PARM_DESC(
+	max_pages_per_migration,
+	"Maximum number of pages per migration batch (0 means no limit, default: 0)");
 #define MB_INTV 1000
 #define SUBTASK_RETRY_TIME 1000
 #define SUBTASK_SLEEP_TIME 5

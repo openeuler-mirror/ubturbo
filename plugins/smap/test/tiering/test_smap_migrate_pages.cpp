@@ -663,10 +663,10 @@ TEST_F(SmapMigratePagesTest, DoMigrateMultiListFailed)
 {
     struct page p_page;
     struct migrate_msg msg;
-    struct mig_list mig_list[2];
-    u64 addr = 1;
-    mig_list[0].addr = &addr;
-    mig_list[1].addr = &addr;
+    struct mig_list mig_list[2] = {};
+    u64 addr[4] = {1, 2, 3, 4};
+    mig_list[0].addr = addr;
+    mig_list[1].addr = addr;
     unsigned int nr_folios = 1;
     msg.cnt = 2;
     mig_list[0].from = 0;
@@ -1510,4 +1510,188 @@ TEST_F(SmapMigratePagesTest, TestSmapMigrateRangePfnInvalid)
     MOCKER(pfn_valid).stubs().will(returnValue(false));
     unsigned int ret = smap_migrate_range(1, start_pa, end_pa);
     EXPECT_EQ((unsigned int)-EINVAL, ret);
+}
+
+extern "C" int add_to_migration_disabled_procs(pid_t pid);
+extern "C" int remove_from_migration_disabled_procs(pid_t pid);
+extern "C" bool is_proc_migration_disabled(pid_t pid);
+extern "C" int do_migrate_batch(struct migrate_msg *msg, struct mig_list *mig_list);
+extern "C" unsigned int max_pages_per_migration;
+
+TEST_F(SmapMigratePagesTest, TestAddRemoveMigrationDisabledProc)
+{
+    int ret = add_to_migration_disabled_procs(100);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(true, is_proc_migration_disabled(100));
+
+    /* Duplicate adds are rejected. */
+    ret = add_to_migration_disabled_procs(100);
+    EXPECT_EQ(-EINVAL, ret);
+
+    /* Invalid pid is rejected. */
+    ret = add_to_migration_disabled_procs(0);
+    EXPECT_EQ(-EINVAL, ret);
+
+    ret = remove_from_migration_disabled_procs(100);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(false, is_proc_migration_disabled(100));
+
+    /* Removing a pid that is not on the list still succeeds. */
+    ret = remove_from_migration_disabled_procs(100);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(SmapMigratePagesTest, TestAddMigrationDisabledProcKmallocFailed)
+{
+    MOCKER(kmalloc).stubs().will(returnValue((void*)nullptr));
+    int ret = add_to_migration_disabled_procs(200);
+    EXPECT_EQ(-ENOMEM, ret);
+}
+
+TEST_F(SmapMigratePagesTest, TestDoMigrateBatchVzallocFailed)
+{
+    struct migrate_msg msg;
+    struct mig_list mig_list[1];
+    unsigned int saved_max_pages = max_pages_per_migration;
+
+    max_pages_per_migration = 2;
+    msg.cnt = 1;
+    msg.mig_list = mig_list;
+    mig_list[0].pid = 1;
+    mig_list[0].from = 0;
+    mig_list[0].to = 4;
+    mig_list[0].nr = 1;
+
+    MOCKER(vzalloc).stubs().will(returnValue((void*)nullptr));
+    int ret = do_migrate_batch(&msg, mig_list);
+    EXPECT_EQ(-ENOMEM, ret);
+
+    max_pages_per_migration = saved_max_pages;
+}
+
+TEST_F(SmapMigratePagesTest, TestDoMigrateBatchOffsetAllocFailed)
+{
+    struct migrate_msg msg;
+    struct mig_list mig_list[1];
+    unsigned int saved_max_pages = max_pages_per_migration;
+
+    max_pages_per_migration = 2;
+    msg.cnt = 1;
+    msg.mig_list = mig_list;
+    mig_list[0].pid = 1;
+    mig_list[0].from = 0;
+    mig_list[0].to = 4;
+    mig_list[0].nr = 1;
+
+    MOCKER(kzalloc).stubs().will(returnValue((void*)nullptr));
+    int ret = do_migrate_batch(&msg, mig_list);
+    EXPECT_EQ(-ENOMEM, ret);
+
+    max_pages_per_migration = saved_max_pages;
+}
+
+TEST_F(SmapMigratePagesTest, TestDoMigrateBatchSuccess)
+{
+    struct page p_page;
+    struct migrate_msg msg;
+    struct mig_list mig_list[2] = {};
+    u64 addrs[6] = {0x100000, 0x200000, 0x300000, 0x400000, 0x500000, 0x600000};
+    unsigned int nr_folios = 1;
+    int saved_nr_local_numa = nr_local_numa;
+    unsigned int saved_max_pages = max_pages_per_migration;
+
+    nr_local_numa = 4;
+    max_pages_per_migration = 2;
+    msg.cnt = 2;
+    msg.mul_mig.page_size = 0x1000;
+    msg.mig_list = mig_list;
+
+    /* pid 1 owns 3 pages (two batches of 2/1), pid 2 owns 2 pages (one batch). */
+    mig_list[0].addr = &addrs[0];
+    mig_list[0].pid = 1;
+    mig_list[0].from = 0;
+    mig_list[0].to = 4;
+    mig_list[0].nr = 3;
+    mig_list[1].addr = &addrs[3];
+    mig_list[1].pid = 2;
+    mig_list[1].from = 0;
+    mig_list[1].to = 4;
+    mig_list[1].nr = 2;
+
+    MOCKER(pfn_valid).stubs().will(returnValue(true));
+    MOCKER(pfn_to_online_page).stubs().will(returnValue(&p_page));
+    MOCKER(is_filter_anon).stubs().will(returnValue(false));
+    MOCKER(is_filter_4k).stubs().will(returnValue(-1));
+    MOCKER(smap_add_page_for_migration)
+        .stubs()
+        .with(any(), any(), outBoundP(&nr_folios, sizeof(nr_folios)), any(), any())
+        .will(returnValue(0));
+    MOCKER(smu_migrate).stubs().will(returnValue(0));
+
+    int ret = do_migrate_batch(&msg, mig_list);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(true, mig_list[0].success_to_user);
+    EXPECT_EQ(3U, mig_list[0].nr);
+    EXPECT_EQ(0U, mig_list[0].failed_mig_nr);
+    EXPECT_EQ(0U, mig_list[0].failed_pre_migrated_nr);
+    EXPECT_EQ(true, mig_list[1].success_to_user);
+    EXPECT_EQ(2U, mig_list[1].nr);
+    EXPECT_EQ(0U, mig_list[1].failed_mig_nr);
+
+    max_pages_per_migration = saved_max_pages;
+    nr_local_numa = saved_nr_local_numa;
+}
+
+TEST_F(SmapMigratePagesTest, TestDoMigrateBatchPausedProc)
+{
+    struct page p_page;
+    struct migrate_msg msg;
+    struct mig_list mig_list[2] = {};
+    u64 addrs[6] = {0x100000, 0x200000, 0x300000, 0x400000, 0x500000, 0x600000};
+    unsigned int nr_folios = 1;
+    int saved_nr_local_numa = nr_local_numa;
+    unsigned int saved_max_pages = max_pages_per_migration;
+
+    nr_local_numa = 4;
+    max_pages_per_migration = 2;
+    msg.cnt = 2;
+    msg.mul_mig.page_size = 0x1000;
+    msg.mig_list = mig_list;
+
+    mig_list[0].addr = &addrs[0];
+    mig_list[0].pid = 1;
+    mig_list[0].from = 0;
+    mig_list[0].to = 4;
+    mig_list[0].nr = 3;
+    mig_list[1].addr = &addrs[3];
+    mig_list[1].pid = 2;
+    mig_list[1].from = 0;
+    mig_list[1].to = 4;
+    mig_list[1].nr = 2;
+
+    MOCKER(pfn_valid).stubs().will(returnValue(true));
+    MOCKER(pfn_to_online_page).stubs().will(returnValue(&p_page));
+    MOCKER(is_filter_anon).stubs().will(returnValue(false));
+    MOCKER(is_filter_4k).stubs().will(returnValue(-1));
+    MOCKER(smap_add_page_for_migration)
+        .stubs()
+        .with(any(), any(), outBoundP(&nr_folios, sizeof(nr_folios)), any(), any())
+        .will(returnValue(0));
+    MOCKER(smu_migrate).stubs().will(returnValue(0));
+
+    /* pid 1 is paused: all of its pages must be skipped and accounted. */
+    add_to_migration_disabled_procs(1);
+
+    int ret = do_migrate_batch(&msg, mig_list);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(3U, mig_list[0].failed_pre_migrated_nr);
+    EXPECT_EQ(false, mig_list[0].success_to_user);
+    EXPECT_EQ(3U, mig_list[0].nr);
+    EXPECT_EQ(true, mig_list[1].success_to_user);
+    EXPECT_EQ(0U, mig_list[1].failed_pre_migrated_nr);
+    EXPECT_EQ(2U, mig_list[1].nr);
+
+    remove_from_migration_disabled_procs(1);
+    max_pages_per_migration = saved_max_pages;
+    nr_local_numa = saved_nr_local_numa;
 }

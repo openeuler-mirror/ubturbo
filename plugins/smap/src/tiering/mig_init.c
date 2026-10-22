@@ -218,7 +218,9 @@ static int __ioctl_migrate(void __user *argp)
 	if (ret) {
 		return ret;
 	}
-	ret = do_migrate(&msg, mig_list);
+	/* Non-zero batch limit enables per-batch migration in pid-sized slices. */
+	ret = (max_pages_per_migration == 0) ? do_migrate(&msg, mig_list)
+					     : do_migrate_batch(&msg, mig_list);
 	filter_4k_migrate_info();
 	if (copy_to_user(argp, &msg, sizeof(msg)))
 		pr_err("unable to copy migrate message to user space\n");
@@ -530,6 +532,32 @@ static int __ioctl_set_ub_dma_avail(void __user *argp)
 	return 0;
 }
 
+static int __ioctl_set_migrate_status(void __user *argp)
+{
+	struct migrate_status_set_msg msg;
+	int ret;
+
+	if (copy_from_user(&msg, argp, sizeof(msg)))
+		return -EFAULT;
+
+	if (msg.status > SMAP_MIGRATE_ENABLE) {
+		pr_err("invalid migrate status: %u\n",
+		       (unsigned int)msg.status);
+		return -EINVAL;
+	}
+	if (msg.pid <= 0) {
+		pr_err("invalid pid: %d passed to set migrate status\n",
+		       msg.pid);
+		return -EINVAL;
+	}
+
+	if (msg.status == SMAP_MIGRATE_DISABLE)
+		ret = add_to_migration_disabled_procs(msg.pid);
+	else
+		ret = remove_from_migration_disabled_procs(msg.pid);
+	return ret;
+}
+
 static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 			  unsigned long arg)
 {
@@ -556,6 +584,9 @@ static long smu_mig_ioctl(struct file *file, unsigned int cmd,
 	}
 	case SMAP_SET_UB_DMA_AVAIL:
 		rc = __ioctl_set_ub_dma_avail(argp);
+		break;
+	case SMAP_MIG_MIGRATE_SET_STS:
+		rc = __ioctl_set_migrate_status(argp);
 		break;
 	default:
 		rc = -ENOTTY;

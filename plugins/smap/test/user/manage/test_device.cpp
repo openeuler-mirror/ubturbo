@@ -450,3 +450,26 @@ TEST_F(DeviceTest, TestConfigUbWatchSuccess)
 
     pm->fds.nodes[LOCAL_NUMA_NUM] = savedFd;
 }
+
+extern "C" int SetMigrateStatus(struct ProcessManager *manager, struct MigrateStatusSetMsg *msg);
+TEST_F(DeviceTest, TestSetMigrateStatus)
+{
+    struct ProcessManager pm = { 0 };
+    pm.fds.migrate = 5;
+    struct MigrateStatusSetMsg msg = { SMAP_MIGRATE_DISABLE };
+    msg.pid = 10;
+    msg.status = SMAP_MIGRATE_ENABLE;
+
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl))
+        .stubs()
+        .will(returnValue(0));
+    int ret = SetMigrateStatus(&pm, &msg);
+    EXPECT_EQ(0, ret);
+
+    GlobalMockObject::verify();
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl))
+        .stubs()
+        .will(returnValue(-1));
+    ret = SetMigrateStatus(&pm, &msg);
+    EXPECT_EQ(-1, ret);
+}

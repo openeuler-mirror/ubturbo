@@ -61,3 +61,35 @@ SMAP是在灵衢超节点架构中, 基于内存池化技术单节点能够使�
 6. 检查迁移驱动是否载入成功，返回smap信息即表示安装成功。
    
    <pre class="screen"><p class="p" id="p20963104815273">lsmod | grep smap</p></pre>
+
+## SMAP分批迁移与进程迁移暂停
+
+smap\_tiering支持将冷热页迁移按每批最大页数切分执行：当配置了每批上限后，驱动会把一次迁移请求按PID切分为多个批次依次执行，批次之间会检查暂停名单，从而可以在迁移过程中动态暂停/恢复指定进程的迁移。
+
+#### 模块参数
+
+| 模块参数 | 权限 | 说明 |
+| :-- | :-- | :-- |
+| max\_pages\_per\_migration | 0644 | 每个PID单批迁移的最大页数。**为0时不设置上限**（保持原有一次性迁移行为），默认0。运行时可通过echo修改，立即生效。 |
+
+#### 迁移状态设置
+
+通过ioctl设置指定进程（pid）的迁移状态，暂停后的进程在后续批次迁移中被整体跳过，其待迁移页数计为迁移未完成：
+
+| 状态 | 说明 |
+| :-- | :-- |
+| SMAP\_MIGRATE\_DISABLE | 暂停指定pid的迁移（加入暂停名单） |
+| SMAP\_MIGRATE\_ENABLE | 恢复指定pid的迁移（移出暂停名单） |
+
+用户态`EnableProcessMigrate`启用/禁用进程迁移时会同步设置内核迁移状态；进程从管理列表移除时自动恢复其迁移状态，避免残留暂停名单。
+
+#### 配置示例
+
+加载时配置每批最大页数为4096：
+
+    insmod smap_tiering.ko max_pages_per_migration=4096
+
+运行时通过echo更新（立即生效）：
+
+    echo 4096 > /sys/module/smap_tiering/parameters/max_pages_per_migration
+    echo 0 > /sys/module/smap_tiering/parameters/max_pages_per_migration    //不设上限（默认行为）

@@ -318,6 +318,17 @@ void DeinitTrackingDev(struct ProcessManager *manager)
     }
 }
 
+int SetMigrateStatus(struct ProcessManager *manager, struct MigrateStatusSetMsg *msg)
+{
+    int ret;
+
+    ret = ioctl(manager->fds.migrate, SMAP_MIG_MIGRATE_SET_STS, msg);
+    if (ret) {
+        SMAP_LOGGER_ERROR("set migrate status failed. errno: %d.", errno);
+    }
+    return ret;
+}
+
 void GetUbFluxMb(void)
 {
     struct ProcessManager *manager = GetProcessManager();

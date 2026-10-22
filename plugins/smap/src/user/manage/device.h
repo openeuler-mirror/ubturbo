@@ -37,6 +37,8 @@ int InitTrackingDev(struct ProcessManager *manager);
 
 void DeinitTrackingDev(struct ProcessManager *manager);
 
+int SetMigrateStatus(struct ProcessManager *manager, struct MigrateStatusSetMsg *msg);
+
 bool IsNumaCriticalErr(int nid);
 
 struct UbFluxMbStatistic;
