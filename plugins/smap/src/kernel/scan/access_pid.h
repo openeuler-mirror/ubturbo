@@ -96,10 +96,13 @@ struct access_pid {
 	wait_queue_head_t wq;
 	bool freq_ready; /* window data ready for user-space consumption */
 	struct remote_ram_snapshot *remote_snapshot;
-	u32 scan_count[SMAP_MAX_NUMNODES];
-	size_t page_num[SMAP_MAX_NUMNODES];
-	size_t bm_len[SMAP_MAX_NUMNODES];
-	unsigned long *paddr_bm[SMAP_MAX_NUMNODES];
+	/* 内核内部 per-node 定维：使用内核编译期 MAX_NUMNODES（随目标内核自适应），
+	 * 与 ABI 定宽 SMAP_MAX_NUMNODES 解耦；readback 流写出时对 [MAX_NUMNODES,
+	 * SMAP_MAX_NUMNODES) 槽位补 0（见 scan_ioctl.c write_bitmap_nrpage） */
+	u32 scan_count[MAX_NUMNODES];
+	size_t page_num[MAX_NUMNODES];
+	size_t bm_len[MAX_NUMNODES];
+	unsigned long *paddr_bm[MAX_NUMNODES];
 	struct list_head
 		node; /* used only for staging lists during add, not for ap_data */
 	struct vm_mapping_info info;
@@ -122,10 +125,11 @@ void access_remove_statistic_pid(int len,
 void destroy_access_pid(struct access_pid *elem);
 int init_access_pid(struct access_add_pid_payload *payload,
 		    struct access_pid **elem);
-int access_add_ham_pid(int len, struct access_add_pid_payload *payload);
+int access_add_ham_pid(int len, struct access_add_pid_payload *payload,
+		       u32 stride);
 int access_add_statistic_pid(int len, struct access_add_pid_payload *payload,
-			     int page_size);
-int access_add_pid(int len, struct access_add_pid_payload *payload);
+			     u32 stride, int page_size);
+int access_add_pid(int len, struct access_add_pid_payload *payload, u32 stride);
 void access_remove_pid(int len, struct access_remove_pid_payload *payload);
 void access_remove_all_pid(void);
 void change_ap_type(pid_t pid);

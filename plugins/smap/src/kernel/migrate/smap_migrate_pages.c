@@ -45,7 +45,7 @@ extern u32 g_pagesize_huge;
 
 static struct migrate_node {
 	int next_nid;
-	unsigned long nr[SMAP_MAX_NUMNODES];
+	unsigned long nr[MAX_NUMNODES];
 } migrate_node;
 
 #ifdef CONFIG_MIGRATE_PAGES_DMA_OFFLOADING
@@ -182,7 +182,7 @@ unsigned int smap_migrate(struct folio **folios, unsigned int nr_folios,
 		return nr_folios;
 	}
 
-	if (to_node < 0 || to_node >= SMAP_MAX_NUMNODES) {
+	if (to_node < 0 || to_node >= MAX_NUMNODES) {
 		put_folios(folios, nr_folios);
 		pr_debug(
 			"invalid destination node: %d passed to SMAP migrate\n",
@@ -541,8 +541,8 @@ void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 {
 	int i, j, cnt;
 	unsigned int nr_migrate_fail, nr_fail, nr_folios_min;
-	unsigned int mig_pages_cnt[SMAP_MAX_LOCAL_NUMNODES] = { 0 };
-	struct folio **migrate_folios[SMAP_MAX_LOCAL_NUMNODES] = { NULL };
+	unsigned int *mig_pages_cnt;
+	struct folio ***migrate_folios;
 	unsigned long nr_pre_migrate_fail;
 	unsigned long max_nr_folios =
 		(task->pa_end - task->pa_start) / PAGE_SIZE;
@@ -551,7 +551,23 @@ void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 	ktime_t start_time, end_time;
 	s64 delta_time_ms;
 #endif
-	for (i = 0; i < SMAP_MAX_LOCAL_NUMNODES; i++) {
+
+	mig_pages_cnt =
+		kcalloc(MAX_NUMNODES, sizeof(*mig_pages_cnt), GFP_KERNEL);
+	migrate_folios =
+		kcalloc(MAX_NUMNODES, sizeof(*migrate_folios), GFP_KERNEL);
+	if (!mig_pages_cnt || !migrate_folios) {
+		kfree(mig_pages_cnt);
+		kfree(migrate_folios);
+		task->status = MB_SUBTASK_ERR;
+		pr_err("unable to allocate memory for migrate back arrays\n");
+		return;
+	}
+
+	/* 目标节点只会是本地节点（smap_add_page_for_migrate_back 已保证
+	 * nid < nr_local_numa），按本地节点数分配即可，无需为全部
+	 * MAX_NUMNODES 个节点各分配一份 folio 数组 */
+	for (i = 0; i < nr_local_numa; i++) {
 		migrate_folios[i] =
 			vzalloc(max_nr_folios * sizeof(struct folio *));
 		if (!migrate_folios[i]) {
@@ -560,6 +576,8 @@ void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 			}
 			task->status = MB_SUBTASK_ERR;
 			pr_err("unable to allocate memory for migrate folio list\n");
+			kfree(mig_pages_cnt);
+			kfree(migrate_folios);
 			return;
 		}
 	}
@@ -567,7 +585,7 @@ void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 	nr_pre_migrate_fail = nr_migrate_fail = 0;
 	process_pages_for_migration(task, migrate_folios, mig_pages_cnt,
 				    &nr_pre_migrate_fail, &nr_pre_migrate);
-	for (i = 0; i < SMAP_MAX_LOCAL_NUMNODES; i++) {
+	for (i = 0; i < nr_local_numa; i++) {
 		if (mig_pages_cnt[i] == 0) {
 			vfree(migrate_folios[i]);
 			continue;
@@ -619,6 +637,8 @@ void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 	task->status = (nr_migrate_fail || nr_pre_migrate_fail)
 			       ? MB_SUBTASK_ERR
 			       : MB_SUBTASK_DONE;
+	kfree(mig_pages_cnt);
+	kfree(migrate_folios);
 }
 
 int is_filter_4k(struct page *page, int page_size)

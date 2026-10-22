@@ -35,7 +35,7 @@
 bool is_hist_tracking_node(int node)
 {
 	return is_remote_scan_hist_active() && node >= nr_local_numa &&
-	       node < SMAP_MAX_NUMNODES;
+	       node < MAX_NUMNODES;
 }
 
 int hist_tracking_disable(void)
@@ -95,7 +95,7 @@ int hist_tracking_ub_watch(void *result)
 	stc->len = 0;
 	read_lock(&rem_ram_list_lock);
 	list_for_each_entry_safe(seg, tmp, &remote_ram_list, node) {
-		if (stc->len >= SMAP_MAX_REMOTE_NUMNODES) {
+		if (stc->len >= SMAP_MAX_NUMNODES) {
 			pr_err("too many remote NUMA nodes\n");
 			read_unlock(&rem_ram_list_lock);
 			return -EINVAL;

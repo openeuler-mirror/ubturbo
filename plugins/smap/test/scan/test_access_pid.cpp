@@ -15,6 +15,21 @@
 
 using namespace std;
 
+/*
+ * 方案B：内核 struct access_add_pid_payload 的 numa_nodes 已由定长数组改为柔性数组，
+ * 单条记录字节数 = 定长头 + nr_words * sizeof(unsigned long)（见 scan_ioctl.h 的 stride 约定）。
+ * 测试用一个显式缓冲区承载记录，并以引用复用原结构类型，避免逐处 reinterpret_cast 强转；
+ * 缓冲区布局与结构体逐字节一致（numa_nodes 紧接定长头之后），nr_words 预置为位图字数。
+ */
+#define TEST_NUMA_WORDS NUMA_NODES_BIT_WORDS
+#define TEST_ADD_PID_STRIDE \
+    ((u32)(sizeof(struct access_add_pid_payload) + (size_t)TEST_NUMA_WORDS * sizeof(unsigned long)))
+#define DECL_ADD_PID_PAYLOAD(name)                                            \
+    alignas(8) unsigned long name##_storage[4 + TEST_NUMA_WORDS] = {};        \
+    struct access_add_pid_payload &name =                                     \
+        *reinterpret_cast<struct access_add_pid_payload *>(name##_storage);   \
+    name.nr_words = TEST_NUMA_WORDS
+
 extern "C" struct list_head ham_pid_list;
 extern "C" spinlock_t ham_lock;
 extern "C" struct access_pid_struct ap_data;
@@ -206,7 +221,7 @@ TEST_F(DriversAccessPidTest, InitAccessPid)
     GlobalMockObject::verify();
     struct access_pid ap;
     struct access_pid *tmp;
-    struct access_add_pid_payload payload = {0};
+    DECL_ADD_PID_PAYLOAD(payload);
     MOCKER(kmalloc).stubs().will(returnValue((void *)&ap));
     MOCKER(init_vm_mapping_info).stubs().will(returnValue(0));
     MOCKER(IS_ERR).stubs().will(returnValue(false));
@@ -285,14 +300,15 @@ extern "C" int init_access_ham_pid(struct access_add_pid_payload *payload);
 TEST_F(DriversAccessPidTest, InitAccessHamPidOne)
 {
     struct ham_tracking_info tmp;
-    struct access_add_pid_payload payload;
+    DECL_ADD_PID_PAYLOAD(payload);
 
     nr_local_numa = 4;
     tmp.pid = 1;
     tmp.l1_node = 0;
     tmp.l2_node = -1;
     payload.pid = 1;
-    payload.numa_nodes = 0x11;
+    memset(payload.numa_nodes, 0, (size_t)TEST_NUMA_WORDS * sizeof(unsigned long));
+    payload.numa_nodes[0] = 0x11;
     int ret = list_empty(&ham_pid_list);
     EXPECT_EQ(1, ret);
     list_add(&tmp.node, &ham_pid_list);
@@ -305,21 +321,21 @@ TEST_F(DriversAccessPidTest, InitAccessHamPidOne)
 
 TEST_F(DriversAccessPidTest, AccessAddHamPidOne)
 {
-    struct access_add_pid_payload payload;
+    DECL_ADD_PID_PAYLOAD(payload);
 
     payload.type = HAM_SCAN;
     MOCKER(init_access_ham_pid).stubs().will(returnValue(0));
-    int ret = access_add_ham_pid(1, &payload);
+    int ret = access_add_ham_pid(1, &payload, TEST_ADD_PID_STRIDE);
     EXPECT_EQ(0, ret);
 
     GlobalMockObject::verify();
     MOCKER(init_access_ham_pid).stubs().will(returnValue(-1));
-    ret = access_add_ham_pid(1, &payload);
+    ret = access_add_ham_pid(1, &payload, TEST_ADD_PID_STRIDE);
     EXPECT_EQ(-1, ret);
 
     // wrong type case, should return 0
     payload.type = NORMAL_SCAN;
-    ret = access_add_ham_pid(1, &payload);
+    ret = access_add_ham_pid(1, &payload, TEST_ADD_PID_STRIDE);
     EXPECT_EQ(0, ret);
 }
 
@@ -332,12 +348,13 @@ TEST_F(DriversAccessPidTest, InitAccessStatisticPidTest)
 {
     struct statistics_tracking_info *tmp;
     struct statistics_tracking_info *pos;
-    struct access_add_pid_payload payload;
+    DECL_ADD_PID_PAYLOAD(payload);
     bool findFlag = false;
     int pageSize = PMD_SIZE;
     nr_local_numa = 4;
     payload.pid = 17986;
-    payload.numa_nodes = 0x01;
+    memset(payload.numa_nodes, 0, (size_t)TEST_NUMA_WORDS * sizeof(unsigned long));
+    payload.numa_nodes[0] = 0x01;
 
     int ret = list_empty(&statistic_pid_list);
     EXPECT_EQ(1, ret);
@@ -367,7 +384,8 @@ TEST_F(DriversAccessPidTest, InitAccessStatisticPidTest)
     // duplicate payload case, should update statistic_pid_list
     MOCKER(destroy_access_statistic_pid).stubs();
     payload.pid = 17986;
-    payload.numa_nodes = 0x02;
+    memset(payload.numa_nodes, 0, (size_t)TEST_NUMA_WORDS * sizeof(unsigned long));
+    payload.numa_nodes[0] = 0x02;
     ret = init_access_statistic_pid_2m(&payload);
     EXPECT_EQ(0, ret);
     // check whether statistic_pid_list update
@@ -393,20 +411,20 @@ TEST_F(DriversAccessPidTest, InitAccessStatisticPidTest)
 extern "C" int init_access_statistic_pid(struct access_add_pid_payload *payload, int page_size);
 TEST_F(DriversAccessPidTest, AccessAddStatisticPid)
 {
-    struct access_add_pid_payload payload = {};
+    DECL_ADD_PID_PAYLOAD(payload);
     payload.type = STATISTIC_SCAN;
     MOCKER(init_access_statistic_pid).stubs().will(returnValue(0));
-    int ret = access_add_statistic_pid(1, &payload, PMD_SIZE);
+    int ret = access_add_statistic_pid(1, &payload, TEST_ADD_PID_STRIDE, PMD_SIZE);
     EXPECT_EQ(0, ret);
 
     GlobalMockObject::verify();
     MOCKER(init_access_statistic_pid).stubs().will(returnValue(-EINVAL));
-    ret = access_add_statistic_pid(1, &payload, PMD_SIZE);
+    ret = access_add_statistic_pid(1, &payload, TEST_ADD_PID_STRIDE, PMD_SIZE);
     EXPECT_EQ(-EINVAL, ret);
 
     // wrong type case, should return 0
     payload.type = NORMAL_SCAN;
-    ret = access_add_statistic_pid(1, &payload, PMD_SIZE);
+    ret = access_add_statistic_pid(1, &payload, TEST_ADD_PID_STRIDE, PMD_SIZE);
     EXPECT_EQ(0, ret);
 }
 
@@ -444,12 +462,12 @@ TEST_F(DriversAccessPidTest, AccessAddPid)
     struct access_pid *tmp;
     ap.pid = 1;
     tmp = &ap;
-    struct access_add_pid_payload payload = {0};
+    DECL_ADD_PID_PAYLOAD(payload);
 
     // failed case
     MOCKER(init_access_pid).stubs().will(returnValue(1));
     MOCKER(submit_one_work).stubs();
-    ret = access_add_pid(1, &payload);
+    ret = access_add_pid(1, &payload, TEST_ADD_PID_STRIDE);
     EXPECT_EQ(1, ret);
 
     // success case
@@ -457,7 +475,7 @@ TEST_F(DriversAccessPidTest, AccessAddPid)
     ap_test_reset_slots();
     MOCKER(init_access_pid).stubs().with(&payload, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
     MOCKER(submit_one_work).stubs();
-    ret = access_add_pid(1, &payload);
+    ret = access_add_pid(1, &payload, TEST_ADD_PID_STRIDE);
     EXPECT_EQ(0, ret);
 }
 
@@ -470,19 +488,25 @@ TEST_F(DriversAccessPidTest, AccessAddPidDuplicateCase)
 {
     int ret;
     struct access_pid *tmp;
-    struct access_add_pid_payload payload[2] = {0};
+    alignas(8) unsigned long payload_storage[2 * (4 + TEST_NUMA_WORDS)] = {};
+    struct access_add_pid_payload *payload =
+        reinterpret_cast<struct access_add_pid_payload *>(payload_storage);
+    struct access_add_pid_payload *p0 = access_add_pid_payload_at(payload, 0, TEST_ADD_PID_STRIDE);
+    struct access_add_pid_payload *p1 = access_add_pid_payload_at(payload, 1, TEST_ADD_PID_STRIDE);
     bool findFlag = false;
-    payload[0].pid = 14587;
-    payload[1].pid = 14587;
+    p0->nr_words = TEST_NUMA_WORDS;
+    p1->nr_words = TEST_NUMA_WORDS;
+    p0->pid = 14587;
+    p1->pid = 14587;
 
     // duplicate payload case, should failed
     ap_test_reset_slots();
     struct access_pid ap = {.pid = 14587, .type = NORMAL_SCAN, .scan_time = 50};
     tmp = &ap;
-    MOCKER(init_access_pid).stubs().with(&payload[0], outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
+    MOCKER(init_access_pid).stubs().with(p0, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
     MOCKER(destroy_access_pid).stubs().will(returnValue(0));
     MOCKER(submit_one_work).stubs();
-    ret = access_add_pid(2, payload);
+    ret = access_add_pid(2, payload, TEST_ADD_PID_STRIDE);
     EXPECT_EQ(-EINVAL, ret);
     EXPECT_EQ(0, ap_data_len());
 
@@ -490,20 +514,20 @@ TEST_F(DriversAccessPidTest, AccessAddPidDuplicateCase)
     GlobalMockObject::verify();
     struct access_pid ap2 = {.pid = 14587, .type = NORMAL_SCAN, .scan_time = 50};
     tmp = &ap2;
-    MOCKER(init_access_pid).stubs().with(&payload[0], outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
+    MOCKER(init_access_pid).stubs().with(p0, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
     MOCKER(destroy_access_pid).stubs().will(returnValue(0));
     MOCKER(submit_one_work).stubs();
-    ret = access_add_pid(1, payload);
+    ret = access_add_pid(1, payload, TEST_ADD_PID_STRIDE);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, ap_data_len());
 
     GlobalMockObject::verify();
     /* pid 已占用 slot：原位更新配置，不再调用 init_access_pid */
-    payload[0].scan_time = 200;
-    MOCKER(init_access_pid).stubs().with(&payload[0], outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
+    p0->scan_time = 200;
+    MOCKER(init_access_pid).stubs().with(p0, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
     MOCKER(destroy_access_pid).stubs().will(returnValue(0));
     MOCKER(submit_one_work).stubs();
-    ret = access_add_pid(1, payload);
+    ret = access_add_pid(1, payload, TEST_ADD_PID_STRIDE);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, ap_data_len());
     // check whether ap_data update
@@ -725,7 +749,7 @@ TEST_F(DriversAccessPidTest, InitAccessPidWalkPagemapPrepareFail)
     int ret;
     struct access_pid ap;
     struct access_pid *tmp;
-    struct access_add_pid_payload payload = {0};
+    DECL_ADD_PID_PAYLOAD(payload);
     ap.info.priors = (u8 *)vmalloc(sizeof(u8) * 2);
     ASSERT_NE(nullptr, ap.info.priors);
     MOCKER(kmalloc).stubs().will(returnValue((void *)&ap));
@@ -742,12 +766,13 @@ extern "C" int init_access_ham_pid(struct access_add_pid_payload *payload);
 extern "C" int smap_create_tracking_info_file(struct ham_tracking_info *info);
 TEST_F(DriversAccessPidTest, InitAccessHamPidCreateFileFail)
 {
-    struct access_add_pid_payload payload;
+    DECL_ADD_PID_PAYLOAD(payload);
     struct ham_tracking_info info;
 
     nr_local_numa = 4;
     payload.pid = 12345;
-    payload.numa_nodes = 0x11;
+    memset(payload.numa_nodes, 0, (size_t)TEST_NUMA_WORDS * sizeof(unsigned long));
+    payload.numa_nodes[0] = 0x11;
     info.pid = payload.pid;
     info.l1_node = 0;
     info.l2_node = -1;
@@ -771,13 +796,14 @@ extern "C" int init_access_statistic_pid_2m(struct access_add_pid_payload *paylo
 extern "C" int scan_hva_info(pid_t pid_nr, u64 *l1_page_num, u64 *l2_page_num, u64 **l1_vaddr, u64 **l2_vaddr);
 TEST_F(DriversAccessPidTest, InitAccessStatisticPid2mWindowFail)
 {
-    struct access_add_pid_payload payload;
+    DECL_ADD_PID_PAYLOAD(payload);
     struct statistics_tracking_info *tmp;
     struct statistics_tracking_info *pos;
 
     nr_local_numa = 4;
     payload.pid = 17987;
-    payload.numa_nodes = 0x01;
+    memset(payload.numa_nodes, 0, (size_t)TEST_NUMA_WORDS * sizeof(unsigned long));
+    payload.numa_nodes[0] = 0x01;
     payload.duration = 10;
     payload.scan_time = 100;
 
@@ -1065,21 +1091,23 @@ TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kNullPayload)
 
 TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kInvalidL1Node)
 {
-    struct access_add_pid_payload payload;
+    DECL_ADD_PID_PAYLOAD(payload);
     nr_local_numa = 0;
     payload.pid = 1234;
-    payload.numa_nodes = 0x00;
+    memset(payload.numa_nodes, 0, (size_t)TEST_NUMA_WORDS * sizeof(unsigned long));
+    payload.numa_nodes[0] = 0x00;
     int ret = init_access_statistic_pid_4k(&payload);
     EXPECT_EQ(-EINVAL, ret);
 }
 
 TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kScanFail)
 {
-    struct access_add_pid_payload payload;
+    DECL_ADD_PID_PAYLOAD(payload);
     struct statistics_tracking_info *pos, *tmp;
     nr_local_numa = 4;
     payload.pid = 17988;
-    payload.numa_nodes = 0x01;
+    memset(payload.numa_nodes, 0, (size_t)TEST_NUMA_WORDS * sizeof(unsigned long));
+    payload.numa_nodes[0] = 0x01;
     MOCKER(scan_hva_info_4k).stubs().will(returnValue(-EINVAL));
     int ret = init_access_statistic_pid_4k(&payload);
     EXPECT_EQ(-EINVAL, ret);
@@ -1091,11 +1119,12 @@ TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kScanFail)
 
 TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kWindowFail)
 {
-    struct access_add_pid_payload payload;
+    DECL_ADD_PID_PAYLOAD(payload);
     struct statistics_tracking_info *pos, *tmp;
     nr_local_numa = 4;
     payload.pid = 17989;
-    payload.numa_nodes = 0x01;
+    memset(payload.numa_nodes, 0, (size_t)TEST_NUMA_WORDS * sizeof(unsigned long));
+    payload.numa_nodes[0] = 0x01;
     payload.duration = 10;
     payload.scan_time = 100;
     MOCKER(scan_hva_info_4k).stubs().will(returnValue(0));
@@ -1112,12 +1141,13 @@ TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kWindowFail)
 
 TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kSuccess)
 {
-    struct access_add_pid_payload payload;
+    DECL_ADD_PID_PAYLOAD(payload);
     struct statistics_tracking_info *tmp, *pos;
     bool findFlag = false;
     nr_local_numa = 4;
     payload.pid = 17990;
-    payload.numa_nodes = 0x01;
+    memset(payload.numa_nodes, 0, (size_t)TEST_NUMA_WORDS * sizeof(unsigned long));
+    payload.numa_nodes[0] = 0x01;
     payload.duration = 10;
     payload.scan_time = 100;
     MOCKER(scan_hva_info_4k).stubs().will(returnValue(0));
@@ -1143,9 +1173,9 @@ TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kSuccess)
 extern "C" int init_access_statistic_pid(struct access_add_pid_payload *payload, int page_size);
 TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kDispatch)
 {
-    struct access_add_pid_payload payload = {};
+    DECL_ADD_PID_PAYLOAD(payload);
     payload.pid = 1234;
-    payload.numa_nodes = 0x01;
+    payload.numa_nodes[0] = 0x01;
     MOCKER(init_access_statistic_pid_4k).stubs().will(returnValue(0));
     int ret = init_access_statistic_pid(&payload, PAGE_SIZE);
     EXPECT_EQ(0, ret);
@@ -1153,7 +1183,7 @@ TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kDispatch)
 
 TEST_F(DriversAccessPidTest, InitAccessStatisticPidInvalidPageSize)
 {
-    struct access_add_pid_payload payload = {};
+    DECL_ADD_PID_PAYLOAD(payload);
     int ret = init_access_statistic_pid(&payload, PAGE_SIZE_64K);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -1483,8 +1513,7 @@ TEST_F(DriversAccessPidTest, CalcProcessPageNumber)
     struct access_pid ap;
     ap.page_num[0] = 10;
     ap.page_num[1] = 20;
-    for (int i = 2; i < SMAP_MAX_NUMNODES; i++)
-        ap.page_num[i] = 0;
+    for (int i = 2; i < MAX_NUMNODES; i++) ap.page_num[i] = 0;
     size_t ret = calc_process_page_number(&ap);
     EXPECT_EQ((size_t)30, ret);
 }
@@ -1515,31 +1544,33 @@ TEST_F(DriversAccessPidTest, InitStatisticWindowSuccess)
 
 TEST_F(DriversAccessPidTest, AccessAddStatisticPidDurationExceed)
 {
-    struct access_add_pid_payload payload = {};
+    DECL_ADD_PID_PAYLOAD(payload);
     payload.type = STATISTIC_SCAN;
     payload.pid = 1234;
     payload.duration = MAX_SCAN_DURATION_SEC + 1;
-    int ret = access_add_statistic_pid(1, &payload, PMD_SIZE);
+    int ret = access_add_statistic_pid(1, &payload, TEST_ADD_PID_STRIDE, PMD_SIZE);
     EXPECT_EQ(-EINVAL, ret);
 }
 
 TEST_F(DriversAccessPidTest, InitAccessHamPidInvalidL1Node)
 {
-    struct access_add_pid_payload payload;
+    DECL_ADD_PID_PAYLOAD(payload);
     nr_local_numa = 0;
     payload.pid = 1234;
-    payload.numa_nodes = 0x00;
+    memset(payload.numa_nodes, 0, (size_t)TEST_NUMA_WORDS * sizeof(unsigned long));
+    payload.numa_nodes[0] = 0x00;
     int ret = init_access_ham_pid(&payload);
     EXPECT_EQ(-EINVAL, ret);
 }
 
 TEST_F(DriversAccessPidTest, InitAccessHamPidKzallocFail)
 {
-    struct access_add_pid_payload payload;
+    DECL_ADD_PID_PAYLOAD(payload);
     struct ham_tracking_info *tmp, *pos;
     nr_local_numa = 4;
     payload.pid = 12345;
-    payload.numa_nodes = 0x11;
+    memset(payload.numa_nodes, 0, (size_t)TEST_NUMA_WORDS * sizeof(unsigned long));
+    payload.numa_nodes[0] = 0x11;
     INIT_LIST_HEAD(&ham_pid_list);
     MOCKER(find_first_local_numa).stubs().will(returnValue(0));
     MOCKER(find_first_remote_numa).stubs().will(returnValue(4));
@@ -1564,4 +1595,58 @@ TEST_F(DriversAccessPidTest, CheckMigrateParamsNullAddr)
 {
     int ret = check_migrate_params(1, nullptr);
     EXPECT_EQ(-EINVAL, ret);
+}
+/* init_access_pid：NORMAL_SCAN 初始化不消费 payload.numa_nodes
+ * （该字段仅供 HAM/STATISTIC 推导 l1/l2_node） */
+TEST_F(DriversAccessPidTest, InitAccessPidSuccess)
+{
+    struct access_pid *tmp = nullptr;
+    DECL_ADD_PID_PAYLOAD(payload);
+    payload.pid = 100;
+    payload.numa_nodes[0] = 0x21;
+
+    MOCKER(init_vm_mapping_info).stubs().will(returnValue(0));
+    MOCKER(IS_ERR).stubs().will(returnValue(false));
+    MOCKER(access_walk_pagemap_prepare).stubs().will(returnValue(0));
+    MOCKER(create_procfs).stubs().will(returnValue(0));
+    int ret = init_access_pid(&payload, &tmp);
+    EXPECT_EQ(0, ret);
+    ASSERT_NE(nullptr, tmp);
+    destroy_access_pid(tmp);
+}
+
+/* 重复添加同一 pid：仅更新扫描参数，配置不触碰 */
+TEST_F(DriversAccessPidTest, AccessAddPidDuplicateKeepsScanParams)
+{
+    struct access_pid existing = {};
+    struct access_pid ap_new = {};
+    struct access_pid *tmp = &ap_new;
+    DECL_ADD_PID_PAYLOAD(payload);
+
+    ap_test_reset_slots();
+
+    existing.pid = 200;
+    existing.type = NORMAL_SCAN;
+    existing.scan_time = 50;
+    ap_slot_add(&existing);
+
+    ap_new.pid = 200;
+    ap_new.type = NORMAL_SCAN;
+    ap_new.scan_time = 100;
+    ap_new.ntimes = 2;
+
+    payload.pid = 200;
+    payload.scan_time = 100;
+    payload.type = NORMAL_SCAN;
+    payload.ntimes = 2;
+
+    MOCKER(init_access_pid).stubs().with(&payload, outBoundP(&tmp, sizeof(tmp))).will(returnValue(0));
+    MOCKER(submit_one_work).stubs();
+    MOCKER(destroy_access_pid).stubs();
+
+    int ret = access_add_pid(1, &payload, TEST_ADD_PID_STRIDE);
+    EXPECT_EQ(0, ret);
+    /* 重复 ADD_PID 只更新扫描参数 */
+    EXPECT_EQ(100, existing.scan_time);
+    EXPECT_EQ(2, existing.ntimes);
 }

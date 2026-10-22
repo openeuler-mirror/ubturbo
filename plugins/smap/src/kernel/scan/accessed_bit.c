@@ -1013,7 +1013,7 @@ static int fill_vaddrs_info(struct kvm *kvm, struct hva_info *hva_vec, u64 len,
 			cur_node = get_vma_numa_node(kvm, vma, hva);
 			hva_vec[idx] = (struct hva_info){ hva, cur_node };
 			if (cur_node >= nr_local_numa &&
-			    cur_node < nr_local_numa + SMAP_MAX_REMOTE_NUMNODES)
+			    cur_node < MAX_NUMNODES)
 				++l2_page_nr;
 			else if (cur_node < nr_local_numa && cur_node >= 0)
 				++l1_page_nr;

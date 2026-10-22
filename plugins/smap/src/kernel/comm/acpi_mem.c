@@ -65,6 +65,15 @@ static int acpi_table_build_mem(struct acpi_subtable_header *header)
 		pr_err("unable to trans PXM id to NUMA node, ret: %d\n", node);
 		return -EINVAL;
 	}
+	/* 超过 SMAP_MAX_NUMNODES 的节点无法被 SMAP 承载（防御性上界；正常内核
+	 * node < MAX_NUMNODES，不会触发），拒绝该段进入链表，
+	 * calc_paddr_acidx_acpi 返回的 nid 由此保证合法 */
+	if (node >= SMAP_MAX_NUMNODES) {
+		kfree(mem);
+		pr_err("node %d exceeds SMAP_MAX_NUMNODES %d, skip memory segment\n",
+		       node, SMAP_MAX_NUMNODES);
+		return -EINVAL;
+	}
 	mem->node = node;
 
 	update_nr_local_numa(mem->node);

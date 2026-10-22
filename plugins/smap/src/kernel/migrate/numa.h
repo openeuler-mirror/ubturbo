@@ -12,7 +12,7 @@ unsigned long get_node_nr_free_pages(int nid);
 
 static inline bool is_node_invalid(int node)
 {
-	return node < 0 || node >= SMAP_MAX_NUMNODES;
+	return node < 0 || node >= MAX_NUMNODES;
 }
 
 #endif /* _SRC_TIERING_NUMA_H */

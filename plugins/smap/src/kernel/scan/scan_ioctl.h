@@ -43,20 +43,37 @@ typedef enum {
 	SMAP_PID_VM,
 } smap_pid_type;
 
+/*
+ * 定长头 + 尾部柔性位图：numa_nodes 字数由运行期 cap 折算（见用户态 NumaWordsForCap），
+ * 不再按 SMAP_MAX_NUMNODES 定长。单条记录字节数由 access_add_pid_msg.stride 给出，
+ * 数组内不得用 payload[i] 下标，须经 access_add_pid_payload_at 按 stride 寻址。
+ * 布局须与用户态 struct AccessAddPidWirePayload 逐字节同构（offsetof(numa_nodes)=32）。
+ */
 struct access_add_pid_payload {
 	pid_t pid;
-	u32 numa_nodes;
 	u32 scan_time;
+	u32 nr_words; /* 尾部 numa_nodes 字数 */
 	u32 duration;
 	scan_type type;
 	u32 ntimes;
 	smap_pid_type pid_type;
+	unsigned long numa_nodes[]; /* 柔性数组，长度 nr_words */
 };
 
 struct access_add_pid_msg {
 	int count;
+	u32 stride; /* 单条 payload 字节数 = offsetof(numa_nodes) + nr_words * sizeof(unsigned long) */
 	struct access_add_pid_payload *payload;
 };
+
+/* 按 stride 定位第 i 条记录（柔性数组无法用下标） */
+static inline struct access_add_pid_payload *
+access_add_pid_payload_at(struct access_add_pid_payload *base, int i,
+			  u32 stride)
+{
+	return (struct access_add_pid_payload *)((char *)base +
+						 (size_t)i * stride);
+}
 
 struct access_remove_pid_payload {
 	pid_t pid;

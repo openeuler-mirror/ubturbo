@@ -76,7 +76,7 @@ struct numa_ub_flux_mb {
 
 struct ub_flux_mb_statistic {
 	int len;
-	struct numa_ub_flux_mb flux[SMAP_MAX_REMOTE_NUMNODES];
+	struct numa_ub_flux_mb flux[SMAP_MAX_NUMNODES];
 };
 
 typedef enum {
