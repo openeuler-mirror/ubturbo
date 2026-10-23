@@ -29,11 +29,11 @@
 
 | 文档 | 说明 |
 | --- | --- |
-| [安装指南](installation.md) | 构建、RPM、SMAP 和部署验证 |
+| [安装指南](ubturbo_installation.md) | 构建、RPM、SMAP 和部署验证 |
 | [用户指南](user_guide.md) | 配置、服务管理和排障 |
 | [架构设计](architecture.md) | 组件边界、数据流和生命周期 |
 | [开发者指南](developer_guide.md) | SDK 与插件开发 |
-| [API 参考](api_reference.md) | UBTurbo 公共接口 |
+| [API 参考](ubturbo_api_reference.md) | UBTurbo 公共接口 |
 
 ## 维护要求
 

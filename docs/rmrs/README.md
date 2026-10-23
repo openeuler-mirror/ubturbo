@@ -72,7 +72,7 @@ rmrs.ucache.enable=false
 ## 📑 文档
 
 - [API 参考](api_reference.md)
-- [UBTurbo 配置参考](../configuration.md)
+- [UBTurbo 配置参考](../ubturbo_configuration.md)
 - [安全说明](../ubturbo_security_description.md)
 
 ## 📜 许可证

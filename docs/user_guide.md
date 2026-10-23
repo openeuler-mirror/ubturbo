@@ -7,7 +7,7 @@
 3. 确认所需插件共享库和配置已安装，再启用插件。
 4. 确认 PID、源 NUMA、目的 NUMA 和容量信息来自可信资源管理中心。
 
-首次安装步骤见[安装指南](installation.md)。
+首次安装步骤见[安装指南](ubturbo_installation.md)。
 
 ## 配置
 
@@ -20,7 +20,7 @@
 - `smap/period.config`：SMAP 策略参数；是否随包安装取决于组件组合。
 
 默认准入文件中的插件项被注释，因此 UBTurbo 默认不加载 RMRS 或 UCache。修改前备份原配置，并
-使用[配置参考](configuration.md)确认插件名、模块码和共享库均匹配。
+使用[配置参考](ubturbo_configuration.md)确认插件名、模块码和共享库均匹配。
 
 ## 服务管理
 

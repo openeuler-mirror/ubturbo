@@ -1513,7 +1513,6 @@ int main(void)
 
 ## 新版补充说明
 
-
 ### 基本约定
 
 接口声明在 `src/user/smap_interface.h`，由 `libsmap.so` 提供。除特别说明外，返回 `0` 表示请求成功，

@@ -9,7 +9,6 @@
 - [日志接口](#ubturbo_log_crit-创建单条crit级别日志写入终端或文件)
 - [公共类型与错误码](#turbobytebuffer-ipc通用数据载体)
 
-
 UBTurbo 对外接口分为四类：IPC 通信（客户端调用 / 服务端注册）、配置读取、日志输出，以及插件加载/卸载入口与公共数据类型。各接口所属头文件与库如下。
 
 | 头文件 | 安装路径 | 所属库 | 用途 |
@@ -1097,7 +1096,6 @@ UBTurbo IPC 错误码定义于 turbo_def.h，由 UBTurboFunctionCaller 返回。
 守护进程内部接口（UBTurboRegIpcService、UBTurboUnRegIpcService、UBTurboGet*、TurboPluginInit 等）返回 0 表示成功，非 0 表示失败。
 
 ## 新版补充说明
-
 
 ### 使用范围
 
