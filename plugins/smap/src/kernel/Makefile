@@ -20,7 +20,7 @@ smap-y += migrate/ham_migration.o migrate/basic.o \
 	migrate/coherence_maintain.o migrate/ham_tasks_mgr.o
 endif
 
-ccflags-y += -I$(src)/comm -I$(src)/..
+ccflags-y += -I$(src)/comm -I$(src)/scan -I$(src)/..
 ifeq ($(KERNEL_VERSION),ocos)
 	ccflags-y += -DKERNEL_OCOS
 else ifeq ($(KERNEL_VERSION),velinux)
