@@ -40,7 +40,7 @@ turbo_ucache=778
 
 ## 🔗 相关文档
 
-- [UBTurbo 配置参考](../configuration.md)
+- [UBTurbo 配置参考](../ubturbo_configuration.md)
 - [UBTurbo 用户指南](../user_guide.md)
 - [UBTurbo 安全说明](../ubturbo_security_description.md)
 

@@ -70,7 +70,7 @@ IPC 是节点内通信机制，不提供跨节点认证、授权或加密。调�
 ## 配置与日志
 
 安装包默认将运行文件部署到 `/opt/ubturbo`。主配置控制日志级别，插件准入配置决定加载哪些插件，
-插件配置提供共享库名称及业务参数。详细键值见[配置参考](configuration.md)。
+插件配置提供共享库名称及业务参数。详细键值见[配置参考](ubturbo_configuration.md)。
 
 日志按模块分开管理，写入前应避免包含凭证、敏感地址或个人信息。文件权限与通信矩阵见
 [安全说明](ubturbo_security_description.md)。
@@ -89,7 +89,7 @@ Security 模块由 systemd 授予的能力上界中仅保留 `CAP_DAC_READ_SEARC
 ## 相关文档
 
 - [开发者指南](developer_guide.md)
-- [API 参考](api_reference.md)
+- [API 参考](ubturbo_api_reference.md)
 - [RMRS](rmrs/README.md)
 - [SMAP](smap/README.md)
 - [UBDMA](ubdma/README.md)

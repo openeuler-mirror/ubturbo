@@ -7,13 +7,13 @@
 
 | 文档 | 内容 |
 | ---- | ---- |
-| [安装指南](installation.md) | 构建、RPM、SMAP 安装和验证 |
+| [安装指南](./ubturbo_installation.md) | 构建、RPM、SMAP 安装和验证 |
 | [构建与单元测试指南](unit_testing.md) | 源码构建以及 UBTurbo、RMRS、SMAP 单元测试 |
 | [用户指南](user_guide.md) | 配置、服务管理、运行检查和排障 |
-| [配置参考](configuration.md) | 框架及插件配置项 |
+| [配置参考](ubturbo_configuration.md) | 框架及插件配置项 |
 | [架构设计](architecture.md) | 系统边界、生命周期和数据流 |
 | [开发者指南](developer_guide.md) | SDK 调用、插件开发和测试 |
-| [API 参考](api_reference.md) | UBTurbo 公共接口 |
+| [API 参考](ubturbo_api_reference.md) | UBTurbo 公共接口 |
 | [实践教程](tutorial.md) | IPC、RMRS 和 SMAP 集成示例 |
 | [IPC Python 客户端](../tools/ubturbo_ipc/README.md) | 服务启动后通过 UDS 调用 SMAP 能力 |
 | [安全说明](ubturbo_security_description.md) | 信任边界、权限模型和部署检查 |

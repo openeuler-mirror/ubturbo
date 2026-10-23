@@ -3,7 +3,7 @@
 ## 为什么不能在 x86 或非 openEuler 环境直接构建？
 
 项目当前仅支持 aarch64。CMake 配置阶段还会读取 `/etc/openEuler-release`，因此请在受支持的
-openEuler 环境中构建。环境与依赖要求见[安装指南](installation.md)。
+openEuler 环境中构建。环境与依赖要求见[安装指南](ubturbo_installation.md)。
 
 ## 为什么启用插件后守护进程启动失败？
 
@@ -13,7 +13,7 @@ openEuler 环境中构建。环境与依赖要求见[安装指南](installation.
 ## 为什么 SMAP 内核模块无法加载？
 
 内核模块必须与运行内核及 `kernel-devel` 匹配，并按依赖顺序加载。还应检查内核配置、NUMA 环境和
-设备依赖。完整顺序见[安装指南](installation.md#安装-smap)。
+设备依赖。完整顺序见[安装指南](ubturbo_installation.md#安装-smap)。
 
 ## 为什么 IPC 客户端无法连接？
 

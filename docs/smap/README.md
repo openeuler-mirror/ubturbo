@@ -51,7 +51,7 @@ make -C src/kernel KERNEL_VERSION=openeuler -j"$(nproc)"
 ```
 
 内核模块的安装、加载、扫描模式配置和卸载方法统一参见
-[UBTurbo 安装指南](../installation.md#安装-smap)。
+[UBTurbo 安装指南](../ubturbo_installation.md#安装-smap)。
 
 `ubturbo_smap_start` 的 `pageType` 为 `0` 时使用 4K 普通页面，为 `1` 时使用 2M 静态大页；同一实例
 不得混用。典型流程为启动 SMAP、设置远端容量、添加 PID 或配置迁出目标、查询结果、移除 PID 并停止

@@ -51,7 +51,6 @@ uint32_t UBTurboRMRSAgentMigrateStrategy(const MigrateStrategyParamRMRS &migrate
 
 返回值6：函数返回值不合法
 
-
 ### 约束 CONSTRAINTS
 
 暂无
@@ -75,7 +74,7 @@ UBTurboRMRSAgentMigrateStrategy UBTurboRMRSAgentMigrateStrategy = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentMigrateStrategy = reinterpret_cast<UBTurboRMRSAgentMigrateStrategy>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateStrategy"));
+    UBTurboRMRSAgentMigrateStrategy = reinterpret_cast<UBTurboRMRSAgentMigrateStrategy>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateStrategy"));
 
     MigrateStrategyParam migrateStrategyParam;
     /*
@@ -145,7 +144,7 @@ UBTurboRMRSAgentMigrateExecute UBTurboRMRSAgentMigrateExecute = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentMigrateExecute = reinterpret_cast<UBTurboRMRSAgentMigrateExecute>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateExecute"));
+    UBTurboRMRSAgentMigrateExecute = reinterpret_cast<UBTurboRMRSAgentMigrateExecute>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateExecute"));
 
     MigrateStrategyResult migrateStrategyResult;
     /*
@@ -221,7 +220,7 @@ UBTurboRMRSAgentMigrateBack UBTurboRMRSAgentMigrateBack = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentMigrateBack = reinterpret_cast<UBTurboRMRSAgentMigrateBack>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateBack"));
+    UBTurboRMRSAgentMigrateBack = reinterpret_cast<UBTurboRMRSAgentMigrateBack>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentMigrateBack"));
 
     MigrateBackResult migrateBackResult;
     /*
@@ -295,7 +294,7 @@ UBTurboRMRSAgentBorrowRollBack UBTurboRMRSAgentBorrowRollBack = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentBorrowRollBack = reinterpret_cast<UBTurboRMRSAgentBorrowRollBack>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentBorrowRollBack"));
+    UBTurboRMRSAgentBorrowRollBack = reinterpret_cast<UBTurboRMRSAgentBorrowRollBack>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentBorrowRollBack"));
 
     std::map<std::string, std::set<BorrowIdInfo>> curBorrowIdsPidsMap;
     /*
@@ -370,7 +369,7 @@ UBTurboRMRSAgentPidNumaInfoCollect UBTurboRMRSAgentPidNumaInfoCollect = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentPidNumaInfoCollect =
+    UBTurboRMRSAgentPidNumaInfoCollect =
         reinterpret_cast<UBTurboRMRSAgentPidNumaInfoCollect>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentPidNumaInfoCollect"));
 
     turbo::rmrs::PidNumaInfoCollectParam pidNumaInfoCollectParam;
@@ -447,7 +446,7 @@ UBTurboRMRSAgentNumaMemInfoCollect UBTurboRMRSAgentNumaMemInfoCollect = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentNumaMemInfoCollect =
+    UBTurboRMRSAgentNumaMemInfoCollect =
         reinterpret_cast<UBTurboRMRSAgentNumaMemInfoCollect>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentNumaMemInfoCollect"));
 
    turbo::rmrs::NumaMemInfoCollectParam numaMemInfoCollectParam;
@@ -526,7 +525,7 @@ UBTurboRMRSAgentUCacheMigrateStrategy UBTurboRMRSAgentUCacheMigrateStrategy = nu
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentUCacheMigrateStrategy = reinterpret_cast<UBTurboRMRSAgentUCacheMigrateStrategy>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentUCacheMigrateStrategy"));
+    UBTurboRMRSAgentUCacheMigrateStrategy = reinterpret_cast<UBTurboRMRSAgentUCacheMigrateStrategy>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentUCacheMigrateStrategy"));
 
     UCacheMigrationStrategyParam param;
     ResCode result;
@@ -603,17 +602,13 @@ UBTurboRMRSAgentUCacheMigrateStop UBTurboRMRSAgentUCacheMigrateStop = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentUCacheMigrateStop = reinterpret_cast<UBTurboRMRSAgentUCacheMigrateStop>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentUCacheMigrateStop"));
+    UBTurboRMRSAgentUCacheMigrateStop = reinterpret_cast<UBTurboRMRSAgentUCacheMigrateStop>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentUCacheMigrateStop"));
 
     ResCode result;
     auto ret = UBTurboRMRSAgentUCacheMigrateStop(result);
     return 0;
 }
 ```
-
-
-
-
 
 ## UBTurboRMRSAgentUpdateUCacheRatio:计算Pagecache远端内存使用比例
 
@@ -681,7 +676,7 @@ UBTurboRMRSAgentUpdateUCacheRatio UBTurboRMRSAgentUpdateUCacheRatio = nullptr;
 int main()
 {
     ubturboClientHandle = dlopen(LIBUBTURBO_CLIENT_PATH, RTLD_LAZY);
-	UBTurboRMRSAgentUpdateUCacheRatio = reinterpret_cast<UBTurboRMRSAgentUpdateUCacheRatio>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentUpdateUCacheRatio"));
+    UBTurboRMRSAgentUpdateUCacheRatio = reinterpret_cast<UBTurboRMRSAgentUpdateUCacheRatio>(dlsym(ubturboClientHandle, "UBTurboRMRSAgentUpdateUCacheRatio"));
 
     MigrationInfoParam param;
     UCacheRatioRes result;
@@ -693,9 +688,7 @@ int main()
 }
 ```
 
-
 ## 新版补充说明
-
 
 ### 接口边界
 

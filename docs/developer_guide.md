@@ -8,7 +8,7 @@ UBTurbo 支持三种集成方式：
 2. 在守护进程内启用已有插件。
 3. 开发新的动态插件，并通过 UBTurbo 暴露节点内服务。
 
-公共接口的完整签名见 [API 参考](api_reference.md)。
+公共接口的完整签名见 [API 参考](ubturbo_api_reference.md)。
 
 ## 构建开发环境
 

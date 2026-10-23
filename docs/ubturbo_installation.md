@@ -171,7 +171,7 @@ fi
 
 ## 配置并启动
 
-默认不启用任何插件。先按[配置参考](configuration.md)检查插件共享库和配置，再修改
+默认不启用任何插件。先按[配置参考](ubturbo_configuration.md)检查插件共享库和配置，再修改
 `/opt/ubturbo/conf/ubturbo_plugin_admission.conf`。
 
 RPM 安装场景使用 systemd：
