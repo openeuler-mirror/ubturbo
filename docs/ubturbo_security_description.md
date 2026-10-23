@@ -99,11 +99,13 @@ UBTurbo 体系内的可执行/库文件及其特权配置如下：
 | `/usr/lib64/libubturbo_client.so` | `550` | `ubturbo:ubturbo` | 对外客户端 SDK。 |
 | `/usr/lib/systemd/system/ubturbo.service` | `644` | `root:root` | systemd 单元文件。 |
 
-### SMAP 内核组件（`ubturbo-smap` 组件）
+### SMAP 内核模块与用户态组件（`ubturbo-smap` 及 `-dkms`/`-kmod` 子包）
 
 | 路径 | 权限 | 属主 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `/lib/modules/smap/*.ko` | `0500` | `ubturbo:ubturbo` | SMAP 内核模块。 |
+| `/lib/modules/<内核版本>/updates/smap.ko` | `0500` | `root:root` | SMAP 内核模块（统一为单个 `smap.ko`，dkms 方式，来源 `ubturbo-smap-dkms`，安装时自动编译部署）。 |
+| `/lib/modules/<内核版本>/extra/smap.ko` | `0500` | `root:root` | SMAP 内核模块（预编译方式，来源 `ubturbo-smap-kmod`，需与运行内核版本一致）。 |
+| `/usr/src/ubturbo-smap-<版本>/` | `0755` | `root:root` | SMAP 内核模块 DKMS 源码树与 `dkms.conf`（仅 `ubturbo-smap-dkms` 包）。 |
 | `/usr/lib64/libsmap.so` | `0500` | `ubturbo:ubturbo` | SMAP 用户态库。 |
 | `/etc/udev/rules.d/99-smap.rules` | `0640` | `ubturbo:ubturbo` | udev 规则，设置设备属主与权限。 |
 | `/dev/smap_device` | `0600` | `ubturbo:ubturbo` | SMAP 主设备。 |

@@ -111,6 +111,11 @@ UBTurbo 是一款开源的节点内资源管理框架，面向 openEuler aarch64
 - GCC 工具链，支持 C++17/C11
 - RMRS：`libvirt-devel`
 
+> **SMAP 交付形态**：使用 SMAP 能力需提前安装 SMAP，包含用户态包 `ubturbo-smap` 与内核模块包
+> `ubturbo-smap-dkms`（源码包，dkms 自动编译部署至 `/lib/modules/<内核版本>/updates/`）或
+> `ubturbo-smap-kmod`（预编译包，安装至 `extra/`）二选一。内核模块已统一为单个 `smap.ko`，经
+> `modprobe smap` 加载；详见 [安装指南](docs/installation.md) 与 [SMAP 文档](docs/smap/README.md)。
+
 ## 📌 FAQ
 
 常见问题请参考：[FAQ](docs/faq.md)

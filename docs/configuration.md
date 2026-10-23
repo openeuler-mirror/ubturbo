@@ -51,7 +51,9 @@ log.level=INFO
 | `turbo.plugin.pkg`   | string | `librmrs_ubturbo_plugin.so` | 共享库名称                   |
 | `rmrs.ucache.enable` | bool   | `false`                     | 是否启用 RMRS 的 UCache 路径 |
 
-配置读取失败时，`rmrs.ucache.enable` 回退为 `false`。启用它还要求 UCache 内核能力已经安装并可用。
+配置读取失败时，`rmrs.ucache.enable` 回退为 `false`。启用它还要求 UCache 内核能力已经安装并可用：
+`ucache.ko` 内核驱动由 `ubturbo-ucache-dkms`/`ubturbo-ucache-kmod` 子包安装（源码位于
+`plugins/smap/src/ucache`），需已加载（`modprobe ucache`）并生成 `/dev/ucache`。
 
 ## UCache
 

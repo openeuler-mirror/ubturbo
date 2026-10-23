@@ -117,7 +117,6 @@ Use the following guides to get started:
 - [Plugin development](docs/developer_guide.md): development environment, plugin entry points, IPC service
   registration, testing, and submission checks.
 - [IPC Python client](tools/ubturbo_ipc/README.md): commands, page modes, and invocation security constraints.
-
 ## 📦 Software and Hardware Compatibility
 
 - Hardware platform
@@ -126,6 +125,12 @@ Use the following guides to get started:
 - Operating system: openEuler 24.03 LTS releases
 - CMake 3.22 or later
 - GCC toolchain with C++17/C11 support
+
+> **SMAP delivery form**: installing SMAP requires the user-space package **ubturbo-smap** plus one kernel
+> module package — **ubturbo-smap-dkms** (source tree automatically built by dkms into
+> `/lib/modules/<kver>/updates/`) or **ubturbo-smap-kmod** (prebuilt modules installed to `extra/`). The kernel
+> module has been unified into a single `smap.ko`, loaded via `modprobe smap`; see
+> [installation guide](docs/installation.md) and [SMAP docs](docs/smap/README.md).
 - RMRS: `libvirt-devel`
 - SMAP: matching `kernel-devel`, `libsmap.so`, and SMAP kernel modules
 

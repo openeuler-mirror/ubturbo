@@ -68,8 +68,9 @@ RPM 文件列表确定，避免把本机路径硬编码进源码。
 
 ## 示例二：准备 RMRS 迁移调用
 
-1. 安装并加载 SMAP，确认页面类型与目标进程一致：普通 4K 进程使用 `pageType=0`，2M 静态大页
-   虚机使用 `pageType=1`。
+1. 安装并加载 SMAP（用户态包 `ubturbo-smap`，内核模块包 `ubturbo-smap-dkms`/`ubturbo-smap-kmod`
+   二选一，包安装后 `modprobe smap`；详见 [安装指南](installation.md#安装-smap)），确认页面类型
+   与目标进程一致：普通 4K 进程使用 `pageType=0`，2M 静态大页虚机使用 `pageType=1`。
 2. 安装 RMRS 插件，并在 `ubturbo_plugin_admission.conf` 中启用 `rmrs=777`。
 3. 启动 UBTurbo，确认 RMRS 注册的服务没有报错。
 4. 从可信资源管理器取得 PID、远端 NUMA 和容量信息。
