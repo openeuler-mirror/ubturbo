@@ -152,7 +152,7 @@ UBTurbo 对外的可触达暴露面逐一收敛如下：
 
 2. **插件管理**：启停插件只需编辑 `/opt/ubturbo/conf/ubturbo_plugin_admission.conf`（注释/取消注释对应行），再 `systemctl restart ubturbo` 生效。新增插件需将其 `.so` 安装到 `/opt/ubturbo/lib/`、在白名单登记、并补齐对应 `plugin_*.conf`，三步缺一不可。
 
-3. **策略管理**：SMAP 策略经 `/opt/ubturbo/conf/smap/period.config` 在线调整；仅当 `smap.period.file.config.switch = true` 时文件配置才逐周期覆盖内存生效配置，`false` 时仅读取不覆盖，便于在变更窗口后冻结策略。
+3. **策略管理**：SMAP 策略经 `/opt/ubturbo/conf/smap/smap_strategy.conf` 在线调整；配置文件归用户/RPM 所有（`%config` 安装，升级时新版直接覆盖旧版，被修改过的旧文件自动备份为 `.rpmorig`，权限 `0640`），SMAP 只读取不回写。仅当 `smap.period.file.config.switch = true` 时文件配置才逐周期覆盖内存生效配置，`false` 时仅读取不覆盖，便于在变更窗口后冻结策略。
 
 4. **变更管理**：SMAP 配置变更为热加载，其余配置均需重启服务生效（`systemctl restart ubturbo`）；切换运行用户或切换场景时，需先清理 `/dev/shm/smap_config` 与 `/dev/shm/ubturbo_page_type.dat`，避免读到旧用户/旧场景的残留状态。
 

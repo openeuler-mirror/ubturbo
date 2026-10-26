@@ -14,7 +14,7 @@ process pages and virtual machines backed by static 2 MiB huge pages.
 - Migrate-out targets, migrate-back, urgent migration, and remote-to-remote migration.
 - Multiple local and remote NUMA nodes and grouped migration policy.
 
-The `smap.remote.scan.mode` setting in `period.config` selects software-only (`0`), combined software/hardware
+The `smap.remote.scan.mode` setting in `smap_strategy.conf` selects software-only (`0`), combined software/hardware
 (`1`, default), or hardware-only (`2`) remote scanning. HIST is supported only on Kunpeng 950; unavailable hardware
 falls back to software scanning. Module initialization creates `/dev/smap_scan_dev` and initializes software scanning.
 The hardware subsystem is initialized on demand by user-space configuration. The management layer sends PID,

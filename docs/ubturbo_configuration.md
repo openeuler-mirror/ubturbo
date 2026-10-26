@@ -11,7 +11,7 @@ UBTurbo 配置文件安装在 `/opt/ubturbo/conf/`。框架配置采用一行一
 | `ubturbo_plugin_admission.conf` | 不适用                  | 插件管理器      |
 | `plugin_rmrs.conf`              | `plugin_rmrs`         | RMRS            |
 | `plugin_turbo_ucache.conf`      | `plugin_turbo_ucache` | UCache          |
-| `smap/period.config`            | 不适用                  | SMAP 自有解析器 |
+| `smap/smap_strategy.conf`       | 不适用                  | SMAP 自有解析器 |
 
 除 SMAP 策略文件的周期读取机制外，不承诺配置热加载。修改后应重启 UBTurbo。
 
@@ -69,41 +69,51 @@ log.level=INFO
 
 ## SMAP 策略
 
-SMAP 从 `/opt/ubturbo/conf/smap/period.config` 读取扁平键值。当前解析表包含 18 个键，其中
-`smap.ub.bw.threshold` 是可选项，其余为必填项：
+SMAP 从 `/opt/ubturbo/conf/smap/smap_strategy.conf` 读取扁平键值。该文件由 `ubturbo-smap` RPM 以
+`%config` 方式安装（属主 `ubturbo:ubturbo`，权限 `0640`），RPM 升级时新版配置直接覆盖旧配置；
+若旧配置曾被用户修改，升级会将其自动备份为 `.rpmorig`，便于比对后合并到新版文件；文件自带注释，
+说明每键的取值范围。SMAP 只读取该文件，运行期不会生成或回写；读取路径固定
+在 SMAP 策略配置模块内，不能通过调用方参数或环境变量覆盖。单独部署 SMAP 且未安装 RPM 时，需
+手动创建目录与文件，并为实际运行主体设置合适的最小权限。`#` 开头的行是注释。
 
-该路径由 `ubturbo` 主框架包创建；单独部署 SMAP 且未安装主框架时，需要手动创建
-`/opt/ubturbo/conf`，并为实际运行主体设置合适的最小权限。
+解析表包含 17 个键，全部可选，键缺席时沿用下表内置默认值，不存在必填项：
 
-| 键                                        |        默认值 | 有效范围/格式                          |
-| ----------------------------------------- | ------------: | -------------------------------------- |
-| `smap.scan.period`                      |           200 | 50–60000，单位 ms                     |
-| `smap.migrate.period`                   |          2000 | 500–300000，单位 ms，且不小于扫描周期 |
-| `smap.remote.freq.percentile`           |            99 | 1–100                                 |
-| `smap.slow.threshold`                   |             2 | 0–6000                                |
-| `smap.freq.wt`                          |             0 | 0–65535                               |
-| `smap.remote.hot.threshold`             |         65535 | 1–65535                               |
-| `smap.group.swap.ratio`                 |             1 | 0–10                                  |
-| `smap.group.swap.min.remote.freq`       |             0 | 0–65535                               |
-| `smap.group.swap.min.freq.gain`         |             0 | 0–65535                               |
-| `smap.group.swap.local.watermark.ratio` |            95 | 0–100                                 |
-| `smap.migrate.mode`                     |             1 | 0：LD/ST；1：URMA                      |
-| `smap.migrate.mode.enable`              |         false | `true` / `false`                   |
-| `smap.zero.freq.migrate.enable`         |          true | `true` / `false`                   |
-| `smap.adaptive.ratio.enable`            |          true | `true` / `false`                   |
-| `smap.period.file.config.switch`        |         false | `true` / `false`                   |
-| `smap.scan.cpu`                         | 系统 CPU 范围 | `min-max`，且 `min <= max`         |
-| `smap.ub.bw.threshold`                  |             0 | 0–65535                               |
-| `smap.remote.scan.mode`                 |             1 | 0：纯软；1：软硬结合；2：纯硬         |
+| 键                                        |          默认值 | 有效范围/格式                          |
+| ----------------------------------------- | ---------------: | -------------------------------------- |
+| `smap.scan.period`                      |              200 | 50–60000，单位 ms                     |
+| `smap.migrate.period`                   |             2000 | 500–300000，单位 ms，且不小于扫描周期 |
+| `smap.remote.freq.percentile`           |               99 | 1–100                                 |
+| `smap.slow.threshold`                   |                2 | 0–6000（迁移周期上限/扫描周期下限）   |
+| `smap.freq.wt`                          |                0 | 0–65535                               |
+| `smap.remote.hot.threshold`             |            65535 | 0–65535                               |
+| `smap.group.swap.ratio`                 |                1 | 0–10                                  |
+| `smap.group.swap.min.remote.freq`       |                0 | 0–65535                               |
+| `smap.group.swap.min.freq.gain`         |                0 | 0–65535                               |
+| `smap.group.swap.local.watermark.ratio` |               95 | 0–100                                 |
+| `smap.migrate.mode`                     |                0 | 0：LD/ST；1：URMA                      |
+| `smap.zero.freq.migrate.enable`         |             true | `true` / `false`                   |
+| `smap.adaptive.ratio.enable`            |             true | `true` / `false`                   |
+| `smap.period.file.config.switch`        |            false | `true` / `false`                   |
+| `smap.scan.cpu`                         |     空值=未配置 | `min-max`，如 `0-63`，允许 `35 - 63`   |
+| `smap.ub.bw.threshold`                  |                0 | 0–65535                               |
+| `smap.remote.scan.mode`                 |                1 | 0：纯软；1：软硬结合；2：纯硬         |
 
-版本升级后应以同版本源码或随包示例为准，不能将其他版本的 `period.config` 直接覆盖到当前环境。
+`smap.scan.cpu` 空值（如 `smap.scan.cpu =`）表示未配置：不下发内核、迁移线程不绑核，内核默认
+全 CPU 生效。显式配置时绑定扫描 workqueue 与迁移线程到 `[min, max]`，`min <= max` 且两者均不得
+超出系统 possible CPU 范围（参见 `/sys/devices/system/cpu/possible`）。
+
+单键非法（越界、非法字符、解析失败）仅告警并废弃该键（该键保持当前/默认值），错误日志带行号，
+其余键照常生效；未知键、重复键仅告警不阻断（重复键保留首个值）；value 仅允许字母、数字、`.`、
+`_`、`-` 和空格，长度不超过 64。跨字段校验失败（如扫描周期大于迁移周期）时本轮配置整体不应用，
+内存保持上一次有效配置；文件缺失或读取失败同样保持当前值。配置文件归用户/RPM 所有；RPM 升级
+直接以新版配置覆盖旧版（旧版曾修改的内容备份为 `.rpmorig`），升级后以新文件内容为准。
 
 `smap.period.file.config.switch=true` 才允许周期读取的文件值覆盖内存中的策略配置。生产环境修改周期、
 CPU 范围或迁移方式前，应先评估扫描开销、迁移流量和业务抖动。
 
 `smap.remote.scan.mode` 控制远端节点扫描模式，硬件判热仅鲲鹏950机型支持，硬件不可用时自动降级为
-纯软扫描。修改后下个迁移周期生效，无需重插内核模块。配置项缺失或配置非法时沿用上一次有效配置
-（尚未配置时使用默认值），并在下个迁移周期检测到非法配置后将文件恢复为上一次有效配置。
+纯软扫描。修改后下个迁移周期生效，无需重插内核模块；配置项缺失或本轮校验失败时沿用上一次有效配置
+（尚未配置时使用默认值）。
 
 ## 配置变更流程
 

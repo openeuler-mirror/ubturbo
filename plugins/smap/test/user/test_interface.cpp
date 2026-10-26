@@ -5203,14 +5203,13 @@ extern "C" void IoctlUpdateUbDmaAvail(uint32_t value);
 extern "C" void IoctlSetScanCpuRange(uint32_t cpuMin, uint32_t cpuMax);
 extern "C" void IoctlSetRemoteScanMode(uint32_t mode);
 extern "C" bool CheckUbFeatureUbDma(void);
-extern "C" bool GetMigrateModeEnableConfig(void);
 extern "C" uint32_t GetMigrateModeConfig(void);
+extern "C" bool GetScanCpuConfigured(void);
 extern "C" uint32_t GetScanCpuMinConfig(void);
 extern "C" uint32_t GetScanCpuMaxConfig(void);
 
 TEST_F(InterfaceTest, TestMigrateAndCpuConfigMigrateModeEnable)
 {
-    MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(true));
     MOCKER(GetMigrateModeConfig).stubs().will(returnValue((uint32_t)1));
     MOCKER(IoctlUpdateUbDmaAvail).stubs().will(ignoreReturnValue());
     MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)0));
@@ -5223,7 +5222,6 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigMigrateModeEnable)
 
 TEST_F(InterfaceTest, TestMigrateAndCpuConfigMigrateModeDisableUbDmaAvail)
 {
-    MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(false));
     MOCKER(CheckUbFeatureUbDma).stubs().will(returnValue(true));
     MOCKER(IoctlUpdateUbDmaAvail).stubs().will(ignoreReturnValue());
     MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)0));
@@ -5236,7 +5234,6 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigMigrateModeDisableUbDmaAvail)
 
 TEST_F(InterfaceTest, TestMigrateAndCpuConfigMigrateModeDisableUbDmaNotAvail)
 {
-    MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(false));
     MOCKER(CheckUbFeatureUbDma).stubs().will(returnValue(false));
     MOCKER(IoctlUpdateUbDmaAvail).stubs().will(ignoreReturnValue());
     MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)0));
@@ -5249,7 +5246,7 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigMigrateModeDisableUbDmaNotAvail)
 
 TEST_F(InterfaceTest, TestMigrateAndCpuConfigScanCpuEnable)
 {
-    MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(false));
+    MOCKER(GetScanCpuConfigured).stubs().will(returnValue(true));
     MOCKER(CheckUbFeatureUbDma).stubs().will(returnValue(false));
     MOCKER(IoctlUpdateUbDmaAvail).stubs().will(ignoreReturnValue());
     MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)1));
@@ -5262,7 +5259,6 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigScanCpuEnable)
 
 TEST_F(InterfaceTest, TestMigrateAndCpuConfigBothEnabled)
 {
-    MOCKER(GetMigrateModeEnableConfig).stubs().will(returnValue(true));
     MOCKER(GetMigrateModeConfig).stubs().will(returnValue((uint32_t)2));
     MOCKER(IoctlUpdateUbDmaAvail).stubs().will(ignoreReturnValue());
     MOCKER(GetScanCpuMinConfig).stubs().will(returnValue((uint32_t)0));

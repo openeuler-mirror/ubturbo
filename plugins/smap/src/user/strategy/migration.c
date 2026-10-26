@@ -1124,14 +1124,17 @@ static int DecideThreadNum(struct MigrateMsg *mMsg)
 static void *SubMigrateThreadFn(void *arg)
 {
     struct SubMigrateCtx *ctx = arg;
-    cpu_set_t cpuset;
 
-    CPU_ZERO(&cpuset);
-    for (uint32_t c = ctx->cpuMin; c <= ctx->cpuMax; c++) {
-        CPU_SET((int)c, &cpuset);
-    }
-    if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
-        SMAP_LOGGER_WARNING("migrate thread setaffinity (%u-%u) failed.", ctx->cpuMin, ctx->cpuMax);
+    /* scan.cpu unset: no affinity, scheduler free (same as old all-cpu pinning) */
+    if (GetScanCpuConfigured()) {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        for (uint32_t c = ctx->cpuMin; c <= ctx->cpuMax; c++) {
+            CPU_SET((int)c, &cpuset);
+        }
+        if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
+            SMAP_LOGGER_WARNING("migrate thread setaffinity (%u-%u) failed.", ctx->cpuMin, ctx->cpuMax);
+        }
     }
     ctx->ret = (ctx->msg.cnt > 0) ? ioctl(ctx->fd, SMAP_MIG_MIGRATE, &ctx->msg) : 0;
     return NULL;
@@ -1648,12 +1651,10 @@ static void RestoreProcessScanTime(struct ProcessManager *manager)
 
 static void MigrationUpdateMigrateModeAndScanCpu(void)
 {
-    if (GetMigrateModeEnableConfig()) {
-        if (GetMigrateModeChanged()) {
-            IoctlUpdateUbDmaAvail(GetMigrateModeConfig());
-            SMAP_LOGGER_INFO("Start update migrate mode from config to %u.", GetMigrateModeConfig());
-            SetMigrateModeChanged(false);
-        }
+    if (GetMigrateModeChanged()) {
+        IoctlUpdateUbDmaAvail(GetMigrateModeConfig());
+        SMAP_LOGGER_INFO("Start update migrate mode from config to %u.", GetMigrateModeConfig());
+        SetMigrateModeChanged(false);
     }
 
     if (GetScanCpuChanged()) {
@@ -1992,7 +1993,7 @@ int ManagerDaemonWork(struct ProcessManager *manager)
         return 0;
     }
     EventLoopEnsureRegistered(manager);
-    StrategyConfigRead(STRATEGY_CONFIG_PATH); // 从配置文件中读取策略配置
+    StrategyConfigRead(); // read strategy config from file
     manager->ubBwMonitor.ubBwThreshold = GetUbBwThresholdConfig();
     if (GetFileConfSwitchConfig()) {
         SetAdaptMem(GetAdaptiveRatioEnableConfig());

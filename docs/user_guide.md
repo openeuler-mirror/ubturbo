@@ -17,7 +17,7 @@
 - `ubturbo_plugin_admission.conf`：插件准入配置。
 - `plugin_rmrs.conf`：RMRS 插件配置。
 - `plugin_turbo_ucache.conf`：UCache 插件配置。
-- `smap/period.config`：SMAP 策略参数；是否随包安装取决于组件组合。
+- `smap/smap_strategy.conf`：SMAP 策略参数，由 ubturbo-smap 包安装；SMAP 只读取该文件，运行期不回写。
 
 默认准入文件中的插件项被注释，因此 UBTurbo 默认不加载 RMRS 或 UCache。修改前备份原配置，并
 使用[配置参考](ubturbo_configuration.md)确认插件名、模块码和共享库均匹配。
