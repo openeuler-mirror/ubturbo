@@ -26,13 +26,20 @@
 
 /* ---- Frequency field layout (relative to LAST_CPUPID_PGSHIFT) ----
  *
- * bit[0..7]  freq counter   8 bits, value 0..255
- * bit[8]     freq sentinel   1 bit,  1 = "invalid / pending-clear"
- * bit[9..19] reserved       11 bits (for future cumulative freq)
+ * bit[0..7]  freq counter    8 bits, value 0..255
+ * bit[8]     recycled/liveness  1 bit,  1 = "page freed/recycled"
+ * bit[9..19] reserved        11 bits (for future cumulative freq)
  *
- * Sentinel bit=1 means the freq counter is stale (e.g. page freed,
- * kernel wrote all-1s in LAST_CPUPID). get() returns 0; inc() resets
- * counter to 1 and clears sentinel.
+ * bit[8] is set ONLY by the kernel: page_cpupid_reset_last() writes
+ * all-ones into LAST_CPUPID on free (free_pages_prepare), setting
+ * bit[8]=1 and counter=0xFF. SMAP clears bit[8] on the first post-alloc
+ * inc/add and NEVER sets it itself, so at migrate time:
+ *   bit[8]==0 -> page alive since SMAP scanned it (migrate)
+ *   bit[8]==1 -> page freed/recycled since scan      (skip)
+ *
+ * "freq consumed (already reported)" is expressed by clearing the
+ * counter to 0 (smap_page_freq_read_clear), NOT by setting bit[8],
+ * so the liveness signal survives the read->migrate decision window.
  */
 
 static inline bool smap_page_freq_try_get(struct page *page)
@@ -50,7 +57,9 @@ static inline bool smap_page_freq_try_get(struct page *page)
 #define SMAP_FREQ_FIELD_MASK (SMAP_FREQ_VAL_MASK << SMAP_FREQ_VAL_SHIFT)
 #define SMAP_FREQ_MAX ((1UL << SMAP_FREQ_VAL_WIDTH) - 1)
 
-/* Read current freq value; returns 0 when sentinel is set. */
+/* Read current freq value; returns 0 when recycled (sentinel set) or
+ * already consumed (counter cleared to 0 by a prior read_clear).
+ */
 static inline u8 smap_page_freq_get(struct page *page)
 {
 	unsigned long flags;
@@ -68,22 +77,35 @@ static inline u8 smap_page_freq_get(struct page *page)
 	return v;
 }
 
-/* Set the sentinel bit to mark freq as stale. */
-static inline void smap_page_freq_set_sentinel(struct page *page)
+/* Liveness check for the migrate path. True => the page has been
+ * freed/recycled since SMAP last scanned it. Reliable because bit[8]
+ * is set ONLY by the kernel (page_cpupid_reset_last all-ones write on
+ * free); SMAP never sets it, so a set bit is an unambiguous "recycled"
+ * signal at migration time.
+ *
+ * Caller must hold a folio reference so that the page cannot be freed
+ * while its flags are read (e.g. pinned by folio_try_get() in
+ * smap_add_page_for_migration before calling). No folio_try_get/put
+ * is done here because with the caller's reference held it can never
+ * fail and would only add a pair of useless atomics per page. A
+ * standalone (unpinned) caller must pin the folio itself first and
+ * treat pin failure as recycled=true.
+ */
+static inline bool smap_page_freq_is_recycled(struct page *page)
 {
-	unsigned long old, nv;
-
-	if (!smap_page_freq_try_get(page))
-		return;
-
-	do {
-		old = READ_ONCE(page->flags);
-		nv = old | SMAP_FREQ_SENT_BIT;
-	} while (unlikely(cmpxchg(&page->flags, old, nv) != old));
-	folio_put(page_folio(page));
+	return !!(READ_ONCE(page->flags) & SMAP_FREQ_SENT_BIT);
 }
 
-/* Atomically read freq and set sentinel; returns 0 when sentinel is already set. */
+/* Atomically read freq and consume it (counter->0). Returns 0 when the
+ * page is recycled (freed; sentinel set) so callers do not re-report a
+ * consumed or dead page.
+ *
+ * Must NOT set SMAP_FREQ_SENT_BIT: that bit is a kernel-exclusive
+ * liveness marker (set on free via the all-ones write). Consuming the
+ * freq is expressed by clearing the counter to 0, which keeps bit[8]
+ * at 0 (alive) so a later smap_page_freq_is_recycled() still works
+ * across the read->migrate decision window.
+ */
 static inline u8 smap_page_freq_read_clear(struct page *page)
 {
 	unsigned long old, nv;
@@ -96,11 +118,11 @@ static inline u8 smap_page_freq_read_clear(struct page *page)
 		old = READ_ONCE(page->flags);
 		if (old & SMAP_FREQ_SENT_BIT) {
 			v = 0;
-			nv = old; /* sentinel already set, no change */
+			nv = old;		/* recycled: leave kernel state */
 		} else {
 			v = (u8)((old >> SMAP_FREQ_VAL_SHIFT) &
 				 SMAP_FREQ_VAL_MASK);
-			nv = old | SMAP_FREQ_SENT_BIT;
+			nv = old & ~SMAP_FREQ_FIELD_MASK;	/* consume */
 		}
 	} while (unlikely(cmpxchg(&page->flags, old, nv) != old));
 	folio_put(page_folio(page));

@@ -20,6 +20,7 @@
 #include "smap_migrate_wrapper.h"
 #include "critical.h"
 #include "smap_migrate_pages.h"
+#include "smap_page_flags.h"
 
 #define MAX_MIGRATE_NUMA_RETRY_TIME 10
 
@@ -83,7 +84,7 @@ static int smap_check_huge_page_for_migration(struct page *page, pid_t pid)
 
 static int smap_add_page_for_migration(struct page *page, struct folio **folios,
 				       unsigned int *nr_folios, pid_t pid,
-				       bool migrate_all)
+				       bool migrate_all, bool check_recycled)
 {
 	int err;
 	err = PTR_ERR(page);
@@ -106,6 +107,11 @@ static int smap_add_page_for_migration(struct page *page, struct folio **folios,
 	if (!folio_try_get(page_folio(page))) {
 		pr_debug("failed to add folio reference\n");
 		return -EINVAL;
+	}
+	if (check_recycled && smap_page_freq_is_recycled(page)) {
+		pr_debug("page %px freed/recycled since scan, skip\n", page);
+		folio_put(page_folio(page));
+		return -EAGAIN;
 	}
 	if (PageHuge(page)) {
 		err = smap_check_huge_page_for_migration(page, pid);
@@ -428,8 +434,24 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 		if (is_smap_pg_huge() && PageHuge(page) && !PageHead(page)) {
 			continue;
 		}
-		ret = smap_add_page_for_migration(
-			page, migrate_folios, &nr_folios, 0, MPOL_MF_MOVE_ALL);
+		/*
+		 * check_recycled is disabled here: migrate-back walks the whole
+		 * remote MEM interval (memid -> OBMM pa..pa+size), which cover
+		 * live pages of processes NOT tracked by SMAP. For those bit[8]
+		 * keeps the "freed" fingerprint set by page free and is never
+		 * cleared (SMAP inc/add only runs for tracked pages), so
+		 * check_recycled=true would wrongly skip them as recycled.
+		 * Note the two sets are NOT disjoint: pages demoted to the
+		 * remote by freq-scan migration stay in this interval and will
+		 * be walked here again. If such a page was freed and
+		 * re-allocated since the scan (bit[8]=1), it is migrated back
+		 * as if alive: the try_get-based isolate/migrate below is still
+		 * a safe movable-page migration. That window is the accepted
+		 * trade-off of migrate-back's range-first semantics.
+		 */
+		ret = smap_add_page_for_migration(page, migrate_folios,
+						  &nr_folios, 0,
+						  MPOL_MF_MOVE_ALL, false);
 		if (ret) {
 			nr_pre_migrate_fail++;
 		}
@@ -712,7 +734,7 @@ static void collect_one_folio(int idx, struct mig_list *mig_list,
 
 	flag = smap_add_page_for_migration(p_page, batch->folios,
 					   &batch->nr_folios, mig_list[idx].pid,
-					   MPOL_MF_MOVE_ALL);
+					   MPOL_MF_MOVE_ALL, true);
 	if (!flag) {
 		stats->pre_migrate_num++;
 		batch->tmp_pre_nr++;
