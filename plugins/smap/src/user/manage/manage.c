@@ -446,7 +446,9 @@ void ResetActcData(ActcData *actcData[], int len)
     F(memSize, nrLocalNuma)            \
     F(allocRemoteNrPages, nrLocalNuma) \
     F(l2RemoteMemRatio, nrLocalNuma)   \
-    F(l3RemoteMemRatio, nrLocalNuma)
+    F(l3RemoteMemRatio, nrLocalNuma)   \
+    F(nrMigratePages, nrLocalNuma)     \
+    F(nrMigrateBackPages, nrLocalNuma)
 
 int InitProcessAttrArrays(ProcessAttr *attr)
 {
@@ -1790,9 +1792,11 @@ static void ClearRemovedRemoteStrategy(ProcessAttr *attr, int remoteNid)
         NM_AT(attr->strategyAttr.allocRemoteNrPages, i, remoteIdx) = 0;
         attr->strategyAttr.remoteNrPagesAfterMigrate[i][remoteIdx] = 0;
     }
-    for (int i = 0; i < MAX_NODES; i++) {
-        attr->strategyAttr.nrMigratePages[i][remoteNid] = 0;
-        attr->strategyAttr.nrMigratePages[remoteNid][i] = 0;
+    /* 方向矩阵第一维仅分配 nrLocalNuma 行，只按 i < nrLocalNuma 清远端绝对 nid 列；
+     * 用 cap 同时索引行与列会越界写坏相邻堆 chunk */
+    for (int i = 0; i < nrLocalNuma; i++) {
+        NM_AT(attr->strategyAttr.nrMigratePages, i, remoteNid) = 0;
+        NM_AT(attr->strategyAttr.nrMigrateBackPages, i, remoteNid) = 0;
     }
 }
 

@@ -475,9 +475,12 @@ static void ClearCompatibleProcessTargets(ProcessAttr *attr)
             NM_AT(attr->strategyAttr.l3RemoteMemRatio, j, i) = 0;
         }
     }
-    for (int i = 0; i < MAX_NODES; i++) {
-        for (int j = 0; j < MAX_NODES; j++) {
-            attr->strategyAttr.nrMigratePages[i][j] = 0;
+    /* 迁移量方向矩阵第一维按 nrLocalNuma 分配，按 [local][远端绝对 nid] 清零 */
+    int cap = (int)GetNumaCap();
+    for (int j = 0; j < nrLocalNuma; j++) {
+        for (int i = 0; i < cap; i++) {
+            NM_AT(attr->strategyAttr.nrMigratePages, j, i) = 0;
+            NM_AT(attr->strategyAttr.nrMigrateBackPages, j, i) = 0;
         }
     }
 }
@@ -642,8 +645,6 @@ void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *candida
     attr->strategyAttr.separateParam = candidate->strategyAttr.separateParam;
     (void)memcpy_s(attr->strategyAttr.nrPagesPerLocalNuma, sizeof(attr->strategyAttr.nrPagesPerLocalNuma),
                    candidate->strategyAttr.nrPagesPerLocalNuma, sizeof(attr->strategyAttr.nrPagesPerLocalNuma));
-    (void)memcpy_s(attr->strategyAttr.nrMigratePages, sizeof(attr->strategyAttr.nrMigratePages),
-                   candidate->strategyAttr.nrMigratePages, sizeof(attr->strategyAttr.nrMigratePages));
     (void)memcpy_s(attr->strategyAttr.remoteNrPagesAfterMigrate, sizeof(attr->strategyAttr.remoteNrPagesAfterMigrate),
                    candidate->strategyAttr.remoteNrPagesAfterMigrate,
                    sizeof(attr->strategyAttr.remoteNrPagesAfterMigrate));

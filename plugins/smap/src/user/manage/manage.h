@@ -336,7 +336,14 @@ typedef struct {
     uint32_t nrPagesPerLocalNuma[SMAP_NODE_CAP_LIMIT]; // 根据账本计算的，各本地numa可支配的内存
     double *l2RemoteMemRatio;
     double *l3RemoteMemRatio;
-    uint32_t nrMigratePages[MAX_NODES][MAX_NODES]; // 水线场景：消减后的迁移量；密度场景：接口设置的比例
+    /*
+     * 迁移量按方向拆为两个矩阵：nrMigratePages[l][r] 为 demote+swap（l→r）迁移量；
+     * nrMigrateBackPages[l][r] 为 promote+swap（r→l）迁移量。两矩阵均为行主序扁平
+     * 存储（T *），第一维为本地 nid（[0, nrLocalNuma)），第二维为远端绝对 nid，
+     * 分配尺寸 = nrLocalNuma × GetNumaCap()，经 NM_AT/NM_ROW 宏访问。
+     */
+    uint32_t *nrMigratePages; // 水线场景：消减后的迁移量（demote 方向）；密度场景：接口设置的比例
+    uint32_t *nrMigrateBackPages; // 水线场景：消减后的迁移量（promote 方向）
     uint32_t remoteNrPagesAfterMigrate[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 迁移后记录账本
     MigrateDirection dir[SMAP_NODE_CAP_LIMIT]; // 算法决策各numa的迁出的方向 demote/promote/swap
     UbBwRestrictType ubBwRestrict[SMAP_NODE_CAP_LIMIT]; // 各NUMA的UB带宽限制策略

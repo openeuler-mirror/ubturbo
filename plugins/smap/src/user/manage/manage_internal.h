@@ -79,8 +79,8 @@ void CalRemoteMemUsed(void);
  * 与锁内剪辑配合实现「快照→剪辑→预扣」原子化，杜绝并发超卖 */
 void SnapshotRemoteCapacityLocked(uint64_t privateAvail[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
                                   uint64_t sharedAvail[REMOTE_NUMA_NUM]);
-void LedgerPlanInFlightLocked(const uint32_t nrMigratePages[MAX_NODES][MAX_NODES], int nrLocalNuma);
-void LedgerSettleInFlight(const uint32_t planned[MAX_NODES][MAX_NODES], int nrLocalNuma);
+void LedgerPlanInFlightLocked(const uint32_t *nrMigratePages, int nrLocalNuma);
+void LedgerSettleInFlight(const uint32_t *planned, int nrLocalNuma);
 
 /* ========== manage_scan.c 导出给其他文件的内部函数 ========== */
 

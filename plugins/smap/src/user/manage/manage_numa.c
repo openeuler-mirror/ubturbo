@@ -577,31 +577,35 @@ void SnapshotRemoteCapacityLocked(uint64_t privateAvail[LOCAL_NUMA_NUM][REMOTE_N
 }
 
 /* 迁移结算后回收全部在途预扣；成功迁移的页数由后续快照重新入账。 */
-void LedgerSettleInFlight(const uint32_t planned[MAX_NODES][MAX_NODES], int nrLocalNuma)
+void LedgerSettleInFlight(const uint32_t *planned, int nrLocalNuma)
 {
     struct RemoteNumaInfo *remoteNumaInfo = &GetProcessManager()->remoteNumaInfo;
 
     EnvMutexLock(&remoteNumaInfo->lock);
+    /* planned 为方向矩阵（第一维本地行、第二维远端绝对 nid）；privateInFlight 暂按
+     * 相对远端索引 j，故取列为 nrLocalNuma + j */
     for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
         for (int i = 0; i < nrLocalNuma; i++) {
-            if (planned[i][j] == 0) {
+            uint32_t plannedPages = NM_AT(planned, i, nrLocalNuma + j);
+            if (plannedPages == 0) {
                 continue;
             }
-            remoteNumaInfo->privateInFlight[i][j] = remoteNumaInfo->privateInFlight[i][j] >= planned[i][j] ?
-                                                        remoteNumaInfo->privateInFlight[i][j] - planned[i][j] :
-                                                        0;
+            uint64_t *inFlight = &remoteNumaInfo->privateInFlight[i][j];
+            *inFlight = *inFlight >= plannedPages ? *inFlight - plannedPages : 0;
         }
     }
     EnvMutexUnlock(&remoteNumaInfo->lock);
 }
 
-void LedgerPlanInFlightLocked(const uint32_t nrMigratePages[MAX_NODES][MAX_NODES], int nrLocalNuma)
+void LedgerPlanInFlightLocked(const uint32_t *nrMigratePages, int nrLocalNuma)
 {
     struct RemoteNumaInfo *remoteNumaInfo = &GetProcessManager()->remoteNumaInfo;
 
+    /* nrMigratePages 为方向矩阵（第一维本地行、第二维远端绝对 nid）；privateInFlight
+     * 暂按相对远端索引 j，故取列为 nrLocalNuma + j */
     for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
         for (int i = 0; i < nrLocalNuma; i++) {
-            remoteNumaInfo->privateInFlight[i][j] += nrMigratePages[i][j];
+            remoteNumaInfo->privateInFlight[i][j] += NM_AT(nrMigratePages, i, nrLocalNuma + j);
         }
     }
 }
