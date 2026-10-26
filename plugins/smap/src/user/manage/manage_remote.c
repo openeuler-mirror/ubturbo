@@ -1219,7 +1219,8 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
             }
 
             SMAP_LOGGER_INFO("[change_remote] pid=%d local=%d old_remote=%d new_remote=%d old_sz=%llu new_sz=%llu",
-                             attr->pid, i, srcNodeIndex, destNodeIndex, NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex),
+                             attr->pid, i, srcNodeIndex, destNodeIndex,
+                             NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex),
                              NM_AT(attr->strategyAttr.memSize, i, destNodeIndex));
         }
         /* 部分迁移时保留原节点L2位，否则同源节点后续迁移请求可能会被拒绝 */
@@ -1295,7 +1296,8 @@ static void ChangePidRemoteMemoryByNuma(ProcessAttr *attr, int srcNode, int dest
 {
     int nrLocalNuma = GetProcessManager()->nrLocalNuma;
     for (int i = 0; i < nrLocalNuma; i++) {
-        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, destNode) = NM_AT(attr->strategyAttr.initRemoteMemRatio, i, srcNode);
+        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, destNode) =
+            NM_AT(attr->strategyAttr.initRemoteMemRatio, i, srcNode);
         NM_AT(attr->strategyAttr.initRemoteMemRatio, i, srcNode) = 0;
         NM_AT(attr->strategyAttr.memSize, i, destNode) = NM_AT(attr->strategyAttr.memSize, i, srcNode);
         NM_AT(attr->strategyAttr.memSize, i, srcNode) = 0;

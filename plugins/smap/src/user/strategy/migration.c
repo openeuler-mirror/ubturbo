@@ -456,7 +456,7 @@ OUT:
 typedef struct {
     ProcessAttr *process;
     bool pairSeen[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
-    uint32_t *nrMigratePages;    /* demote+swap：l→r */
+    uint32_t *nrMigratePages; /* demote+swap：l→r */
     uint32_t *nrMigrateBackPages; /* promote+swap：r→l */
 } PairPlanMatrixStage;
 
@@ -1407,8 +1407,9 @@ static void CalProcessNuma(StrategyAttribute *strategyAttr)
             continue;
         }
         for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-            double resRatio = ((double)NM_AT(strategyAttr->allocRemoteNrPages, i, j) / strategyAttr->nrPagesPerLocalNuma[i]) -
-                              (NM_AT(strategyAttr->l3RemoteMemRatio, i, j) / HUNDRED);
+            double resRatio =
+                ((double)NM_AT(strategyAttr->allocRemoteNrPages, i, j) / strategyAttr->nrPagesPerLocalNuma[i]) -
+                (NM_AT(strategyAttr->l3RemoteMemRatio, i, j) / HUNDRED);
             int32_t tmp = ceil(strategyAttr->nrPagesPerLocalNuma[i] * resRatio);
             SMAP_LOGGER_DEBUG("CalProcessNuma l3Ratio[%d][%d]: %.2lf, resRatio: %.2lf, tmp: %d.", i, j,
                               NM_AT(strategyAttr->l3RemoteMemRatio, i, j), resRatio, tmp);

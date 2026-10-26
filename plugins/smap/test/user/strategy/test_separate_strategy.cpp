@@ -154,16 +154,19 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KAbnormal)
     ProcessAttr process;
     struct MigList mlist[MAX_NODES][MAX_NODES];
     process.separateParam.freqWt = 0;
-    process.numaAttr.numaNodes = 0b01100011;
 
     MOCKER(InitSeparateParam).stubs().will(ignoreReturnValue());
     MOCKER(CalcMaxMigrate).stubs().will(ignoreReturnValue());
     MOCKER(ShouldMigrate).stubs().will(returnValue(true));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    process.numaAttr.numaNodes = 0b01100011;
     MOCKER(BuildSelectKMlistAddr).stubs().will(returnValue(-ENOMEM));
     MOCKER(FreeMlist).stubs().will(ignoreReturnValue());
     int ret = SeparateStrategy(&process, mlist);
 
     EXPECT_EQ(-ENOMEM, ret);
+    FreeProcessAttrArrays(&process);
 }
 
 TEST_F(SeparateStrategyTest, TestSeparateStrategy4KNormal)
@@ -171,15 +174,19 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KNormal)
     ProcessAttr process;
     struct MigList mlist[MAX_NODES][MAX_NODES];
     process.separateParam.freqWt = 0;
+    process.numaAttr.numaNodes = 0b01100011;
 
     MOCKER(InitSeparateParam).stubs().will(ignoreReturnValue());
     MOCKER(CalcMaxMigrate).stubs().will(ignoreReturnValue());
     MOCKER(ShouldMigrate).stubs().will(returnValue(true));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     MOCKER(BuildSelectKMlistAddr).stubs().will(returnValue(0));
     MOCKER(FreeMlist).stubs().will(ignoreReturnValue());
     int ret = SeparateStrategy(&process, mlist);
 
     EXPECT_EQ(0, ret);
+    FreeProcessAttrArrays(&process);
 }
 
 void BuildActcData(int nid, const uint16_t data[], int size, ScanAttribute *scanAttribute)

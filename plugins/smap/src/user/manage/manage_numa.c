@@ -274,7 +274,8 @@ void CalRemoteNumaAllocPerPid(int i, int j, uint32_t tmpNrPagesToUse,
         // 1）每个PID最大迁出量/总最大迁出量 = 最大迁出量比例
         tmpRatioPerPid =
             (double)attr->strategyAttr.nrPagesPerLocalNuma[i] *
-            ((NM_AT(attr->strategyAttr.initRemoteMemRatio, i, j) - NM_AT(attr->strategyAttr.l2RemoteMemRatio, i, j)) / HUNDRED) /
+            ((NM_AT(attr->strategyAttr.initRemoteMemRatio, i, j) - NM_AT(attr->strategyAttr.l2RemoteMemRatio, i, j)) /
+             HUNDRED) /
             tmpMaxAllocNrPages[i][j];
         SMAP_LOGGER_DEBUG("CalRemoteNumaAllocPerPid 1: %u [%d][%d]: %.2lf %u.", tmpNrPagesToUse, i, j, tmpRatioPerPid,
                           attr->strategyAttr.nrPagesPerLocalNuma[i]);

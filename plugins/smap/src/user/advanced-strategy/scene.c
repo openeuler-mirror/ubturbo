@@ -474,7 +474,8 @@ void ConfigMultiVmRatio(struct ProcessManager *manager)
         int l1Node = GetAttrL1(current);
         int l2Node = GetAttrL2(current) - manager->nrLocalNuma;
         if (l1Node >= 0 && l2Node >= 0) {
-            int localPages = p->nrPages * (HUNDRED - NM_AT(current->strategyAttr.l2RemoteMemRatio, l1Node, l2Node)) / HUNDRED;
+            int localPages =
+                p->nrPages * (HUNDRED - NM_AT(current->strategyAttr.l2RemoteMemRatio, l1Node, l2Node)) / HUNDRED;
             surpluses[i] = localPages - p->nrL1Guarantee;
         } else {
             surpluses[i] = 0; // 后续流程中不会更改配比
