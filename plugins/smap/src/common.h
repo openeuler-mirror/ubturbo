@@ -37,15 +37,4 @@
 	((SMAP_MAX_NUMNODES + sizeof(unsigned long) * 8 - 1) / \
 	 (sizeof(unsigned long) * 8))
 
-/* [split-compat] 旧编译期节点宏暂时保留，供尚未迁移的 user 态与 DT 引用；
- * 待用户态节点维度全部切换为运行期 cap 后统一删除 */
-#ifndef USE_DT
-#define SMAP_MAX_LOCAL_NUMA_NODES 8
-#else
-#define SMAP_MAX_LOCAL_NUMA_NODES 4
-#endif
-#define SMAP_MAX_REMOTE_NUMA_NODES 18
-#define SMAP_MAX_NUMA_NODES \
-	(SMAP_MAX_LOCAL_NUMA_NODES + SMAP_MAX_REMOTE_NUMA_NODES)
-
 #endif /* SMAP_COMMON_H */

@@ -35,7 +35,7 @@ struct NumaUbFluxMb {
 
 struct UbFluxMbStatistic {
     int len;
-    struct NumaUbFluxMb flux[REMOTE_NUMA_NUM];
+    struct NumaUbFluxMb flux[SMAP_MAX_NUMNODES];
 };
 
 #define SMAP_IOCTL_UB_WATCH_CMD _IOR(SMAP_ACCESS_MAGIC, 11, struct UbFluxMbStatistic)

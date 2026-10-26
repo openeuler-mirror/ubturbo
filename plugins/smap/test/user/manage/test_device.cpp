@@ -18,6 +18,13 @@
 
 using namespace std;
 
+// Test-only compat: old compile-time NUMA constants (8 local + 18 remote)
+#define OLD_REMOTE_NUMA_NUM 18
+#define OLD_REMOTE_NUMA_BITS 18
+#define OLD_LOCAL_NUMA_NUM 8
+#define OLD_LOCAL_NUMA_BITS 8
+#define OLD_MAX_NODES (OLD_LOCAL_NUMA_NUM + OLD_REMOTE_NUMA_NUM)
+
 static struct dirent MakeDirent(const char *name)
 {
     struct dirent entry = {};
@@ -103,7 +110,7 @@ TEST_F(DeviceTest, TestDeinitTrackingDev)
 extern "C" bool IsLocalNuma(unsigned long nid);
 TEST_F(DeviceTest, TestIsLocalNumaExceedLocalNumaNum)
 {
-    bool ret = IsLocalNuma(LOCAL_NUMA_NUM);
+    bool ret = IsLocalNuma(OLD_LOCAL_NUMA_NUM);
     EXPECT_FALSE(ret);
 }
 

@@ -25,8 +25,10 @@ struct remote_ram_range {
 
 struct remote_ram_snapshot {
 	u32 nr_ranges;
-	u64 page_count_4k[SMAP_MAX_NUMNODES];
-	u64 page_count_2m[SMAP_MAX_NUMNODES];
+	/* 内核内部 per-node 定维：使用内核编译期 MAX_NUMNODES，与 ABI 定宽
+	 * SMAP_MAX_NUMNODES 解耦（见 access_pid.h 同名约定） */
+	u64 page_count_4k[MAX_NUMNODES];
+	u64 page_count_2m[MAX_NUMNODES];
 	struct remote_ram_range ranges[];
 };
 

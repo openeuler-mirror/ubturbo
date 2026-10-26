@@ -112,3 +112,111 @@ TEST_F(AccessIoctlTest, TestIoctlSetRemoteScanModeFailed)
     MOCKER((int (*)(int, unsigned long, void *))ioctl).stubs().will(returnValue(-1));
     IoctlSetRemoteScanMode(2);
 }
+/* ---- GetNodeCapFromStatus：Mems_allowed 打印宽度解析获取 cap（方案 F） ---- */
+
+/* 实机样例（openEuler 24.03 aarch64，CONFIG_NODES_SHIFT=8 → MAX_NUMNODES=256） */
+extern "C" int32_t ParseNodeCapFromLine(const char *line, uint32_t *cap);
+extern "C" int32_t GetNodeCapFromStatus(uint32_t *cap);
+TEST_F(AccessIoctlTest, TestParseNodeCapNormal)
+{
+    uint32_t cap = 0;
+    int32_t ret = ParseNodeCapFromLine(
+        "Mems_allowed:\t00000000,00000000,00000000,00000000,00000000,00000000,00000000,0000140f\n", &cap);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(SMAP_NODE_CAP_LIMIT / 4, cap); /* 64 个 hex 字符 → 256 */
+}
+
+TEST_F(AccessIoctlTest, TestParseNodeCapNarrow)
+{
+    uint32_t cap = 0;
+    int32_t ret = ParseNodeCapFromLine("Mems_allowed:\t0000000000000003\n", &cap);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(64U, cap); /* 16 个 hex 字符 → 64 */
+}
+
+/* 值本身不参与解析：全 0 位图与全置位位图宽度相同，cap 相同 */
+TEST_F(AccessIoctlTest, TestParseNodeCapValueIrrelevant)
+{
+    uint32_t capAllZero = 0;
+    uint32_t capAllSet = 0;
+    EXPECT_EQ(0, ParseNodeCapFromLine(
+        "Mems_allowed:\t00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000\n", &capAllZero));
+    EXPECT_EQ(0, ParseNodeCapFromLine(
+        "Mems_allowed:\tffffffff,ffffffff,ffffffff,ffffffff,ffffffff,ffffffff,ffffffff,ffffffff\n", &capAllSet));
+    EXPECT_EQ(capAllZero, capAllSet);
+}
+
+TEST_F(AccessIoctlTest, TestParseNodeCapFieldNotFound)
+{
+    uint32_t cap = 0;
+    int32_t ret = ParseNodeCapFromLine("Cpus_allowed:\t00000000,00000003\n", &cap);
+    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ((uint32_t)SMAP_NODE_CAP_LIMIT, cap); /* 失败即回退 */
+}
+
+/* Mems_allowed_list 是 %pbl 压缩区间列表，无宽度信息，不能误匹配 */
+TEST_F(AccessIoctlTest, TestParseNodeCapListLineRejected)
+{
+    uint32_t cap = 0;
+    int32_t ret = ParseNodeCapFromLine("Mems_allowed_list:\t0-3,10,12\n", &cap);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(AccessIoctlTest, TestParseNodeCapBadChar)
+{
+    uint32_t cap = 0;
+    int32_t ret = ParseNodeCapFromLine("Mems_allowed:\t00000000,0000000g\n", &cap);
+    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ((uint32_t)SMAP_NODE_CAP_LIMIT, cap);
+}
+
+TEST_F(AccessIoctlTest, TestParseNodeCapEmpty)
+{
+    uint32_t cap = 0;
+    int32_t ret = ParseNodeCapFromLine("Mems_allowed:\t\n", &cap);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(AccessIoctlTest, TestParseNodeCapNotPowerOfTwo)
+{
+    uint32_t cap = 0;
+    int32_t ret = ParseNodeCapFromLine("Mems_allowed:\t000000000000\n", &cap); /* 12 hex → 48 */
+    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ((uint32_t)SMAP_NODE_CAP_LIMIT, cap);
+}
+
+TEST_F(AccessIoctlTest, TestParseNodeCapExceedLimit)
+{
+    char line[512];
+    uint32_t cap = 0;
+    int n = snprintf(line, sizeof(line), "Mems_allowed:\t");
+    for (int i = 0; i < 300; i++) { /* 300 hex → 1200 > SMAP_NODE_CAP_LIMIT */
+        line[n++] = '0';
+    }
+    line[n] = '\0';
+    int32_t ret = ParseNodeCapFromLine(line, &cap);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(AccessIoctlTest, TestParseNodeCapNullArgs)
+{
+    uint32_t cap = 0;
+    EXPECT_EQ(-EINVAL, ParseNodeCapFromLine(nullptr, &cap));
+    EXPECT_EQ(-EINVAL, ParseNodeCapFromLine("Mems_allowed:\t00000003\n", nullptr));
+}
+
+/* 真机 /proc/self/status：UT 运行于 Linux 服务器，内核必提供该字段且宽度合法 */
+TEST_F(AccessIoctlTest, TestGetNodeCapFromStatusRealFile)
+{
+    uint32_t cap = 0;
+    int32_t ret = GetNodeCapFromStatus(&cap);
+    EXPECT_EQ(0, ret);
+    EXPECT_GE(cap, 4U);
+    EXPECT_LE(cap, (uint32_t)SMAP_NODE_CAP_LIMIT);
+    EXPECT_EQ(0U, cap & (cap - 1)); /* 2 的幂 */
+}
+
+TEST_F(AccessIoctlTest, TestGetNodeCapFromStatusNullArg)
+{
+    EXPECT_EQ(-EINVAL, GetNodeCapFromStatus(nullptr));
+}

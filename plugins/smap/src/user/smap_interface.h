@@ -27,10 +27,10 @@ extern "C" {
 #define MAX_MIGRATION_GROUP_NUM 8
 #endif
 #ifndef MAX_GROUP_LOCAL_NUMA
-#define MAX_GROUP_LOCAL_NUMA LOCAL_NUMA_NUM
+#define MAX_GROUP_LOCAL_NUMA 8
 #endif
 #ifndef MAX_GROUP_REMOTE_NUMA
-#define MAX_GROUP_REMOTE_NUMA REMOTE_NUMA_NUM
+#define MAX_GROUP_REMOTE_NUMA 18
 #endif
 #define ADAPT_ALLOC_PERIOD 1000
 #define SCAN_MIGRATE_PERIOD LIGHT_STABLE_MIGRATE_CYCLE
@@ -78,7 +78,7 @@ struct MigrateOutPayload {
     int srcNid; // -1表示自动选择来源；合法本地NUMA表示固定迁出来源
     pid_t pid;
     int count;
-    struct MigrateOutPayloadInner inner[REMOTE_NUMA_NUM];
+    struct MigrateOutPayloadInner inner[SMAP_MAX_NUMNODES];
 };
 
 struct MigrateOutMsg {
@@ -124,7 +124,7 @@ struct MigrateBackMsg {
 struct RemovePayload {
     pid_t pid;
     int count; // count为0时按PID整体删除；大于0时按nid[]局部删除普通PID的远端NUMA
-    int nid[REMOTE_NUMA_NUM]; // count大于0时表示需要删除的远端NUMA集合
+    int nid[SMAP_MAX_NUMNODES]; // count大于0时表示需要删除的远端NUMA集合
 };
 
 struct RemoveMsg {

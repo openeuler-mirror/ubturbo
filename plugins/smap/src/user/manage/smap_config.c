@@ -34,7 +34,7 @@
 static inline size_t CalcNumaPayloadNum(void)
 {
     int nrLocalNuma = GetNrLocalNuma();
-    return nrLocalNuma * REMOTE_NUMA_NUM + REMOTE_NUMA_NUM;
+    return nrLocalNuma * SMAP_MAX_NUMNODES + SMAP_MAX_NUMNODES;
 }
 
 /* CalcNumaPayloadLen - Calculate numa payload length */
@@ -49,10 +49,32 @@ static inline size_t CalcNumaConfigLen(void)
     return PAYLOAD_HEADER_LEN + CalcNumaPayloadLen();
 }
 
-/* CalcProcessConfigLen - Calculate process config length */
-static inline size_t CalcProcessConfigLen(int nrProcess)
+/* CalcProcessPayloadStride - Calculate single V3 record byte size */
+static inline size_t CalcProcessPayloadStride(uint32_t nrWords, int count)
 {
-    return PAYLOAD_HEADER_LEN + (nrProcess * CONFIG_PROC_LEN);
+    return CONFIG_PROC_HEADER_LEN + (size_t)nrWords * sizeof(unsigned long) +
+           (size_t)count * sizeof(struct PersistRemoteTarget);
+}
+
+/* CalcProcessPayloadBytes - Calculate total serialized process payload bytes */
+static size_t CalcProcessPayloadBytes(const struct ProcessPayload *payload, int nrPayload)
+{
+    size_t bytes = 0;
+    uint32_t nrWords = NumaWordsForCap();
+
+    if (payload == NULL) {
+        return 0;
+    }
+    for (int i = 0; i < nrPayload; i++) {
+        bytes += CalcProcessPayloadStride(nrWords, payload[i].count);
+    }
+    return bytes;
+}
+
+/* CalcProcessConfigLen - Calculate process config length */
+static inline size_t CalcProcessConfigLen(size_t payloadBytes)
+{
+    return PAYLOAD_HEADER_LEN + payloadBytes;
 }
 
 /* GetProcessConfigLen - Get process config length from process payload header */
@@ -61,9 +83,9 @@ static inline size_t GetProcessConfigLen(struct PayloadHeader *header)
     return PAYLOAD_HEADER_LEN + header->len;
 }
 
-static inline size_t CalcConfigLen(int nrProcess)
+static inline size_t CalcConfigLen(size_t processPayloadBytes)
 {
-    return CONFIG_HEADER_LEN + CalcNumaConfigLen() + CalcProcessConfigLen(nrProcess);
+    return CONFIG_HEADER_LEN + CalcNumaConfigLen() + CalcProcessConfigLen(processPayloadBytes);
 }
 
 /* JumpToNumaConfig - jump to numa config from config base addr */
@@ -185,20 +207,24 @@ static void WriteNumaConfig(char *base)
     struct PayloadHeader *header = (struct PayloadHeader *)base;
     struct NumaPayload *payload;
     int nrLocalNuma = GetNrLocalNuma();
+    int cap = (int)GetNumaCap();
 
     header->len = CalcNumaPayloadLen();
     payload = (struct NumaPayload *)JumpToNumaPayload(base);
 
     for (int i = 0; i < nrLocalNuma; i++) {
-        for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
+        /* 行首指针提到内层循环外：避免每个元素经 NM_AT/NM_STRIDE 重复调用 GetNumaCap() */
+        const uint64_t *row = NM_ROW(numaInfo->privateSize, i);
+        for (int j = 0; j < SMAP_MAX_NUMNODES; j++) {
             payload->local = i;
-            payload->remote = j + nrLocalNuma;
-            payload->size = NM_AT(numaInfo->privateSize, i, j + nrLocalNuma);
+            payload->remote = j;
+            /* ABI 流固定 SMAP_MAX_NUMNODES 宽；j >= cap 的槽位非真实节点，补 0 对齐 */
+            payload->size = j < cap ? row[j] : 0;
             payload++;
         }
     }
-    for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
-        payload->size = numaInfo->sharedSize[i + nrLocalNuma];
+    for (int i = 0; i < SMAP_MAX_NUMNODES; i++) {
+        payload->size = numaInfo->sharedSize[i];
         payload++;
     }
 }
@@ -342,28 +368,35 @@ static int RecoverNumaConfig(char *numaBase)
 
     SMAP_LOGGER_DEBUG("Enter RecoverNumaConfig.");
     payload = (struct NumaPayload *)JumpToNumaPayload(numaBase);
-    for (int i = 0; i < GetNrLocalNuma(); i++) {
-        for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-            int remoteNid = j + GetNrLocalNuma();
+    /* cap 提到两层循环外：避免逐 (i,j) 重复调用 GetNumaCap() */
+    int cap = (int)GetNumaCap();
+    /* 本地节点数提到循环外：避免循环条件重复调用 GetNrLocalNuma() */
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int i = 0; i < nrLocalNuma; i++) {
+        /* 顺序读取私有区，j 与 WriteOneNumaConfig 的绝对 nid 布局对应；
+         * [0, nrLocalNuma) 区间槽位闲置为 0，不参与远端语义 */
+        for (int j = 0; j < SMAP_MAX_NUMNODES; j++) {
             // only called during initialization, no need to lock
-            NM_AT(numaInfo->privateSize, i, remoteNid) = payload->size;
-            NM_AT(numaInfo->privateUsedInfo, i, remoteNid).size = MBToPage(payload->size);
+            if (j < cap) {
+                NM_AT(numaInfo->privateSize, i, j) = payload->size;
+                NM_AT(numaInfo->privateUsedInfo, i, j).size = MBToPage(payload->size);
+            }
             SMAP_LOGGER_INFO("Numa privateSize[%d][%d] %u.", i, j, payload->size);
             payload++;
         }
     }
-    for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
-        numaInfo->sharedSize[i + GetNrLocalNuma()] = payload->size;
+    for (int i = 0; i < SMAP_MAX_NUMNODES; i++) {
+        numaInfo->sharedSize[i] = payload->size;
         SMAP_LOGGER_INFO("Numa sharedSize[%d] %u.", i, payload->size);
         payload++;
     }
-    for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-        int remoteNid = j + GetNrLocalNuma();
-        numaInfo->usedInfo[remoteNid].size = MBToPage(numaInfo->sharedSize[remoteNid]);
-        for (int i = 0; i < GetNrLocalNuma(); i++) {
-            numaInfo->usedInfo[remoteNid].size += MBToPage(NM_AT(numaInfo->privateSize, i, remoteNid));
+    /* payload 流（上两个循环）为固定 SMAP_MAX_NUMNODES 宽，此处仅汇总内存账本，按 cap 收敛 */
+    for (int j = nrLocalNuma; j < cap; j++) {
+        numaInfo->usedInfo[j].size = MBToPage(numaInfo->sharedSize[j]);
+        for (int i = 0; i < nrLocalNuma; i++) {
+            numaInfo->usedInfo[j].size += MBToPage(NM_AT(numaInfo->privateSize, i, j));
         }
-        SMAP_LOGGER_INFO("Numa usedInfo[%d] %u.", j, numaInfo->usedInfo[remoteNid].size);
+        SMAP_LOGGER_INFO("Numa usedInfo[%d] %u.", j, numaInfo->usedInfo[j].size);
     }
     SMAP_LOGGER_DEBUG("Exit RecoverNumaConfig.");
     return 0;
@@ -379,10 +412,12 @@ static void WriteOneNumaConfig(char *numaBase, struct NumaPayload *np)
     payload = (struct NumaPayload *)JumpToNumaPayload(numaBase);
 
     // Calculate numa payload pointer offset according to local and remote numa
+    // 布局按绝对 nid 下标：私有区每行占 SMAP_MAX_NUMNODES 槽位（[0, nrLocalNuma) 区间闲置），
+    // 共享区紧跟其后；与 RecoverNumaConfig 的顺序读取一一对应
     if (np->local < 0) {
-        offset = nrLocalNuma * REMOTE_NUMA_NUM + np->remote - nrLocalNuma;
+        offset = nrLocalNuma * SMAP_MAX_NUMNODES + np->remote;
     } else {
-        offset = (np->local * REMOTE_NUMA_NUM) + (np->remote - nrLocalNuma);
+        offset = (np->local * SMAP_MAX_NUMNODES) + np->remote;
     }
     SMAP_LOGGER_DEBUG("Numa payload pointer offset: %zu.", offset);
     payload += offset;
@@ -394,7 +429,7 @@ static void WriteOneNumaConfig(char *numaBase, struct NumaPayload *np)
 static int RestoreProcessTargetConfig(ProcessTargetConfig *config, uint8_t migrateMode, int srcNid, int count,
                                       const struct PersistRemoteTarget targets[])
 {
-    if (!config || !targets || count < 0 || count > REMOTE_NUMA_NUM ||
+    if (!config || !targets || count < 0 || count > SMAP_MAX_NUMNODES ||
         (migrateMode != MIG_RATIO_MODE && migrateMode != MIG_MEMSIZE_MODE) || srcNid < NUMA_NO_NODE ||
         srcNid >= GetNrLocalNuma()) {
         return -EINVAL;
@@ -408,7 +443,7 @@ static int RestoreProcessTargetConfig(ProcessTargetConfig *config, uint8_t migra
     bool remoteSeen[SMAP_MAX_NUMNODES] = { false };
     for (int i = 0; i < count; i++) {
         const struct PersistRemoteTarget *target = &targets[i];
-        bool valid = IsRemoteNidValid(target->nid) && !remoteSeen[target->nid];
+        bool valid = target->nid >= GetNrLocalNuma() && target->nid < SMAP_MAX_NUMNODES && !remoteSeen[target->nid];
         if (valid && migrateMode == MIG_RATIO_MODE) {
             valid = target->ratio <= HUNDRED && totalRatio + target->ratio <= HUNDRED;
         }
@@ -472,43 +507,39 @@ static bool IsRecoveredTargetConfigZero(const ProcessTargetConfig *config)
     return true;
 }
 
-static int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayload *payload)
+static int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayloadHeader *header, const NumaBitmap *numaNodes,
+                             const struct PersistRemoteTarget *targets)
 {
     /* 磁盘 payload 属于外部输入：type 会被用作 nr[] 数组下标，scanType 参与枚举比较，
      * 越界值必须拒绝，防止恢复后越界写 */
-    if (payload->type >= TYPE_MAX || payload->scanType >= SCAN_TYPE_MAX) {
-        SMAP_LOGGER_ERROR("Invalid persisted process %d type %u scanType %u.", payload->pid, payload->type,
-                          payload->scanType);
+    if (header->type >= TYPE_MAX || header->scanType >= SCAN_TYPE_MAX) {
+        SMAP_LOGGER_ERROR("Invalid persisted process %d type %u scanType %u.", header->pid, header->type,
+                          header->scanType);
         return -EINVAL;
     }
 
     ProcessTargetConfig activeConfig;
-    int ret = RestoreProcessTargetConfig(&activeConfig, payload->migrateMode, payload->srcNid, payload->count,
-                                         payload->migrateParam);
+    int ret = RestoreProcessTargetConfig(&activeConfig, header->migrateMode, header->srcNid, header->count, targets);
     if (ret) {
         return ret;
     }
 
-    /* numaNodes 净化：用户态访问器（InL1/InL2 等）只认 [0, MAX_NODES) 位域，
-     * 超出位属脏数据，掩掉后仅经 ADD_PID 下发内核，不拒绝恢复 */
-    const uint32_t validNumaMask = (1u << MAX_NODES) - 1;
-    if (payload->numaNodes & ~validNumaMask) {
-        SMAP_LOGGER_WARNING("pid %d recovered numaNodes %#x has invalid bits, sanitized.", payload->pid,
-                            payload->numaNodes);
+    attr->pid = header->pid;
+    /* 变长位图：解码出的尾部缓冲区为借用，深拷贝到 attr 自有缓冲区 */
+    if (!NumaBitmapCopy(&attr->numaAttr.numaNodes, numaNodes)) {
+        SMAP_LOGGER_ERROR("Copy numa bitmap for pid %d failed.", header->pid);
+        return -ENOMEM;
     }
-
-    attr->pid = payload->pid;
-    attr->numaAttr.numaNodes = payload->numaNodes & validNumaMask;
-    attr->type = payload->type;
-    attr->state = payload->state == PROC_MIGRATE ? PROC_IDLE : payload->state;
-    attr->scanType = payload->scanType;
-    attr->scanTime = payload->scanTime;
-    attr->duration = payload->duration;
+    attr->type = header->type;
+    attr->state = header->state == PROC_MIGRATE ? PROC_IDLE : header->state;
+    attr->scanType = header->scanType;
+    attr->scanTime = header->scanTime;
+    attr->duration = header->duration;
     attr->enableSwap = true;
     attr->isFirstScan = true;
     ApplyRecoveredTargetConfig(attr, &activeConfig);
-    /* 恢复持久化的 sync 旁路容量标记：payload 存 uint8_t，非 0 视为 true */
-    attr->ignoreRemoteCapacity = (payload->ignoreRemoteCapacity == 1);
+    /* 恢复持久化的 sync 旁路容量标记：记录存 uint8_t，非 0 视为 true */
+    attr->ignoreRemoteCapacity = (header->ignoreRemoteCapacity == 1);
     attr->autoRemoveWhenRemoteEmpty = attr->scanType == NORMAL_SCAN && IsRecoveredTargetConfigZero(&activeConfig);
     if (time(&attr->scanStart) == (time_t)-1) {
         SMAP_LOGGER_ERROR("get time error.");
@@ -525,14 +556,36 @@ static int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayload *pay
 static bool IsProcessConfigValid(char *processBase, size_t totalLen)
 {
     struct PayloadHeader *header = (struct PayloadHeader *)processBase;
-    size_t processConfigLen;
+    size_t processConfigLen = GetProcessConfigLen(header);
+    uint32_t nrWords = NumaWordsForCap();
 
-    if (header->len % CONFIG_PROC_LEN != 0) {
+    if ((CONFIG_HEADER_LEN + CalcNumaConfigLen() + processConfigLen) > totalLen) {
         SMAP_LOGGER_ERROR("Process config has wrong length: %u.", header->len);
         return false;
     }
-    processConfigLen = GetProcessConfigLen(header);
-    return (CONFIG_HEADER_LEN + CalcNumaConfigLen() + processConfigLen) <= totalLen;
+
+    /* V3 记录变长，按定长头 + 尾部柔性区逐条走 */
+    char *cur = JumpToProcessPayload(processBase);
+    size_t remaining = header->len;
+    while (remaining > 0) {
+        if (remaining < CONFIG_PROC_HEADER_LEN) {
+            SMAP_LOGGER_ERROR("Process config truncated, remaining %zu.", remaining);
+            return false;
+        }
+        struct ProcessPayloadHeader *h = (struct ProcessPayloadHeader *)cur;
+        if (h->nrWords != nrWords || h->count < 0 || h->count > SMAP_MAX_NUMNODES) {
+            SMAP_LOGGER_ERROR("Process config invalid record: nrWords %u, count %d.", h->nrWords, h->count);
+            return false;
+        }
+        size_t stride = CalcProcessPayloadStride(h->nrWords, h->count);
+        if (stride > remaining) {
+            SMAP_LOGGER_ERROR("Process config record overflows: %zu > %zu.", stride, remaining);
+            return false;
+        }
+        cur += stride;
+        remaining -= stride;
+    }
+    return true;
 }
 
 static inline bool HasProcessConfig(size_t totalLen)
@@ -547,43 +600,58 @@ static int RecoverProcessConfig(char *processBase)
     struct PayloadHeader *header = (struct PayloadHeader *)processBase;
     struct ProcessManager *manager = GetProcessManager();
     ProcessAttr *attr;
-    uint32_t nrPayload;
     bool errFlag = false;
 
     SMAP_LOGGER_DEBUG("Enter RecoverProcessConfig.");
-    nrPayload = header->len / CONFIG_PROC_LEN;
-    struct ProcessPayload *payload = (struct ProcessPayload *)JumpToProcessPayload(processBase);
-    for (uint32_t i = 0; i < nrPayload; i++, payload++) {
+    /* V3 记录变长：按定长头 + 尾部柔性区逐条解码 */
+    char *cur = JumpToProcessPayload(processBase);
+    size_t remaining = header->len;
+    while (remaining >= CONFIG_PROC_HEADER_LEN) {
+        struct ProcessPayloadHeader *h = (struct ProcessPayloadHeader *)cur;
+        size_t stride = CalcProcessPayloadStride(h->nrWords, h->count);
+        if (h->nrWords == 0 || stride > remaining) {
+            SMAP_LOGGER_ERROR("Corrupted process record, remaining %zu.", remaining);
+            errFlag = true;
+            break;
+        }
+        NumaBitmap numaNodes;
+        NumaBitmapBind(&numaNodes, (unsigned long *)(cur + CONFIG_PROC_HEADER_LEN), h->nrWords);
+        const struct PersistRemoteTarget *targets =
+            (const struct PersistRemoteTarget *)((unsigned long *)(cur + CONFIG_PROC_HEADER_LEN) + h->nrWords);
+        cur += stride;
+        remaining -= stride;
+
         /* 页类型一致性校验：pid 实际页类型须与 smap 当前模式匹配，否则内核扫描返回 -EINVAL；
          * 进程已退出（-ESRCH）同样跳过恢复 */
-        int hugeFlag = IsPidUsingHugePages(payload->pid);
+        int hugeFlag = IsPidUsingHugePages(h->pid);
         if (hugeFlag == -ESRCH || (hugeFlag != 0) != IsHugeMode()) {
-            SMAP_LOGGER_WARNING("pid %d page type mismatch smap mode, skip recover.", payload->pid);
+            SMAP_LOGGER_WARNING("pid %d page type mismatch smap mode, skip recover.", h->pid);
             continue;
         }
         /* pidType 与全局 pageType 解耦：按 payload 携带的 per-pid type 恢复，不再做全局一致性过滤 */
         attr = calloc(1, sizeof(ProcessAttr));
         if (!attr) {
-            SMAP_LOGGER_ERROR("Malloc for process %d failed.", payload->pid);
+            SMAP_LOGGER_ERROR("Malloc for process %d failed.", h->pid);
             errFlag = true;
             break;
         }
+        /* strategyAttr 二维数组为指针成员，须在此分配，否则 ApplyRecoveredTargetConfig 写 NULL 指针 */
         if (InitProcessAttrArrays(attr)) {
-            SMAP_LOGGER_ERROR("Init arrays for process %d failed.", payload->pid);
+            SMAP_LOGGER_ERROR("Init arrays for process %d failed.", h->pid);
             free(attr);
             errFlag = true;
             break;
         }
         InitProcessMigrationTargetState(attr);
-        int ret = AssignProcessAttr(attr, payload);
+        int ret = AssignProcessAttr(attr, h, &numaNodes, targets);
         if (ret) {
-            SMAP_LOGGER_ERROR("Skip invalid persisted process %d: %d.", payload->pid, ret);
+            SMAP_LOGGER_ERROR("Skip invalid persisted process %d: %d.", h->pid, ret);
             FreeProcessAttrArrays(attr);
             free(attr);
             continue;
         }
-        SMAP_LOGGER_INFO("ProcessPayload %d, type %hu, numaNodes %#x, state %hu, scan type %hu, scan time %u.",
-                         attr->pid, attr->type, attr->numaAttr.numaNodes, attr->state, attr->scanType, attr->scanTime);
+        SMAP_LOGGER_INFO("ProcessPayload %d, type %hu, nrWords %u, state %hu, scan type %hu, scan time %u.", attr->pid,
+                         attr->type, h->nrWords, attr->state, attr->scanType, attr->scanTime);
         for (uint32_t j = 0; j < attr->targetConfig.count; j++) {
             SMAP_LOGGER_INFO("ProcessPayload %d, destNid %d, ratio %u, memsize %llu.", attr->pid,
                              attr->targetConfig.targets[j].remoteNid, attr->targetConfig.targets[j].ratio,
@@ -605,30 +673,70 @@ static int RecoverProcessConfig(char *processBase)
     return 0;
 }
 
-static int WriteProcessConfig(char *processBase, struct ProcessPayload *p, int nrPayload)
+/* FreeProcessPayloadBitmaps - 回收构建载荷内深拷贝出的变长位图（幂等） */
+static void FreeProcessPayloadBitmaps(struct ProcessPayload *payload, int len)
 {
-    int ret;
+    if (payload == NULL) {
+        return;
+    }
+    for (int i = 0; i < len; i++) {
+        NumaBitmapFree(&payload[i].numaNodes);
+    }
+}
+
+static int WriteProcessConfig(char *processBase, const struct ProcessPayload *p, int nrPayload)
+{
     struct PayloadHeader *header = (struct PayloadHeader *)processBase;
-    struct ProcessPayload *payload;
+    uint32_t nrWords = NumaWordsForCap();
 
     SMAP_LOGGER_DEBUG("Enter WriteProcessConfig.");
-    header->len = CONFIG_PROC_LEN * nrPayload;
+    header->len = (uint32_t)CalcProcessPayloadBytes(p, nrPayload);
     if (header->len == 0) {
         return 0;
     }
-    payload = (struct ProcessPayload *)JumpToProcessPayload(processBase);
-    // memcpy_s return value is positive, so we use -ret
-    ret = memcpy_s(payload, header->len, p, header->len);
-    if (ret) {
-        SMAP_LOGGER_ERROR("WriteProcessConfig memcpy_s failed: %d.", -ret);
+
+    char *cur = JumpToProcessPayload(processBase);
+    for (int i = 0; i < nrPayload; i++) {
+        struct ProcessPayloadHeader *h = (struct ProcessPayloadHeader *)cur;
+        h->pid = p[i].pid;
+        h->scanType = p[i].scanType;
+        h->type = p[i].type;
+        h->state = p[i].state;
+        h->migrateMode = p[i].migrateMode;
+        h->srcNid = p[i].srcNid;
+        h->scanTime = p[i].scanTime;
+        h->duration = p[i].duration;
+        h->nrWords = nrWords;
+        h->count = p[i].count;
+        h->ignoreRemoteCapacity = p[i].ignoreRemoteCapacity;
+
+        unsigned long *bits = (unsigned long *)(cur + CONFIG_PROC_HEADER_LEN);
+        if (p[i].numaNodes.bits != NULL && p[i].numaNodes.nWords > 0) {
+            uint32_t n = p[i].numaNodes.nWords < nrWords ? p[i].numaNodes.nWords : nrWords;
+            if (memcpy_s(bits, (size_t)nrWords * sizeof(unsigned long), p[i].numaNodes.bits,
+                         (size_t)n * sizeof(unsigned long)) != EOK) {
+                SMAP_LOGGER_ERROR("Write bitmap for pid %d failed.", p[i].pid);
+                return -EINVAL;
+            }
+        }
+        struct PersistRemoteTarget *targets = (struct PersistRemoteTarget *)(bits + nrWords);
+        if (p[i].count > 0) {
+            size_t bytes = (size_t)p[i].count * sizeof(*targets);
+            if (memcpy_s(targets, bytes, p[i].migrateParam, bytes) != EOK) {
+                SMAP_LOGGER_ERROR("Write targets for pid %d failed.", p[i].pid);
+                return -EINVAL;
+            }
+        }
+        cur += CalcProcessPayloadStride(nrWords, p[i].count);
     }
-    return -ret;
+    SMAP_LOGGER_DEBUG("Exit WriteProcessConfig.");
+    return 0;
 }
 
 static int WriteTargetConfigToPayload(struct PersistRemoteTarget payloadTargets[], int *payloadCount,
                                       uint8_t *payloadMode, const ProcessTargetConfig *config)
 {
-    if (!payloadTargets || !payloadCount || !payloadMode || !config || config->count > REMOTE_NUMA_NUM ||
+    if (!payloadTargets || !payloadCount || !payloadMode || !config || config->count > SMAP_MAX_NUMNODES ||
         (config->migrateMode != MIG_RATIO_MODE && config->migrateMode != MIG_MEMSIZE_MODE) ||
         config->sourceLocalNid < NUMA_NO_NODE || config->sourceLocalNid >= GetNrLocalNuma()) {
         return -EINVAL;
@@ -640,7 +748,8 @@ static int WriteTargetConfigToPayload(struct PersistRemoteTarget payloadTargets[
     bool remoteSeen[SMAP_MAX_NUMNODES] = { false };
     for (uint32_t i = 0; i < config->count; i++) {
         const ProcessRemoteTarget *target = &config->targets[i];
-        if (!IsRemoteNidValid(target->remoteNid) || remoteSeen[target->remoteNid] ||
+        if (target->remoteNid < GetNrLocalNuma() || target->remoteNid >= SMAP_MAX_NUMNODES ||
+            remoteSeen[target->remoteNid] ||
             (config->migrateMode == MIG_RATIO_MODE &&
              (target->ratio > HUNDRED || totalRatio + target->ratio > HUNDRED)) ||
             (config->migrateMode == MIG_MEMSIZE_MODE &&
@@ -681,7 +790,7 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
         return 0;
     }
 
-    p = calloc(nrPayload, CONFIG_PROC_LEN);
+    p = calloc(nrPayload, sizeof(struct ProcessPayload));
     if (!p) {
         SMAP_LOGGER_ERROR("BuildAllProcessPayload calloc failed.");
         PidSlotReleaseRefs(all, n);
@@ -701,13 +810,21 @@ static int BuildAllProcessPayload(struct ProcessPayload **payload, int *len)
                                                                                       &attr->targetConfig;
         tmp->srcNid = effectiveConfig->sourceLocalNid;
         tmp->state = attr->state == PROC_MIGRATE ? PROC_IDLE : attr->state;
-        /* numaAttr.numaNodes is user-synthesized; persist the last read-back value. */
-        tmp->numaNodes = attr->numaAttr.numaNodes;
+        /* numaAttr.numaNodes is user-synthesized; persist the last read-back value.
+         * 深拷贝：避免序列化期间 attr 位图被并发替换后悬空 */
+        if (!NumaBitmapCopy(&tmp->numaNodes, &attr->numaAttr.numaNodes)) {
+            SMAP_LOGGER_ERROR("Build pid %d numa bitmap failed.", attr->pid);
+            FreeProcessPayloadBitmaps(p, nrPayload);
+            free(p);
+            PidSlotReleaseRefs(all, n);
+            return -ENOMEM;
+        }
         tmp->scanTime = attr->scanTime;
         tmp->duration = attr->duration;
         int ret = WriteTargetConfigToPayload(tmp->migrateParam, &tmp->count, &tmp->migrateMode, effectiveConfig);
         if (ret) {
             SMAP_LOGGER_ERROR("Build pid %d effective target config payload failed: %d.", attr->pid, ret);
+            FreeProcessPayloadBitmaps(p, nrPayload);
             free(p);
             PidSlotReleaseRefs(all, n);
             return ret;
@@ -774,8 +891,8 @@ static int ChangeProcessConfig(int fd)
         return ret;
     }
 
-    newConfigLen = CalcConfigLen(nrPayload);
-    SMAP_LOGGER_DEBUG("New config length with %d processes: %d.", nrPayload, newConfigLen);
+    newConfigLen = CalcConfigLen(CalcProcessPayloadBytes(payload, nrPayload));
+    SMAP_LOGGER_DEBUG("New config length with %d processes: %zu.", nrPayload, newConfigLen);
 
     // Extend config before writing process config
     if (newConfigLen > oldConfigLen) {
@@ -783,6 +900,7 @@ static int ChangeProcessConfig(int fd)
         ret = TruncateConfig(fd, newConfigLen);
         if (ret) {
             SMAP_LOGGER_ERROR("Extend smap config to %zu failed: %d.", newConfigLen, ret);
+            FreeProcessPayloadBitmaps(payload, nrPayload);
             free(payload);
             return ret;
         }
@@ -791,6 +909,7 @@ static int ChangeProcessConfig(int fd)
     ret = MapAndWriteProcessConfig(fd, newConfigLen, payload, nrPayload);
     if (ret) {
         SMAP_LOGGER_ERROR("Map and write process config failed: %d.", ret);
+        FreeProcessPayloadBitmaps(payload, nrPayload);
         free(payload);
         return ret;
     }
@@ -804,6 +923,7 @@ static int ChangeProcessConfig(int fd)
         }
     }
 
+    FreeProcessPayloadBitmaps(payload, nrPayload);
     free(payload);
     return ret;
 }
@@ -1044,7 +1164,7 @@ int SyncOneNumaConfig(int local, int remote, size_t size)
         SMAP_LOGGER_ERROR("SyncOneNumaConfig local %d is invalid.", local);
         return -EINVAL;
     }
-    if (remote < nrLocalNuma || remote >= nrLocalNuma + REMOTE_NUMA_NUM) {
+    if (remote < nrLocalNuma || remote >= SMAP_MAX_NUMNODES) {
         SMAP_LOGGER_ERROR("SyncOneNumaConfig remote %d is invalid.", remote);
         return -EINVAL;
     }

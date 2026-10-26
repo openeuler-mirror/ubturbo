@@ -1214,9 +1214,9 @@ int SmapQueryRemoteNumaFreqCodec::DecodeRequest(const TurboByteBuffer &buffer, u
 
 int SmapQueryRemoteNumaFreqCodec::EncodeResponse(TurboByteBuffer &buffer, uint64_t *freq, uint16_t len, int returnValue)
 {
-    if (len > REMOTE_NUMA_BITS) {
+    if (len > SMAP_MAX_NUMNODES) {
         IPC_CLIENT_LOGGER_ERROR("DecodeResponse: out value %d is invalid; must be between 0 and %d\n", len,
-                                REMOTE_NUMA_BITS);
+                                SMAP_MAX_NUMNODES);
         return -1;
     }
     size_t size = sizeof(uint16_t) + sizeof(uint64_t) * len + sizeof(int);
@@ -1255,9 +1255,9 @@ int SmapQueryRemoteNumaFreqCodec::DecodeResponse(TurboByteBuffer &buffer, uint64
     }
     returnValue = *static_cast<int *>(static_cast<void *>(buffer.data));
     uint16_t out = *static_cast<uint16_t *>(static_cast<void *>(buffer.data + sizeof(int)));
-    if (out > REMOTE_NUMA_BITS || out > length) {
+    if (out > SMAP_MAX_NUMNODES || out > length) {
         IPC_CLIENT_LOGGER_ERROR("DecodeResponse: out value %d is invalid; must be between 0 and %d and <= %d\n", out,
-                                REMOTE_NUMA_BITS, length);
+                                SMAP_MAX_NUMNODES, length);
         return IPC_ERROR;
     }
     if (buffer.len < sizeof(int) + sizeof(uint16_t) + out * sizeof(uint64_t)) {

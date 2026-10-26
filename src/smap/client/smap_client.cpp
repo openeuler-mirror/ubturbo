@@ -591,7 +591,7 @@ int ubturbo_smap_remote_numa_freq_query(uint16_t *numa, uint64_t *freq, uint16_t
         IPC_CLIENT_LOGGER_ERROR("[Smap] Query remote numa freq numa or freq is null.\n");
         return -EINVAL;
     }
-    if (length == 0 || length > REMOTE_NUMA_BITS) {
+    if (length == 0 || length > SMAP_MAX_NUMNODES) {
         IPC_CLIENT_LOGGER_ERROR("[Smap] Query remote numa freq length is %d.\n", length);
         return -EINVAL;
     }

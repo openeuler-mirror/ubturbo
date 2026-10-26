@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include <mockcpp/mockcpp.h>
 #include <mockcpp/mokc.h>
+#include <atomic>
 #include <cerrno>
 #include "securec.h"
 #include "smap_handler_msg.h"

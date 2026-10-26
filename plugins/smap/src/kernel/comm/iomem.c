@@ -212,7 +212,7 @@ struct remote_ram_snapshot *remote_ram_snapshot_create(void)
 		u64 size = range->end - range->start + 1;
 		int nid = range->numa_node;
 
-		if (unlikely(nid < 0 || nid >= SMAP_MAX_NUMNODES)) {
+		if (unlikely(nid < 0 || nid >= MAX_NUMNODES)) {
 			pr_err("invalid remote RAM snapshot node: %d, range: %u\n",
 			       nid, i);
 			kvfree(snapshot);
@@ -232,7 +232,7 @@ void remote_ram_snapshot_free(struct remote_ram_snapshot *snapshot)
 u64 remote_ram_snapshot_page_count(const struct remote_ram_snapshot *snapshot,
 				   int nid, int page_size)
 {
-	if (!snapshot || nid < 0 || nid >= SMAP_MAX_NUMNODES)
+	if (!snapshot || nid < 0 || nid >= MAX_NUMNODES)
 		return 0;
 	return page_size == g_pagesize_huge ? snapshot->page_count_2m[nid]
 					    : snapshot->page_count_4k[nid];
@@ -369,45 +369,43 @@ EXPORT_SYMBOL(get_node_page_cnt_iomem);
 int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size)
 {
 	struct ram_segment *seg;
+	struct ram_segment *cur;
 	int shift = __builtin_ctz(page_size);
 	int numa = NUMA_NO_NODE;
-	u64 *idx;
-
-	idx = kcalloc(MAX_NUMNODES, sizeof(*idx), GFP_KERNEL);
-	if (!idx)
-		return -ENOMEM;
+	u64 idx = 0;
 
 	read_lock(&rem_ram_list_lock);
 	list_for_each_entry(seg, &remote_ram_list, node) {
 		if (seg->numa_node >= MAX_NUMNODES) {
 			pr_err("numa %d is invalid\n", seg->numa_node);
 			read_unlock(&rem_ram_list_lock);
-			kfree(idx);
 			return -ERANGE;
 		}
 		if (pa < seg->start)
 			break;
 		if (pa <= seg->end) {
 			numa = seg->numa_node;
-			idx[numa] += ((pa - seg->start) >> shift);
 			break;
 		}
-		idx[seg->numa_node] += ((seg->end - seg->start + 1) >> shift);
 	}
-
-	if (unlikely(list_entry_is_head(seg, &remote_ram_list, node))) {
+	if (unlikely(numa == NUMA_NO_NODE)) {
 		read_unlock(&rem_ram_list_lock);
-		kfree(idx);
 		return -ERANGE;
+	}
+	/* 第二遍仅累计匹配节点在匹配段之前的页数：该函数处于扫描热路径，
+	 * 不再为整个节点空间做一次堆分配 */
+	list_for_each_entry(cur, &remote_ram_list, node) {
+		if (cur->numa_node != numa)
+			continue;
+		if (cur == seg) {
+			idx += (pa - cur->start) >> shift;
+			break;
+		}
+		idx += (cur->end - cur->start + 1) >> shift;
 	}
 	read_unlock(&rem_ram_list_lock);
-	if (unlikely(numa == NUMA_NO_NODE)) {
-		kfree(idx);
-		return -ERANGE;
-	}
 	*nid = numa;
-	*index = idx[numa];
-	kfree(idx);
+	*index = idx;
 	return 0;
 }
 
