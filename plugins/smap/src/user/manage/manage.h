@@ -330,12 +330,12 @@ typedef struct {
      * Pair-level compatibility fields generated from ProcessTargetConfig.
      * They are runtime state, not the source of the user-requested target.
      */
-    double initRemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
-    uint64_t memSize[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
-    uint32_t allocRemoteNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 根据账本计算的，各本地numa对应的远端page的数量
+    double *initRemoteMemRatio;
+    uint64_t *memSize;
+    uint32_t *allocRemoteNrPages; // 根据账本计算的，各本地numa对应的远端page的数量
     uint32_t nrPagesPerLocalNuma[SMAP_NODE_CAP_LIMIT]; // 根据账本计算的，各本地numa可支配的内存
-    double l2RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
-    double l3RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
+    double *l2RemoteMemRatio;
+    double *l3RemoteMemRatio;
     uint32_t nrMigratePages[MAX_NODES][MAX_NODES]; // 水线场景：消减后的迁移量；密度场景：接口设置的比例
     uint32_t remoteNrPagesAfterMigrate[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 迁移后记录账本
     MigrateDirection dir[SMAP_NODE_CAP_LIMIT]; // 算法决策各numa的迁出的方向 demote/promote/swap
@@ -612,6 +612,22 @@ int MoveProcessRemoteTarget(ProcessTargetConfig *config, int srcNid, int destNid
 const ProcessRemoteTarget *FindProcessRemoteTarget(const ProcessTargetConfig *config, int remoteNid);
 int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex);
 void InitProcessMigrationTargetState(ProcessAttr *attr);
+
+/*
+ * ProcessAttr 内嵌二维指针成员的生命周期管理：
+ * - InitProcessAttrArrays: 在 ProcessAttr 创建后分配 strategyAttr 的 [local][remote] 数组
+ *   （第一维按 nrLocalNuma 分配，列向按运行期 GetNumaCap() 收敛）
+ * - FreeProcessAttrArrays: 释放上述数组（幂等，重复调用安全）
+ * - CloneProcessAttrArrays: 浅拷贝出的 ProcessAttr 共享源数组指针，调用本函数
+ *   替换为独立深拷贝，避免候选配置写入污染 active 状态；失败时回收已克隆数组
+ *   并将 dst 数组指针全部置空，调用方直接丢弃 dst 即可
+ * - CopyProcessAttrArrays: 将 src 数组内容拷贝到 dst 已分配的数组（指针相同则跳过）
+ */
+int InitProcessAttrArrays(ProcessAttr *attr);
+void FreeProcessAttrArrays(ProcessAttr *attr);
+int CloneProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src);
+void CopyProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src);
+
 int ProcessManagerInit(uint32_t pageType);
 
 int DestroyProcessManager(void);

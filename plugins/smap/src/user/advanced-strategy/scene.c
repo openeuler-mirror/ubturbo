@@ -14,6 +14,7 @@
 #include "securec.h"
 #include "smap_user_log.h"
 #include "scene_info.h"
+#include "manage/node_matrix.h"
 #include "scene.h"
 
 static bool g_adaptLocalMem = true;
@@ -302,10 +303,10 @@ static void UpdateMemRatio(ProcessAttr *process)
         return;
     }
 
-    process->strategyAttr.l3RemoteMemRatio[l1Node][l2Node - nrLocalNuma] =
+    NM_AT(process->strategyAttr.l3RemoteMemRatio, l1Node, l2Node - nrLocalNuma) =
         HUNDRED - (double)p->nrL1Planed * HUNDRED / (p->nrPages + LITTLE_NUM);
     SMAP_LOGGER_INFO("Adjust l3RemoteMemRatio to %.2lf for pid %d who need %u pages.",
-                     process->strategyAttr.l3RemoteMemRatio[l1Node][l2Node - nrLocalNuma], process->pid,
+                     NM_AT(process->strategyAttr.l3RemoteMemRatio, l1Node, l2Node - nrLocalNuma), process->pid,
                      p->nrL1Guarantee);
 }
 
@@ -473,7 +474,7 @@ void ConfigMultiVmRatio(struct ProcessManager *manager)
         int l1Node = GetAttrL1(current);
         int l2Node = GetAttrL2(current) - manager->nrLocalNuma;
         if (l1Node >= 0 && l2Node >= 0) {
-            int localPages = p->nrPages * (HUNDRED - current->strategyAttr.l2RemoteMemRatio[l1Node][l2Node]) / HUNDRED;
+            int localPages = p->nrPages * (HUNDRED - NM_AT(current->strategyAttr.l2RemoteMemRatio, l1Node, l2Node)) / HUNDRED;
             surpluses[i] = localPages - p->nrL1Guarantee;
         } else {
             surpluses[i] = 0; // 后续流程中不会更改配比
@@ -509,9 +510,11 @@ static void GetMaxNuma(struct ProcessManager *manager, int *maxL1node, int *maxL
 static bool ProcessMultiNumaVmNode(ProcessAttr *process)
 {
     if (IsMultiNumaVm(process)) {
+        /* l2/l3RemoteMemRatio 第一维为 nrLocalNuma，列跨度 = 运行期 cap，仅拷贝实际分配的元素数 */
+        int nrLocalNuma = GetNrLocalNuma();
+        size_t bytes = sizeof(double) * NM_COUNT(nrLocalNuma);
         errno_t ret =
-            memcpy_s(process->strategyAttr.l3RemoteMemRatio, sizeof(double) * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM,
-                     process->strategyAttr.l2RemoteMemRatio, sizeof(double) * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM);
+            memcpy_s(process->strategyAttr.l3RemoteMemRatio, bytes, process->strategyAttr.l2RemoteMemRatio, bytes);
         if (ret != EOK) {
             SMAP_LOGGER_ERROR("memcpy l3 remote mem ratio failed.");
             return false;
@@ -576,13 +579,16 @@ static void SkipMultiProcessRatio(struct ProcessManager *manager)
 {
     struct PidSlot *all[MAX_PID_SLOTS];
     size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
+    /* l2/l3RemoteMemRatio 第一维为 nrLocalNuma，列跨度 = 运行期 cap，仅拷贝实际分配的元素数 */
+    int nrLocalNuma = GetNrLocalNuma();
+    size_t bytes = sizeof(double) * NM_COUNT(nrLocalNuma);
     for (size_t k = 0; k < n; k++) {
         ProcessAttr *current = all[k]->attr;
         if (current->scanType != NORMAL_SCAN) {
             continue;
         }
-        int ret = memcpy_s(current->strategyAttr.l3RemoteMemRatio, sizeof(double) * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM,
-                           current->strategyAttr.l2RemoteMemRatio, sizeof(double) * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM);
+        int ret =
+            memcpy_s(current->strategyAttr.l3RemoteMemRatio, bytes, current->strategyAttr.l2RemoteMemRatio, bytes);
         if (ret) {
             SMAP_LOGGER_ERROR("memcpy l3 remote mem ratio failed.");
         }

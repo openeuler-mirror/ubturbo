@@ -19,6 +19,7 @@
 #include "smap_user_log.h"
 #include "advanced-strategy/scene.h"
 #include "manage/manage.h"
+#include "manage/node_matrix.h"
 #include "manage/manage_internal.h"
 #include "manage/device.h"
 #include "manage/thread.h"
@@ -1382,11 +1383,11 @@ static void CalProcessNuma(StrategyAttribute *strategyAttr)
             continue;
         }
         for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-            double resRatio = ((double)strategyAttr->allocRemoteNrPages[i][j] / strategyAttr->nrPagesPerLocalNuma[i]) -
-                              (strategyAttr->l3RemoteMemRatio[i][j] / HUNDRED);
+            double resRatio = ((double)NM_AT(strategyAttr->allocRemoteNrPages, i, j) / strategyAttr->nrPagesPerLocalNuma[i]) -
+                              (NM_AT(strategyAttr->l3RemoteMemRatio, i, j) / HUNDRED);
             int32_t tmp = ceil(strategyAttr->nrPagesPerLocalNuma[i] * resRatio);
             SMAP_LOGGER_DEBUG("CalProcessNuma l3Ratio[%d][%d]: %.2lf, resRatio: %.2lf, tmp: %d.", i, j,
-                              strategyAttr->l3RemoteMemRatio[i][j], resRatio, tmp);
+                              NM_AT(strategyAttr->l3RemoteMemRatio, i, j), resRatio, tmp);
 
             if (tmp > 0) {
                 strategyAttr->nrMigratePages[j + nrLocalNuma][i] = tmp;
@@ -1425,7 +1426,8 @@ static void NumaSwapMemPool(ProcessAttr *current)
         return;
     }
 
-    for (int i = 0; i < LOCAL_NUMA_NUM; i++) {
+    /* memSize 等 5 个数组第一维仅分配 nrLocalNuma 行 */
+    for (int i = 0; i < GetNrLocalNuma(); i++) {
         if (!InAttrL1(current, i)) {
             continue;
         }
@@ -1433,7 +1435,7 @@ static void NumaSwapMemPool(ProcessAttr *current)
         for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
             StrategyAttribute *sa = &current->strategyAttr;
             int l2Node = GetNrLocalNuma() + j;
-            uint32_t targetNum = KBToPage(sa->memSize[i][j]);
+            uint32_t targetNum = KBToPage(NM_AT(sa->memSize, i, j));
             uint64_t whiteNum = current->scanAttr.actCount[i].whiteNum;
             /* 饱和减法：旧 whiteNum 残留时防止 localNum 下溢成超大值 */
             uint32_t localNum =

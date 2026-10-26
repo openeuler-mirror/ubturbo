@@ -34,6 +34,7 @@
 #include "strategy/migration.h"
 #include "manage.h"
 #include "manage_internal.h"
+#include "node_matrix.h"
 #include "smap_interface.h"
 
 #define UPDATE_CRITICAL_ERR_COUNT 5
@@ -432,6 +433,147 @@ void ResetActcData(ActcData *actcData[], int len)
     }
 }
 
+/*
+ * ProcessAttr 内需随对象分配/深拷贝/释放的堆数组字段表。
+ * F(field, rows)：rows = nrLocalNuma，[local][remote] 数组第一维按
+ * nrLocalNuma 分配，列向按运行期 GetNumaCap() 收敛（行主序扁平存储）。
+ * 新增/删除字段只需修改本表。
+ * 使用约定：语句式宏（F 体内含 goto/if 等）定义体须自带尾分号；
+ * 表达式式宏（如 sa->field == NULL ||）定义体不带分号，遍历处统一不加。
+ */
+#define FOR_EACH_PROCESS_ATTR_ARRAY(F) \
+    F(initRemoteMemRatio, nrLocalNuma) \
+    F(memSize, nrLocalNuma)            \
+    F(allocRemoteNrPages, nrLocalNuma) \
+    F(l2RemoteMemRatio, nrLocalNuma)   \
+    F(l3RemoteMemRatio, nrLocalNuma)
+
+int InitProcessAttrArrays(ProcessAttr *attr)
+{
+    if (attr == NULL) {
+        return -EINVAL;
+    }
+    int nrLocalNuma = GetNrLocalNuma();
+    if (nrLocalNuma <= 0 || nrLocalNuma > SMAP_MAX_NUMNODES) {
+        SMAP_LOGGER_ERROR("Invalid nrLocalNuma %d for pid %d arrays.", nrLocalNuma, attr->pid);
+        return -EINVAL;
+    }
+
+    StrategyAttribute *sa = &attr->strategyAttr;
+#define CALLOC_ARRAY(field, rows) sa->field = calloc(NM_COUNT(rows), sizeof(*sa->field));
+    FOR_EACH_PROCESS_ATTR_ARRAY(CALLOC_ARRAY)
+#undef CALLOC_ARRAY
+
+#define ARRAY_UNINIT(field, rows) sa->field == NULL ||
+    bool arrayUninit = (FOR_EACH_PROCESS_ATTR_ARRAY(ARRAY_UNINIT) 0);
+#undef ARRAY_UNINIT
+    if (arrayUninit) {
+        FreeProcessAttrArrays(attr);
+        SMAP_LOGGER_ERROR("Alloc strategy arrays for pid %d failed.", attr->pid);
+        return -ENOMEM;
+    }
+    return 0;
+}
+
+/* 幂等释放：仅回收 InitProcessAttrArrays/CloneProcessAttrArrays 分配的数组，
+ * 不触碰 scanAttr.actcData（浅拷贝出的候选与 active 共享该缓冲区） */
+void FreeProcessAttrArrays(ProcessAttr *attr)
+{
+    if (attr == NULL) {
+        return;
+    }
+    StrategyAttribute *sa = &attr->strategyAttr;
+#define FREE_ARRAY(field, rows) free(sa->field), sa->field = NULL;
+    FOR_EACH_PROCESS_ATTR_ARRAY(FREE_ARRAY)
+#undef FREE_ARRAY
+}
+
+static void *CloneArray(const void *src, size_t bytes)
+{
+    void *dst = malloc(bytes);
+    if (dst == NULL) {
+        return NULL;
+    }
+    if (memcpy_s(dst, bytes, src, bytes) != EOK) {
+        free(dst);
+        return NULL;
+    }
+    return dst;
+}
+
+/*
+ * 浅拷贝出的 ProcessAttr（*prepared = *active）与源共享数组指针，本函数将其
+ * 替换为独立深拷贝，避免候选配置写入污染 active 状态。scanAttr.actcData 不
+ * 属于配置状态，保持共享（候选生命周期内不会写 actcData）。
+ * 失败时回收已克隆的数组并把 dst 全部数组指针置空，调用方直接丢弃 dst 即可。
+ */
+int CloneProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src)
+{
+    if (dst == NULL || src == NULL) {
+        return -EINVAL;
+    }
+    const StrategyAttribute *ss = &src->strategyAttr;
+    int nrLocalNuma = GetNrLocalNuma();
+    if (nrLocalNuma <= 0 || nrLocalNuma > SMAP_MAX_NUMNODES) {
+        SMAP_LOGGER_ERROR("Invalid nrLocalNuma %d for cloning pid %d arrays.", nrLocalNuma, src->pid);
+        return -EINVAL;
+    }
+
+#define SRC_UNINIT(field, rows) ss->field == NULL ||
+    bool srcUninit = (FOR_EACH_PROCESS_ATTR_ARRAY(SRC_UNINIT) 0);
+#undef SRC_UNINIT
+    if (srcUninit) {
+        SMAP_LOGGER_ERROR("Source pid %d arrays not initialized.", src->pid);
+        return -EINVAL;
+    }
+
+    StrategyAttribute *sa = &dst->strategyAttr;
+    /* dst 当前与 src 共享数组指针：先全部置空，失败路径才能统一安全回收 */
+#define CLEAR_ARRAY(field, rows) sa->field = NULL;
+    FOR_EACH_PROCESS_ATTR_ARRAY(CLEAR_ARRAY)
+#undef CLEAR_ARRAY
+
+#define CLONE_ARRAY(field, rows)                                                \
+    do {                                                                        \
+        sa->field = CloneArray(ss->field, NM_COUNT(rows) * sizeof(*ss->field)); \
+        if (sa->field == NULL) {                                                \
+            goto out_fail;                                                      \
+        }                                                                       \
+    } while (0);
+    FOR_EACH_PROCESS_ATTR_ARRAY(CLONE_ARRAY)
+#undef CLONE_ARRAY
+    return 0;
+
+out_fail:
+    FreeProcessAttrArrays(dst);
+    SMAP_LOGGER_ERROR("Clone strategy arrays for pid %d failed.", src->pid);
+    return -ENOMEM;
+}
+
+/* 将 src 数组内容拷贝到 dst 已分配的数组；指针相同（栈上候选共享 active 数组，
+ * 内容已写穿）时跳过，避免 memcpy 源目的重叠 */
+void CopyProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src)
+{
+    if (dst == NULL || src == NULL) {
+        return;
+    }
+    StrategyAttribute *sa = &dst->strategyAttr;
+    const StrategyAttribute *ss = &src->strategyAttr;
+    int nrLocalNuma = GetNrLocalNuma();
+    if (nrLocalNuma <= 0 || nrLocalNuma > SMAP_MAX_NUMNODES) {
+        return;
+    }
+#define COPY_ARRAY_IF_DIFFERENT(field, rows)                    \
+    do {                                                        \
+        if (sa->field != NULL && sa->field != ss->field) {      \
+            size_t bytes = NM_COUNT(rows) * sizeof(*sa->field); \
+            (void)memcpy_s(sa->field, bytes, ss->field, bytes); \
+        }                                                       \
+    } while (0);
+    FOR_EACH_PROCESS_ATTR_ARRAY(COPY_ARRAY_IF_DIFFERENT)
+#undef COPY_ARRAY_IF_DIFFERENT
+}
+
 static void FreeProceccesAttr(ProcessAttr *attr)
 {
     if (attr == NULL) {
@@ -440,6 +582,7 @@ static void FreeProceccesAttr(ProcessAttr *attr)
     if (attr->scanAttr.actcData) {
         ResetActcData(attr->scanAttr.actcData, MAX_NODES);
     }
+    FreeProcessAttrArrays(attr);
     free(attr);
 }
 
@@ -896,7 +1039,7 @@ void SetMultiNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
 
         /* Set the same ratio for all local NUMAs */
         for (int j = 0; j < nrLocalNuma && j < LOCAL_NUMA_NUM; j++) {
-            attr->strategyAttr.initRemoteMemRatio[j][l2Index] = param->numaParam[i].ratio;
+            NM_AT(attr->strategyAttr.initRemoteMemRatio, j, l2Index) = param->numaParam[i].ratio;
             SMAP_LOGGER_INFO("Multi-NUMA config destNid: %d, ratio: %d", remoteNid, param->numaParam[i].ratio);
         }
         AddAttrL2(attr, remoteNid);
@@ -916,6 +1059,11 @@ int AddProcess(ProcessParam *param, PidType type)
         SMAP_LOGGER_ERROR("Alloc memory for process failed.");
         return -ENOMEM;
     }
+    ret = InitProcessAttrArrays(attr);
+    if (ret) {
+        free(attr);
+        return ret;
+    }
     InitProcessMigrationTargetState(attr);
     attr->type = type;
 
@@ -923,6 +1071,7 @@ int AddProcess(ProcessParam *param, PidType type)
         ret = VMPreprocess(param->pid, attr);
         if (ret) {
             SMAP_LOGGER_ERROR("Preprocess VM process %d attribute failed, return code: %d.", param->pid, ret);
+            FreeProcessAttrArrays(attr);
             free(attr);
             return ret;
         }
@@ -935,6 +1084,7 @@ int AddProcess(ProcessParam *param, PidType type)
     ret = SetProcessConfig(attr, param, skipRemoteResidencyCheck);
     if (ret) {
         SMAP_LOGGER_ERROR("Set process %d config failed: %d.", param->pid, ret);
+        FreeProcessAttrArrays(attr);
         free(attr);
         return ret;
     }
@@ -966,6 +1116,7 @@ void DiscardProcessManageCandidate(ProcessManageCandidate *candidate)
         return;
     }
 
+    FreeProcessAttrArrays(candidate->prepared);
     free(candidate->prepared);
     if (candidate->slot) {
         PidSlotReleaseRefs(&candidate->slot, 1);
@@ -1007,6 +1158,12 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
             return -ENOMEM;
         }
         *prepared = *active;
+        ret = CloneProcessAttrArrays(prepared, active);
+        if (ret) {
+            free(prepared);
+            PutProcessAttr(active);
+            return ret;
+        }
     } else {
         if (g_processManager.nr[VM_TYPE] + g_processManager.nr[PROCESS_TYPE] >= GetCurrentMaxNrPid()) {
             SMAP_LOGGER_ERROR("nr of pid is out of limit.");
@@ -1016,12 +1173,18 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
         if (!prepared) {
             return -ENOMEM;
         }
+        ret = InitProcessAttrArrays(prepared);
+        if (ret) {
+            free(prepared);
+            return ret;
+        }
         InitProcessMigrationTargetState(prepared);
         prepared->pid = param->pid;
         prepared->type = type;
         if (param->scanType == NORMAL_SCAN) {
             ret = VMPreprocess(param->pid, prepared);
             if (ret) {
+                FreeProcessAttrArrays(prepared);
                 free(prepared);
                 return ret;
             }
@@ -1618,12 +1781,13 @@ static void ClearRemovedRemoteStrategy(ProcessAttr *attr, int remoteNid)
         return;
     }
 
-    for (int i = 0; i < LOCAL_NUMA_NUM; i++) {
-        attr->strategyAttr.initRemoteMemRatio[i][remoteIdx] = 0;
-        attr->strategyAttr.l2RemoteMemRatio[i][remoteIdx] = 0;
-        attr->strategyAttr.l3RemoteMemRatio[i][remoteIdx] = 0;
-        attr->strategyAttr.memSize[i][remoteIdx] = 0;
-        attr->strategyAttr.allocRemoteNrPages[i][remoteIdx] = 0;
+    /* initRemoteMemRatio 等 5 个数组第一维仅分配 nrLocalNuma 行 */
+    for (int i = 0; i < nrLocalNuma; i++) {
+        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, remoteIdx) = 0;
+        NM_AT(attr->strategyAttr.l2RemoteMemRatio, i, remoteIdx) = 0;
+        NM_AT(attr->strategyAttr.l3RemoteMemRatio, i, remoteIdx) = 0;
+        NM_AT(attr->strategyAttr.memSize, i, remoteIdx) = 0;
+        NM_AT(attr->strategyAttr.allocRemoteNrPages, i, remoteIdx) = 0;
         attr->strategyAttr.remoteNrPagesAfterMigrate[i][remoteIdx] = 0;
     }
     for (int i = 0; i < MAX_NODES; i++) {

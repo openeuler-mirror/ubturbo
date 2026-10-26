@@ -15,6 +15,7 @@
 #include "securec.h"
 #include "smap_user_log.h"
 #include "manage/manage.h"
+#include "manage/node_matrix.h"
 #include "strategy.h"
 #include "strategy_config.h"
 #include "separate_strategy.h"
@@ -589,7 +590,7 @@ static void UpdateSwapNum(ProcessAttr *process, uint64_t swapNum[LOCAL_NUMA_BITS
                 continue;
             }
             // memSize and nrMigratePages both being zero means no swap should happen for processes in MIG_MEMSIZE_MODE.
-            if (process->migrateMode == MIG_MEMSIZE_MODE && sa->memSize[localNid][remoteIndex] == 0 &&
+            if (process->migrateMode == MIG_MEMSIZE_MODE && NM_AT(sa->memSize, localNid, remoteIndex) == 0 &&
                 sa->nrMigratePages[localNid][remoteNid] == 0) {
                 continue;
             }

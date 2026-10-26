@@ -9,6 +9,7 @@
 #include "advanced-strategy/scene.h"
 #include "advanced-strategy/scene_info.h"
 #include "manage/manage.h"
+#include "manage/node_matrix.h"
 
 using namespace std;
 
@@ -312,8 +313,10 @@ TEST_F(SceneTest, TestUpdateMemRatio)
     process.sceneInfo.pageInfo[0].nrL1Planed = 30;
     process.sceneInfo.pageInfo[0].nrPages = 100;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     UpdateMemRatio(&process);
-    EXPECT_NEAR(ret, process.strategyAttr.l3RemoteMemRatio[0][0], 0.001);
+    EXPECT_NEAR(ret, NM_AT(process.strategyAttr.l3RemoteMemRatio, 0, 0), 0.001);
+    FreeProcessAttrArrays(&process);
 }
 
 extern "C" void ClearList(int arr[], int len);
@@ -485,11 +488,14 @@ TEST_F(SceneTest, TestConfigMultiVmRatio)
     MOCKER(IsReadyForAdapt).stubs().will(returnValue(true));
     current.sceneInfo.pageInfoIndex = 0;
     current.sceneInfo.pageInfo[0].nrPages = 10;
-    current.strategyAttr.l3RemoteMemRatio[0][0] = 100;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&current));
+    NM_AT(current.strategyAttr.l3RemoteMemRatio, 0, 0) = 100;
     current.sceneInfo.pageInfo[0].nrL1Guarantee = 11;
     MOCKER(AdjustVmMemRatio).stubs();
     ConfigMultiVmRatio(&manager);
-    EXPECT_EQ(100, current.strategyAttr.l3RemoteMemRatio[0][0]);
+    EXPECT_EQ(100, NM_AT(current.strategyAttr.l3RemoteMemRatio, 0, 0));
+    FreeProcessAttrArrays(&current);
 }
 
 extern "C" void GetMaxNuma(struct ProcessManager *manager, int *maxL1node, int *maxL2node);
@@ -519,9 +525,11 @@ TEST_F(SceneTest, TestConfigMultiVmRatioInGroups)
     current.numaAttr.numaNodes = 31;
     memset(&manager->slots, 0, sizeof(manager->slots));
     PidSlotAdd(manager, &current);
+    ASSERT_EQ(0, InitProcessAttrArrays(&current));
     MOCKER(ConfigMultiVmRatio).stubs();
     ConfigMultiVmRatioInGroups(manager);
     EXPECT_EQ(false, current.adaptMem.enableAdaptMem);
+    FreeProcessAttrArrays(&current);
 }
 
 TEST_F(SceneTest, TestConfigMultiVmRatioInGroupsTwo)
@@ -548,11 +556,14 @@ TEST_F(SceneTest, TestSkipMultiProcessRatio)
     PidSlotAdd(&manager, &current);
     current.next = NULL;
     current.scanType = NORMAL_SCAN;
-    current.strategyAttr.l2RemoteMemRatio[0][0] = 30;
-    current.strategyAttr.l3RemoteMemRatio[0][0] = 10;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&current));
+    NM_AT(current.strategyAttr.l2RemoteMemRatio, 0, 0) = 30;
+    NM_AT(current.strategyAttr.l3RemoteMemRatio, 0, 0) = 10;
 
     SkipMultiProcessRatio(&manager);
-    EXPECT_EQ(30, current.strategyAttr.l3RemoteMemRatio[0][0]);
+    EXPECT_EQ(30, NM_AT(current.strategyAttr.l3RemoteMemRatio, 0, 0));
+    FreeProcessAttrArrays(&current);
 }
 
 extern "C" void ConfigRatios(struct ProcessManager *manager);
@@ -568,11 +579,14 @@ TEST_F(SceneTest, TestConfigRatiosProcessType)
     manager.nr[VM_TYPE] = 0; /* 无 VM → 走 SkipMultiProcessRatio */
     current.next = NULL;
     current.scanType = NORMAL_SCAN;
-    current.strategyAttr.l2RemoteMemRatio[0][0] = 30;
-    current.strategyAttr.l3RemoteMemRatio[0][0] = 10;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&current));
+    NM_AT(current.strategyAttr.l2RemoteMemRatio, 0, 0) = 30;
+    NM_AT(current.strategyAttr.l3RemoteMemRatio, 0, 0) = 10;
 
     MOCKER(SkipMultiProcessRatio).expects(once());
     ConfigRatios(&manager);
+    FreeProcessAttrArrays(&current);
 }
 
 TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemTrue)
@@ -601,12 +615,15 @@ TEST_F(SceneTest, TestConfigRatiosVmTypeAdaptMemFalse)
     manager.tracking.pageSize = PAGESIZE_4K;
     manager.nr[VM_TYPE] = 1; /* 存在 VM 但关自适应 → 回落 SkipMultiProcessRatio */
     current.next = NULL;
-    current.strategyAttr.l2RemoteMemRatio[0][0] = 30;
-    current.strategyAttr.l3RemoteMemRatio[0][0] = 10;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&current));
+    NM_AT(current.strategyAttr.l2RemoteMemRatio, 0, 0) = 30;
+    NM_AT(current.strategyAttr.l3RemoteMemRatio, 0, 0) = 10;
 
     MOCKER(GetAdaptMem).stubs().will(returnValue(false));
     MOCKER(SkipMultiProcessRatio).expects(once());
     ConfigRatios(&manager);
+    FreeProcessAttrArrays(&current);
 }
 
 extern "C" bool GetAdaptMem(void);

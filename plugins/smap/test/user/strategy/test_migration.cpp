@@ -14,6 +14,7 @@
 #include "advanced-strategy/scene_info.h"
 #include "manage/device.h"
 #include "manage/manage.h"
+#include "manage/node_matrix.h"
 extern "C" int CalcDurationUs(struct timeval start, struct timeval end);
 extern "C" void ApplyUbBwStop(ProcessAttr *current, struct ProcessManager *manager);
 extern "C" int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload);
@@ -577,13 +578,15 @@ extern "C" void CalProcessNuma(StrategyAttribute *strategyAttr);
 TEST_F(MigrationTest, TestCalProcessNuma)
 {
     ProcessAttr attr = {};
-    attr.strategyAttr.nrPagesPerLocalNuma[0] = 100;
-    attr.strategyAttr.allocRemoteNrPages[0][0] = 200;
-    attr.strategyAttr.l3RemoteMemRatio[0][0] = 50;
-
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    attr.strategyAttr.nrPagesPerLocalNuma[0] = 100;
+    NM_AT(attr.strategyAttr.allocRemoteNrPages, 0, 0) = 200;
+    NM_AT(attr.strategyAttr.l3RemoteMemRatio, 0, 0) = 50;
+
     CalProcessNuma(&attr.strategyAttr);
     EXPECT_EQ(150, attr.strategyAttr.nrMigratePages[4][0]);
+    FreeProcessAttrArrays(&attr);
 }
 
 typedef struct {
@@ -624,14 +627,15 @@ TEST_F(MigrationTest, TestNumaSwapMemPool)
 {
     int l2Node = 4;
     ProcessAttr attr = {};
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(l2Node));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.numaAttr.numaNodes = 0x11;
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 5;
     attr.walkPage.nrPages[l2Node] = 5;
-    attr.strategyAttr.memSize[0][0] = 4096; // 2 hugepage
+    NM_AT(attr.strategyAttr.memSize, 0, 0) = 4096; // 2 hugepage
     g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.tracking.pageSize = g_pageSizeHuge;
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(l2Node));
 
     // promote case
     NumaSwapMemPool(&attr);
@@ -641,9 +645,10 @@ TEST_F(MigrationTest, TestNumaSwapMemPool)
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 140;
     attr.walkPage.nrPages[0] = 200;
     attr.walkPage.nrPages[l2Node] = 140;
-    attr.strategyAttr.memSize[0][0] = 307200; // 150 hugepage
+    NM_AT(attr.strategyAttr.memSize, 0, 0) = 307200; // 150 hugepage
     NumaSwapMemPool(&attr);
     EXPECT_EQ(10, attr.strategyAttr.nrMigratePages[0][l2Node]);
+    FreeProcessAttrArrays(&attr);
 }
 
 extern "C" void NumaMigReduceDeal(ProcessAttr *current);
@@ -651,13 +656,15 @@ TEST_F(MigrationTest, TestNumaMigReduceDeal)
 {
     ProcessAttr attr = {};
     attr.strategyAttr.nrPagesPerLocalNuma[0] = 100;
-    attr.strategyAttr.allocRemoteNrPages[0][0] = 200;
-    attr.strategyAttr.l3RemoteMemRatio[0][0] = 50;
-
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetRunMode).stubs().will(returnValue(0));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    NM_AT(attr.strategyAttr.allocRemoteNrPages, 0, 0) = 200;
+    NM_AT(attr.strategyAttr.l3RemoteMemRatio, 0, 0) = 50;
+
     NumaMigReduceDeal(&attr);
     EXPECT_EQ(150, attr.strategyAttr.nrMigratePages[4][0]);
+    FreeProcessAttrArrays(&attr);
 }
 
 static PairPlan MakePairPlan(pid_t pid, int localNid, int remoteNid, int remoteIndex, uint32_t targetPages,

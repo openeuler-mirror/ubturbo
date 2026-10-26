@@ -20,6 +20,7 @@
 #include "securec.h"
 #include "smap_user_log.h"
 #include "manage.h"
+#include "node_matrix.h"
 #include "advanced-strategy/scene.h"
 #include "smap_config.h"
 
@@ -444,8 +445,8 @@ static void ApplyRecoveredTargetConfig(ProcessAttr *attr, const ProcessTargetCon
             if (!InAttrL1(attr, localNid)) {
                 continue;
             }
-            attr->strategyAttr.initRemoteMemRatio[localNid][remoteIndex] = config->targets[i].ratio;
-            attr->strategyAttr.memSize[localNid][remoteIndex] = firstL1 ? config->targets[i].memSizeKB : 0;
+            NM_AT(attr->strategyAttr.initRemoteMemRatio, localNid, remoteIndex) = config->targets[i].ratio;
+            NM_AT(attr->strategyAttr.memSize, localNid, remoteIndex) = firstL1 ? config->targets[i].memSizeKB : 0;
             firstL1 = false;
         }
         AddAttrL2(attr, config->targets[i].remoteNid);
@@ -564,10 +565,17 @@ static int RecoverProcessConfig(char *processBase)
             errFlag = true;
             break;
         }
+        if (InitProcessAttrArrays(attr)) {
+            SMAP_LOGGER_ERROR("Init arrays for process %d failed.", payload->pid);
+            free(attr);
+            errFlag = true;
+            break;
+        }
         InitProcessMigrationTargetState(attr);
         int ret = AssignProcessAttr(attr, payload);
         if (ret) {
             SMAP_LOGGER_ERROR("Skip invalid persisted process %d: %d.", payload->pid, ret);
+            FreeProcessAttrArrays(attr);
             free(attr);
             continue;
         }
