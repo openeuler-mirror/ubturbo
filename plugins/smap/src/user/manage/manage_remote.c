@@ -53,7 +53,7 @@ void ClearProcessTargetConfig(ProcessTargetConfig *config)
 
 int CopyProcessTargetConfig(ProcessTargetConfig *dest, const ProcessTargetConfig *src)
 {
-    if (!dest || !src || src->count > REMOTE_NUMA_NUM ||
+    if (!dest || !src || src->count > SMAP_MAX_NUMNODES ||
         (src->migrateMode != MIG_RATIO_MODE && src->migrateMode != MIG_MEMSIZE_MODE)) {
         return -EINVAL;
     }
@@ -64,7 +64,7 @@ int CopyProcessTargetConfig(ProcessTargetConfig *dest, const ProcessTargetConfig
 
 bool RemoveProcessRemoteTarget(ProcessTargetConfig *config, int remoteNid)
 {
-    if (!config || config->count > REMOTE_NUMA_NUM) {
+    if (!config || config->count > SMAP_MAX_NUMNODES) {
         return false;
     }
 
@@ -86,7 +86,7 @@ bool RemoveProcessRemoteTarget(ProcessTargetConfig *config, int remoteNid)
 
 int MoveProcessRemoteTarget(ProcessTargetConfig *config, int srcNid, int destNid, uint64_t memSizeKB, int ratio)
 {
-    if (!config || config->count > REMOTE_NUMA_NUM || srcNid == destNid ||
+    if (!config || config->count > SMAP_MAX_NUMNODES || srcNid == destNid ||
         (config->migrateMode != MIG_RATIO_MODE && config->migrateMode != MIG_MEMSIZE_MODE) || ratio < 0) {
         return -EINVAL;
     }
@@ -120,7 +120,7 @@ int MoveProcessRemoteTarget(ProcessTargetConfig *config, int srcNid, int destNid
         return 0;
     }
     if (destIndex < 0) {
-        if (config->count == REMOTE_NUMA_NUM) {
+        if (config->count == SMAP_MAX_NUMNODES) {
             return -ENOSPC;
         }
         destIndex = (int)config->count++;
@@ -192,7 +192,7 @@ int ValidateProcessTargetConfig(const ProcessTargetConfig *config)
 
 const ProcessRemoteTarget *FindProcessRemoteTarget(const ProcessTargetConfig *config, int remoteNid)
 {
-    if (!config || config->count > REMOTE_NUMA_NUM) {
+    if (!config || config->count > SMAP_MAX_NUMNODES) {
         return NULL;
     }
 
@@ -202,17 +202,6 @@ const ProcessRemoteTarget *FindProcessRemoteTarget(const ProcessTargetConfig *co
         }
     }
     return NULL;
-}
-
-int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex)
-{
-    if (!remoteIndex || nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM || remoteNid < nrLocalNuma ||
-        remoteNid - nrLocalNuma >= REMOTE_NUMA_NUM) {
-        return -EINVAL;
-    }
-
-    *remoteIndex = remoteNid - nrLocalNuma;
-    return 0;
 }
 
 void InitProcessMigrationTargetState(ProcessAttr *attr)
@@ -234,7 +223,7 @@ void InitProcessMigrationTargetState(ProcessAttr *attr)
 
 int BuildProcessTargetConfigFromParam(const ProcessParam *param, ProcessTargetConfig *config)
 {
-    if (!param || !config || param->count < 0 || param->count > REMOTE_NUMA_NUM) {
+    if (!param || !config || param->count < 0 || param->count > SMAP_MAX_NUMNODES) {
         return -EINVAL;
     }
 
@@ -265,45 +254,46 @@ int BuildProcessTargetConfigFromParam(const ProcessParam *param, ProcessTargetCo
 }
 
 /* Migrate additional pages to remote NUMA in forward order (NUMA0 -> NUMA1 -> ...) */
-void MigratePagesToRemote(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES], uint64_t pages)
+void MigratePagesToRemote(ProcessAttr *attr, int remoteNid, const uint64_t pagesPerNuma[SMAP_MAX_NUMNODES],
+                          uint64_t pages)
 {
     uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
     int nrLocalNuma = GetNrLocalNuma();
     uint64_t pagesToMigrate = pages;
 
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM && pagesToMigrate > 0; i++) {
+    for (int i = 0; i < nrLocalNuma && pagesToMigrate > 0; i++) {
         if (InAttrL1(attr, i)) {
             uint64_t allocPages = MIN(pagesPerNuma[i], pagesToMigrate);
-            NM_AT(attr->strategyAttr.memSize, i, l2Index) += allocPages * (pageSize / KIB);
+            NM_AT(attr->strategyAttr.memSize, i, remoteNid) += allocPages * (pageSize / KIB);
             pagesToMigrate -= allocPages;
         }
     }
 }
 
-static void ClearSingleRemoteTarget(ProcessAttr *attr, int l2Index, int nrLocalNuma)
+static void ClearSingleRemoteTarget(ProcessAttr *attr, int remoteNid, int nrLocalNuma)
 {
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-        NM_AT(attr->strategyAttr.memSize, i, l2Index) = 0;
-        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] = 0;
+    for (int i = 0; i < nrLocalNuma; i++) {
+        NM_AT(attr->strategyAttr.memSize, i, remoteNid) = 0;
+        NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, i, remoteNid) = 0;
     }
 }
 
-static void AccountExistingRemotePagesByOldAccount(ProcessAttr *attr, int l2Index, uint64_t remotePages,
+static void AccountExistingRemotePagesByOldAccount(ProcessAttr *attr, int remoteNid, uint64_t remotePages,
                                                    uint64_t oldTotal, int nrLocalNuma)
 {
     uint64_t nrLeft = remotePages;
 
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+    for (int i = 0; i < nrLocalNuma; i++) {
         if (!InAttrL1(attr, i)) {
             continue;
         }
 
-        uint64_t oldPages = attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index];
+        uint64_t oldPages = NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, i, remoteNid);
         uint64_t nrPages = oldTotal == 0 ? 0 : remotePages * oldPages / oldTotal;
         if (nrPages > nrLeft) {
             nrPages = nrLeft;
         }
-        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] = nrPages;
+        NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, i, remoteNid) = nrPages;
         nrLeft -= nrPages;
     }
 
@@ -311,25 +301,25 @@ static void AccountExistingRemotePagesByOldAccount(ProcessAttr *attr, int l2Inde
         if (!InAttrL1(attr, i)) {
             continue;
         }
-        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] += nrLeft;
+        NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, i, remoteNid) += nrLeft;
         break;
     }
 }
 
-static void AccountExistingRemotePagesByLocalPages(ProcessAttr *attr, int l2Index,
-                                                   const uint64_t pagesPerNuma[MAX_NODES], uint64_t remotePages,
+static void AccountExistingRemotePagesByLocalPages(ProcessAttr *attr, int remoteNid,
+                                                   const uint64_t pagesPerNuma[SMAP_MAX_NUMNODES], uint64_t remotePages,
                                                    int nrLocalNuma)
 {
     uint64_t localTotal = 0;
     uint64_t nrLeft = remotePages;
 
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+    for (int i = 0; i < nrLocalNuma; i++) {
         if (InAttrL1(attr, i)) {
             localTotal += pagesPerNuma[i];
         }
     }
 
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+    for (int i = 0; i < nrLocalNuma; i++) {
         if (!InAttrL1(attr, i)) {
             continue;
         }
@@ -341,7 +331,7 @@ static void AccountExistingRemotePagesByLocalPages(ProcessAttr *attr, int l2Inde
         if (nrPages > nrLeft) {
             nrPages = nrLeft;
         }
-        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] = nrPages;
+        NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, i, remoteNid) = nrPages;
         nrLeft -= nrPages;
     }
 
@@ -349,12 +339,12 @@ static void AccountExistingRemotePagesByLocalPages(ProcessAttr *attr, int l2Inde
         if (!InAttrL1(attr, i)) {
             continue;
         }
-        attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] += nrLeft;
+        NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, i, remoteNid) += nrLeft;
         break;
     }
 }
 
-static void AccountExistingRemotePages(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES],
+static void AccountExistingRemotePages(ProcessAttr *attr, int remoteNid, const uint64_t pagesPerNuma[SMAP_MAX_NUMNODES],
                                        uint64_t remotePages, int nrLocalNuma)
 {
     uint64_t oldTotal = 0;
@@ -363,46 +353,46 @@ static void AccountExistingRemotePages(ProcessAttr *attr, int l2Index, const uin
         return;
     }
 
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
+    for (int i = 0; i < nrLocalNuma; i++) {
         if (InAttrL1(attr, i)) {
-            oldTotal += attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index];
+            oldTotal += NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, i, remoteNid);
         }
     }
 
     if (oldTotal > 0) {
-        AccountExistingRemotePagesByOldAccount(attr, l2Index, remotePages, oldTotal, nrLocalNuma);
+        AccountExistingRemotePagesByOldAccount(attr, remoteNid, remotePages, oldTotal, nrLocalNuma);
     } else {
-        AccountExistingRemotePagesByLocalPages(attr, l2Index, pagesPerNuma, remotePages, nrLocalNuma);
+        AccountExistingRemotePagesByLocalPages(attr, remoteNid, pagesPerNuma, remotePages, nrLocalNuma);
     }
 }
 
-static void SetSingleRemoteTargetPages(ProcessAttr *attr, int l2Index, const uint64_t pagesPerNuma[MAX_NODES],
+static void SetSingleRemoteTargetPages(ProcessAttr *attr, int remoteNid, const uint64_t pagesPerNuma[SMAP_MAX_NUMNODES],
                                        uint64_t targetPages, int nrLocalNuma)
 {
     uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
     uint64_t nrLeft = targetPages;
     int lastLocal = NUMA_NO_NODE;
 
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM && nrLeft > 0; i++) {
+    for (int i = 0; i < nrLocalNuma && nrLeft > 0; i++) {
         if (!InAttrL1(attr, i)) {
             continue;
         }
 
-        uint64_t accounted = attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index];
+        uint64_t accounted = NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, i, remoteNid);
         uint64_t capacity = accounted + pagesPerNuma[i];
         uint64_t nrPages = MIN(capacity, nrLeft);
-        NM_AT(attr->strategyAttr.memSize, i, l2Index) = nrPages * (pageSize / KIB);
+        NM_AT(attr->strategyAttr.memSize, i, remoteNid) = nrPages * (pageSize / KIB);
         nrLeft -= nrPages;
         lastLocal = i;
     }
 
     if (nrLeft > 0 && lastLocal != NUMA_NO_NODE) {
-        NM_AT(attr->strategyAttr.memSize, lastLocal, l2Index) += nrLeft * (pageSize / KIB);
+        NM_AT(attr->strategyAttr.memSize, lastLocal, remoteNid) += nrLeft * (pageSize / KIB);
     }
 }
 
 /* Recall pages from remote NUMA in reverse order (NUMA(n-1) -> ... -> NUMA1 -> NUMA0) */
-void RecallPagesFromRemote(ProcessAttr *attr, int l2Index, uint64_t pages)
+void RecallPagesFromRemote(ProcessAttr *attr, int remoteNid, uint64_t pages)
 {
     uint32_t pageSize = IsHugeMode() ? GetHugePageSize() : GetNormalPageSize();
     int nrLocalNuma = GetNrLocalNuma();
@@ -410,9 +400,9 @@ void RecallPagesFromRemote(ProcessAttr *attr, int l2Index, uint64_t pages)
 
     for (int i = nrLocalNuma - 1; i >= 0 && pagesToRecall > 0; i--) {
         if (InAttrL1(attr, i)) {
-            uint64_t existingMemSizePages = NM_AT(attr->strategyAttr.memSize, i, l2Index) / (pageSize / KIB);
+            uint64_t existingMemSizePages = NM_AT(attr->strategyAttr.memSize, i, remoteNid) / (pageSize / KIB);
             uint64_t recallPages = MIN(existingMemSizePages, pagesToRecall);
-            NM_AT(attr->strategyAttr.memSize, i, l2Index) -= recallPages * (pageSize / KIB);
+            NM_AT(attr->strategyAttr.memSize, i, remoteNid) -= recallPages * (pageSize / KIB);
             pagesToRecall -= recallPages;
         }
     }
@@ -420,7 +410,7 @@ void RecallPagesFromRemote(ProcessAttr *attr, int l2Index, uint64_t pages)
 
 /* Handle single remote NUMA scenario: single local+single remote, or multi-local+single remote */
 int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma,
-                              const uint64_t pagesPerNuma[MAX_NODES])
+                              const uint64_t pagesPerNuma[SMAP_MAX_NUMNODES])
 {
     if (!pagesPerNuma) {
         return -EINVAL;
@@ -429,12 +419,10 @@ int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLoca
     int remoteNid = param->numaParam[0].nid;
 
     /* Validate remote NUMA node */
-    if (remoteNid < nrLocalNuma || remoteNid >= nrLocalNuma + REMOTE_NUMA_NUM) {
+    if (remoteNid < nrLocalNuma || remoteNid >= SMAP_MAX_NUMNODES) {
         SMAP_LOGGER_WARNING("Invalid remote numa %d for pid %d, nrLocalNuma: %d.", remoteNid, attr->pid, nrLocalNuma);
         return -EINVAL;
     }
-
-    int l2Index = remoteNid - nrLocalNuma;
 
     /* Calculate target pages and pages already on remote NUMA */
     uint64_t targetPages = IsHugeMode() ? KBToHugePage(param->numaParam[0].memSize) :
@@ -442,13 +430,13 @@ int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLoca
     uint64_t remoteExistingPages = pagesPerNuma[remoteNid];
 
     /* Set ratio for all local NUMAs */
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, l2Index) = param->numaParam[0].ratio;
+    for (int i = 0; i < nrLocalNuma; i++) {
+        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, remoteNid) = param->numaParam[0].ratio;
     }
 
-    ClearSingleRemoteTarget(attr, l2Index, nrLocalNuma);
-    AccountExistingRemotePages(attr, l2Index, pagesPerNuma, remoteExistingPages, nrLocalNuma);
-    SetSingleRemoteTargetPages(attr, l2Index, pagesPerNuma, targetPages, nrLocalNuma);
+    ClearSingleRemoteTarget(attr, remoteNid, nrLocalNuma);
+    AccountExistingRemotePages(attr, remoteNid, pagesPerNuma, remoteExistingPages, nrLocalNuma);
+    SetSingleRemoteTargetPages(attr, remoteNid, pagesPerNuma, targetPages, nrLocalNuma);
 
     attr->migrateParam[0].memSize = param->numaParam[0].memSize;
     attr->migrateParam[0].nid = remoteNid;
@@ -462,11 +450,12 @@ int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLoca
 
 static void ClearCompatibleProcessTargets(ProcessAttr *attr)
 {
-    /* initRemoteMemRatio 等 5 个数组第一维仅分配 nrLocalNuma 行 */
     int nrLocalNuma = GetNrLocalNuma();
-    for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
+    int cap = (int)GetNumaCap();
+    for (int i = 0; i < cap; i++) {
         attr->migrateParam[i].nid = DEFAULT_L2_NODE;
         attr->migrateParam[i].memSize = 0;
+        /* initRemoteMemRatio 等 5 个数组的第一维仅分配 nrLocalNuma 行 */
         for (int j = 0; j < nrLocalNuma; j++) {
             NM_AT(attr->strategyAttr.initRemoteMemRatio, j, i) = 0;
             NM_AT(attr->strategyAttr.memSize, j, i) = 0;
@@ -475,8 +464,7 @@ static void ClearCompatibleProcessTargets(ProcessAttr *attr)
             NM_AT(attr->strategyAttr.l3RemoteMemRatio, j, i) = 0;
         }
     }
-    /* 迁移量方向矩阵第一维按 nrLocalNuma 分配，按 [local][远端绝对 nid] 清零 */
-    int cap = (int)GetNumaCap();
+    /* 迁移量方向矩阵第一维按 nrLocalNuma 分配，按 [local][remote] 清零 */
     for (int j = 0; j < nrLocalNuma; j++) {
         for (int i = 0; i < cap; i++) {
             NM_AT(attr->strategyAttr.nrMigratePages, j, i) = 0;
@@ -645,9 +633,6 @@ void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *candida
     attr->strategyAttr.separateParam = candidate->strategyAttr.separateParam;
     (void)memcpy_s(attr->strategyAttr.nrPagesPerLocalNuma, sizeof(attr->strategyAttr.nrPagesPerLocalNuma),
                    candidate->strategyAttr.nrPagesPerLocalNuma, sizeof(attr->strategyAttr.nrPagesPerLocalNuma));
-    (void)memcpy_s(attr->strategyAttr.remoteNrPagesAfterMigrate, sizeof(attr->strategyAttr.remoteNrPagesAfterMigrate),
-                   candidate->strategyAttr.remoteNrPagesAfterMigrate,
-                   sizeof(attr->strategyAttr.remoteNrPagesAfterMigrate));
     (void)memcpy_s(attr->strategyAttr.dir, sizeof(attr->strategyAttr.dir), candidate->strategyAttr.dir,
                    sizeof(attr->strategyAttr.dir));
     (void)memcpy_s(attr->strategyAttr.ubBwRestrict, sizeof(attr->strategyAttr.ubBwRestrict),
@@ -655,7 +640,8 @@ void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *candida
     CopyProcessAttrArrays(attr, candidate);
     attr->isFirstScan = candidate->isFirstScan;
     attr->scanTime = candidate->scanTime;
-    for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
+    int cap = (int)GetNumaCap();
+    for (int i = 0; i < cap; i++) {
         attr->migrateParam[i] = candidate->migrateParam[i];
     }
 }
@@ -821,7 +807,6 @@ int SetProcessConfig(ProcessAttr *attr, ProcessParam *param, bool skipRemoteResi
 int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size)
 {
     int ret;
-    int column = destNid - GetProcessManager()->nrLocalNuma;
     struct RemoteNumaInfo *numaInfo = &GetProcessManager()->remoteNumaInfo;
     EnvMutexLock(&numaInfo->lock);
     ret = SyncOneNumaConfig(srcNid, destNid, size);
@@ -832,28 +817,28 @@ int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size)
     }
     SMAP_LOGGER_INFO("SetRemoteNumaInfo %d-%d to %llu.", srcNid, destNid, size);
     if (srcNid == NUMA_NO_NODE) {
-        numaInfo->sharedSize[column] = size;
+        numaInfo->sharedSize[destNid] = size;
     } else {
-        numaInfo->privateSize[srcNid][column] = size;
+        NM_AT(numaInfo->privateSize, srcNid, destNid) = size;
     }
-    for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-        int l2Nid = j + GetProcessManager()->nrLocalNuma;
-        numaInfo->usedInfo[j].ifUsedFreshed = false;
-        numaInfo->usedInfo[j].size = MBToPage(numaInfo->sharedSize[j]);
-        if (numaInfo->usedInfo[j].size) {
-            SMAP_LOGGER_INFO("Node%d shared pages: %llu.", l2Nid, numaInfo->usedInfo[j].size);
+    int cap = (int)GetNumaCap();
+    for (int nid = 0; nid < cap; nid++) {
+        numaInfo->usedInfo[nid].ifUsedFreshed = false;
+        numaInfo->usedInfo[nid].size = MBToPage(numaInfo->sharedSize[nid]);
+        if (numaInfo->usedInfo[nid].size) {
+            SMAP_LOGGER_INFO("Node%d shared pages: %llu.", nid, numaInfo->usedInfo[nid].size);
         }
         for (int i = 0; i < GetProcessManager()->nrLocalNuma; i++) {
-            numaInfo->usedInfo[j].size += MBToPage(numaInfo->privateSize[i][j]);
-            numaInfo->privateUsedInfo[i][j].ifUsedFreshed = false;
-            numaInfo->privateUsedInfo[i][j].size = MBToPage(numaInfo->privateSize[i][j]);
-            if (numaInfo->privateUsedInfo[i][j].size) {
-                SMAP_LOGGER_INFO("local %d borrow remote %d private pages: %llu.", i, l2Nid,
-                                 numaInfo->privateUsedInfo[i][j].size);
+            numaInfo->usedInfo[nid].size += MBToPage(NM_AT(numaInfo->privateSize, i, nid));
+            NM_AT(numaInfo->privateUsedInfo, i, nid).ifUsedFreshed = false;
+            NM_AT(numaInfo->privateUsedInfo, i, nid).size = MBToPage(NM_AT(numaInfo->privateSize, i, nid));
+            if (NM_AT(numaInfo->privateUsedInfo, i, nid).size) {
+                SMAP_LOGGER_INFO("local %d borrow remote %d private pages: %llu.", i, nid,
+                                 NM_AT(numaInfo->privateUsedInfo, i, nid).size);
             }
         }
-        if (numaInfo->usedInfo[j].size) {
-            SMAP_LOGGER_INFO("Node%d total borrow pages: %llu.", l2Nid, numaInfo->usedInfo[j].size);
+        if (numaInfo->usedInfo[nid].size) {
+            SMAP_LOGGER_INFO("Node%d total borrow pages: %llu.", nid, numaInfo->usedInfo[nid].size);
         }
     }
     /* 配额变更后同步刷新 used/fresh，供紧随其后的迁回就绪检查使用。 */
@@ -866,13 +851,12 @@ int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size)
 bool CheckPrivateBorrowUsed(int destNid)
 {
     int nrLocalNuma = GetNrLocalNuma();
-    int column = destNid - nrLocalNuma;
     struct RemoteNumaInfo *numaInfo = &GetProcessManager()->remoteNumaInfo;
 
     for (int count = 0; count < MAX_FRESH_USED_TIME; count++) {
         EnvMutexLock(&numaInfo->lock);
         for (int i = 0; i < nrLocalNuma; i++) {
-            struct RemoteNumaUsedInfo *usedInfo = &numaInfo->privateUsedInfo[i][column];
+            struct RemoteNumaUsedInfo *usedInfo = &NM_AT(numaInfo->privateUsedInfo, i, destNid);
             SMAP_LOGGER_INFO("[private_borrow] local=%d remote=%d used_pages=%llu total_pages=%llu fresh=%d", i,
                              destNid, usedInfo->used, usedInfo->size, usedInfo->ifUsedFreshed);
 
@@ -909,12 +893,11 @@ bool CheckPrivateBorrowUsed(int destNid)
 
 bool CheckBorrowUsed(int destNid)
 {
-    int column = destNid - GetProcessManager()->nrLocalNuma;
     struct RemoteNumaInfo *numaInfo = &GetProcessManager()->remoteNumaInfo;
 
     for (int count = 0; count < MAX_FRESH_USED_TIME; count++) {
         EnvMutexLock(&numaInfo->lock);
-        struct RemoteNumaUsedInfo *usedInfo = &numaInfo->usedInfo[column];
+        struct RemoteNumaUsedInfo *usedInfo = &numaInfo->usedInfo[destNid];
         SMAP_LOGGER_INFO("[total_borrow] remote=%d used_pages=%llu total_pages=%llu freshed=%d", destNid,
                          usedInfo->used, usedInfo->size, usedInfo->ifUsedFreshed);
 
@@ -941,14 +924,13 @@ bool CheckBorrowUsed(int destNid)
 static bool IsRemoteNodeDrained(int destNid)
 {
     int nrLocalNuma = GetNrLocalNuma();
-    int column = destNid - nrLocalNuma;
 
     uint64_t accountSum = 0;
     bool inFlight = false;
     struct RemoteNumaInfo *numaInfo = &GetProcessManager()->remoteNumaInfo;
     EnvMutexLock(&numaInfo->lock);
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM && !inFlight; i++) {
-        inFlight = numaInfo->privateInFlight[i][column] != 0;
+    for (int i = 0; i < nrLocalNuma && !inFlight; i++) {
+        inFlight = NM_AT(numaInfo->privateInFlight, i, destNid) != 0;
     }
     EnvMutexUnlock(&numaInfo->lock);
 
@@ -969,8 +951,8 @@ static bool IsRemoteNodeDrained(int destNid)
         if (attr->groupPolicy.enabled || attr->scanType != NORMAL_SCAN) {
             continue;
         }
-        for (int l = 0; l < nrLocalNuma && l < LOCAL_NUMA_NUM; l++) {
-            accountSum += attr->strategyAttr.remoteNrPagesAfterMigrate[l][column];
+        for (int l = 0; l < nrLocalNuma; l++) {
+            accountSum += NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, l, destNid);
         }
         snapshotSum += attr->walkPage.nrPages[destNid];
     }
@@ -995,15 +977,14 @@ static bool IsRemoteNodeDrained(int destNid)
 static bool IsRemoteQuotaCleared(int destNid)
 {
     int nrLocalNuma = GetNrLocalNuma();
-    int column = destNid - nrLocalNuma;
-    if (column < 0 || column >= REMOTE_NUMA_NUM) {
+    if (!IsRemoteNidValid(destNid)) {
         return false;
     }
     struct RemoteNumaInfo *numaInfo = &GetProcessManager()->remoteNumaInfo;
     EnvMutexLock(&numaInfo->lock);
-    bool cleared = numaInfo->sharedSize[column] == 0;
-    for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM && cleared; i++) {
-        cleared = numaInfo->privateSize[i][column] == 0;
+    bool cleared = numaInfo->sharedSize[destNid] == 0;
+    for (int i = 0; i < nrLocalNuma && cleared; i++) {
+        cleared = NM_AT(numaInfo->privateSize, i, destNid) == 0;
     }
     EnvMutexUnlock(&numaInfo->lock);
     return cleared;
@@ -1011,8 +992,7 @@ static bool IsRemoteQuotaCleared(int destNid)
 
 bool CheckReadyMigrateBack(int destNid)
 {
-    int column = destNid - GetNrLocalNuma();
-    if (destNid < 0 || destNid >= MAX_NODES || column < 0 || column >= REMOTE_NUMA_NUM) {
+    if (!IsRemoteNidValid(destNid)) {
         SMAP_LOGGER_ERROR("Invalid remote node %d for migrate back readiness check.", destNid);
         return false;
     }
@@ -1030,7 +1010,7 @@ bool CheckReadyMigrateBack(int destNid)
     while (nrWait < MAX_MIGRATE_BACK_WAIT_TIME) {
         SMAP_LOGGER_INFO("Wait until ready to migrate back, destNid: %d, nrWait: %d.", destNid, nrWait);
         EnvMutexLock(&numaInfo->lock);
-        bool flag = numaInfo->sharedSize[column] > 0;
+        bool flag = numaInfo->sharedSize[destNid] > 0;
         EnvMutexUnlock(&numaInfo->lock);
         bool ready;
         if (flag) {
@@ -1185,17 +1165,19 @@ static void SetChangePidRemoteMsgPayload(int srcNid, int destNid, int *i, int ma
     PidSlotReleaseRefs(all, n);
 }
 
-static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destNodeIndex, uint64_t memSize, int ratio)
+static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNid, int destNid, uint64_t memSize, int ratio)
 {
     int nrLocalNuma = GetNrLocalNuma();
     int l1node;
     if (GetRunMode() == WATERLINE_MODE) {
         l1node = GetAttrL1(attr);
         if (attr->migrateMode == MIG_MEMSIZE_MODE) {
-            attr->migrateParam[0].nid = destNodeIndex + nrLocalNuma;
+            attr->migrateParam[0].nid = destNid;
         } else {
-            if (ratio >= NM_AT(attr->strategyAttr.initRemoteMemRatio, l1node, srcNodeIndex)) {
-                ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
+            /* l1node 未命中 L1 时返回 NUMA_NO_NODE，不可作 initRemoteMemRatio 下标 */
+            if (l1node >= 0 && l1node < nrLocalNuma &&
+                ratio >= NM_AT(attr->strategyAttr.initRemoteMemRatio, l1node, srcNid)) {
+                ClearNodeBit(&attr->numaAttr.numaNodes, srcNid + (LOCAL_NUMA_BITS - nrLocalNuma));
             }
         }
         bool migOutAll = true;
@@ -1203,35 +1185,33 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
             if (!InAttrL1(attr, i)) {
                 continue;
             }
-            if (attr->migrateMode == MIG_MEMSIZE_MODE && NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) == 0) {
+            if (attr->migrateMode == MIG_MEMSIZE_MODE && NM_AT(attr->strategyAttr.memSize, i, srcNid) == 0) {
                 continue;
             }
-            NM_AT(attr->strategyAttr.initRemoteMemRatio, i, destNodeIndex) += ratio;
-            NM_AT(attr->strategyAttr.initRemoteMemRatio, i, srcNodeIndex) -= ratio;
-            NM_AT(attr->strategyAttr.memSize, i, destNodeIndex) += memSize;
-            if (NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) >= memSize) {
-                NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) -= memSize;
+            NM_AT(attr->strategyAttr.initRemoteMemRatio, i, destNid) += ratio;
+            NM_AT(attr->strategyAttr.initRemoteMemRatio, i, srcNid) -= ratio;
+            NM_AT(attr->strategyAttr.memSize, i, destNid) += memSize;
+            if (NM_AT(attr->strategyAttr.memSize, i, srcNid) >= memSize) {
+                NM_AT(attr->strategyAttr.memSize, i, srcNid) -= memSize;
             } else {
-                NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) = 0;
+                NM_AT(attr->strategyAttr.memSize, i, srcNid) = 0;
             }
-            if (attr->migrateMode == MIG_MEMSIZE_MODE && NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) != 0) {
+            if (attr->migrateMode == MIG_MEMSIZE_MODE && NM_AT(attr->strategyAttr.memSize, i, srcNid) != 0) {
                 migOutAll = false;
             }
 
             SMAP_LOGGER_INFO("[change_remote] pid=%d local=%d old_remote=%d new_remote=%d old_sz=%llu new_sz=%llu",
-                             attr->pid, i, srcNodeIndex, destNodeIndex,
-                             NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex),
-                             NM_AT(attr->strategyAttr.memSize, i, destNodeIndex));
+                             attr->pid, i, srcNid, destNid, NM_AT(attr->strategyAttr.memSize, i, srcNid),
+                             NM_AT(attr->strategyAttr.memSize, i, destNid));
         }
         /* 部分迁移时保留原节点L2位，否则同源节点后续迁移请求可能会被拒绝 */
         if (attr->migrateMode == MIG_MEMSIZE_MODE && migOutAll) {
-            ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
+            ClearNodeBit(&attr->numaAttr.numaNodes, srcNid + (LOCAL_NUMA_BITS - nrLocalNuma));
         }
     } else if (GetRunMode() == MEM_POOL_MODE) {
         uint64_t srcMemSize = 0;
         int remoteNidIndex = -1;
         for (int i = 0; i < attr->remoteNumaCnt; i++) {
-            int srcNid = srcNodeIndex + nrLocalNuma;
             if (srcNid == attr->migrateParam[i].nid) {
                 srcMemSize = attr->migrateParam[i].memSize;
                 remoteNidIndex = i;
@@ -1242,7 +1222,7 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
          * 不清 numaNodes 位（本就无该远端页），仅调整下方账本 */
         if (remoteNidIndex >= 0) {
             if (memSize >= srcMemSize) {
-                ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
+                ClearNodeBit(&attr->numaAttr.numaNodes, srcNid + (LOCAL_NUMA_BITS - nrLocalNuma));
                 attr->migrateParam[remoteNidIndex].nid = 0;
                 attr->migrateParam[remoteNidIndex].memSize = 0;
             } else {
@@ -1254,16 +1234,16 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
             if (!InAttrL1(attr, i)) {
                 continue;
             }
-            NM_AT(attr->strategyAttr.memSize, i, destNodeIndex) += memSize;
-            if (NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) >= memSize) {
-                NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) -= memSize;
+            NM_AT(attr->strategyAttr.memSize, i, destNid) += memSize;
+            if (NM_AT(attr->strategyAttr.memSize, i, srcNid) >= memSize) {
+                NM_AT(attr->strategyAttr.memSize, i, srcNid) -= memSize;
             } else {
-                NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) = 0;
+                NM_AT(attr->strategyAttr.memSize, i, srcNid) = 0;
             }
         }
     }
 
-    AddAttrL2(attr, destNodeIndex + nrLocalNuma);
+    AddAttrL2(attr, destNid);
 
     if (GetRunMode() == WATERLINE_MODE && attr->migrateMode == MIG_MEMSIZE_MODE) {
         return;
@@ -1275,7 +1255,7 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
     int zeroIdx = -1;
 
     for (int i = 0; i < attr->remoteNumaCnt; i++) {
-        if (attr->migrateParam[i].nid == (destNodeIndex + nrLocalNuma)) {
+        if (attr->migrateParam[i].nid == destNid) {
             targetIdx = i;
             break;
         }
@@ -1287,24 +1267,24 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
     if (targetIdx != -1) {
         attr->migrateParam[targetIdx].memSize += memSize;
     } else if (zeroIdx != -1) {
-        attr->migrateParam[zeroIdx].nid = destNodeIndex + nrLocalNuma;
+        attr->migrateParam[zeroIdx].nid = destNid;
         attr->migrateParam[zeroIdx].memSize = memSize;
     }
 }
 
-static void ChangePidRemoteMemoryByNuma(ProcessAttr *attr, int srcNode, int destNode)
+static void ChangePidRemoteMemoryByNuma(ProcessAttr *attr, int srcNid, int destNid)
 {
     int nrLocalNuma = GetProcessManager()->nrLocalNuma;
     for (int i = 0; i < nrLocalNuma; i++) {
-        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, destNode) =
-            NM_AT(attr->strategyAttr.initRemoteMemRatio, i, srcNode);
-        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, srcNode) = 0;
-        NM_AT(attr->strategyAttr.memSize, i, destNode) = NM_AT(attr->strategyAttr.memSize, i, srcNode);
-        NM_AT(attr->strategyAttr.memSize, i, srcNode) = 0;
+        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, destNid) =
+            NM_AT(attr->strategyAttr.initRemoteMemRatio, i, srcNid);
+        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, srcNid) = 0;
+        NM_AT(attr->strategyAttr.memSize, i, destNid) = NM_AT(attr->strategyAttr.memSize, i, srcNid);
+        NM_AT(attr->strategyAttr.memSize, i, srcNid) = 0;
     }
     for (int i = 0; i < attr->remoteNumaCnt; i++) {
-        if (attr->migrateParam[i].nid == srcNode + nrLocalNuma)
-            attr->migrateParam[i].nid = destNode + nrLocalNuma;
+        if (attr->migrateParam[i].nid == srcNid)
+            attr->migrateParam[i].nid = destNid;
     }
 }
 
@@ -1336,8 +1316,6 @@ int ChangePidRemoteByNuma(int srcNid, int destNid)
 {
     int i = 0;
     int maxProcessCnt = GetCurrentMaxNrPid();
-    int srcNode = srcNid - GetProcessManager()->nrLocalNuma;
-    int destNode = destNid - GetProcessManager()->nrLocalNuma;
     ProcessAttr *attr;
     struct AccessAddPidPayload *payload = malloc(sizeof(struct AccessAddPidPayload) * maxProcessCnt);
     if (!payload) {
@@ -1367,11 +1345,11 @@ int ChangePidRemoteByNuma(int srcNid, int destNid)
         }
         SMAP_LOGGER_INFO("change pid %d L2 from %d to %d.", attr->pid, srcNid, destNid);
         for (int j = 0; j < GetProcessManager()->nrLocalNuma; j++) {
-            attr->strategyAttr.remoteNrPagesAfterMigrate[j][destNode] +=
-                attr->strategyAttr.remoteNrPagesAfterMigrate[j][srcNode];
-            attr->strategyAttr.remoteNrPagesAfterMigrate[j][srcNode] = 0;
+            NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, j, destNid) +=
+                NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, j, srcNid);
+            NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, j, srcNid) = 0;
         }
-        ChangePidRemoteMemoryByNuma(attr, srcNode, destNode);
+        ChangePidRemoteMemoryByNuma(attr, srcNid, destNid);
         MoveProcessTargetConfig(attr, srcNid, destNid);
         SetAttrL2(attr, destNid);
     }
@@ -1480,16 +1458,17 @@ int IsRemoteNumaMoveAllowed(int nid)
 
 static bool IsRemoteTargetMigOutDone(ProcessAttr *attr, int remoteNid, uint64_t targetPages)
 {
-    if (remoteNid < 0 || remoteNid >= MAX_NODES) {
+    if (remoteNid < 0 || remoteNid >= SMAP_MAX_NUMNODES) {
         SMAP_LOGGER_ERROR("Invalid remote node %d of pid %d.", remoteNid, attr->pid);
         return false;
     }
 
-    int remoteIdx = remoteNid - GetNrLocalNuma();
     uint64_t accountedPages = 0;
-    if (remoteIdx >= 0 && remoteIdx < REMOTE_NUMA_NUM) {
-        for (int local = 0; local < LOCAL_NUMA_NUM; local++) {
-            accountedPages += attr->strategyAttr.remoteNrPagesAfterMigrate[local][remoteIdx];
+    if (remoteNid >= 0 && remoteNid < SMAP_MAX_NUMNODES) {
+        /* remoteNrPagesAfterMigrate 第一维仅分配 nrLocalNuma 行 */
+        int nrLocalNuma = GetNrLocalNuma();
+        for (int local = 0; local < nrLocalNuma; local++) {
+            accountedPages += NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, local, remoteNid);
         }
     }
     uint64_t remotePages = attr->walkPage.nrPages[remoteNid];
@@ -1550,7 +1529,7 @@ bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid)
         ret = true;
     } else {
         int l2Node = GetAttrL2(attr);
-        if (l2Node < GetProcessManager()->nrLocalNuma || l2Node >= MAX_NODES) {
+        if (l2Node < GetProcessManager()->nrLocalNuma || l2Node >= SMAP_MAX_NUMNODES) {
             SMAP_LOGGER_ERROR("Invalid l2Node %d of pid %d.", l2Node, pid);
             return false;
         }
@@ -1603,19 +1582,26 @@ static int SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRem
         }
         l1node = GetAttrL1(attr);
         l2node = msg->payloads[i].srcNid;
+        /* l1node 未命中返回 NUMA_NO_NODE；l2node 为外部输入的绝对 nid，
+         * 均须校验后才能作为 initRemoteMemRatio/memSize 的下标 */
+        if (l1node < 0 || l1node >= nrLocalNuma || l2node < nrLocalNuma || l2node >= SMAP_MAX_NUMNODES) {
+            SMAP_LOGGER_ERROR("Pid %d invalid l1node %d or srcNid %d.", attr->pid, l1node, l2node);
+            PutProcessAttr(attr);
+            continue;
+        }
         if (runMode == WATERLINE_MODE) {
             bool clearSrc;
             if (attr->migrateMode == MIG_MEMSIZE_MODE) {
-                clearSrc = msg->payloads[i].memSize >= NM_AT(attr->strategyAttr.memSize, l1node, l2node - nrLocalNuma);
+                clearSrc = msg->payloads[i].memSize >= NM_AT(attr->strategyAttr.memSize, l1node, l2node);
             } else {
-                int initRatio = NM_AT(attr->strategyAttr.initRemoteMemRatio, l1node, l2node - nrLocalNuma);
+                int initRatio = NM_AT(attr->strategyAttr.initRemoteMemRatio, l1node, l2node);
                 clearSrc = msg->payloads[i].ratio >= initRatio;
             }
             if (clearSrc) {
                 ClearNodeBit(&payload[found].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
             }
         } else {
-            if (msg->payloads[i].memSize >= NM_AT(attr->strategyAttr.memSize, l1node, l2node - nrLocalNuma)) {
+            if (msg->payloads[i].memSize >= NM_AT(attr->strategyAttr.memSize, l1node, l2node)) {
                 ClearNodeBit(&payload[found].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
             }
         }
@@ -1659,29 +1645,27 @@ int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg)
             PutProcessAttr(attr);
             continue;
         }
-        int srcNode = msg->payloads[i].srcNid - GetProcessManager()->nrLocalNuma;
-        int destNode = msg->payloads[i].destNid - GetProcessManager()->nrLocalNuma;
-        SMAP_LOGGER_INFO("change pid %d L2 from %d to %d.", attr->pid, msg->payloads[i].srcNid,
-                         msg->payloads[i].destNid);
+        int srcNid = msg->payloads[i].srcNid;
+        int destNid = msg->payloads[i].destNid;
+        SMAP_LOGGER_INFO("change pid %d L2 from %d to %d.", attr->pid, srcNid, destNid);
         if (GetL1Count(attr->numaAttr.numaNodes) > 1) { // 容器本地多numa
             for (int j = 0; j < GetProcessManager()->nrLocalNuma; j++) {
-                attr->strategyAttr.remoteNrPagesAfterMigrate[j][destNode] +=
-                    attr->strategyAttr.remoteNrPagesAfterMigrate[j][srcNode];
-                attr->strategyAttr.remoteNrPagesAfterMigrate[j][srcNode] = 0;
+                NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, j, destNid) +=
+                    NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, j, srcNid);
+                NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, j, srcNid) = 0;
             }
         } else {
             int l1node = GetAttrL1(attr);
-            attr->strategyAttr.remoteNrPagesAfterMigrate[l1node][destNode] += msg->payloads[i].successCnt;
-            attr->strategyAttr.remoteNrPagesAfterMigrate[l1node][srcNode] -= msg->payloads[i].successCnt;
+            NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, l1node, destNid) += msg->payloads[i].successCnt;
+            NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, l1node, srcNid) -= msg->payloads[i].successCnt;
         }
 
-        ChangePidRemoteMemory(attr, srcNode, destNode, msg->payloads[i].memSize, msg->payloads[i].ratio);
+        ChangePidRemoteMemory(attr, srcNid, destNid, msg->payloads[i].memSize, msg->payloads[i].ratio);
         /* Pair planning and V1 persistence both use targetConfig as their source of truth. */
-        ret = MoveProcessRemoteTarget(&attr->targetConfig, msg->payloads[i].srcNid, msg->payloads[i].destNid,
-                                      msg->payloads[i].memSize, msg->payloads[i].ratio);
+        ret = MoveProcessRemoteTarget(&attr->targetConfig, srcNid, destNid, msg->payloads[i].memSize,
+                                      msg->payloads[i].ratio);
         if (ret) {
-            SMAP_LOGGER_WARNING("Pid %d move Pair target %d to %d failed: %d.", attr->pid, msg->payloads[i].srcNid,
-                                msg->payloads[i].destNid, ret);
+            SMAP_LOGGER_WARNING("Pid %d move Pair target %d to %d failed: %d.", attr->pid, srcNid, destNid, ret);
         } else {
             attr->remoteNumaCnt = attr->targetConfig.count;
             /* Sync migrateParam from targetConfig so the strategy layer reads

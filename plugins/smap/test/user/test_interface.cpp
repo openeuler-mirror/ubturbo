@@ -1874,6 +1874,13 @@ TEST_F(InterfaceTest, TestRecover)
 {
     int ret;
 
+    /* 模拟未 start 时的 Recover 直调：此时 nrLocalNuma 尚未上报且远端账本
+     * 数组未分配。前序用例可能给 g_processManager.nrLocalNuma 留下非零残
+     * 留值，导致真实执行的 SyncAllProcessConfig 解引用未分配的 privateSize，
+     * 这里显式归零对齐生产前置状态。 */
+    g_processManager.nrLocalNuma = 0;
+
+    
     MOCKER(RecoverFromConfig).stubs().will(returnValue(-EPERM));
     ret = Recover();
     EXPECT_EQ(-EPERM, ret);
@@ -3832,7 +3839,9 @@ TEST_F(InterfaceTest, TestSmapAddProcessTrackingUpdatesManagedPidMode)
     attr.targetConfig.count = 2;
     attr.targetConfig.targets[0] = {4, 0, 2048};
     attr.targetConfig.targets[1] = {6, 0, 4096};
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 321;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 321;
     g_processManager.tracking.pageSize = PAGESIZE_2M;
     EnvAtomicSet(&g_status, RUNNING);
     MOCKER(CheckAddProcessTrackingMsg).expects(once()).will(returnValue(0));
@@ -3847,9 +3856,10 @@ TEST_F(InterfaceTest, TestSmapAddProcessTrackingUpdatesManagedPidMode)
     EXPECT_EQ(2U, attr.targetConfig.count);
     EXPECT_EQ(4, attr.targetConfig.targets[0].remoteNid);
     EXPECT_EQ(6, attr.targetConfig.targets[1].remoteNid);
-    EXPECT_EQ(321U, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ(321U, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4));
     EXPECT_TRUE(EnvMutexIsRelease(&g_processManager.threadLock));
     g_processManager.tracking.pageSize = 0;
+    FreeProcessAttrArrays(&attr);
 }
 
 extern "C" int CheckRemoveProcessTrackingMsg(pid_t *pidArr, int len);

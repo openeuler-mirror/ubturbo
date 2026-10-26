@@ -140,6 +140,12 @@ static int GetNrLocalNumaFromKernel(struct ProcessManager *manager)
     }
     manager->nrLocalNuma = nrLocalNuma;
     SMAP_LOGGER_INFO("get nr_local_numa %d from kernel successfully", manager->nrLocalNuma);
+    /* nrLocalNuma 探测完成后分配远端账本二维数组（第一维按 nrLocalNuma） */
+    int initRet = InitRemoteNumaInfoArrays();
+    if (initRet) {
+        SMAP_LOGGER_ERROR("init remote numa arrays failed: %d", initRet);
+        return initRet;
+    }
     return 0;
 }
 

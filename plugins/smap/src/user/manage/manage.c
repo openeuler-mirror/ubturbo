@@ -83,18 +83,53 @@ uint32_t GetPageSize(void)
 static void RemoteNumaInfoInit(void)
 {
     EnvMutexInit(&g_processManager.remoteNumaInfo.lock);
-    for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
+    int cap = (int)GetNumaCap();
+    for (int j = 0; j < cap; j++) {
         g_processManager.remoteNumaInfo.sharedSize[j] = 0;
         g_processManager.remoteNumaInfo.usedInfo[j].ifUsedFreshed = false;
         g_processManager.remoteNumaInfo.usedInfo[j].used = 0;
         g_processManager.remoteNumaInfo.usedInfo[j].size = 0;
-        for (int i = 0; i < LOCAL_NUMA_NUM; i++) {
-            g_processManager.remoteNumaInfo.privateSize[i][j] = 0;
-            g_processManager.remoteNumaInfo.privateUsedInfo[i][j].ifUsedFreshed = false;
-            g_processManager.remoteNumaInfo.privateUsedInfo[i][j].used = 0;
-            g_processManager.remoteNumaInfo.privateUsedInfo[i][j].size = 0;
-        }
     }
+    /* privateSize/privateUsedInfo 第一维按 nrLocalNuma 分配，此时内核尚未上报
+     * nrLocalNuma，延迟到 InitRemoteNumaInfoArrays 中完成（calloc 已清零） */
+}
+
+/*
+ * 分配 remoteNumaInfo 的二维数组（第一维按 nrLocalNuma）。
+ * 必须在内核 nrLocalNuma 探测完成（InitTrackingDev）之后、任何远端账本
+ * 读写（Recover/RebuildRemoteNids 等）之前调用；幂等，重复调用直接成功。
+ */
+int InitRemoteNumaInfoArrays(void)
+{
+    struct RemoteNumaInfo *info = &g_processManager.remoteNumaInfo;
+    int nrLocalNuma = GetNrLocalNuma();
+    if (nrLocalNuma <= 0 || nrLocalNuma > SMAP_MAX_NUMNODES) {
+        SMAP_LOGGER_ERROR("Invalid nrLocalNuma %d for remote numa arrays.", nrLocalNuma);
+        return -EINVAL;
+    }
+    if (info->privateSize != NULL && info->privateUsedInfo != NULL && info->privateInFlight != NULL) {
+        return 0;
+    }
+    if (info->privateSize == NULL) {
+        info->privateSize = calloc(NM_COUNT(nrLocalNuma), sizeof(*info->privateSize));
+    }
+    if (info->privateUsedInfo == NULL) {
+        info->privateUsedInfo = calloc(NM_COUNT(nrLocalNuma), sizeof(*info->privateUsedInfo));
+    }
+    if (info->privateInFlight == NULL) {
+        info->privateInFlight = calloc(NM_COUNT(nrLocalNuma), sizeof(*info->privateInFlight));
+    }
+    if (info->privateSize == NULL || info->privateUsedInfo == NULL || info->privateInFlight == NULL) {
+        free(info->privateSize);
+        free(info->privateUsedInfo);
+        free(info->privateInFlight);
+        info->privateSize = NULL;
+        info->privateUsedInfo = NULL;
+        info->privateInFlight = NULL;
+        SMAP_LOGGER_ERROR("Alloc remote numa arrays failed.");
+        return -ENOMEM;
+    }
+    return 0;
 }
 
 int GetNrLocalNuma(void)
@@ -127,17 +162,17 @@ static uint32_t BuildResidentLocalMask(const ProcessAttr *attr)
     return residentLocalMask;
 }
 
-uint32_t BuildAccountLocalMask(const ProcessAttr *attr, int remoteIndex)
+uint32_t BuildAccountLocalMask(const ProcessAttr *attr, int remoteNid)
 {
-    if (!attr || remoteIndex < 0 || remoteIndex >= REMOTE_NUMA_NUM) {
+    if (!attr || remoteNid < GetNrLocalNuma() || remoteNid >= SMAP_MAX_NUMNODES) {
         return 0;
     }
 
     uint32_t accountLocalMask = 0;
     int nrLocalNuma = GetNrLocalNuma();
-    for (int localNid = 0; localNid < nrLocalNuma && localNid < LOCAL_NUMA_NUM; localNid++) {
-        if (attr->strategyAttr.remoteNrPagesAfterMigrate[localNid][remoteIndex] != 0) {
-            AddL1(&accountLocalMask, localNid);
+    for (int localNid = 0; localNid < nrLocalNuma; localNid++) {
+        if (NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, localNid, remoteNid) != 0) {
+            accountLocalMask |= (1U << localNid);
         }
     }
     return accountLocalMask;
@@ -171,9 +206,10 @@ int ApplyManagedLocalObservation(ProcessAttr *attr, const ManagedLocalObservatio
     }
 
     uint32_t allAccountLocalMask = 0;
-    for (int remoteIndex = 0; remoteIndex < REMOTE_NUMA_NUM; remoteIndex++) {
-        state.accountLocalMask[remoteIndex] = BuildAccountLocalMask(attr, remoteIndex);
-        allAccountLocalMask |= state.accountLocalMask[remoteIndex];
+    int cap = (int)GetNumaCap();
+    for (int remoteNid = GetNrLocalNuma(); remoteNid < cap; remoteNid++) {
+        state.accountLocalMask[remoteNid] = BuildAccountLocalMask(attr, remoteNid);
+        allAccountLocalMask |= state.accountLocalMask[remoteNid];
     }
 
     uint32_t managedLocalMask = state.observedLocalMask | allAccountLocalMask;
@@ -441,13 +477,14 @@ void ResetActcData(ActcData *actcData[], int len)
  * 使用约定：语句式宏（F 体内含 goto/if 等）定义体须自带尾分号；
  * 表达式式宏（如 sa->field == NULL ||）定义体不带分号，遍历处统一不加。
  */
-#define FOR_EACH_PROCESS_ATTR_ARRAY(F) \
-    F(initRemoteMemRatio, nrLocalNuma) \
-    F(memSize, nrLocalNuma)            \
-    F(allocRemoteNrPages, nrLocalNuma) \
-    F(l2RemoteMemRatio, nrLocalNuma)   \
-    F(l3RemoteMemRatio, nrLocalNuma)   \
-    F(nrMigratePages, nrLocalNuma)     \
+#define FOR_EACH_PROCESS_ATTR_ARRAY(F)        \
+    F(initRemoteMemRatio, nrLocalNuma)        \
+    F(memSize, nrLocalNuma)                   \
+    F(allocRemoteNrPages, nrLocalNuma)        \
+    F(l2RemoteMemRatio, nrLocalNuma)          \
+    F(l3RemoteMemRatio, nrLocalNuma)          \
+    F(remoteNrPagesAfterMigrate, nrLocalNuma) \
+    F(nrMigratePages, nrLocalNuma)            \
     F(nrMigrateBackPages, nrLocalNuma)
 
 int InitProcessAttrArrays(ProcessAttr *attr)
@@ -1033,15 +1070,14 @@ void SetMultiNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLocalNuma)
 {
     for (int i = 0; i < param->count; i++) {
         int remoteNid = param->numaParam[i].nid;
-        int l2Index = remoteNid - nrLocalNuma;
 
         attr->migrateParam[i].nid = remoteNid;
         attr->migrateParam[i].memSize = param->numaParam[i].memSize;
         SMAP_LOGGER_INFO("Multi-NUMA config destNid: %d, memSize: %lu", remoteNid, attr->migrateParam[i].memSize);
 
         /* Set the same ratio for all local NUMAs */
-        for (int j = 0; j < nrLocalNuma && j < LOCAL_NUMA_NUM; j++) {
-            NM_AT(attr->strategyAttr.initRemoteMemRatio, j, l2Index) = param->numaParam[i].ratio;
+        for (int j = 0; j < nrLocalNuma; j++) {
+            NM_AT(attr->strategyAttr.initRemoteMemRatio, j, remoteNid) = param->numaParam[i].ratio;
             SMAP_LOGGER_INFO("Multi-NUMA config destNid: %d, ratio: %d", remoteNid, param->numaParam[i].ratio);
         }
         AddAttrL2(attr, remoteNid);
@@ -1783,18 +1819,15 @@ static void ClearRemovedRemoteStrategy(ProcessAttr *attr, int remoteNid)
         return;
     }
 
-    /* initRemoteMemRatio 等 5 个数组第一维仅分配 nrLocalNuma 行 */
+    /* 各数组第一维仅分配 nrLocalNuma 行；远端列统一为绝对 nid，
+     * 扁平存储经 NM_AT 访问 */
     for (int i = 0; i < nrLocalNuma; i++) {
-        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, remoteIdx) = 0;
-        NM_AT(attr->strategyAttr.l2RemoteMemRatio, i, remoteIdx) = 0;
-        NM_AT(attr->strategyAttr.l3RemoteMemRatio, i, remoteIdx) = 0;
-        NM_AT(attr->strategyAttr.memSize, i, remoteIdx) = 0;
-        NM_AT(attr->strategyAttr.allocRemoteNrPages, i, remoteIdx) = 0;
-        attr->strategyAttr.remoteNrPagesAfterMigrate[i][remoteIdx] = 0;
-    }
-    /* 方向矩阵第一维仅分配 nrLocalNuma 行，只按 i < nrLocalNuma 清远端绝对 nid 列；
-     * 用 cap 同时索引行与列会越界写坏相邻堆 chunk */
-    for (int i = 0; i < nrLocalNuma; i++) {
+        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, remoteNid) = 0;
+        NM_AT(attr->strategyAttr.l2RemoteMemRatio, i, remoteNid) = 0;
+        NM_AT(attr->strategyAttr.l3RemoteMemRatio, i, remoteNid) = 0;
+        NM_AT(attr->strategyAttr.memSize, i, remoteNid) = 0;
+        NM_AT(attr->strategyAttr.allocRemoteNrPages, i, remoteNid) = 0;
+        NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, i, remoteNid) = 0;
         NM_AT(attr->strategyAttr.nrMigratePages, i, remoteNid) = 0;
         NM_AT(attr->strategyAttr.nrMigrateBackPages, i, remoteNid) = 0;
     }
@@ -1912,6 +1945,10 @@ int DestroyProcessManager(void)
     RemoveAllManagedProcess();
     PidSlotDestroy(&g_processManager);
     EnvMutexDestroy(&g_processManager.threadLock);
+    EnvMutexDestroy(&g_processManager.remoteNumaInfo.lock);
+    free(g_processManager.remoteNumaInfo.privateSize);
+    free(g_processManager.remoteNumaInfo.privateUsedInfo);
+    free(g_processManager.remoteNumaInfo.privateInFlight);
     (void)memset_s(&g_processManager, sizeof(struct ProcessManager), 0, sizeof(struct ProcessManager));
     return 0;
 }

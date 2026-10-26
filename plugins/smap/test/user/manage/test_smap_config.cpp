@@ -12,6 +12,7 @@
 
 #include "advanced-strategy/scene.h"
 #include "manage/manage.h"
+#include "manage/node_matrix.h"
 #include "manage/smap_config.h"
 #include "securec.h"
 
@@ -315,7 +316,12 @@ TEST_F(SmapConfigTest, TestWriteNumaConfig)
     struct PayloadHeader header;
     struct ProcessManager manager;
     memset(&manager, 0, sizeof(manager));
-    manager.remoteNumaInfo.privateSize[0][0] = 128;
+    manager.remoteNumaInfo.privateSize = (uint64_t *)calloc(NM_COUNT(nrLocal), sizeof(uint64_t));
+    manager.remoteNumaInfo.privateUsedInfo =
+        (struct RemoteNumaUsedInfo *)calloc(NM_COUNT(nrLocal), sizeof(struct RemoteNumaUsedInfo));
+    ASSERT_NE(nullptr, manager.remoteNumaInfo.privateSize);
+    ASSERT_NE(nullptr, manager.remoteNumaInfo.privateUsedInfo);
+    NM_AT(manager.remoteNumaInfo.privateSize, 0, nrLocal) = 128;
     struct NumaPayload *payload = (struct NumaPayload *)calloc((nrLocal + 1) * REMOTE_NUMA_NUM, sizeof(*payload));
 
     ASSERT_NE(nullptr, payload);
@@ -326,6 +332,10 @@ TEST_F(SmapConfigTest, TestWriteNumaConfig)
     WriteNumaConfig((char *)&header);
     EXPECT_EQ(128, payload[0].size);
     free(payload);
+    free(manager.remoteNumaInfo.privateSize);
+    free(manager.remoteNumaInfo.privateUsedInfo);
+    manager.remoteNumaInfo.privateSize = nullptr;
+    manager.remoteNumaInfo.privateUsedInfo = nullptr;
 }
 
 extern "C" void UnmapConfig(char *addr, size_t len);
@@ -518,6 +528,11 @@ TEST_F(SmapConfigTest, TestRecoverNumaConfig)
     char numaBase;
     struct ProcessManager manager;
     memset(&manager, 0, sizeof(manager));
+    manager.remoteNumaInfo.privateSize = (uint64_t *)calloc(NM_COUNT(nrLocal), sizeof(uint64_t));
+    manager.remoteNumaInfo.privateUsedInfo =
+        (struct RemoteNumaUsedInfo *)calloc(NM_COUNT(nrLocal), sizeof(struct RemoteNumaUsedInfo));
+    ASSERT_NE(nullptr, manager.remoteNumaInfo.privateSize);
+    ASSERT_NE(nullptr, manager.remoteNumaInfo.privateUsedInfo);
     struct NumaPayload *payload = (struct NumaPayload *)calloc((nrLocal + 1) * REMOTE_NUMA_NUM, sizeof(*payload));
     payload[local1 * REMOTE_NUMA_NUM + remote1 - nrLocal].size = 1024; // local1-remote1 has 1024MB
     payload[local2 * REMOTE_NUMA_NUM + remote2 - nrLocal].size = 512;  // local2-remote2 has 512MB
@@ -527,7 +542,14 @@ TEST_F(SmapConfigTest, TestRecoverNumaConfig)
     MOCKER(JumpToNumaPayload).stubs().will(returnValue(reinterpret_cast<char *>(payload)));
     ret = RecoverNumaConfig(&numaBase);
     EXPECT_EQ(0, ret);
+    EXPECT_EQ(1024U, NM_AT(manager.remoteNumaInfo.privateSize, local1, remote1));
+    EXPECT_EQ(512U, NM_AT(manager.remoteNumaInfo.privateSize, local2, remote2));
+    EXPECT_EQ(0U, NM_AT(manager.remoteNumaInfo.privateSize, local1, remote2));
     free(payload);
+    free(manager.remoteNumaInfo.privateSize);
+    free(manager.remoteNumaInfo.privateUsedInfo);
+    manager.remoteNumaInfo.privateSize = nullptr;
+    manager.remoteNumaInfo.privateUsedInfo = nullptr;
 }
 
 extern "C" void WriteOneNumaConfig(char *numaBase, struct NumaPayload *np);

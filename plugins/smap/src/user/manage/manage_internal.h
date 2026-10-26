@@ -43,7 +43,7 @@ typedef struct {
 
 /* manage_pair.c 使用 */
 uint32_t BuildAllLocalNumaMask(void);
-uint32_t BuildAccountLocalMask(const ProcessAttr *attr, int remoteIndex);
+uint32_t BuildAccountLocalMask(const ProcessAttr *attr, int remoteNid);
 
 /* manage_scan.c 使用 */
 void ResetActcData(ActcData *actcData[], int len);
@@ -76,9 +76,10 @@ void CalRemoteNumaSizeAllocPerNuma(void);
 void ClearRemoteMemUsed(void);
 void CalRemoteMemUsed(void);
 /* 事件驱动流水的在线账本（manage_numa.c）：快照与预扣须由调用方持账本锁调用，
- * 与锁内剪辑配合实现「快照→剪辑→预扣」原子化，杜绝并发超卖 */
-void SnapshotRemoteCapacityLocked(uint64_t privateAvail[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                  uint64_t sharedAvail[REMOTE_NUMA_NUM]);
+ * 与锁内剪辑配合实现「快照→剪辑→预扣」原子化，杜绝并发超卖。
+ * 节点维度一律走运行期 cap：privateAvail 为 nrLocalNuma 行 × cap 列扁平矩阵
+ * （行跨度 = cap，经 NM_AT 访问）；sharedAvail 按远端绝对 nid 定维（长度 cap） */
+void SnapshotRemoteCapacityLocked(uint64_t *privateAvail, uint64_t *sharedAvail);
 void LedgerPlanInFlightLocked(const uint32_t *nrMigratePages, int nrLocalNuma);
 void LedgerSettleInFlight(const uint32_t *planned, int nrLocalNuma);
 
