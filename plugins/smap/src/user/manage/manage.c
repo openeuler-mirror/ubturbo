@@ -8,6 +8,7 @@
  * See the Mulan PSL v2 for more details.
  */
 #define _GNU_SOURCE
+#include <ctype.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -48,6 +49,10 @@ EnvAtomic g_forbiddenNodes[MAX_NODES];
 RunMode g_runMode;
 
 uint8_t g_criticalErrNodes[REMOTE_NUMA_BITS];
+
+/* 远端在线节点列表（运行时由 sysfs 扫描填充） */
+int g_remoteNids[SMAP_NODE_CAP_LIMIT];
+int g_nrRemote;
 
 RunMode GetRunMode(void)
 {
@@ -1746,4 +1751,113 @@ int DestroyProcessManager(void)
 struct ProcessManager *GetProcessManager(void)
 {
     return &g_processManager;
+}
+
+/* 内核节点空间上限缓存：初始化链路经 Mems_allowed 打印宽度解析获取并只读，
+ * 初始化前缺省为编译期常量（行为与未接入 cap 链路时一致）。
+ * 非 static：GetNumaCap() 已改为 numa_nodes.h 中的 inline 访问器，需跨编译单元可见 */
+uint32_t g_numaCap = SMAP_MAX_NUMNODES;
+
+void SetNumaCap(uint32_t cap)
+{
+    g_numaCap = cap;
+}
+
+#define SMAP_STATUS_PATH "/proc/self/status"
+
+/*
+ * 解析 Mems_allowed 位图行的打印宽度（方案 F，见 doc/runtime-numa-cap-design.md 3.2/3.5.2.1）：
+ * 内核经 nodemask_pr_args() 以 %*pb 按 MAX_NUMNODES 零填充打印该行，
+ * 过滤空白与逗号后统计十六进制字符数 n，cap = n * SMAP_BITS_PER_HEX_CHAR 即编译期节点空间宽度。
+ * 只取宽度不取值（值是 cpuset 允许集）；不得 trim 前导零（否则退化为 nr_node_ids 语义）。
+ * 该换算在 NODES_SHIFT < 2 的极端内核下只会向上取整（宁宽勿窄，无静默截断）。
+ */
+int32_t ParseNodeCapFromLine(const char *line, uint32_t *cap)
+{
+    static const char field[] = "Mems_allowed:";
+    const char *p;
+    uint32_t hexChars = 0;
+    uint32_t nodeCap;
+
+    if (line == NULL || cap == NULL) {
+        return -EINVAL;
+    }
+    /* 失败即回退：静态 1024 定维下所有循环界内、readback 补零对齐，行为安全 */
+    *cap = SMAP_NODE_CAP_LIMIT;
+
+    p = strstr(line, field);
+    if (p == NULL) {
+        SMAP_LOGGER_ERROR("ParseNodeCapFromLine: Mems_allowed field not found in line: %s", line);
+        return -EINVAL;
+    }
+    p += strlen(field);
+
+    for (; *p != '\0' && *p != '\n'; p++) {
+        if (isspace((unsigned char)*p) || *p == ',') {
+            continue;
+        }
+        if (!isxdigit((unsigned char)*p)) {
+            SMAP_LOGGER_ERROR("ParseNodeCapFromLine: unexpected char '%c' at column %ld of Mems_allowed.", *p,
+                              (long)(p - line));
+            return -EINVAL;
+        }
+        hexChars++;
+    }
+
+    if (hexChars == 0) {
+        SMAP_LOGGER_ERROR("ParseNodeCapFromLine: empty Mems_allowed value.");
+        return -EINVAL;
+    }
+
+    nodeCap = hexChars * SMAP_BITS_PER_HEX_CHAR;
+    /* sanity：cap 必须为 2 的幂且 <= SMAP_NODE_CAP_LIMIT（与 Kconfig NODES_SHIFT 上限 10 对应），
+     * 异常视为打印格式变更，走回退通道 */
+    if (nodeCap > (uint32_t)SMAP_NODE_CAP_LIMIT || (nodeCap & (nodeCap - 1)) != 0) {
+        SMAP_LOGGER_ERROR("ParseNodeCapFromLine: width %u hex chars implies cap %u, "
+                          "expected power of two in [4, %d], proc format may have changed.",
+                          hexChars, nodeCap, SMAP_NODE_CAP_LIMIT);
+        return -EINVAL;
+    }
+
+    *cap = nodeCap;
+    SMAP_LOGGER_INFO("ParseNodeCapFromLine: Mems_allowed width %u hex chars, node cap %u.", hexChars, nodeCap);
+    return 0;
+}
+
+int32_t GetNodeCapFromStatus(uint32_t *cap)
+{
+    char line[512];
+    FILE *fp;
+    int32_t ret = -EINVAL;
+
+    if (cap == NULL) {
+        return -EINVAL;
+    }
+    *cap = SMAP_NODE_CAP_LIMIT;
+
+    fp = fopen(SMAP_STATUS_PATH, "r");
+    if (fp == NULL) {
+        SMAP_LOGGER_ERROR("GetNodeCapFromStatus: open %s failed, errno %d, fallback cap %d.", SMAP_STATUS_PATH, errno,
+                          SMAP_NODE_CAP_LIMIT);
+        return -EIO;
+    }
+
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        /* Mems_allowed_list: 行不含 "Mems_allowed:" 子串，不会被误匹配 */
+        if (strstr(line, "Mems_allowed:") == NULL) {
+            continue;
+        }
+        ret = ParseNodeCapFromLine(line, cap);
+        break;
+    }
+    if (fclose(fp) != 0) {
+        SMAP_LOGGER_ERROR("GetNodeCapFromStatus: close %s failed, errno %d.", SMAP_STATUS_PATH, errno);
+    }
+
+    if (ret != 0) {
+        SMAP_LOGGER_WARNING("GetNodeCapFromStatus: parse %s failed: %d, fallback to cap %d "
+                            "(static dimension, safe).",
+                            SMAP_STATUS_PATH, ret, SMAP_NODE_CAP_LIMIT);
+    }
+    return ret;
 }

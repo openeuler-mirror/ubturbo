@@ -78,6 +78,8 @@
 extern "C" {
 #endif
 extern EnvAtomic g_forbiddenNodes[MAX_NODES];
+extern int g_remoteNids[SMAP_NODE_CAP_LIMIT];
+extern int g_nrRemote;
 
 #define NODE_FORBIDDEN_USER (1 << 0)
 #define NODE_FORBIDDEN_MIGBACK_DONE (1 << 1)
@@ -679,6 +681,18 @@ int BuildAllPairPlanInputsForState(struct ProcessManager *manager, PairPlan plan
 int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size);
 
 struct ProcessManager *GetProcessManager(void);
+
+/* 内核节点空间上限（cap）：初始化链路经 Mems_allowed 打印宽度解析写入后只读，
+ * 缺省 SMAP_MAX_NUMNODES；节点维度一律引用 GetNumaCap()，禁止新增编译期定维。
+ * GetNumaCap() 为 numa_nodes.h 中的 inline 访问器（读 g_numaCap） */
+void SetNumaCap(uint32_t cap);
+
+/* 解析 /proc/self/status 中 Mems_allowed 位图行的打印宽度获取内核编译期上限
+ * MAX_NUMNODES（内核经 %*pb 按 MAX_NUMNODES 零填充输出，宽度即编译期宽度）。
+ * 只取宽度不取值：值是 cpuset 允许集，与上限语义无关；不得 trim 前导零。
+ * 解析失败时 *cap 置为 SMAP_NODE_CAP_LIMIT 供调用方保守回退（安全不拒启） */
+int32_t ParseNodeCapFromLine(const char *line, uint32_t *cap);
+int32_t GetNodeCapFromStatus(uint32_t *cap);
 
 unsigned long GetPidNrPages(pid_t pid);
 

@@ -31,6 +31,10 @@ void DeinitTrackingDev(struct ProcessManager *manager);
 
 bool IsNumaCriticalErr(int nid);
 
+int ScanRemoteNids(int *out, int outCap);
+void RebuildRemoteNids(void);
+bool RemoteNidSetChanged(void);
+
 struct UbFluxMbStatistic;
 void GetUbFluxMb(void);
 
