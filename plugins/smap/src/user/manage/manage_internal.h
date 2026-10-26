@@ -29,7 +29,7 @@ extern "C" {
 extern uint32_t g_pageSizeNormal;
 extern uint32_t g_pageSizeHuge;
 extern RunMode g_runMode;
-extern uint8_t g_criticalErrNodes[REMOTE_NUMA_BITS];
+extern uint8_t g_criticalErrNodes[SMAP_NODE_CAP_LIMIT];
 
 /* 共享类型定义（原定义在 manage.c，供多个拆分文件使用） */
 typedef struct {

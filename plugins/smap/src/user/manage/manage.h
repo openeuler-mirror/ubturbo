@@ -77,7 +77,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-extern EnvAtomic g_forbiddenNodes[MAX_NODES];
+/* 单例全局按绝对上界静态定维（内核 MAX_NUMNODES 数组同款双轨），运行期以 GetNumaCap() 为界 */
+extern EnvAtomic g_forbiddenNodes[SMAP_NODE_CAP_LIMIT];
 extern int g_remoteNids[SMAP_NODE_CAP_LIMIT];
 extern int g_nrRemote;
 
@@ -222,11 +223,11 @@ typedef struct {
 
 typedef struct {
     uint32_t nrPage; // 进程使用的page数量
-    uint32_t nrPages[MAX_NODES]; // 进程在近远端使用的page数量
+    uint32_t nrPages[SMAP_NODE_CAP_LIMIT]; // 进程在近远端使用的page数量
 } WalkPage;
 
 typedef struct {
-    uint32_t cpuMask[LOCAL_NUMA_NUM]; // CPU绑定情况
+    uint32_t cpuMask[SMAP_NODE_CAP_LIMIT]; // CPU绑定情况
     uint32_t numaNodes; // numa bitmap: 0-unused, 1-used
 } NumaAttribute;
 
@@ -248,7 +249,7 @@ typedef struct {
     MigrateMode migrateMode;
     int sourceLocalNid;
     uint32_t count;
-    ProcessRemoteTarget targets[REMOTE_NUMA_NUM];
+    ProcessRemoteTarget targets[SMAP_MAX_NUMNODES];
 } ProcessTargetConfig;
 
 typedef struct {
@@ -257,7 +258,7 @@ typedef struct {
     uint32_t residentLocalMask;
     uint32_t affinityLocalMask;
     uint32_t affinityRefreshElapsedMs;
-    uint32_t accountLocalMask[REMOTE_NUMA_NUM];
+    uint32_t accountLocalMask[SMAP_NODE_CAP_LIMIT];
     bool affinityValid;
     bool affinitySampled;
 } ManagedLocalState;
@@ -279,21 +280,21 @@ typedef struct {
 typedef struct {
     int nrLocalNuma;
     uint64_t pageSizeKB;
-    uint32_t capacityLocalMask[REMOTE_NUMA_NUM];
+    uint32_t capacityLocalMask[SMAP_MAX_NUMNODES];
 } PairRequestContext;
 
 typedef struct {
     uint64_t managedTotalPages;
     /* Original aggregate request derived from ProcessTargetConfig. */
-    uint64_t requestedRemotePages[REMOTE_NUMA_NUM];
+    uint64_t requestedRemotePages[SMAP_MAX_NUMNODES];
     /* Aggregate request limited only by the process's managed pages. */
-    uint64_t effectiveRemotePages[REMOTE_NUMA_NUM];
+    uint64_t effectiveRemotePages[SMAP_MAX_NUMNODES];
     /*
      * Portion of effectiveRemotePages that cannot currently be assigned to
      * any eligible local -> remote Pair. The aggregate request remains in
      * ProcessTargetConfig and can be assigned when Pair eligibility returns.
      */
-    uint64_t unassignedRequestedPages[REMOTE_NUMA_NUM];
+    uint64_t unassignedRequestedPages[SMAP_MAX_NUMNODES];
 } PairRequestSummary;
 
 /* Runtime-only migration decision for one local-to-remote pair. */
@@ -312,9 +313,9 @@ typedef struct {
 /* Per-cycle destination-node budget shared by all processes and Pairs. */
 typedef struct {
     int nrLocalNuma;
-    uint64_t freePages[MAX_NODES];
-    uint64_t safetyReservePages[MAX_NODES];
-    uint64_t plannedPages[MAX_NODES];
+    uint64_t freePages[SMAP_MAX_NUMNODES];
+    uint64_t safetyReservePages[SMAP_MAX_NUMNODES];
+    uint64_t plannedPages[SMAP_MAX_NUMNODES];
 } PairPlanContext;
 
 /* Per-cycle migration budget shared by all Pairs of one process. */
@@ -332,22 +333,22 @@ typedef struct {
     double initRemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
     uint64_t memSize[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
     uint32_t allocRemoteNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 根据账本计算的，各本地numa对应的远端page的数量
-    uint32_t nrPagesPerLocalNuma[LOCAL_NUMA_NUM]; // 根据账本计算的，各本地numa可支配的内存
+    uint32_t nrPagesPerLocalNuma[SMAP_NODE_CAP_LIMIT]; // 根据账本计算的，各本地numa可支配的内存
     double l2RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
     double l3RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
     uint32_t nrMigratePages[MAX_NODES][MAX_NODES]; // 水线场景：消减后的迁移量；密度场景：接口设置的比例
     uint32_t remoteNrPagesAfterMigrate[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 迁移后记录账本
-    MigrateDirection dir[MAX_NODES]; // 算法决策各numa的迁出的方向 demote/promote/swap
-    UbBwRestrictType ubBwRestrict[MAX_NODES]; // 各NUMA的UB带宽限制策略
+    MigrateDirection dir[SMAP_NODE_CAP_LIMIT]; // 算法决策各numa的迁出的方向 demote/promote/swap
+    UbBwRestrictType ubBwRestrict[SMAP_NODE_CAP_LIMIT]; // 各NUMA的UB带宽限制策略
     SeparateParam separateParam;
 } StrategyAttribute;
 
 typedef struct {
     uint32_t scanTime;
     ScanType scanType; // 标识添加进程组件 HAM/普通冷热
-    uint64_t actcLen[MAX_NODES];
-    ActcData *actcData[MAX_NODES]; // actc数据，按nid偏移指向同一连续缓冲区，第一个非空即缓冲区起始
-    ActCount actCount[MAX_NODES]; // 统计数据
+    uint64_t actcLen[SMAP_NODE_CAP_LIMIT];
+    ActcData *actcData[SMAP_NODE_CAP_LIMIT]; // actc数据，按nid偏移指向同一连续缓冲区，第一个非空即缓冲区起始
+    ActCount actCount[SMAP_NODE_CAP_LIMIT]; // 统计数据
     uint32_t selectedBuckets[MAX_NODES][FREQ_BUCKETS_SIZE]; // 已选频次为freq的页面数
 } ScanAttribute;
 
@@ -380,7 +381,7 @@ struct ProcessAttribute {
     struct { // 迁移相关参数
         int nid;
         uint64_t memSize; // 迁移内存大小,单位为KB
-    } migrateParam[REMOTE_NUMA_NUM];
+    } migrateParam[SMAP_MAX_NUMNODES];
     ProcessTargetConfig targetConfig;
     ProcessTargetConfig pendingTargetConfig;
     bool pendingTargetConfigValid;

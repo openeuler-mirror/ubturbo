@@ -45,10 +45,10 @@ static char g_mmapTypeName[][MMAP_TYPE_STRING_LEN] = { "mmap_private", "mmap_sha
 uint32_t g_pageSizeNormal;
 uint32_t g_pageSizeHuge;
 
-EnvAtomic g_forbiddenNodes[MAX_NODES];
+EnvAtomic g_forbiddenNodes[SMAP_NODE_CAP_LIMIT];
 RunMode g_runMode;
 
-uint8_t g_criticalErrNodes[REMOTE_NUMA_BITS];
+uint8_t g_criticalErrNodes[SMAP_NODE_CAP_LIMIT];
 
 /* 远端在线节点列表（运行时由 sysfs 扫描填充） */
 int g_remoteNids[SMAP_NODE_CAP_LIMIT];
