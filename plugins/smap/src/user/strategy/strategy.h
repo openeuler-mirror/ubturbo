@@ -24,7 +24,9 @@ static inline void CalcMaxMigrate(uint divisor, uint64_t total, uint64_t *res)
 static inline uint32_t NrLocalPage(ProcessAttr *process)
 {
     uint32_t pages = 0;
-    for (int n = 0; n < GetNrLocalNuma(); n++) {
+    /* 本地节点数提到循环外：避免循环条件重复调用 GetNrLocalNuma() */
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int n = 0; n < nrLocalNuma; n++) {
         if (NotInAttrL1(process, n)) {
             continue;
         }
@@ -36,7 +38,8 @@ static inline uint32_t NrLocalPage(ProcessAttr *process)
 static inline uint32_t NrRemotePage(ProcessAttr *process)
 {
     uint32_t pages = 0;
-    for (int n = LOCAL_NUMA_NUM; n < MAX_NODES; n++) {
+    int cap = (int)GetNumaCap();
+    for (int n = GetNrLocalNuma(); n < cap; n++) {
         if (NotInAttrL2(process, n)) {
             continue;
         }
@@ -48,7 +51,8 @@ static inline uint32_t NrRemotePage(ProcessAttr *process)
 static inline int CheckActcDataValid(ProcessAttr *process)
 {
     bool nullFlag = true;
-    for (int n = 0; n < MAX_NODES; n++) {
+    int cap = (int)GetNumaCap();
+    for (int n = 0; n < cap; n++) {
         nullFlag &= !process->scanAttr.actcData[n];
     }
     if (nullFlag) {
@@ -58,7 +62,7 @@ static inline int CheckActcDataValid(ProcessAttr *process)
     return 0;
 }
 
-int RunStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], size_t mlistSize);
+int RunStrategy(ProcessAttr *process, struct MigList *mlist, size_t mlistSize);
 uint64_t GetNrFreePagesByNode(int nid);
 uint64_t GetNrFreeHugePagesByNode(int nid);
 

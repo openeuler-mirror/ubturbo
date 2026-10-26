@@ -6,18 +6,21 @@
 #include <stdio.h>
 
 #include "user/manage/manage.h"
+#include "manage/node_matrix.h"
+#include "common.h"
 
-#define LOCAL_NUMA_BITS 4
-#define REMOTE_NUMA_BITS 18
-#define MAX_NODES (LOCAL_NUMA_BITS + REMOTE_NUMA_BITS)
+#define LOCAL_NUMA_BITS 4      // 保留供测试逻辑使用
+#define STUB_REMOTE_NUMA_NUM 18 // 与旧矩阵远端数量一致，BuildMigrationMsg 统计 4*18*2=144 页
 
-int RunStrategyStub(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], size_t mlistSize)
+int RunStrategyStub(ProcessAttr *process, struct MigList *mlist, size_t mlistSize)
 {
     int i, j;
 
-    for (i = 0; i < MAX_NODES; i++) {
-        for (j = 0; j < MAX_NODES; j++) {
-            mlist[i][j].nr = 1;
+    /* 只填充本地 0..3 与远端 4..21 的组合（迁出与回迁双向），模拟真实策略输出范围 */
+    for (i = 0; i < LOCAL_NUMA_BITS; i++) {
+        for (j = LOCAL_NUMA_BITS; j < LOCAL_NUMA_BITS + STUB_REMOTE_NUMA_NUM; j++) {
+            NM_AT(mlist, i, j).nr = 1;
+            NM_AT(mlist, j, i).nr = 1;
         }
     }
 

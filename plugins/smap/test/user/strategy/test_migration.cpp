@@ -27,6 +27,22 @@ extern "C" uint32_t g_pageSizeHuge;
 
 using namespace std;
 
+/* cap=1024 时 mlist 全矩阵约 50MB，超出栈预算；gtest 用例串行执行，共用 BSS 数组 */
+static struct MigList g_testMlist[SMAP_MAX_NUMNODES][SMAP_MAX_NUMNODES];
+
+static struct MigList *TestMlist(void)
+{
+    (void)memset(g_testMlist, 0, sizeof(g_testMlist));
+    return &g_testMlist[0][0];
+}
+
+// Test-only compat: old compile-time NUMA constants (8 local + 18 remote)
+#define OLD_REMOTE_NUMA_NUM 18
+#define OLD_REMOTE_NUMA_BITS 18
+#define OLD_LOCAL_NUMA_NUM 8
+#define OLD_LOCAL_NUMA_BITS 8
+#define OLD_MAX_NODES (OLD_LOCAL_NUMA_NUM + OLD_REMOTE_NUMA_NUM)
+
 #define TEST_SMAP_MIG_MAGIC 0xB9
 #define TEST_SMAP_MIG_MIGRATE _IOW(TEST_SMAP_MIG_MAGIC, 0, struct MigrateMsg)
 #define BIT(i) (1U << (i))
@@ -192,33 +208,33 @@ TEST_F(MigrationTest, TestAddMigListRejectsKernelEntryOverflow)
     EXPECT_EQ(MAX_2M_PROCESSES_CNT * MAX_PER_PID_MIG_LIST_COUNT, mMsg.cnt);
 }
 
-extern "C" void FreeMigList(struct MigList mList[MAX_NODES][MAX_NODES]);
+extern "C" void FreeMigList(struct MigList *mList);
 TEST_F(MigrationTest, TestFreeMigList)
 {
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {0};
-    mlist[0][0].addr = (uint64_t *)malloc(sizeof(uint64_t));
+    struct MigList *mlist = TestMlist();
+    NM_AT(mlist, 0, 0).addr = (uint64_t *)malloc(sizeof(uint64_t));
     FreeMigList(mlist);
-    EXPECT_EQ(nullptr, mlist[0][0].addr);
+    EXPECT_EQ(nullptr, NM_AT(mlist, 0, 0).addr);
 }
 
-extern "C" void StrategyInitMigList(struct MigList mList[MAX_NODES][MAX_NODES], int pid);
+extern "C" void StrategyInitMigList(struct MigList *mList, int pid);
 TEST_F(MigrationTest, TestInitMigList)
 {
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {0};
-    printf("MAX_NODES in test = %d\n", MAX_NODES);
-    mlist[0][0].addr = (uint64_t *)malloc(sizeof(uint64_t));
-    mlist[0][0].nr = 1;
-    mlist[0][0].pid = 1234;
-    mlist[0][0].from = 100;
-    mlist[0][0].to = 200;
+    struct MigList *mlist = TestMlist();
+    printf("SMAP_MAX_NUMNODES in test = %d\n", SMAP_MAX_NUMNODES);
+    NM_AT(mlist, 0, 0).addr = (uint64_t *)malloc(sizeof(uint64_t));
+    NM_AT(mlist, 0, 0).nr = 1;
+    NM_AT(mlist, 0, 0).pid = 1234;
+    NM_AT(mlist, 0, 0).from = 100;
+    NM_AT(mlist, 0, 0).to = 200;
 
     StrategyInitMigList(mlist, 12345);
 
-    EXPECT_EQ(0, mlist[0][0].nr);
-    EXPECT_EQ(12345, mlist[0][0].pid);
-    EXPECT_EQ(0, mlist[0][0].from);
-    EXPECT_EQ(0, mlist[0][0].to);
-    EXPECT_EQ(nullptr, mlist[0][0].addr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 0).nr);
+    EXPECT_EQ(12345, NM_AT(mlist, 0, 0).pid);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 0).from);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 0).to);
+    EXPECT_EQ(nullptr, NM_AT(mlist, 0, 0).addr);
 }
 
 extern "C" int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint64_t *migratePage);
@@ -280,7 +296,6 @@ TEST_F(MigrationTest, TestBuildMigrationMsgNoPage)
     int nid = 4;
     uint64_t pages;
     ProcessAttr process = {};
-    process.numaAttr.numaNodes = 0b00010001;
     ActcData actc = {};
     process.scanAttr.actcData[0] = &actc;
     struct MigrateMsg mMsg;
@@ -290,6 +305,7 @@ TEST_F(MigrationTest, TestBuildMigrationMsgNoPage)
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    process.numaAttr.numaNodes = 0b00010001;
 
     MOCKER(AddMigListCapped).stubs().will(returnValue(0));
     ret = BuildMigrationMsg(&process, &mMsg, &pages);
@@ -353,18 +369,18 @@ TEST_F(MigrationTest, TestBuildMigrationMsgAllowsNormalPromoteFromForbiddenNode)
     EnvAtomicSet(&g_forbiddenNodes[nid], 0);
 }
 
-extern "C" int RunStrategyStub(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], size_t mlistSize);
+extern "C" int RunStrategyStub(ProcessAttr *process, struct MigList *mlist, size_t mlistSize);
 
 static int g_addMigListOrder[2];
 static int g_addMigListCount;
 
-static int BuildMigrationMsgDirectionLists(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
+static int BuildMigrationMsgDirectionLists(ProcessAttr *process, struct MigList *mlist,
                                            size_t mlistSize)
 {
     (void)process;
     (void)mlistSize;
-    mlist[0][1].nr = 2;
-    mlist[1][0].nr = 1;
+    NM_AT(mlist, 0, 1).nr = 2;
+    NM_AT(mlist, 1, 0).nr = 1;
     return 0;
 }
 
@@ -706,7 +722,7 @@ TEST_F(MigrationTest, TestCollectNodeFreeSnapshotUsesBasePages)
         EXPECT_EQ(0U, context.safetyReservePages[nid]);
         EXPECT_EQ(0U, context.plannedPages[nid]);
     }
-    for (int nid = 2; nid < 2 + REMOTE_NUMA_NUM; nid++) {
+    for (int nid = 2; nid < SMAP_MAX_NUMNODES; nid++) {
         EXPECT_EQ(0U, context.freePages[nid]);
         EXPECT_EQ(0U, context.safetyReservePages[nid]);
         EXPECT_EQ(0U, context.plannedPages[nid]);
@@ -723,7 +739,7 @@ TEST_F(MigrationTest, TestCollectNodeFreeSnapshotUsesHugePages)
         EXPECT_EQ(21U, context.freePages[nid]);
         EXPECT_EQ(0U, context.safetyReservePages[nid]);
     }
-    for (int nid = 2; nid < 2 + REMOTE_NUMA_NUM; nid++) {
+    for (int nid = 2; nid < SMAP_MAX_NUMNODES; nid++) {
         EXPECT_EQ(0U, context.freePages[nid]);
         EXPECT_EQ(0U, context.safetyReservePages[nid]);
     }
@@ -742,7 +758,7 @@ TEST_F(MigrationTest, TestBuildPairPlansBuildsOneNetDirection)
         {.pid = 300, .maxMigratePages = 100},
     };
     PairPlanContext context = {.nrLocalNuma = 2};
-    for (int nid = 0; nid < MAX_NODES; nid++) {
+    for (int nid = 0; nid < SMAP_MAX_NUMNODES; nid++) {
         context.freePages[nid] = 1000;
     }
     PairPlan plans[3] = {};
@@ -1051,7 +1067,7 @@ TEST_F(MigrationTest, TestApplyPairPlansForStateRebuildsMigratingMatrixOnly)
     ASSERT_EQ(0, InitProcessAttrArrays(&first));
     ASSERT_EQ(0, InitProcessAttrArrays(&second));
     ASSERT_EQ(0, InitProcessAttrArrays(&grouped));
-    /* 方向矩阵拆分后第一维仅 nrLocalNuma 行，陈旧值须落在未被本用例写到的 [local][远端 nid] 槽位 */
+    /* 方向矩阵拆分后第一维仅 nrLocalNuma(4) 行，陈旧值须落在未写入的 [local][remote] 槽位 */
     NM_AT(first.strategyAttr.nrMigrateBackPages, 0, 3) = 7;
     NM_AT(second.strategyAttr.nrMigrateBackPages, 0, 3) = 6;
     NM_AT(grouped.strategyAttr.nrMigrateBackPages, 1, 2) = 5;
@@ -1086,8 +1102,7 @@ TEST_F(MigrationTest, TestApplyPairPlansForStateFailureKeepsOldMatrix)
     process.state = PROC_MIGRATE;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&process));
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &process);
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &process);
     NM_AT(process.strategyAttr.nrMigratePages, 0, 2) = 7;
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
@@ -1704,6 +1719,15 @@ TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuNoChange)
 }
 
 extern "C" int MigrateRemoteNuma(struct ProcessManager *manager, struct MigrateNumaIoctlMsg *msg);
+TEST_F(MigrationTest, TestMigrateRemoteNumaOne)
+{
+    struct ProcessManager manager;
+    struct MigrateNumaIoctlMsg msg = {.srcNid = 4, .destNid = 5, .count = 1, .memids = {1}};
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-ENOMEM));
+    int ret = MigrateRemoteNuma(&manager, &msg);
+    EXPECT_EQ(-ENOMEM, ret);
+}
+
 TEST_F(MigrationTest, TestApplyUbBwStopThresholdZero)
 {
     ProcessAttr current = {};
@@ -1762,7 +1786,6 @@ TEST_F(MigrationTest, TestApplyUbBwStopBwExceedThreshold)
     EXPECT_EQ(UB_BW_SWAP_STOP, current.strategyAttr.ubBwRestrict[2]);
     EXPECT_EQ(UB_BW_NORMAL, current.strategyAttr.ubBwRestrict[0]);
     EXPECT_EQ(UB_BW_NORMAL, current.strategyAttr.ubBwRestrict[1]);
-    FreeProcessAttrArrays(&current);
 }
 
 TEST_F(MigrationTest, TestApplyUbBwStopBwBelowThreshold)

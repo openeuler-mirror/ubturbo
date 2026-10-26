@@ -51,15 +51,16 @@ static bool ShouldMigrate(ProcessAttr *process)
     return true;
 }
 
-static void FreeMlist(struct MigList mlist[MAX_NODES][MAX_NODES])
+static void FreeMlist(struct MigList *mlist)
 {
-    for (int from = 0; from < MAX_NODES; from++) {
-        for (int to = 0; to < MAX_NODES; to++) {
-            if (mlist[from][to].addr) {
-                free(mlist[from][to].addr);
-                mlist[from][to].addr = NULL;
+    int cap = (int)GetNumaCap();
+    for (int from = 0; from < cap; from++) {
+        for (int to = 0; to < cap; to++) {
+            if (NM_AT(mlist, from, to).addr) {
+                free(NM_AT(mlist, from, to).addr);
+                NM_AT(mlist, from, to).addr = NULL;
             }
-            mlist[from][to].nr = 0;
+            NM_AT(mlist, from, to).nr = 0;
         }
     }
 }
@@ -398,14 +399,14 @@ static size_t CollectPages4K(const SelectionMode mode, uint64_t actcLen, ActcDat
     return collectedCount;
 }
 
-static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
-                                 const uint64_t numaOffset[MAX_NODES], int from, int to, SelectionMode mode)
+static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList *mlist,
+                                 const uint64_t numaOffset[SMAP_MAX_NUMNODES], int from, int to, SelectionMode mode)
 {
     int nrLocalNuma = GetNrLocalNuma();
     uint64_t offset = numaOffset[from];
     uint64_t n = process->scanAttr.actcLen[from];
     ActcData *currentData = process->scanAttr.actcData[from];
-    struct MigList *currentMig = &mlist[from][to];
+    struct MigList *currentMig = &NM_AT(mlist, from, to);
     ActCount *actCount = &process->scanAttr.actCount[from];
     uint32_t *selectedBuckets = process->scanAttr.selectedBuckets[from];
     uint32_t remainBuckets[FREQ_BUCKETS_SIZE];
@@ -416,7 +417,7 @@ static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_
     }
 
     uint64_t remainLen = n - offset;
-    uint64_t nrMig = mlist[from][to].nr;
+    uint64_t nrMig = NM_AT(mlist, from, to).nr;
     nrMig = MIN(nrMig, remainLen);
     currentMig->nr = nrMig;
     if (nrMig == 0) {
@@ -455,33 +456,35 @@ static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList mlist[MAX_
     return 0;
 }
 
-static int BuildPairMlist(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
-                          uint64_t numaOffset[MAX_NODES], int from, int to, uint32_t nrMigrate, SelectionMode mode)
+static int BuildPairMlist(ProcessAttr *process, struct MigList *mlist, uint64_t numaOffset[SMAP_MAX_NUMNODES], int from,
+                          int to, uint32_t nrMigrate, SelectionMode mode)
 {
     if (nrMigrate == 0) {
         return 0;
     }
 
-    mlist[from][to].nr = nrMigrate;
+    NM_AT(mlist, from, to).nr = nrMigrate;
     int ret = BuildSelectKMlistAddr(process, mlist, numaOffset, from, to, mode);
     if (ret) {
         return ret;
     }
-    numaOffset[from] += mlist[from][to].nr;
+    numaOffset[from] += NM_AT(mlist, from, to).nr;
     return 0;
 }
 
-int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
+int PairMigrationStrategy(ProcessAttr *process, struct MigList *mlist)
 {
     int nrLocalNuma = GetNrLocalNuma();
-    if (!process || nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM || nrLocalNuma + REMOTE_NUMA_NUM > MAX_NODES) {
+    if (!process || nrLocalNuma <= 0 || nrLocalNuma > SMAP_MAX_NUMNODES) {
         return -EINVAL;
     }
 
-    uint64_t numaOffset[MAX_NODES] = { 0 };
+    uint64_t numaOffset[SMAP_MAX_NUMNODES] = { 0 };
     StrategyAttribute *strategy = &process->strategyAttr;
     for (int localNid = 0; localNid < nrLocalNuma; localNid++) {
-        for (int remoteNid = nrLocalNuma; remoteNid < nrLocalNuma + REMOTE_NUMA_NUM; remoteNid++) {
+        int remoteNid;
+        for_each_remote_nid(remoteNid)
+        {
             uint32_t localToRemote = NM_AT(strategy->nrMigratePages, localNid, remoteNid);
             uint32_t remoteToLocal = NM_AT(strategy->nrMigrateBackPages, localNid, remoteNid);
             if (IsNodeForbidden(remoteNid)) {
@@ -518,8 +521,8 @@ int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][
     return 0;
 }
 
-static int SeparateStrategyInner(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
-                                 uint64_t numaOffset[MAX_NODES], struct NumaInfo info, uint64_t swapNum)
+static int SeparateStrategyInner(ProcessAttr *process, struct MigList *mlist, uint64_t numaOffset[SMAP_MAX_NUMNODES],
+                                 struct NumaInfo info, uint64_t swapNum)
 {
     int ret = 0;
     int localNid = info.localNid;
@@ -531,13 +534,13 @@ static int SeparateStrategyInner(ProcessAttr *process, struct MigList mlist[MAX_
                      swapNum, demotePageNr, promotePageNr);
 
     if (demotePageNr > 0) {
-        mlist[localNid][remoteNid].nr = swapNum + demotePageNr;
-        mlist[remoteNid][localNid].nr = swapNum;
+        NM_AT(mlist, localNid, remoteNid).nr = swapNum + demotePageNr;
+        NM_AT(mlist, remoteNid, localNid).nr = swapNum;
     } else if (promotePageNr > 0) {
-        mlist[remoteNid][localNid].nr = swapNum + promotePageNr;
-        mlist[localNid][remoteNid].nr = swapNum;
+        NM_AT(mlist, remoteNid, localNid).nr = swapNum + promotePageNr;
+        NM_AT(mlist, localNid, remoteNid).nr = swapNum;
     } else {
-        mlist[remoteNid][localNid].nr = mlist[localNid][remoteNid].nr = swapNum;
+        NM_AT(mlist, remoteNid, localNid).nr = NM_AT(mlist, localNid, remoteNid).nr = swapNum;
     }
 
     ret = BuildSelectKMlistAddr(process, mlist, numaOffset, localNid, remoteNid, SELECT_BOTTOM_K);
@@ -551,8 +554,8 @@ static int SeparateStrategyInner(ProcessAttr *process, struct MigList mlist[MAX_
         return ret;
     }
 
-    numaOffset[localNid] += mlist[localNid][remoteNid].nr;
-    numaOffset[remoteNid] += mlist[remoteNid][localNid].nr;
+    numaOffset[localNid] += NM_AT(mlist, localNid, remoteNid).nr;
+    numaOffset[remoteNid] += NM_AT(mlist, remoteNid, localNid).nr;
 
     return ret;
 }
@@ -569,21 +572,25 @@ static uint64_t CalcAdditionalPage(ProcessAttr *process, int localNid, int remot
     return additionalNum;
 }
 
-static void UpdateSwapNum(ProcessAttr *process, uint64_t swapNum[LOCAL_NUMA_BITS][MAX_NODES], int localNumaNum,
-                          uint64_t numaFreePage[MAX_NODES])
+static void UpdateSwapNum(ProcessAttr *process, uint64_t *swapNum, int localNumaNum,
+                          uint64_t numaFreePage[SMAP_MAX_NUMNODES])
 {
-    uint64_t numaOffset[MAX_NODES] = { 0 };
+    uint64_t numaOffset[SMAP_MAX_NUMNODES] = { 0 };
     StrategyAttribute *sa = &process->strategyAttr;
 
-    /* 各节点迁出量：demote 从本地节点流出（front[l][r]），promote 从远端节点流出（back[l][r]）；
+    /* 各节点迁出量：demote 从本地节点流出（[l][r]），promote 从远端节点流出（back[l][r]）；
      * 方向矩阵第一维按 nrLocalNuma 分配，不可用绝对 nid 作第一维下标 */
+    /* cap 提前求值：避免每个本地节点重复调用 GetNumaCap() */
+    int cap = (int)GetNumaCap();
     for (int l = 0; l < localNumaNum; l++) {
-        for (int r = localNumaNum; r < localNumaNum + REMOTE_NUMA_NUM; r++) {
+        for (int r = 0; r < cap; r++) {
             numaOffset[l] += NM_AT(sa->nrMigratePages, l, r);
             numaOffset[r] += NM_AT(sa->nrMigrateBackPages, l, r);
         }
     }
-    for (int remoteNid = localNumaNum; remoteNid < localNumaNum + REMOTE_NUMA_NUM; remoteNid++) {
+    int remoteNid;
+    for_each_remote_nid(remoteNid)
+    {
         if (NotInAttrL2(process, remoteNid)) {
             continue;
         }
@@ -596,9 +603,9 @@ static void UpdateSwapNum(ProcessAttr *process, uint64_t swapNum[LOCAL_NUMA_BITS
                 NM_AT(sa->nrMigratePages, localNid, remoteNid) == 0) {
                 continue;
             }
-            swapNum[localNid][remoteNid] = CalcSwapNum(process, localNid, remoteNid, numaOffset, numaFreePage);
-            numaOffset[localNid] += swapNum[localNid][remoteNid];
-            numaOffset[remoteNid] += swapNum[localNid][remoteNid];
+            NM_AT(swapNum, localNid, remoteNid) = CalcSwapNum(process, localNid, remoteNid, numaOffset, numaFreePage);
+            numaOffset[localNid] += NM_AT(swapNum, localNid, remoteNid);
+            numaOffset[remoteNid] += NM_AT(swapNum, localNid, remoteNid);
         }
         uint64_t remoteGuarantee = process->scanAttr.actCount[remoteNid].remoteHotNum;
         for (int localNid = 0; localNid < localNumaNum; localNid++) {
@@ -610,14 +617,14 @@ static void UpdateSwapNum(ProcessAttr *process, uint64_t swapNum[LOCAL_NUMA_BITS
             }
             uint64_t newAddedNum = CalcAdditionalPage(
                 process, localNid, remoteNid, remoteGuarantee - numaOffset[remoteNid], numaOffset, numaFreePage);
-            swapNum[localNid][remoteNid] += newAddedNum;
+            NM_AT(swapNum, localNid, remoteNid) += newAddedNum;
             numaOffset[localNid] += newAddedNum;
             numaOffset[remoteNid] += newAddedNum;
         }
     }
 }
 
-int SeparateStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
+int SeparateStrategy(ProcessAttr *process, struct MigList *mlist)
 {
     int ret = 0;
     if (process->separateParam.freqWt == 0) {
@@ -627,10 +634,15 @@ int SeparateStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_N
     if (!ShouldMigrate(process)) {
         return 0;
     }
-    uint64_t numaOffset[MAX_NODES] = { 0 };
-    uint64_t swapNum[LOCAL_NUMA_BITS][MAX_NODES] = { 0 };
-    uint64_t numaFreePages[MAX_NODES] = { 0 };
-    for (int nid = 0; nid < MAX_NODES; ++nid) {
+    uint64_t numaOffset[SMAP_MAX_NUMNODES] = { 0 };
+    /* 扁平 cap × cap 矩阵（列跨度 = cap） */
+    uint64_t *swapNum = calloc(NM_COUNT(GetNumaCap()), sizeof(*swapNum));
+    uint64_t numaFreePages[SMAP_MAX_NUMNODES] = { 0 };
+    if (!swapNum) {
+        return -ENOMEM;
+    }
+    int cap = (int)GetNumaCap();
+    for (int nid = 0; nid < cap; ++nid) {
         if (InAttrL1(process, nid) || InAttrL2(process, nid)) {
             numaFreePages[nid] = IsHugeMode() ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
         }
@@ -643,17 +655,22 @@ int SeparateStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_N
         if (NotInAttrL1(process, info.localNid)) {
             continue;
         }
-        for (info.remoteNid = localNumaNum; info.remoteNid < localNumaNum + REMOTE_NUMA_NUM; info.remoteNid++) {
+        int nid;
+        for_each_remote_nid(nid)
+        {
+            info.remoteNid = nid;
             if (NotInAttrL2(process, info.remoteNid)) {
                 continue;
             }
             if ((ret = SeparateStrategyInner(process, mlist, numaOffset, info,
-                                             swapNum[info.localNid][info.remoteNid])) != 0) {
+                                             NM_AT(swapNum, info.localNid, info.remoteNid))) != 0) {
                 FreeMlist(mlist);
+                free(swapNum);
                 return ret;
             }
         }
     }
+    free(swapNum);
     return 0;
 }
 
@@ -739,7 +756,8 @@ static uint64_t CalcMultiNumaVmSwapNumByFreq(ProcessAttr *process, LevelActcData
     }
 
     uint64_t freeHugePage[NR_LEVEL] = { 0 };
-    for (int nid = 0; nid < MAX_NODES; ++nid) {
+    int cap = (int)GetNumaCap();
+    for (int nid = 0; nid < cap; ++nid) {
         if (InAttrL1(process, nid)) {
             freeHugePage[L1] += IsHugeMode() ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
         }
@@ -772,10 +790,11 @@ static uint64_t CalcMultiNumaVmSwapNumByFreq(ProcessAttr *process, LevelActcData
     return migrateNum;
 }
 
-static int GroupMigPagesByNode(LevelActcData *levelActcData[NR_LEVEL], uint64_t swapNum, uint64_t nrMig[MAX_NODES],
-                               uint64_t *migAddrArray[MAX_NODES])
+static int GroupMigPagesByNode(LevelActcData *levelActcData[NR_LEVEL], uint64_t swapNum,
+                               uint64_t nrMig[SMAP_MAX_NUMNODES], uint64_t *migAddrArray[SMAP_MAX_NUMNODES])
 {
-    for (int i = 0; i < MAX_NODES; i++) {
+    int cap = (int)GetNumaCap();
+    for (int i = 0; i < cap; i++) {
         if (nrMig[i] > 0) {
             migAddrArray[i] = calloc(nrMig[i], sizeof(uint64_t));
             if (!migAddrArray[i]) {
@@ -784,11 +803,11 @@ static int GroupMigPagesByNode(LevelActcData *levelActcData[NR_LEVEL], uint64_t 
         }
     }
 
-    uint64_t counters[MAX_NODES] = { 0 };
+    uint64_t counters[SMAP_MAX_NUMNODES] = { 0 };
     for (uint64_t i = 0; i < swapNum; i++) {
         int l1node = levelActcData[L1][i].node;
         int l2node = levelActcData[L2][i].node;
-        if (l1node < 0 || l1node >= MAX_NODES || l2node < 0 || l2node >= MAX_NODES) {
+        if (l1node < 0 || l1node >= SMAP_MAX_NUMNODES || l2node < 0 || l2node >= SMAP_MAX_NUMNODES) {
             continue;
         }
         if (counters[l1node] >= nrMig[l1node] || counters[l2node] >= nrMig[l2node]) {
@@ -803,17 +822,18 @@ static int GroupMigPagesByNode(LevelActcData *levelActcData[NR_LEVEL], uint64_t 
     return 0;
 }
 
-static int BuildMigListForDirection(MigrateDirection dir, uint64_t *migAddrArray[MAX_NODES], uint64_t nrMig[MAX_NODES],
-                                    uint64_t destFreeList[MAX_NODES], struct MigList mlist[MAX_NODES][MAX_NODES])
+static int BuildMigListForDirection(MigrateDirection dir, uint64_t *migAddrArray[SMAP_MAX_NUMNODES],
+                                    uint64_t nrMig[SMAP_MAX_NUMNODES], uint64_t destFreeList[SMAP_MAX_NUMNODES],
+                                    struct MigList *mlist)
 {
     int nrLocalNuma = GetNrLocalNuma();
     if (dir != PROMOTE && dir != DEMOTE) {
         return -EINVAL;
     }
     int sourceStart = dir == PROMOTE ? nrLocalNuma : 0;
-    int sourceEnd = dir == PROMOTE ? nrLocalNuma + REMOTE_NUMA_NUM : nrLocalNuma;
+    int sourceEnd = dir == PROMOTE ? (int)GetNumaCap() : nrLocalNuma;
     int destStart = dir == PROMOTE ? 0 : nrLocalNuma;
-    int destEnd = dir == PROMOTE ? nrLocalNuma : nrLocalNuma + REMOTE_NUMA_NUM;
+    int destEnd = dir == PROMOTE ? nrLocalNuma : (int)GetNumaCap();
     for (int from = sourceStart; from < sourceEnd; from++) {
         if (!migAddrArray[from] || nrMig[from] == 0) {
             continue;
@@ -832,19 +852,19 @@ static int BuildMigListForDirection(MigrateDirection dir, uint64_t *migAddrArray
                 continue;
             }
             SMAP_LOGGER_INFO("migrate %lu pages from NUMA %d to NUMA %d", pagesToThisDest, from, to);
-            mlist[from][to].nr = pagesToThisDest;
-            mlist[from][to].addr = calloc(pagesToThisDest, sizeof(uint64_t));
-            if (!mlist[from][to].addr) {
+            NM_AT(mlist, from, to).nr = pagesToThisDest;
+            NM_AT(mlist, from, to).addr = calloc(pagesToThisDest, sizeof(uint64_t));
+            if (!NM_AT(mlist, from, to).addr) {
                 return -ENOMEM;
             }
 
             for (uint64_t i = 0; i < pagesToThisDest; i++) {
-                mlist[from][to].addr[i] = migAddrArray[from][curMigIndex + i];
+                NM_AT(mlist, from, to).addr[i] = migAddrArray[from][curMigIndex + i];
             }
 
             // 地址升序排序，确保 convert_pos_to_paddr_sorted 正确工作
             if (pagesToThisDest > 1) {
-                qsort(mlist[from][to].addr, pagesToThisDest, sizeof(uint64_t), AddrAscFunc);
+                qsort(NM_AT(mlist, from, to).addr, pagesToThisDest, sizeof(uint64_t), AddrAscFunc);
             }
 
             destFreeList[to] -= pagesToThisDest;
@@ -863,37 +883,37 @@ static int BuildMigListForDirection(MigrateDirection dir, uint64_t *migAddrArray
     return 0;
 }
 
-static int BuildDemoteMultiNumaMigLists(uint64_t *migAddrArray[MAX_NODES], uint64_t nrMig[MAX_NODES],
-                                        struct MigList mlist[MAX_NODES][MAX_NODES],
-                                        RemoteMigInfo remoteMigInfo[REMOTE_NUMA_NUM])
+static int BuildDemoteMultiNumaMigLists(uint64_t *migAddrArray[SMAP_MAX_NUMNODES], uint64_t nrMig[SMAP_MAX_NUMNODES],
+                                        struct MigList *mlist, RemoteMigInfo remoteMigInfo[SMAP_MAX_NUMNODES])
 {
-    int nrLocalNuma = GetNrLocalNuma();
-    uint64_t freeHugePages[MAX_NODES] = { 0 };
+    uint64_t freeHugePages[SMAP_MAX_NUMNODES] = { 0 };
 
-    for (int nid = nrLocalNuma; nid < MAX_NODES; nid++) {
-        if (remoteMigInfo[nid - nrLocalNuma].dir == DEMOTE && remoteMigInfo[nid - nrLocalNuma].nrMig > 0) {
+    int nid;
+    for_each_remote_nid(nid)
+    {
+        if (remoteMigInfo[nid].dir == DEMOTE && remoteMigInfo[nid].nrMig > 0) {
             freeHugePages[nid] = IsHugeMode() ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
-            freeHugePages[nid] = MIN(freeHugePages[nid], remoteMigInfo[nid - nrLocalNuma].nrMig);
+            freeHugePages[nid] = MIN(freeHugePages[nid], remoteMigInfo[nid].nrMig);
         }
     }
 
     return BuildMigListForDirection(DEMOTE, migAddrArray, nrMig, freeHugePages, mlist);
 }
 
-static void CountMigrationPerNode(uint64_t nrMig[MAX_NODES], LevelActcData *levelActcData[NR_LEVEL], uint64_t swapNum,
-                                  int nrLocalNuma)
+static void CountMigrationPerNode(uint64_t nrMig[SMAP_MAX_NUMNODES], LevelActcData *levelActcData[NR_LEVEL],
+                                  uint64_t swapNum, int nrLocalNuma)
 {
     for (uint64_t i = 0; i < swapNum; i++) {
         int l1node = levelActcData[L1][i].node;
         int l2node = levelActcData[L2][i].node;
-        if (l2node >= nrLocalNuma && l2node < nrLocalNuma + REMOTE_NUMA_NUM && l1node >= 0 && l1node < nrLocalNuma) {
+        if (l2node >= nrLocalNuma && l2node < SMAP_MAX_NUMNODES && l1node >= 0 && l1node < nrLocalNuma) {
             nrMig[l1node]++;
             nrMig[l2node]++;
         }
     }
 }
 
-static void FreeMultiNumaVmData(LevelActcData *levelActcData[NR_LEVEL], uint64_t *migAddrArray[MAX_NODES])
+static void FreeMultiNumaVmData(LevelActcData *levelActcData[NR_LEVEL], uint64_t *migAddrArray[SMAP_MAX_NUMNODES])
 {
     for (int i = 0; i < NR_LEVEL; i++) {
         if (levelActcData[i]) {
@@ -902,19 +922,22 @@ static void FreeMultiNumaVmData(LevelActcData *levelActcData[NR_LEVEL], uint64_t
         }
     }
 
-    for (int i = 0; i < MAX_NODES; i++) {
+    int cap = (int)GetNumaCap();
+    for (int i = 0; i < cap; i++) {
         if (migAddrArray[i]) {
             free(migAddrArray[i]);
             migAddrArray[i] = NULL;
         }
     }
+    free(migAddrArray);
 }
 
 static int BuildLevelActcData(ProcessAttr *process, LevelActcData *levelActcData, uint64_t nrPages,
                               uint64_t *levelActcLen, int level)
 {
     int nrLocalNuma = GetNrLocalNuma();
-    for (int i = 0; i < MAX_NODES; i++) {
+    int cap = (int)GetNumaCap();
+    for (int i = 0; i < cap; i++) {
         if (process->scanAttr.actcLen[i] == 0) {
             continue;
         }
@@ -952,71 +975,94 @@ static int BuildLevelActcData(ProcessAttr *process, LevelActcData *levelActcData
     return 0;
 }
 
-static int PromoteMultiNumaVmStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
-                                      RemoteMigInfo remoteMigInfo[REMOTE_NUMA_NUM], int nrLocalNuma)
+static int PromoteMultiNumaVmStrategy(ProcessAttr *process, struct MigList *mlist,
+                                      RemoteMigInfo remoteMigInfo[SMAP_MAX_NUMNODES], int nrLocalNuma)
 {
-    uint64_t localFreeHugePages[LOCAL_NUMA_NUM] = { 0 };
-    uint64_t numaOffset[MAX_NODES] = { 0 };
+    uint64_t *localFreeHugePages = calloc(SMAP_MAX_NUMNODES, sizeof(*localFreeHugePages));
+    uint64_t *numaOffset = calloc(SMAP_MAX_NUMNODES, sizeof(*numaOffset));
+    if (!localFreeHugePages || !numaOffset) {
+        free(localFreeHugePages);
+        free(numaOffset);
+        return -ENOMEM;
+    }
     for (int nid = 0; nid < nrLocalNuma; nid++) {
         if (InAttrL1(process, nid)) {
             localFreeHugePages[nid] = IsHugeMode() ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
         }
     }
 
-    for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
-        if (remoteMigInfo[i].dir != PROMOTE || remoteMigInfo[i].nrMig == 0) {
+    int cap = (int)GetNumaCap();
+    for (int nid = nrLocalNuma; nid < cap; nid++) {
+        if (remoteMigInfo[nid].dir != PROMOTE || remoteMigInfo[nid].nrMig == 0) {
             continue;
         }
-        int from = i + nrLocalNuma;
+        int from = nid;
         // use topk algorithm instead of qsort
         for (int to = 0; to < nrLocalNuma; to++) {
             if (!InAttrL1(process, to)) {
                 continue;
             }
-            mlist[from][to].nr = MIN(remoteMigInfo[i].nrMig, localFreeHugePages[to]);
+            NM_AT(mlist, from, to).nr = MIN(remoteMigInfo[nid].nrMig, localFreeHugePages[to]);
             int ret = BuildSelectKMlistAddr(process, mlist, numaOffset, from, to, SELECT_TOP_K);
             if (ret) {
                 SMAP_LOGGER_ERROR("PromoteMultiNumaVmStrategy build mlist addr failed %d.", ret);
+                free(localFreeHugePages);
+                free(numaOffset);
                 return ret;
             }
-            SMAP_LOGGER_INFO("migrate %lu pages from NUMA %d to NUMA %d", mlist[from][to].nr, from, to);
-            localFreeHugePages[to] -= mlist[from][to].nr;
-            remoteMigInfo[i].nrMig -= mlist[from][to].nr;
+            SMAP_LOGGER_INFO("migrate %lu pages from NUMA %d to NUMA %d", NM_AT(mlist, from, to).nr, from, to);
+            localFreeHugePages[to] -= NM_AT(mlist, from, to).nr;
+            remoteMigInfo[nid].nrMig -= NM_AT(mlist, from, to).nr;
         }
-        if (remoteMigInfo[i].nrMig > 0) {
+        if (remoteMigInfo[nid].nrMig > 0) {
             SMAP_LOGGER_ERROR("Pid %d insufficient memory in the destNid.", process->pid);
             process->isLowMem = true;
+            free(localFreeHugePages);
+            free(numaOffset);
             return -MULTI_NUMA_VM_OOM;
         }
     }
+    free(localFreeHugePages);
+    free(numaOffset);
     return 0;
 }
 
-static void FreeDemoteMultiNumaVmData(LevelActcData *l1ActcData, uint64_t *migAddrArray[MAX_NODES])
+static void FreeDemoteMultiNumaVmData(LevelActcData *l1ActcData, uint64_t *migAddrArray[SMAP_MAX_NUMNODES])
 {
     if (l1ActcData) {
         free(l1ActcData);
     }
 
-    for (int i = 0; i < MAX_NODES; i++) {
+    int cap = (int)GetNumaCap();
+    for (int i = 0; i < cap; i++) {
         if (migAddrArray[i]) {
             free(migAddrArray[i]);
             migAddrArray[i] = NULL;
         }
     }
+    free(migAddrArray);
 }
 
-static int DemoteMultiNumaVmStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
-                                     RemoteMigInfo remoteMigInfo[REMOTE_NUMA_NUM], uint64_t nrPages[NR_LEVEL],
+static int DemoteMultiNumaVmStrategy(ProcessAttr *process, struct MigList *mlist,
+                                     RemoteMigInfo remoteMigInfo[SMAP_MAX_NUMNODES], uint64_t nrPages[NR_LEVEL],
                                      uint64_t demoteNum)
 {
     int nrLocalNuma = GetNrLocalNuma();
-    uint64_t nrMig[MAX_NODES] = { 0 };
-    uint64_t counters[MAX_NODES] = { 0 };
-    uint64_t *migAddrArray[MAX_NODES] = { NULL };
+    uint64_t *nrMig = calloc(SMAP_MAX_NUMNODES, sizeof(*nrMig));
+    uint64_t *counters = calloc(SMAP_MAX_NUMNODES, sizeof(*counters));
+    uint64_t **migAddrArray = calloc(SMAP_MAX_NUMNODES, sizeof(*migAddrArray));
+    if (!nrMig || !counters || !migAddrArray) {
+        free(nrMig);
+        free(counters);
+        free(migAddrArray);
+        return -ENOMEM;
+    }
     uint64_t l1ActcLen = 0;
     LevelActcData *l1ActcData = calloc(nrPages[L1], sizeof(LevelActcData));
     if (!l1ActcData) {
+        free(nrMig);
+        free(counters);
+        free(migAddrArray);
         return -ENOMEM;
     }
 
@@ -1033,7 +1079,8 @@ static int DemoteMultiNumaVmStrategy(ProcessAttr *process, struct MigList mlist[
         }
     }
 
-    for (int i = 0; i < MAX_NODES; i++) {
+    int cap = (int)GetNumaCap();
+    for (int i = 0; i < cap; i++) {
         if (nrMig[i] > 0) {
             migAddrArray[i] = calloc(nrMig[i], sizeof(uint64_t));
             if (!migAddrArray[i]) {
@@ -1060,14 +1107,16 @@ static int DemoteMultiNumaVmStrategy(ProcessAttr *process, struct MigList mlist[
 
 cleanup:
     FreeDemoteMultiNumaVmData(l1ActcData, migAddrArray);
+    free(nrMig);
+    free(counters);
     return ret;
 }
 
-static int BuildSwapMigLists(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
-                             uint64_t nrMig[MAX_NODES], uint64_t *migAddrArray[MAX_NODES], int nrLocalNuma)
+static int BuildSwapMigLists(ProcessAttr *process, struct MigList *mlist, uint64_t nrMig[SMAP_MAX_NUMNODES],
+                             uint64_t *migAddrArray[SMAP_MAX_NUMNODES], int nrLocalNuma)
 {
     // promote
-    uint64_t freeHugePages[MAX_NODES] = { 0 };
+    uint64_t freeHugePages[SMAP_MAX_NUMNODES] = { 0 };
     for (int nid = 0; nid < nrLocalNuma; nid++) {
         if (InAttrL1(process, nid)) {
             freeHugePages[nid] = IsHugeMode() ? GetNrFreeHugePagesByNode(nid) : GetNrFreePagesByNode(nid);
@@ -1081,7 +1130,9 @@ static int BuildSwapMigLists(ProcessAttr *process, struct MigList mlist[MAX_NODE
     }
 
     // demote
-    for (int nid = nrLocalNuma; nid < MAX_NODES; nid++) {
+    int nid;
+    for_each_remote_nid(nid)
+    {
         if (InAttrL2(process, nid)) {
             freeHugePages[nid] = nrMig[nid];
         }
@@ -1095,11 +1146,16 @@ static int BuildSwapMigLists(ProcessAttr *process, struct MigList mlist[MAX_NODE
     return ret;
 }
 
-static int SwapMultiNumaVmStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES],
-                                   uint64_t nrPages[NR_LEVEL], int nrLocalNuma)
+static int SwapMultiNumaVmStrategy(ProcessAttr *process, struct MigList *mlist, uint64_t nrPages[NR_LEVEL],
+                                   int nrLocalNuma)
 {
-    uint64_t nrMig[MAX_NODES] = { 0 };
-    uint64_t *migAddrArray[MAX_NODES] = { NULL };
+    uint64_t *nrMig = calloc(SMAP_MAX_NUMNODES, sizeof(*nrMig));
+    uint64_t **migAddrArray = calloc(SMAP_MAX_NUMNODES, sizeof(*migAddrArray));
+    if (!nrMig || !migAddrArray) {
+        free(nrMig);
+        free(migAddrArray);
+        return -ENOMEM;
+    }
     uint64_t levelActcLen[NR_LEVEL] = { 0 };
     LevelActcData *levelActcData[NR_LEVEL] = { NULL };
 
@@ -1108,6 +1164,7 @@ static int SwapMultiNumaVmStrategy(ProcessAttr *process, struct MigList mlist[MA
             levelActcData[i] = calloc(nrPages[i], sizeof(LevelActcData));
             if (!levelActcData[i]) {
                 FreeMultiNumaVmData(levelActcData, migAddrArray);
+                free(nrMig);
                 return -ENOMEM;
             }
         }
@@ -1117,6 +1174,7 @@ static int SwapMultiNumaVmStrategy(ProcessAttr *process, struct MigList mlist[MA
     if (ret) {
         SMAP_LOGGER_ERROR("Failed to build L1 actc data for pid %d, ret: %d", process->pid, ret);
         FreeMultiNumaVmData(levelActcData, migAddrArray);
+        free(nrMig);
         return ret;
     }
 
@@ -1124,12 +1182,14 @@ static int SwapMultiNumaVmStrategy(ProcessAttr *process, struct MigList mlist[MA
     if (ret) {
         SMAP_LOGGER_ERROR("Failed to build L2 actc data for pid %d, ret: %d", process->pid, ret);
         FreeMultiNumaVmData(levelActcData, migAddrArray);
+        free(nrMig);
         return ret;
     }
     uint64_t swapMigrateNum = CalcMultiNumaVmSwapNumByFreq(process, levelActcData, levelActcLen);
     SMAP_LOGGER_INFO("Pid %d swap num:%lu after CalcMultiNumaVmSwapNumByFreq.", process->pid, swapMigrateNum);
     if (swapMigrateNum == 0) {
         FreeMultiNumaVmData(levelActcData, migAddrArray);
+        free(nrMig);
         return 0;
     }
 
@@ -1139,6 +1199,7 @@ static int SwapMultiNumaVmStrategy(ProcessAttr *process, struct MigList mlist[MA
     if (ret) {
         SMAP_LOGGER_ERROR("Failed to classify pages by node for pid %d, ret: %d", process->pid, ret);
         FreeMultiNumaVmData(levelActcData, migAddrArray);
+        free(nrMig);
         return ret;
     }
 
@@ -1147,68 +1208,77 @@ static int SwapMultiNumaVmStrategy(ProcessAttr *process, struct MigList mlist[MA
         SMAP_LOGGER_ERROR("Failed to build mig lists for pid %d, ret: %d", process->pid, ret);
     }
     FreeMultiNumaVmData(levelActcData, migAddrArray);
+    free(nrMig);
     return ret;
 }
 
-static void CalculateMigInfo(ProcessAttr *process, RemoteMigInfo remoteMigInfo[REMOTE_NUMA_NUM],
+static void CalculateMigInfo(ProcessAttr *process, RemoteMigInfo remoteMigInfo[SMAP_MAX_NUMNODES],
                              uint64_t nrPages[NR_LEVEL], uint64_t *demoteNum, uint64_t *promoteNum)
 {
     int nrLocalNuma = GetNrLocalNuma();
     if (GetRunMode() == MEM_POOL_MODE) {
         for (int i = 0; i < process->remoteNumaCnt; i++) {
             int nid = process->migrateParam[i].nid;
-            int index = nid - nrLocalNuma;
             uint64_t targetL2Page = KBToHugePage(process->migrateParam[i].memSize);
             if (targetL2Page > process->scanAttr.actcLen[nid]) {
-                remoteMigInfo[index].dir = DEMOTE;
-                remoteMigInfo[index].nrMig = targetL2Page - process->scanAttr.actcLen[nid];
-                *demoteNum += remoteMigInfo[index].nrMig;
+                remoteMigInfo[nid].dir = DEMOTE;
+                remoteMigInfo[nid].nrMig = targetL2Page - process->scanAttr.actcLen[nid];
+                *demoteNum += remoteMigInfo[nid].nrMig;
             } else if (targetL2Page < process->scanAttr.actcLen[nid]) {
-                remoteMigInfo[index].dir = PROMOTE;
-                remoteMigInfo[index].nrMig = process->scanAttr.actcLen[nid] - targetL2Page;
-                *promoteNum += remoteMigInfo[index].nrMig;
+                remoteMigInfo[nid].dir = PROMOTE;
+                remoteMigInfo[nid].nrMig = process->scanAttr.actcLen[nid] - targetL2Page;
+                *promoteNum += remoteMigInfo[nid].nrMig;
             } else {
-                remoteMigInfo[index].nrMig = 0;
-                remoteMigInfo[index].dir = SWAP;
+                remoteMigInfo[nid].nrMig = 0;
+                remoteMigInfo[nid].dir = SWAP;
             }
         }
     } else {
         int l1Node = GetAttrL1(process);
-        for (int l2Node = nrLocalNuma; l2Node < nrLocalNuma + REMOTE_NUMA_NUM; l2Node++) {
+        /* L1 位图为空返回 NUMA_NO_NODE(-1)，不可作 nrMigratePages 下标；
+         * 此时无迁移账本，保持 remoteMigInfo 零初始化 */
+        if (l1Node < 0) {
+            return;
+        }
+        int cap = (int)GetNumaCap();
+        for (int l2Node = nrLocalNuma; l2Node < cap; l2Node++) {
             if (NotInAttrL2(process, l2Node)) {
                 continue;
             }
-            int index = l2Node - nrLocalNuma;
             if (NM_AT(process->strategyAttr.nrMigratePages, l1Node, l2Node) > 0) {
-                remoteMigInfo[index].dir = DEMOTE;
-                remoteMigInfo[index].nrMig = NM_AT(process->strategyAttr.nrMigratePages, l1Node, l2Node);
-                *demoteNum += remoteMigInfo[index].nrMig;
+                remoteMigInfo[l2Node].dir = DEMOTE;
+                remoteMigInfo[l2Node].nrMig = NM_AT(process->strategyAttr.nrMigratePages, l1Node, l2Node);
+                *demoteNum += remoteMigInfo[l2Node].nrMig;
             } else if (NM_AT(process->strategyAttr.nrMigrateBackPages, l1Node, l2Node) > 0) {
-                remoteMigInfo[index].dir = PROMOTE;
-                remoteMigInfo[index].nrMig = NM_AT(process->strategyAttr.nrMigrateBackPages, l1Node, l2Node);
-                *promoteNum += remoteMigInfo[index].nrMig;
+                remoteMigInfo[l2Node].dir = PROMOTE;
+                remoteMigInfo[l2Node].nrMig = NM_AT(process->strategyAttr.nrMigrateBackPages, l1Node, l2Node);
+                *promoteNum += remoteMigInfo[l2Node].nrMig;
             } else {
-                remoteMigInfo[index].nrMig = 0;
-                remoteMigInfo[index].dir = SWAP;
+                remoteMigInfo[l2Node].nrMig = 0;
+                remoteMigInfo[l2Node].dir = SWAP;
             }
         }
     }
 }
 
-int SeparateStrategyMultiNumaVm(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES])
+int SeparateStrategyMultiNumaVm(ProcessAttr *process, struct MigList *mlist)
 {
     int ret = 0;
     int nrLocalNuma = GetNrLocalNuma();
     uint64_t demoteNum = 0;
     uint64_t promoteNum = 0;
 
-    RemoteMigInfo remoteMigInfo[REMOTE_NUMA_NUM] = { 0 };
+    RemoteMigInfo *remoteMigInfo = calloc(SMAP_MAX_NUMNODES, sizeof(*remoteMigInfo));
+    if (!remoteMigInfo) {
+        return -ENOMEM;
+    }
     if (process->separateParam.freqWt == 0) {
         InitSeparateParam(process);
     }
 
     uint64_t nrPages[NR_LEVEL] = { 0 };
-    for (int i = 0; i < MAX_NODES; i++) {
+    int cap = (int)GetNumaCap();
+    for (int i = 0; i < cap; i++) {
         if (process->scanAttr.actcLen[i] == 0) {
             continue;
         }
@@ -1222,6 +1292,7 @@ int SeparateStrategyMultiNumaVm(ProcessAttr *process, struct MigList mlist[MAX_N
     CalculateMigInfo(process, remoteMigInfo, nrPages, &demoteNum, &promoteNum);
     SMAP_LOGGER_INFO("Pid %d, demoteNum: %lu, promoteNum: %lu.", process->pid, demoteNum, promoteNum);
     if (promoteNum == 0 && demoteNum == 0) {
+        free(remoteMigInfo);
         return SwapMultiNumaVmStrategy(process, mlist, nrPages, nrLocalNuma);
     }
 
@@ -1229,6 +1300,7 @@ int SeparateStrategyMultiNumaVm(ProcessAttr *process, struct MigList mlist[MAX_N
         ret = DemoteMultiNumaVmStrategy(process, mlist, remoteMigInfo, nrPages, demoteNum);
         if (ret) {
             SMAP_LOGGER_ERROR("Demote mulit numa vm strategy failed for pid %d, ret %d.", process->pid, ret);
+            free(remoteMigInfo);
             return ret;
         }
     }
@@ -1240,5 +1312,6 @@ int SeparateStrategyMultiNumaVm(ProcessAttr *process, struct MigList mlist[MAX_N
         }
     }
 
+    free(remoteMigInfo);
     return ret;
 }

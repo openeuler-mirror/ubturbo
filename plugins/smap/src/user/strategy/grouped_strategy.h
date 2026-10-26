@@ -13,7 +13,7 @@
 
 #include "manage/manage.h"
 
-int GroupedMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]);
+int GroupedMigrationStrategy(ProcessAttr *process, struct MigList *mlist);
 void UpdateGroupedMigrationResult(ProcessAttr *process, int fromNid, int toNid, uint64_t successPages);
 
 #endif /* __GROUPED_STRATEGY_H__ */

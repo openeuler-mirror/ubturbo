@@ -6,12 +6,22 @@
 #include "mockcpp/mokc.h"
 
 #include "manage/manage.h"
+#include "manage/node_matrix.h"
 #include "smap_user_log.h"
 #include "strategy/grouped_strategy.h"
 #include "strategy/separate_strategy.h"
 #include "strategy/strategy.h"
 
 using namespace std;
+
+/* cap=1024 时 mlist 全矩阵约 50MB，超出栈预算；gtest 用例串行执行，共用 BSS 数组 */
+static struct MigList g_testMlist[SMAP_MAX_NUMNODES][SMAP_MAX_NUMNODES];
+
+static struct MigList *TestMlist(void)
+{
+    (void)memset(g_testMlist, 0, sizeof(g_testMlist));
+    return &g_testMlist[0][0];
+}
 
 class StrategyTest : public ::testing::Test {
 protected:
@@ -28,15 +38,15 @@ protected:
     }
 };
 
-extern "C" int RunStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], size_t mlistSize);
-extern "C" int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]);
+extern "C" int RunStrategy(ProcessAttr *process, struct MigList *mlist, size_t mlistSize);
+extern "C" int PairMigrationStrategy(ProcessAttr *process, struct MigList *mlist);
 TEST_F(StrategyTest, TestRunStrategyOne)
 {
     size_t mlistSize = NR_LEVEL;
     ProcessAttr process;
     ActcData actcData = {0};
     process.scanAttr.actcData[0] = &actcData;
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+struct MigList *mlist = TestMlist();
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
     MOCKER(SeparateStrategy).stubs().will(returnValue(0));
     MOCKER(SeparateStrategy).stubs().will(returnValue(0));
@@ -50,7 +60,7 @@ TEST_F(StrategyTest, TestRunStrategyTwo)
     ProcessAttr process;
     ActcData actcData = {0};
     process.scanAttr.actcData[0] = &actcData;
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+struct MigList *mlist = TestMlist();
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(SeparateStrategy).stubs().will(returnValue(0));
     MOCKER(SeparateStrategy).stubs().will(returnValue(0));
@@ -62,7 +72,7 @@ TEST_F(StrategyTest, TestRunStrategyThree)
 {
     size_t mlistSize = 0;
     ProcessAttr process;
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+struct MigList *mlist = TestMlist();
     MOCKER(SeparateStrategy).stubs().will(returnValue(0));
     MOCKER(SeparateStrategy).stubs().will(returnValue(0));
     int ret = RunStrategy(&process, mlist, mlistSize);
@@ -74,10 +84,10 @@ TEST_F(StrategyTest, TestRunStrategyUsesPairMigrationForNormalProcess)
     ProcessAttr process = {};
     ActcData actcData = {};
     process.scanAttr.actcData[0] = &actcData;
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+struct MigList *mlist = TestMlist();
     MOCKER(PairMigrationStrategy).expects(once()).will(returnValue(7));
 
-    EXPECT_EQ(7, RunStrategy(&process, mlist, MAX_NODES));
+    EXPECT_EQ(7, RunStrategy(&process, mlist, SMAP_MAX_NUMNODES));
 }
 
 TEST_F(StrategyTest, TestRunStrategyKeepsGroupedMigrationIndependent)
@@ -86,10 +96,10 @@ TEST_F(StrategyTest, TestRunStrategyKeepsGroupedMigrationIndependent)
     ActcData actcData = {};
     process.scanAttr.actcData[0] = &actcData;
     process.groupPolicy.enabled = true;
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+struct MigList *mlist = TestMlist();
     MOCKER(GroupedMigrationStrategy).expects(once()).will(returnValue(8));
 
-    EXPECT_EQ(8, RunStrategy(&process, mlist, MAX_NODES));
+    EXPECT_EQ(8, RunStrategy(&process, mlist, SMAP_MAX_NUMNODES));
 }
 
 extern "C" int snprintf_s(char *strDest, unsigned long destMax, unsigned long count, const char *format, ...);
