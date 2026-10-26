@@ -288,9 +288,13 @@ TEST_F(MigrationTest, TestBuildMigrationMsgNoPage)
     g_processManager.nrLocalNuma = 4;
     EnvAtomicSet(&g_forbiddenNodes[nid], 0);
 
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+
     MOCKER(AddMigListCapped).stubs().will(returnValue(0));
     ret = BuildMigrationMsg(&process, &mMsg, &pages);
     EXPECT_EQ(0, ret);
+    FreeProcessAttrArrays(&process);
 }
 
 extern "C" bool IsPidAnyRemoteNodeForbidden(ProcessAttr *attr);
