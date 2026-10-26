@@ -15,16 +15,16 @@ smap-y += migrate/rmap.o migrate/ksm.o migrate/smap_migrate_wrapper.o \
 	migrate/migrate_dev.o migrate/migrate_main.o migrate/smap_debugfs.o \
 	migrate/dump_info.o migrate/obmm_monitor.o
 
-ifeq ($(filter $(KERNEL_VERSION),ocos velinux),)
+ifeq ($(filter $(KERNEL_VERSION),V1 T1),)
 smap-y += migrate/ham_migration.o migrate/basic.o \
 	migrate/coherence_maintain.o migrate/ham_tasks_mgr.o
 endif
 
 ccflags-y += -I$(src)/comm -I$(src)/..
-ifeq ($(KERNEL_VERSION),ocos)
-	ccflags-y += -DKERNEL_OCOS
-else ifeq ($(KERNEL_VERSION),velinux)
-	ccflags-y += -DKERNEL_VELINUX
+ifeq ($(KERNEL_VERSION),T1)
+	ccflags-y += -DOS_VENDOR_T1
+else ifeq ($(KERNEL_VERSION),V1)
+	ccflags-y += -DOS_VENDOR_V1
 else
 	ccflags-y += -DHAM_ENABLED -DKERNEL_OPENEULER
 endif

@@ -1411,7 +1411,7 @@ static int check_pte_young(pte_t *pte, unsigned long addr, unsigned long next,
 		if (pte_walk->type == STATISTIC_SCAN)
 			pte_walk->statistic_vaddr[pte_walk->statistic_cnt++] =
 				addr;
-#ifdef KERNEL_VELINUX
+#ifdef OS_VENDOR_V1
 		__ptep_test_and_clear_young(pte);
 #else
 		__ptep_test_and_clear_young(NULL, 0, pte);
