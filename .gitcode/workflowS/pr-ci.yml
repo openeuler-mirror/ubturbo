@@ -1,0 +1,298 @@
+name: UBTurbo_CI
+
+on:
+  pull_request_target:
+    types:
+      - open
+      - reopen
+      - update
+    branches: ['*']
+
+  pull_request_comment:
+    types: [created]
+    comments: ['^\s*/retest\s*$']
+    branches: ['*']
+
+env:
+  PR_ID: ${{ atomgit.event.pull_request.number }}
+  TARGET_BRANCH: ${{ atomgit.event.pull_request.base.ref }}
+  HEAD_SHA: ${{ atomgit.event.pull_request.head.sha }}
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  enable: true
+  max: 3
+  exceed-action: QUEUE
+  preemption:
+    enable: true
+    events: [mr_id]
+
+permissions:
+  repository: read
+  pr: none
+  issue: none
+  note: none
+  project: none
+
+jobs:
+  pre_commit:
+    name: pre-commit
+    runs-on: [self-hosted, openeuler, arm, cpu=8]
+    container:
+      image: swr.cn-north-4.myhuaweicloud.com/ubscore/openeuler-24.03-lts-sp3_ci_build:latest
+
+    steps:
+      - name: Checkout PR merge code
+        uses: checkout
+        with:
+          ref: refs/merge-requests/${{ env.PR_ID }}/merge
+
+      - name: Install pre-commit
+        run: |
+          set -euxo pipefail
+          sudo yum install -y python3 python3-pip git
+          sudo python3 -m pip install \
+            --index-url https://repo.huaweicloud.com/repository/pypi/simple \
+            --trusted-host repo.huaweicloud.com \
+            --timeout 120 \
+            --retries 5 \
+            "pre-commit==4.3.0" \
+            "clang-format==12.0.1"
+          clang-format --version
+
+      - name: Run clang-format
+        run: |
+          set -euxo pipefail
+          sed -i 's/, -i/, -n, --Werror/g' .pre-commit-config.yaml
+          pre-commit run clang-format --all-files
+
+      - name: Save result
+        if: ${{ always() }}
+        env:
+          CURRENT_JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p .ci-results
+          if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
+            echo "SUCCESS" > .ci-results/pre-commit
+          else
+            echo "FAILED" > .ci-results/pre-commit
+          fi
+
+      - name: Upload result
+        if: ${{ always() }}
+        uses: upload-artifact
+        with:
+          name: ci-result-pre-commit
+          path: .ci-results/pre-commit
+
+  build_x86_64:
+    name: build-x86_64
+    runs-on: [self-hosted, openeuler, x86, cpu=16]
+
+    steps:
+      # 上游 ubturbo 的 x86_64 Jenkins 门禁只执行一个空 shell 并返回成功。
+      # 保留同名占位检查，避免切换 Actions 后平台侧门禁项消失。
+      - name: Preserve legacy x86_64 status
+        run: |
+          set -euo pipefail
+          echo "UBTurbo 仅支持 aarch64；上游 x86_64 检查为历史占位项，保持 SUCCESS。"
+
+      - name: Save result
+        if: ${{ always() }}
+        env:
+          CURRENT_JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p .ci-results
+          if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
+            echo "SUCCESS" > .ci-results/x86_64
+          else
+            echo "FAILED" > .ci-results/x86_64
+          fi
+
+      - name: Upload result
+        if: ${{ always() }}
+        uses: upload-artifact
+        with:
+          name: ci-result-x86-64
+          path: .ci-results/x86_64
+
+  build_aarch64:
+    name: build-aarch64
+    runs-on: [self-hosted, openeuler, arm, cpu=8]
+    container:
+      image: swr.cn-north-4.myhuaweicloud.com/ubscore/openeuler-24.03-lts-sp3_ci_build:latest
+
+    steps:
+      - name: Checkout PR merge code
+        uses: checkout
+        with:
+          ref: refs/merge-requests/${{ env.PR_ID }}/merge
+
+      - name: Initialize test submodules
+        run: |
+          set -euxo pipefail
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      - name: Install build dependencies
+        run: |
+          set -euxo pipefail
+          sudo yum install -y \
+            gcc gcc-c++ make cmake ninja-build \
+            dos2unix chrpath patchelf findutils git bc \
+            libboundscheck libvirt libvirt-devel rapidjson-devel \
+            numactl-devel rdma-core-devel kmod
+
+      - name: Build UBTurbo and RMRS release
+        run: |
+          set -euxo pipefail
+          dos2unix build.sh
+          bash build.sh -c
+          test -x dist/release/bin/ub_turbo_exec
+          test -f dist/release/lib/libubturbo_client.so
+          test -f dist/release/lib/librmrs_ubturbo_plugin.so
+          test -f dist/release/conf/ubturbo.conf
+          test -f dist/release/conf/ubturbo_plugin_admission.conf
+
+      - name: Build SMAP kernel modules and user library
+        run: |
+          set -euxo pipefail
+          kernel_release="$(uname -r)"
+          kernel_dir="/lib/modules/${kernel_release}/build"
+          if [[ ! -f "${kernel_dir}/Makefile" ]]; then
+            sudo yum install -y "kernel-devel-${kernel_release}" \
+              || sudo yum install -y kernel-devel
+          fi
+          test -f "${kernel_dir}/Makefile"
+
+          pushd plugins/smap/src/kernel
+          make -j"$(nproc)" KERNEL_VERSION=openeuler modules
+          popd
+
+          pushd plugins/smap/src/ucache
+          make -j"$(nproc)" modules
+          popd
+
+          pushd plugins/smap
+          cmake -DCMAKE_BUILD_TYPE=Release .
+          make -j"$(nproc)" install
+          popd
+
+          test -f plugins/smap/output/smap/lib/libsmap.so
+
+      - name: Run SMAP DT
+        run: |
+          set -euxo pipefail
+          page_size="$(getconf PAGESIZE)"
+          if [[ "${page_size}" != "4096" ]]; then
+            echo "SMAP DT requires 4K pages, current page size: ${page_size}" >&2
+            exit 1
+          fi
+
+          git submodule update --init plugins/smap/test/3rdparty/mockcpp
+          pushd plugins/smap/test
+          cp run_dt.sh run_dt_ci.sh
+          # 与旧 Jenkins 一致：本次门禁只执行 DT，不依赖 lcov/genhtml 生成覆盖率。
+          sed -i '/mkdir -p build\/gcovr_report/,$d' run_dt_ci.sh
+          bash run_dt_ci.sh
+          rm -f run_dt_ci.sh
+          popd
+
+      - name: Upload SMAP DT report
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: upload-artifact
+        with:
+          name: ubturbo-smap-dt
+          path: |
+            plugins/smap/test/build/gcovr_report/
+            plugins/smap/output/
+
+      - name: Save result
+        if: ${{ always() }}
+        env:
+          CURRENT_JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p .ci-results
+          if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
+            echo "SUCCESS" > .ci-results/aarch64
+          else
+            echo "FAILED" > .ci-results/aarch64
+          fi
+
+      - name: Upload result
+        if: ${{ always() }}
+        uses: upload-artifact
+        with:
+          name: ci-result-aarch64
+          path: .ci-results/aarch64
+
+  dt:
+    name: DT
+    runs-on: [self-hosted, openeuler, arm, cpu=8]
+    container:
+      image: swr.cn-north-4.myhuaweicloud.com/ubscore/openeuler-24.03-lts-sp3_ci_build:latest
+
+    steps:
+      - name: Checkout PR merge code
+        uses: checkout
+        with:
+          ref: refs/merge-requests/${{ env.PR_ID }}/merge
+
+      - name: Initialize test submodules
+        run: |
+          set -euxo pipefail
+          git submodule sync --recursive
+          git submodule update --init test/3rdparty/mockcpp
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo yum install -y \
+            gcc gcc-c++ make cmake ninja-build \
+            dos2unix findutils git \
+            libboundscheck libvirt-devel gmock-devel rapidjson-devel \
+            perl perl-Capture-Tiny perl-DateTime curl
+
+      - name: Run UBTurbo and RMRS DT
+        run: |
+          set -euxo pipefail
+          page_size="$(getconf PAGESIZE)"
+          if [[ "${page_size}" != "4096" ]]; then
+            echo "UBTurbo DT requires 4K pages, current page size: ${page_size}" >&2
+            exit 1
+          fi
+          export TZ=Asia/Shanghai
+          sh test/run_ut.sh
+
+      - name: Upload DT reports
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: upload-artifact
+        with:
+          name: ubturbo-dt
+          path: |
+            test/build/coverage.info
+            test/build/gcovr_report/
+
+      - name: Save result
+        if: ${{ always() }}
+        env:
+          CURRENT_JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p .ci-results
+          if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
+            echo "SUCCESS" > .ci-results/DT
+          else
+            echo "FAILED" > .ci-results/DT
+          fi
+
+      - name: Upload result
+        if: ${{ always() }}
+        uses: upload-artifact
+        with:
+          name: ci-result-dt
+          path: .ci-results/DT
