@@ -694,3 +694,4 @@ jobs:
             exit 1
           fi
           echo "全部门禁检查通过。"
+
