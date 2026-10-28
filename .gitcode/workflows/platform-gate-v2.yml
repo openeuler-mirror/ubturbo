@@ -112,10 +112,14 @@ jobs:
           fi
 
       - name: Save failure
-        if: ${{ failure() }}
+        if: ${{ always() }}
+        env:
+          CURRENT_JOB_STATUS: ${{ job.status }}
         run: |
           mkdir -p .gate-results
-          echo "FAILED" > .gate-results/check_package_license
+          if [[ "${CURRENT_JOB_STATUS}" != "success" ]]; then
+            echo "FAILED" > .gate-results/check_package_license
+          fi
 
       - name: Upload result
         if: ${{ always() }}
