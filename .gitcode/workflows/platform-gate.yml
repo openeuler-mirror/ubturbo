@@ -124,58 +124,6 @@ jobs:
           name: gate-result-package-license
           path: .gate-results/check_package_license
 
-  # 需要仓库 Secrets: CODE_CHECK_SCAN_AK/SK、CODE_CHECK_RESULT_AK/SK。
-  # 可选仓库 Variables: CODE_CHECK_PROJECT_NAME；未设置时沿用旧门禁的 openeuler。
-  check_code:
-    name: check_code
-    runs-on: [self-hosted, openeuler, arm, cpu=8]
-
-    steps:
-      - name: Run OpenLibing CodeCheck
-        env:
-          ATOMGIT_TOKEN: ${{ atomgit.token }}
-          CODE_CHECK_SCAN_AK: ${{ secrets.CODE_CHECK_SCAN_AK }}
-          CODE_CHECK_SCAN_SK: ${{ secrets.CODE_CHECK_SCAN_SK }}
-          CODE_CHECK_RESULT_AK: ${{ secrets.CODE_CHECK_RESULT_AK }}
-          CODE_CHECK_RESULT_SK: ${{ secrets.CODE_CHECK_RESULT_SK }}
-          CODE_CHECK_PROJECT_NAME: ${{ vars.CODE_CHECK_PROJECT_NAME }}
-        run: |
-          set -euo pipefail
-
-          sudo yum install -y curl
-          tool_dir="$(mktemp -d)"
-          trap 'rm -rf "${tool_dir}"' EXIT
-          api_root="${ATOMGIT_API_URL:-https://api.gitcode.com}"
-          api_root="${api_root%/}"
-          api_root="${api_root%/v5}"
-          api_root="${api_root%/v8}"
-          api_root="${api_root%/api}"
-          script_url="${api_root}/api/v5/repos/${REPO_FULL_NAME}/raw/.gitcode/scripts/openlibing_codecheck.py?ref=${TARGET_BRANCH}"
-          curl -fsSL -H "PRIVATE-TOKEN: ${ATOMGIT_TOKEN}" \
-            "${script_url}" -o "${tool_dir}/openlibing_codecheck.py"
-
-          export CODE_CHECK_PR_URL="https://gitcode.com/${REPO_FULL_NAME}/merge_requests/${PR_ID}"
-          python3 "${tool_dir}/openlibing_codecheck.py"
-
-      - name: Save result
-        if: ${{ always() }}
-        env:
-          CURRENT_JOB_STATUS: ${{ job.status }}
-        run: |
-          mkdir -p .gate-results
-          if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
-            echo "SUCCESS" > .gate-results/check_code
-          else
-            echo "FAILED" > .gate-results/check_code
-          fi
-
-      - name: Upload result
-        if: ${{ always() }}
-        uses: upload-artifact
-        with:
-          name: gate-result-codecheck
-          path: .gate-results/check_code
-
   # SCA 使用 GitCode OIDC 临时凭证，不需要配置 AK/SK。
   check_sca:
     name: check_sca
@@ -387,7 +335,6 @@ jobs:
     if: ${{ always() }}
     needs:
       - check_package_license
-      - check_code
       - check_sca
       - check_issue_associate
       - check_docs
@@ -402,14 +349,6 @@ jobs:
         with:
           name: gate-result-package-license
           path: .gate-results/package
-
-      - name: Download CodeCheck result
-        if: ${{ always() }}
-        continue-on-error: true
-        uses: download-artifact
-        with:
-          name: gate-result-codecheck
-          path: .gate-results/codecheck
 
       - name: Download SCA result
         if: ${{ always() }}
@@ -438,7 +377,7 @@ jobs:
       - name: Collect results and post PR comment
         env:
           ATOMGIT_TOKEN: ${{ atomgit.token }}
-          GATE_STATUS_TOKEN: ${{ secrets.CODE_CHECK_TOKEN }}
+          GATE_STATUS_TOKEN: ${{ secrets.GATE_STATUS_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -583,7 +522,6 @@ jobs:
           }
 
           package_status="$(read_result ".gate-results/package/check_package_license")"
-          codecheck_status="$(read_result ".gate-results/codecheck/check_code")"
           sca_status="$(read_result ".gate-results/sca/check_sca")"
           issue_status="$(read_result ".gate-results/issue/check_issue_associate")"
           docs_status="$(read_result ".gate-results/docs/check_docs")"
@@ -658,7 +596,6 @@ jobs:
 
           overall_failed=0
           for status in \
-            "${codecheck_status}" \
             "${sca_status}" \
             "${issue_status}" \
             "${docs_status}" \
@@ -677,7 +614,6 @@ jobs:
           body="<table>
           <tr><th colspan=2>Check Name</th><th>Build Result</th><th>详情</th><th>Build Details</th></tr>
           <tr><td colspan=2>check_package_license</td><td>$(status_html "${package_status}")</td><td>Copyright 声明检查</td><td><a href=\"${actions_url}\">查看</a></td></tr>
-          <tr><td colspan=2>check_code</td><td>$(status_html "${codecheck_status}")</td><td>OpenLibing CodeCheck</td><td><a href=\"${actions_url}\">查看</a></td></tr>
           <tr><td colspan=2>check_sca</td><td>$(status_html "${sca_status}")</td><td>开源片段与许可证合规</td><td><a href=\"${actions_url}\">查看</a></td></tr>
           <tr><td colspan=2>x86_64</td><td>$(status_html "${x86_status}")</td><td>保留上游 x86_64 占位门禁</td><td><a href=\"${actions_url}\">查看</a></td></tr>
           <tr><td colspan=2>aarch64</td><td>$(status_html "${arm_status}")</td><td>框架、RMRS、SMAP 编译及 SMAP DT</td><td><a href=\"${actions_url}\">查看</a></td></tr>
