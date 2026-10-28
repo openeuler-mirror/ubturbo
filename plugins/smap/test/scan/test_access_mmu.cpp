@@ -59,18 +59,20 @@ TEST_F(AccessMMUTest, MakePME)
     EXPECT_EQ(1, entry.pme);
 }
 
-extern "C" int calc_paddr_acidx(u64 paddr, int *nid, u64 *index);
+extern "C" int calc_paddr_acidx(u64 paddr, struct access_pid *ap, int *nid, u64 *index);
 extern "C" bool is_paddr_local(u64 pa);
-extern "C" int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
+extern "C" int remote_ram_snapshot_paddr_acidx(const struct remote_ram_snapshot *snapshot, u64 pa, int *nid,
+                                                  u64 *index, int page_size);
 TEST_F(AccessMMUTest, CalcPaddrACidx)
 {
     MOCKER(is_access_hugepage).stubs().will(returnValue(true));
     MOCKER(is_paddr_local).stubs().will(returnValue(false));
-    MOCKER(calc_paddr_acidx_iomem).stubs().will(ignoreReturnValue());
+    MOCKER(remote_ram_snapshot_paddr_acidx).stubs().will(returnValue(0));
 
+    struct access_pid ap = {};
     int nid = 0;
     u64 index = 1;
-    calc_paddr_acidx((u64)0x00005000, &nid, &index);
+    calc_paddr_acidx((u64)0x00005000, &ap, &nid, &index);
     EXPECT_EQ(0, nid);
     EXPECT_EQ(1, index);
 }
@@ -86,11 +88,12 @@ TEST_F(AccessMMUTest, CalcPaddrACidxTwo)
 
     nid = 0;
     index = 1;
-    int ret = calc_paddr_acidx((u64)0x00005000, &nid, &index);
+    struct access_pid ap = {};
+    int ret = calc_paddr_acidx((u64)0x00005000, &ap, &nid, &index);
     EXPECT_EQ(0, ret);
 }
 
-static int fake_calc_paddr_acidx(u64 paddr, int *nid, u64 *index)
+static int fake_calc_paddr_acidx(u64 paddr, struct access_pid *ap, int *nid, u64 *index)
 {
     *nid = 0;
     *index = 1;
@@ -166,6 +169,8 @@ TEST_F(AccessMMUTest, AddToBmHugepageTwo)
 extern "C" int calc_vaddr_acidx(u64 vaddr, struct vm_mapping_info *info, u64 *acidx);
 TEST_F(AccessMMUTest, CalcVaddrAcidx)
 {
+    u32 old_huge_size = g_pagesize_huge;
+    g_pagesize_huge = PMD_SIZE;
     int ret;
     u64 vaddr;
     u64 acidx;
@@ -188,6 +193,7 @@ TEST_F(AccessMMUTest, CalcVaddrAcidx)
     vaddr = info.segs[1].start + 2 * PMD_SIZE;
     ret = calc_vaddr_acidx(vaddr, &info, &acidx);
     EXPECT_EQ(-ERANGE, ret);
+    g_pagesize_huge = old_huge_size;
 }
 
 extern "C" bool is_paddr_belong_remote_node(u64 pa, int nid);

@@ -668,6 +668,7 @@ TEST_F(ScanIoctlTestKernel, ScanIoctlExit)
 extern "C" int scan_ioctl_init(void);
 TEST_F(ScanIoctlTestKernel, ScanIoctlInit)
 {
+    MOCKER(IS_ERR).stubs().will(returnValue(false));
     int ret = scan_ioctl_init();
     EXPECT_EQ(ret, 0);
 }

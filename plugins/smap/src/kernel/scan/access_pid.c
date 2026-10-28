@@ -20,6 +20,7 @@
 #include "scan_ioctl.h"
 #include "scan_main.h"
 #include "access_mmu.h"
+#include "iomem.h"
 #include "smap_page_flags.h"
 #include "access_pid.h"
 
@@ -258,6 +259,7 @@ void destroy_access_pid(struct access_pid *elem)
 		vfree(elem->info.priors);
 		elem->info.priors = NULL;
 	}
+	remote_ram_snapshot_free(elem->remote_snapshot);
 	kfree(elem);
 	return;
 }
@@ -467,7 +469,10 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 		return;
 	}
 
-	page_count = get_node_page_count(nid);
+	page_count = nid < nr_local_numa
+			     ? get_node_page_count(nid)
+			     : remote_ram_snapshot_page_count(
+				       ap->remote_snapshot, nid, page_size);
 	if (!page_count) {
 		*actc_len = 0;
 		return;
@@ -496,8 +501,9 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 			ret = calc_acidx_paddr_acpi(nid, acidx, &paddr,
 						    page_size);
 		else
-			ret = calc_acidx_paddr_iomem(nid, acidx, &paddr,
-						     page_size);
+			ret = remote_ram_snapshot_acidx_paddr(
+				ap->remote_snapshot, nid, acidx, &paddr,
+				page_size);
 		if (ret) {
 			pr_warn_ratelimited(
 				"acidx %zu to paddr failed on node %d\n", acidx,
@@ -746,12 +752,21 @@ int init_access_pid(struct access_add_pid_payload *payload,
 			return -EINVAL;
 		}
 	}
+	ap->remote_snapshot = remote_ram_snapshot_create();
+	if (IS_ERR(ap->remote_snapshot)) {
+		ret = PTR_ERR(ap->remote_snapshot);
+		ap->remote_snapshot = NULL;
+		vfree(ap->info.priors);
+		kfree(ap);
+		return ret;
+	}
 	ret = access_walk_pagemap_prepare(ap);
 	if (ret) {
 		if (ap->info.priors) {
 			vfree(ap->info.priors);
 			ap->info.priors = NULL;
 		}
+		remote_ram_snapshot_free(ap->remote_snapshot);
 		kfree(ap);
 		return ret;
 	}
@@ -1422,6 +1437,10 @@ int access_walk_pagemap_prepare(struct access_pid *ap)
 		return 0;
 	}
 	copy_node_page_count(nodes_page_count);
+	for (int i = nr_local_numa; i < SMAP_MAX_NUMNODES; i++) {
+		nodes_page_count[i] = remote_ram_snapshot_page_count(
+			ap->remote_snapshot, i, get_scan_page_size());
+	}
 	clean_last_ap_data(ap);
 	ret = init_ap_bm(SMAP_MAX_NUMNODES, nodes_page_count, ap);
 	if (ret) {
@@ -1514,8 +1533,9 @@ static void convert_single_address(struct access_pid *ap, int nid,
 	if (nid < nr_local_numa) {
 		ret = calc_acidx_paddr_acpi(nid, abs_pos->pos, addr, page_size);
 	} else {
-		ret = calc_acidx_paddr_iomem(nid, abs_pos->pos, addr,
-					     page_size);
+		ret = remote_ram_snapshot_acidx_paddr(ap->remote_snapshot, nid,
+						      abs_pos->pos, addr,
+						      page_size);
 	}
 
 	if (ret) {

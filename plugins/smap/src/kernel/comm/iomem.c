@@ -9,6 +9,7 @@
 #include <linux/errno.h>
 #include <linux/ioport.h>
 #include <linux/slab.h>
+#include <linux/vmalloc.h>
 #include <linux/mmzone.h>
 #include <linux/memory.h>
 #include <linux/spinlock.h>
@@ -163,6 +164,156 @@ int refresh_remote_ram(void)
 	free_remote_ram(&tmp_head);
 	write_unlock(&rem_ram_list_lock);
 	return 0;
+}
+
+struct remote_ram_snapshot *remote_ram_snapshot_create(void)
+{
+	struct remote_ram_snapshot *snapshot;
+	struct ram_segment *seg;
+	u32 capacity = 0;
+	u32 i = 0;
+
+	read_lock(&rem_ram_list_lock);
+	list_for_each_entry(seg, &remote_ram_list, node)
+		capacity++;
+	read_unlock(&rem_ram_list_lock);
+
+	snapshot =
+		kvzalloc(sizeof(*snapshot) +
+				 (size_t)capacity * sizeof(snapshot->ranges[0]),
+			 GFP_KERNEL);
+	if (!snapshot) {
+		pr_err("failed to allocate remote RAM snapshot, capacity: %u\n",
+		       capacity);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	/* Copy the whole list under one read lock. Allocation stays outside it. */
+	read_lock(&rem_ram_list_lock);
+	list_for_each_entry(seg, &remote_ram_list, node) {
+		/* The list may grow while the allocation is in progress. */
+		if (i >= capacity) {
+			read_unlock(&rem_ram_list_lock);
+			pr_err("remote RAM list exceeded snapshot capacity: %u\n",
+			       capacity);
+			kvfree(snapshot);
+			return ERR_PTR(-EAGAIN);
+		}
+		snapshot->ranges[i].start = seg->start;
+		snapshot->ranges[i].end = seg->end;
+		snapshot->ranges[i].numa_node = seg->numa_node;
+		i++;
+	}
+	read_unlock(&rem_ram_list_lock);
+
+	snapshot->nr_ranges = i;
+	for (i = 0; i < snapshot->nr_ranges; i++) {
+		const struct remote_ram_range *range = &snapshot->ranges[i];
+		u64 size = range->end - range->start + 1;
+		int nid = range->numa_node;
+
+		if (unlikely(nid < 0 || nid >= SMAP_MAX_NUMNODES)) {
+			pr_err("invalid remote RAM snapshot node: %d, range: %u\n",
+			       nid, i);
+			kvfree(snapshot);
+			return ERR_PTR(-ERANGE);
+		}
+		snapshot->page_count_4k[nid] += calc_normal_count(size);
+		snapshot->page_count_2m[nid] += calc_huge_count(size);
+	}
+	return snapshot;
+}
+
+void remote_ram_snapshot_free(struct remote_ram_snapshot *snapshot)
+{
+	kvfree(snapshot);
+}
+
+u64 remote_ram_snapshot_page_count(const struct remote_ram_snapshot *snapshot,
+				   int nid, int page_size)
+{
+	if (!snapshot || nid < 0 || nid >= SMAP_MAX_NUMNODES)
+		return 0;
+	return page_size == g_pagesize_huge ? snapshot->page_count_2m[nid]
+					    : snapshot->page_count_4k[nid];
+}
+
+int remote_ram_snapshot_paddr_acidx(const struct remote_ram_snapshot *snapshot,
+				    u64 pa, int *nid, u64 *index, int page_size)
+{
+	u64 offsets[SMAP_MAX_NUMNODES] = { 0 };
+	u32 i;
+	int shift = __builtin_ctz(page_size);
+
+	if (!snapshot || !nid || !index)
+		return -EINVAL;
+	for (i = 0; i < snapshot->nr_ranges; i++) {
+		const struct remote_ram_range *range = &snapshot->ranges[i];
+		int node = range->numa_node;
+
+		if (unlikely(node < 0 || node >= SMAP_MAX_NUMNODES))
+			return -ERANGE;
+		if (pa < range->start)
+			break;
+		if (pa <= range->end) {
+			*nid = node;
+			*index = offsets[node] + ((pa - range->start) >> shift);
+			return 0;
+		}
+		offsets[node] += (range->end - range->start + 1) >> shift;
+	}
+	return -ERANGE;
+}
+
+int remote_ram_snapshot_paddr_acidx_known_nid(
+	const struct remote_ram_snapshot *snapshot, u64 pa, int nid, u64 *index,
+	int page_size)
+{
+	u64 offset = 0;
+	u32 i;
+	int shift = __builtin_ctz(page_size);
+
+	if (!snapshot || !index)
+		return -EINVAL;
+	for (i = 0; i < snapshot->nr_ranges; i++) {
+		const struct remote_ram_range *range = &snapshot->ranges[i];
+
+		if (range->numa_node != nid)
+			continue;
+		if (pa < range->start)
+			break;
+		if (pa <= range->end) {
+			*index = offset + ((pa - range->start) >> shift);
+			return 0;
+		}
+		offset += (range->end - range->start + 1) >> shift;
+	}
+	return -ERANGE;
+}
+
+int remote_ram_snapshot_acidx_paddr(const struct remote_ram_snapshot *snapshot,
+				    int nid, u64 acidx, u64 *paddr,
+				    int page_size)
+{
+	u64 offset = acidx << __builtin_ctz(page_size);
+	u32 i;
+
+	if (!snapshot || !paddr)
+		return -EINVAL;
+	for (i = 0; i < snapshot->nr_ranges; i++) {
+		const struct remote_ram_range *range = &snapshot->ranges[i];
+		u64 size;
+
+		if (range->numa_node != nid)
+			continue;
+		size = range->end - range->start + 1;
+		if (offset < size) {
+			*paddr = range->start + offset;
+			return 0;
+		}
+		offset -= size;
+	}
+	return -ERANGE;
 }
 
 int get_numa_by_pfn(unsigned long pfn)

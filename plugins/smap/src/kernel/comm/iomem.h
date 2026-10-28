@@ -17,6 +17,19 @@ struct ram_segment {
 	u64 end;
 };
 
+struct remote_ram_range {
+	u64 start;
+	u64 end;
+	int numa_node;
+};
+
+struct remote_ram_snapshot {
+	u32 nr_ranges;
+	u64 page_count_4k[SMAP_MAX_NUMNODES];
+	u64 page_count_2m[SMAP_MAX_NUMNODES];
+	struct remote_ram_range ranges[];
+};
+
 struct pa_range {
 	u64 pa_start;
 	u64 pa_end;
@@ -33,5 +46,18 @@ int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
 int calc_paddr_acidx_iomem_known_nid(u64 pa, int nid, u64 *index,
 				     int page_size);
 int calc_acidx_paddr_iomem(int nid, u64 acidx, u64 *paddr, int page_size);
+struct remote_ram_snapshot *remote_ram_snapshot_create(void);
+void remote_ram_snapshot_free(struct remote_ram_snapshot *snapshot);
+u64 remote_ram_snapshot_page_count(const struct remote_ram_snapshot *snapshot,
+				   int nid, int page_size);
+int remote_ram_snapshot_paddr_acidx(const struct remote_ram_snapshot *snapshot,
+				    u64 pa, int *nid, u64 *index,
+				    int page_size);
+int remote_ram_snapshot_paddr_acidx_known_nid(
+	const struct remote_ram_snapshot *snapshot, u64 pa, int nid, u64 *index,
+	int page_size);
+int remote_ram_snapshot_acidx_paddr(const struct remote_ram_snapshot *snapshot,
+				    int nid, u64 acidx, u64 *paddr,
+				    int page_size);
 
 #endif /* SMAP_IOMEM_H */

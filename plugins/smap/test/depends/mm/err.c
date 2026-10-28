@@ -8,5 +8,5 @@ bool IS_ERR(const void *ptr)
 
 long PTR_ERR(const void *ptr)
 {
-    return 0;
+    return (long)(unsigned long)ptr;
 }

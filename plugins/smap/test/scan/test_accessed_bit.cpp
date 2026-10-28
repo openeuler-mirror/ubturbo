@@ -945,11 +945,17 @@ TEST_F(AccessedBitTest, GetNumaIdByPaddrNoOnlinePage)
 
 // ========== DT supplement: actc_data_add_fast ==========
 
-extern "C" void actc_data_add_fast(phys_addr_t paddr, u32 page_size);
+extern "C" void actc_data_add_fast(phys_addr_t paddr, struct page *page, struct access_pid *ap, u32 page_size);
+extern "C" int remote_ram_snapshot_paddr_acidx_known_nid(const struct remote_ram_snapshot *snapshot, u64 pa,
+                                                            int nid, u64 *index, int page_size);
+extern "C" int remote_ram_snapshot_paddr_acidx(const struct remote_ram_snapshot *snapshot, u64 pa, int *nid,
+                                                  u64 *index, int page_size);
 TEST_F(AccessedBitTest, ActcDataAddFastNumaNoNode)
 {
     MOCKER(get_numa_id_by_paddr).stubs().will(returnValue(NUMA_NO_NODE));
-    actc_data_add_fast(0x1000, PAGE_SIZE);
+    struct access_pid ap = {};
+    struct page page = {};
+    actc_data_add_fast(0x1000, &page, &ap, PAGE_SIZE);
 }
 
 TEST_F(AccessedBitTest, ActcDataAddFastCalcAcpiSuccess)
@@ -957,23 +963,28 @@ TEST_F(AccessedBitTest, ActcDataAddFastCalcAcpiSuccess)
     /* 节点页数表默认为 0，索引检查应在频次更新前返回。 */
     MOCKER(get_numa_id_by_paddr).stubs().will(returnValue(0));
     MOCKER(calc_paddr_acidx_acpi_known_nid).stubs().will(returnValue(0));
-    actc_data_add_fast(0x1000, PAGE_SIZE);
+    struct access_pid ap = {};
+    struct page page = {};
+    actc_data_add_fast(0x1000, &page, &ap, PAGE_SIZE);
 }
 
 TEST_F(AccessedBitTest, ActcDataAddFastCalcIomemFallback)
 {
     /* 节点页数表默认为 0，索引检查应在频次更新前返回。 */
     MOCKER(get_numa_id_by_paddr).stubs().will(returnValue(nr_local_numa));
-    MOCKER(calc_paddr_acidx_iomem_known_nid).stubs().will(returnValue(0));
-    actc_data_add_fast(0x1000, PAGE_SIZE);
+    MOCKER(remote_ram_snapshot_paddr_acidx_known_nid).stubs().will(returnValue(0));
+    struct access_pid ap = {};
+    struct page page = {};
+    actc_data_add_fast(0x1000, &page, &ap, PAGE_SIZE);
 }
 
 TEST_F(AccessedBitTest, ActcDataAddFastCalcAllFail)
 {
     MOCKER(get_numa_id_by_paddr).stubs().will(returnValue(0));
     MOCKER(calc_paddr_acidx_acpi_known_nid).stubs().will(returnValue(-1));
-    MOCKER(calc_paddr_acidx_iomem_known_nid).stubs().will(returnValue(-1));
-    actc_data_add_fast(0x1000, PAGE_SIZE);
+    struct access_pid ap = {};
+    struct page page = {};
+    actc_data_add_fast(0x1000, &page, &ap, PAGE_SIZE);
 }
 
 // ========== DT supplement: ham_actc_data_add ==========
@@ -1188,7 +1199,7 @@ TEST_F(AccessedBitTest, FillPteVaIomemFallback)
 
 extern "C" int calc_paddr_acidx_acpi_known_nid(u64 paddr, int nid, u64 *pa_index, int page_size);
 extern "C" int calc_paddr_acidx_iomem_known_nid(u64 paddr, int nid, u64 *pa_index, int page_size);
-extern "C" void add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap, struct page *page);
+extern "C" int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap);
 extern "C" void process_scan_results(struct pte_walk *pte_walk);
 TEST_F(AccessedBitTest, ProcessScanResultsNullPteWalk)
 {
@@ -1204,6 +1215,8 @@ TEST_F(AccessedBitTest, ProcessScanResultsNullAp)
 TEST_F(AccessedBitTest, ProcessScanResultsLocalNidAcpi)
 {
     struct access_pid ap;
+    struct remote_ram_snapshot snapshot = {};
+    ap.remote_snapshot = &snapshot;
     struct scan_result_entry entries[2];
 
     entries[0].paddr = 0x1000;
@@ -1246,13 +1259,15 @@ TEST_F(AccessedBitTest, ProcessScanResultsRemoteNidIomem)
     pw.scan_result_cnt = 1;
 
     /* cur_times=0, ntimes=10 => not last scan */
-    MOCKER(calc_paddr_acidx_iomem_known_nid).stubs().will(returnValue(0));
+    MOCKER(remote_ram_snapshot_paddr_acidx_known_nid).stubs().will(returnValue(0));
     process_scan_results(&pw);
 }
 
 TEST_F(AccessedBitTest, ProcessScanResultsLastScanAddToBm)
 {
-    struct access_pid ap;
+    int old_local_numa = nr_local_numa;
+    nr_local_numa = 1;
+    struct access_pid ap = {};
     struct scan_result_entry entries[1];
     entries[0].paddr = 0x1000;
     entries[0].nid = 0;
@@ -1268,6 +1283,7 @@ TEST_F(AccessedBitTest, ProcessScanResultsLastScanAddToBm)
     MOCKER(calc_paddr_acidx_acpi_known_nid).stubs().will(returnValue(0));
     MOCKER(add_to_bm_page_fast).stubs().will(ignoreReturnValue());
     process_scan_results(&pw);
+    nr_local_numa = old_local_numa;
 }
 
 // ========== DT supplement: setup_statistic_scan ==========
@@ -1390,6 +1406,8 @@ extern "C" int calc_paddr_acidx_iomem(u64 paddr, int *nid, u64 *pa_idx, int page
 TEST_F(AccessedBitTest, ProcessScanResultsLocalNidFallbackToSearch)
 {
     struct access_pid ap;
+    struct remote_ram_snapshot snapshot = {};
+    ap.remote_snapshot = &snapshot;
     struct scan_result_entry entries[1];
     entries[0].paddr = 0x1000;
     entries[0].nid = 0;
@@ -1427,8 +1445,8 @@ TEST_F(AccessedBitTest, ProcessScanResultsRemoteNidFallbackToSearch)
     pw.scan_results = entries;
     pw.scan_result_cnt = 1;
 
-    MOCKER(calc_paddr_acidx_iomem_known_nid).stubs().will(returnValue(-1));
-    MOCKER(calc_paddr_acidx_iomem).stubs().will(returnValue(0));
+    MOCKER(remote_ram_snapshot_paddr_acidx_known_nid).stubs().will(returnValue(-1));
+    MOCKER(remote_ram_snapshot_paddr_acidx).stubs().will(returnValue(0));
     process_scan_results(&pw);
     GlobalMockObject::verify();
 }
@@ -1436,6 +1454,8 @@ TEST_F(AccessedBitTest, ProcessScanResultsRemoteNidFallbackToSearch)
 TEST_F(AccessedBitTest, ProcessScanResultsBothFallbacksFail)
 {
     struct access_pid ap;
+    struct remote_ram_snapshot snapshot = {};
+    ap.remote_snapshot = &snapshot;
     struct scan_result_entry entries[1];
     entries[0].paddr = 0x1000;
     entries[0].nid = 0;

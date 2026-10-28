@@ -367,16 +367,28 @@ int access_tracking_restart_pid(pid_t pid)
 	for (i = 0; i < AP_MAX_SLOTS; i++) {
 		struct ap_slot *s = ap_get_slot_at(i);
 		struct access_pid *ap;
+		struct remote_ram_snapshot *snapshot, *old;
 
 		if (!s)
 			continue;
 		down_write(&s->ap_lock);
 		ap = s->ap;
 		if (ap->type == NORMAL_SCAN && ap->pid == pid) {
+			snapshot = remote_ram_snapshot_create();
+			if (IS_ERR(snapshot)) {
+				int ret = PTR_ERR(snapshot);
+
+				up_write(&s->ap_lock);
+				ap_put_slot(s);
+				return ret;
+			}
+			old = ap->remote_snapshot;
+			ap->remote_snapshot = snapshot;
 			ap->cur_times = 0;
 			/* next window starts scanning; drop readiness now */
 			WRITE_ONCE(ap->freq_ready, false);
 			up_write(&s->ap_lock);
+			remote_ram_snapshot_free(old);
 			submit_one_work(ap);
 			ap_put_slot(s);
 			return 0;
@@ -476,8 +488,10 @@ static void access_work_func(struct work_struct *work)
 	 */
 	if (access_pid_cur_last_scanning(ap)) {
 		down_write(&slot->ap_lock);
-		access_walk_pagemap_prepare(ap);
+		ret = access_walk_pagemap_prepare(ap);
 		up_write(&slot->ap_lock);
+		if (ret)
+			goto scan_failed;
 	}
 
 	down_read(&scan_state.lock);
@@ -495,6 +509,7 @@ static void access_work_func(struct work_struct *work)
 	if (ret < 0) {
 		pr_err("unable to scan access-flag, page size: %d\n",
 		       page_size);
+		goto scan_failed;
 	}
 	ap->cur_times++;
 	pr_debug("pid[%d] cpu[%d], scan took %lldus for %dth time\n", ap->pid,
@@ -521,6 +536,14 @@ static void access_work_func(struct work_struct *work)
 		complete(&ap->work_done);
 		ap_put_slot(slot);
 	}
+	return;
+
+scan_failed:
+	if (ap->type == NORMAL_SCAN)
+		WRITE_ONCE(ap->freq_ready, false);
+	pr_err("pid %d scan stopped, ret: %d\n", ap->pid, ret);
+	complete(&ap->work_done);
+	ap_put_slot(slot);
 }
 
 static int remote_ram_init(void)

@@ -194,6 +194,8 @@ TEST_F(DriversAccessPidTest, InitVmMappingInfoTwo)
 }
 
 extern "C" int create_procfs(struct access_pid *ap);
+extern "C" int access_walk_pagemap_prepare(struct access_pid *ap);
+extern "C" bool IS_ERR(const void *ptr);
 TEST_F(DriversAccessPidTest, InitAccessPid)
 {
     int ret;
@@ -207,6 +209,8 @@ TEST_F(DriversAccessPidTest, InitAccessPid)
     struct access_add_pid_payload payload = {0};
     MOCKER(kmalloc).stubs().will(returnValue((void *)&ap));
     MOCKER(init_vm_mapping_info).stubs().will(returnValue(0));
+    MOCKER(IS_ERR).stubs().will(returnValue(false));
+    MOCKER(access_walk_pagemap_prepare).stubs().will(returnValue(0));
     MOCKER(create_procfs).stubs().will(returnValue(0));
     ret = init_access_pid(&payload, &tmp);
     EXPECT_EQ(0, ret);
@@ -698,7 +702,7 @@ extern "C" int access_walk_pagemap_prepare(struct access_pid *ap);
 TEST_F(DriversAccessPidTest, AccessWalkPagemapPrepareFail)
 {
     int ret;
-    struct access_pid tmp;
+    struct access_pid tmp = {};
     struct access_pid *ap;
     ap = &tmp;
     tmp.type = NORMAL_SCAN;
@@ -715,6 +719,7 @@ TEST_F(DriversAccessPidTest, AccessWalkPagemapPrepareFail)
 
 extern "C" int init_access_pid(struct access_add_pid_payload *payload, struct access_pid **elem);
 extern "C" int access_walk_pagemap_prepare(struct access_pid *ap);
+extern "C" bool IS_ERR(const void *ptr);
 TEST_F(DriversAccessPidTest, InitAccessPidWalkPagemapPrepareFail)
 {
     int ret;
@@ -724,6 +729,7 @@ TEST_F(DriversAccessPidTest, InitAccessPidWalkPagemapPrepareFail)
     ap.info.priors = (u8 *)vmalloc(sizeof(u8) * 2);
     ASSERT_NE(nullptr, ap.info.priors);
     MOCKER(kmalloc).stubs().will(returnValue((void *)&ap));
+    MOCKER(IS_ERR).stubs().will(returnValue(false));
     MOCKER(init_vm_mapping_info).stubs().will(returnValue(0));
     MOCKER(access_walk_pagemap_prepare).stubs().will(returnValue(-ENOMEM));
     MOCKER(vfree).stubs();
@@ -973,7 +979,7 @@ TEST_F(DriversAccessPidTest, ConvertPosToPaddrSortedInvalidAddr)
         0b0000000000000000000000000000000000000000000000000000000000100100,
         0b0000000000000000000000000000000000000000000000000000000000100100,
     };
-    struct access_pid ap = {.pid = pid, .bm_len = {bmLen}, .paddr_bm = {bitmap}};
+    struct access_pid ap = { .pid = pid, .bm_len = { bmLen }, .paddr_bm = { bitmap } };
     ap_test_reset_slots();
     ap_slot_add(&ap);
     u64 addr[] = {4};
@@ -994,7 +1000,7 @@ TEST_F(DriversAccessPidTest, ConvertPosToPaddrSortedPartialFailure)
         0b0000000000000000000000000000000000000000000000000000000000100100,
         0b0000000000000000000000000000000000000000000000000000000000100100,
     };
-    struct access_pid ap = {.pid = pid, .bm_len = {bmLen}, .paddr_bm = {bitmap}};
+    struct access_pid ap = { .pid = pid, .bm_len = { bmLen }, .paddr_bm = { bitmap } };
     ap_test_reset_slots();
     ap_slot_add(&ap);
     u64 pa1 = 0x20000200000;
@@ -1023,7 +1029,7 @@ TEST_F(DriversAccessPidTest, ConvertPosToPaddrSortedOK)
         0b0000000000000000000000000000000000000000000000000000000000100100,
         0b0000000000000000000000000000000000000000000000000000000000100100,
     };
-    struct access_pid ap = {.pid = pid, .bm_len = {bmLen}, .paddr_bm = {bitmap}};
+    struct access_pid ap = { .pid = pid, .bm_len = { bmLen }, .paddr_bm = { bitmap } };
     ap_test_reset_slots();
     ap_slot_add(&ap);
     u64 pa1 = 0x20000200000;
