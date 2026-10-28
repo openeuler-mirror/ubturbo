@@ -96,7 +96,7 @@ jobs:
       - name: Checkout PR merge code
         uses: checkout
         with:
-          ref: refs/merge-requests/${{ env.PR_ID }}/merge
+          ref: refs/merge-requests/${{ atomgit.event.pull_request.number }}/merge
 
       - name: Check project-level Copyright declaration
         run: |
@@ -221,7 +221,7 @@ jobs:
       - name: Checkout PR merge code
         uses: checkout
         with:
-          ref: refs/merge-requests/${{ env.PR_ID }}/merge
+          ref: refs/merge-requests/${{ atomgit.event.pull_request.number }}/merge
 
       - name: Prepare tools
         run: |
@@ -644,4 +644,3 @@ jobs:
             exit 1
           fi
           echo "全部门禁检查通过。"
-
