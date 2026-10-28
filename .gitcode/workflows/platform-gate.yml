@@ -395,12 +395,19 @@ jobs:
           api_v5="${api_root}/api/v5"
           api_v8="${api_root}/api/v8"
           server_url="${ATOMGIT_SERVER_URL:-https://gitcode.com}"
-          status_token="${GATE_STATUS_TOKEN:-${ATOMGIT_TOKEN}}"
+          status_token="${GATE_STATUS_TOKEN:-}"
           actions_url="${server_url}/${REPO_FULL_NAME}/actions"
 
           api_get() {
             local url="$1"
             local response
+            if response="$(curl -fsSL "${url}" 2>/dev/null)"; then
+              printf '%s' "${response}"
+              return 0
+            fi
+            if [[ -z "${status_token}" ]]; then
+              return 1
+            fi
             if response="$(curl -fsSL \
               -H "PRIVATE-TOKEN: ${status_token}" \
               "${url}" 2>/dev/null)"; then
@@ -473,10 +480,9 @@ jobs:
               curl -sS \
                 -o /dev/null \
                 -w '%{redirect_url}' \
-                -H "PRIVATE-TOKEN: ${status_token}" \
                 "${api_v8}/repos/${REPO_FULL_NAME}/actions/artifacts/${artifact_id}/zip"
             )"
-            if [[ -z "${download_url}" ]]; then
+            if [[ -z "${download_url}" && -n "${status_token}" ]]; then
               download_url="$(
                 curl -sS \
                   -o /dev/null \
@@ -485,7 +491,11 @@ jobs:
                   "${api_v8}/repos/${REPO_FULL_NAME}/actions/artifacts/${artifact_id}/zip"
               )"
             fi
-            if [[ -z "${download_url}" ]] || ! curl -fsSL "${download_url}" -o "${zip_file}"; then
+            if [[ -n "${download_url}" ]] && curl -fsSL "${download_url}" -o "${zip_file}"; then
+              :
+            elif ! curl -fsSL \
+              "${api_v8}/repos/${REPO_FULL_NAME}/actions/artifacts/${artifact_id}/zip" \
+              -o "${zip_file}"; then
               printf 'FAILED'
               return 0
             fi
