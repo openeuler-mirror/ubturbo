@@ -48,7 +48,7 @@ jobs:
       - name: Checkout PR merge code
         uses: checkout
         with:
-          ref: refs/merge-requests/${{ env.PR_ID }}/merge
+          ref: refs/merge-requests/${{ atomgit.event.pull_request.number }}/merge
 
       - name: Install pre-commit
         run: |
@@ -129,7 +129,7 @@ jobs:
       - name: Checkout PR merge code
         uses: checkout
         with:
-          ref: refs/merge-requests/${{ env.PR_ID }}/merge
+          ref: refs/merge-requests/${{ atomgit.event.pull_request.number }}/merge
 
       - name: Initialize test submodules
         run: |
@@ -240,7 +240,7 @@ jobs:
       - name: Checkout PR merge code
         uses: checkout
         with:
-          ref: refs/merge-requests/${{ env.PR_ID }}/merge
+          ref: refs/merge-requests/${{ atomgit.event.pull_request.number }}/merge
 
       - name: Initialize test submodules
         run: |
@@ -296,4 +296,3 @@ jobs:
         with:
           name: ci-result-dt
           path: .ci-results/DT
-
