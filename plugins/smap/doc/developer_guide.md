@@ -740,3 +740,48 @@ SMAP紧急迁移接口。
 
 * 在OOM场景下由上层组件调用。
 * 紧急迁出按 numa\_maps 段级过滤收集候选页，无法识别共享页归属，段内共享页可能被一并迁到远端；OOM 场景首要目标是压低本地水线、避免 kill，允许共享页短暂误迁。水线下降后，调用方应把相关 pid 重新加入 SMAP 管理，SMAP 管理态扫描会按 pidType/pageType 纠正共享页归属。
+
+## ubturbo_smap_migrate_pages
+
+### 函数定义
+
+同步迁移进程指定大小内存接口：遍历进程页表收集 srcNid 上的页，经物理地址位图去重后同步迁移到 destNid，支持全量与分批两种模式。
+
+### 实现方法
+
+<pre class="screen"><p class="p" id="p294571314186">int ubturbo_smap_migrate_pages(SyncMigrateTask *task)</p></pre>
+
+其中：
+
+<pre class="screen"><code>typedef enum {
+    SYNC_MIGRATE_MODE_TOTAL, /* 一次性迁移全部 */
+    SYNC_MIGRATE_MODE_BATCH, /* 分批迁移 */
+} SyncMigrateMode;
+
+typedef struct {
+    SyncMigrateMode mode;   // SYNC_MIGRATE_MODE_TOTAL / SYNC_MIGRATE_MODE_BATCH
+    int srcNid;             // 源NUMA节点
+    int destNid;            // 目的NUMA节点
+    pid_t pid;              // 目标进程
+    uint64_t totalSize;     // 迁移总大小(KB)
+    uint64_t batchSize;     // 每次批量大小(KB)
+    uint64_t sleepTimeUs;   // 批次间休眠时间(us)
+} SyncMigrateTask;</code></pre>
+
+### 参数说明
+
+| 参数名 | 数据类型 | 有效性规格 | 参数类型 | 描述 |
+| --- | --- | --- | --- | --- |
+| task | SyncMigrateTask \* | 非空 | 入参 | 迁移任务：src/destNid须为合法NUMA且不相同；pid须为有效进程；mode须为TOTAL或BATCH；totalSize单位为KB且非0、按当前页对齐；BATCH下batchSize非0、sleepTimeUs须落在[100, 1000000]us |
+
+### 返回值
+
+* 0：迁移完成。
+* 非0：操作失败（EPERM/EINVAL/ENOMEM/EBUSY/EIO）。
+
+### 约束和注意事项
+
+* SMAP初始化后才能调用，同步接口返回即代表本次迁移结束，大规格迁移会阻塞调用线程。
+* 用户态经 migrate 设备 ioctl(SMAP\_MIG\_MIGRATE\_PAGES) 下发，内核遍历页表后以物理地址位图去重，保证同一物理页只迁移一次。
+* 目的节点空闲页数不足时拒绝下发（ENOMEM）；进程处于迁移中(PROC\_MOVE)时拒绝（EBUSY）。
+* 若进程受SMAP管理，页面归属账目由后续扫描周期自动校正（与紧急迁出一致）。

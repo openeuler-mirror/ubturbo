@@ -13,6 +13,7 @@
 #define __DEVICE_H__
 
 #include <sys/stat.h>
+#include <sys/time.h>
 
 #include "manage.h"
 
@@ -50,5 +51,8 @@ static inline bool IsBwMonitorEnabled(struct ProcessManager *manager)
 {
     return (manager->ubBwMonitor.ubBwThreshold > 0);
 }
+
+/* 两个时间点之间的耗时(us)，供迁移耗时统计等处复用 */
+long CalcDurationUs(struct timeval start, struct timeval end);
 
 #endif /* __DEVICE_H__ */

@@ -254,15 +254,18 @@ TEST_F(AccessMMUTest, PaddrNotBelongRemoteNote)
 }
 
 extern "C" int PageHead(struct page *page);
-extern "C" bool is_page_ready_for_migrate(struct page *page);
+extern "C" bool is_page_ready_for_migrate(struct page *page,
+					  struct page_migration_reject_statistics *stats);
 TEST_F(AccessMMUTest, HugePageReadyForMigrate)
 {
     struct page page;
+    struct page_migration_reject_statistics stats = { 0 };
     MOCKER(is_access_hugepage).stubs().will(returnValue(true));
     MOCKER(PageHuge).stubs().will(returnValue(1));
     MOCKER(PageHead).stubs().will(returnValue(1));
-    bool ret = is_page_ready_for_migrate(&page);
+    bool ret = is_page_ready_for_migrate(&page, &stats);
     EXPECT_EQ(true, ret);
+    EXPECT_EQ(0U, stats.nr_isolated_pages);
 }
 
 extern "C" int add_to_bm(unsigned long vaddr, pagemap_entry_t *pme, struct pagemapread *pm);
@@ -313,7 +316,7 @@ TEST_F(AccessMMUTest, AddToBMTwo)
     MOCKER(is_access_hugepage).stubs().will(returnValue(true));
     MOCKER(add_to_bm_page).stubs();
     int ret = add_to_bm(0, &pe, &pm);
-    EXPECT_EQ(1, ret);
+    EXPECT_EQ(-ECANCELED, ret);
 }
 
 extern "C" pagemap_entry_t pte_to_pagemap_entry(struct pagemapread *pm,
@@ -414,7 +417,7 @@ extern "C" bool IS_ERR(const void *ptr);
 extern "C" void pos_to_addr(struct mm_struct *mm, unsigned long pos, unsigned long *vaddr);
 TEST_F(AccessMMUTest, FillAPPAddrBM)
 {
-    struct pagemapread pm;
+    struct pagemapread pm = { .mig_type = NORMAL_MIGRATE };
     struct mm_struct mm1;
     unsigned long start_vaddr = 0;
     MOCKER(IS_ERR).stubs().will(returnValue(false));
@@ -460,4 +463,172 @@ TEST_F(AccessMMUTest, PosToAddr)
     vma.vm_end = 0x100;
     vma.vm_start = 0;
     pos_to_addr(&mm, 0x1, &vaddr);
+}
+
+/* ============ should_add_page / handle_sync_migration tests ============ */
+
+extern "C" bool should_add_page(u64 paddr, unsigned long *paddr_bm, size_t bm_len);
+extern "C" int mock_calc_paddr_acidx(u64 paddr, int *nid, u64 *index);
+extern "C" int handle_sync_migration(u64 pfn, u64 paddr, struct pagemapread *pm);
+extern "C" bool is_page_ready_for_migrate(struct page *page,
+					  struct page_migration_reject_statistics *stats);
+
+static int g_fakeAcidxRet = 0;
+static int g_fakeAcidxNid = 0;
+static u64 g_fakeAcidx = 0;
+static int FakeCalcPaddrAcidx(u64 paddr, int *nid, u64 *index)
+{
+    (void)paddr;
+    if (g_fakeAcidxRet)
+        return g_fakeAcidxRet;
+    *nid = g_fakeAcidxNid;
+    *index = g_fakeAcidx;
+    return 0;
+}
+
+/* 位图去重：首次置位返回true，重复页返回false，越界返回false，calc失败返回false */
+TEST_F(AccessMMUTest, ShouldAddPageDedup)
+{
+    unsigned long bm[2] = { 0, 0 }; /* 128 bits */
+
+    g_fakeAcidxRet = 0;
+    g_fakeAcidx = 5;
+    MOCKER(mock_calc_paddr_acidx).stubs().will(invoke(FakeCalcPaddrAcidx));
+    EXPECT_EQ(true, should_add_page(0x1000, bm, 2));
+    EXPECT_NE(0UL, bm[0] & (1UL << 5)); /* 位被置位 */
+    EXPECT_EQ(false, should_add_page(0x2000, bm, 2)); /* 重复物理页拒绝 */
+}
+
+TEST_F(AccessMMUTest, ShouldAddPageOutOfRange)
+{
+    unsigned long bm[1] = { 0 };
+
+    g_fakeAcidxRet = 0;
+    g_fakeAcidx = 200; /* BIT_WORD(200)=3 >= bm_len=1 */
+    g_fakeAcidxNid = 0;
+    MOCKER(mock_calc_paddr_acidx).stubs().will(invoke(FakeCalcPaddrAcidx));
+    EXPECT_EQ(false, should_add_page(0x1000, bm, 1));
+}
+
+TEST_F(AccessMMUTest, ShouldAddPageCalcFail)
+{
+    unsigned long bm[1] = { 0 };
+
+    g_fakeAcidxRet = -EINVAL;
+    MOCKER(mock_calc_paddr_acidx).stubs().will(invoke(FakeCalcPaddrAcidx));
+    EXPECT_EQ(false, should_add_page(0x1000, bm, 1));
+}
+
+/* SYNC收集：source节点过滤+去重+容量满提前终止 */
+extern "C" int page_to_nid(const struct page *page);
+static int g_syncRet = 0;    /* pfn_to_online_page返回页，否则回0 */
+static int g_syncNode = 0;   /* page_to_nid的返回值 */
+static int g_putCnt = 0;     /* folio_put调用次数 */
+static void ResetSyncMigCapture(void)
+{
+    g_syncRet = 0;
+    g_syncNode = 0;
+    g_putCnt = 0;
+}
+
+static struct page *FakePfnToOnlinePage(u64 pfn)
+{
+    (void)pfn;
+    static struct page page;
+    return g_syncRet ? &page : nullptr;
+}
+
+static int FakePageToNid(const struct page *page)
+{
+    (void)page;
+    return g_syncNode;
+}
+
+extern "C" void folio_put(struct folio *folio);
+static void FakeFolioPut(struct folio *folio)
+{
+    (void)folio;
+    g_putCnt++;
+}
+
+TEST_F(AccessMMUTest, HandleSyncMigrationSkipNoPage)
+{
+    struct pagemapread pm = { 0 };
+    ResetSyncMigCapture();
+    g_syncRet = 0;
+    MOCKER(pfn_to_online_page).stubs().will(invoke(FakePfnToOnlinePage));
+    EXPECT_EQ(2, handle_sync_migration(0x100, 0x1000, &pm)); /* PM_ADD_MIG_FOLIOS_SKIP */
+}
+
+TEST_F(AccessMMUTest, HandleSyncMigrationSkipNodeMismatch)
+{
+    struct pagemapread pm = { 0 };
+    ResetSyncMigCapture();
+    g_syncRet = 1;
+    g_syncNode = 0;
+    pm.sync_mig_info.src_nid = 1;
+    MOCKER(pfn_to_online_page).stubs().will(invoke(FakePfnToOnlinePage));
+    MOCKER(page_to_nid).stubs().will(invoke(FakePageToNid));
+    EXPECT_EQ(2, handle_sync_migration(0x100, 0x1000, &pm));
+}
+
+TEST_F(AccessMMUTest, HandleSyncMigrationFullBuffer)
+{
+    struct folio *folios[1];
+    struct pagemapread pm = { 0 };
+    ResetSyncMigCapture();
+    g_syncRet = 1;
+    g_syncNode = 1;
+    pm.sync_mig_info.src_nid = 1;
+    pm.sync_mig_info.folios_len = 1;
+    pm.sync_mig_info.mig_cnt = 1; /* 已满 */
+    pm.sync_mig_info.folios = folios;
+    MOCKER(pfn_to_online_page).stubs().will(invoke(FakePfnToOnlinePage));
+    MOCKER(page_to_nid).stubs().will(invoke(FakePageToNid));
+    MOCKER(is_page_ready_for_migrate).stubs().will(returnValue(true));
+    /* PageHuge默认为false，PageHead未mock时用真实调用(返回0)，4K路径触发folio_put */
+    MOCKER(PageHuge).stubs().will(returnValue(0));
+    MOCKER(folio_put).stubs().will(invoke(FakeFolioPut));
+    EXPECT_EQ(1, handle_sync_migration(0x100, 0x1000, &pm)); /* PM_END_OF_BUFFER */
+    EXPECT_EQ(1, g_putCnt);
+}
+
+TEST_F(AccessMMUTest, HandleSyncMigrationDedupReject)
+{
+    struct pagemapread pm = { 0 };
+    ResetSyncMigCapture();
+    g_syncRet = 1;
+    g_syncNode = 1;
+    pm.sync_mig_info.src_nid = 1;
+    pm.sync_mig_info.folios_len = 4;
+    pm.sync_mig_info.mig_cnt = 0;
+    MOCKER(pfn_to_online_page).stubs().will(invoke(FakePfnToOnlinePage));
+    MOCKER(page_to_nid).stubs().will(invoke(FakePageToNid));
+    MOCKER(is_page_ready_for_migrate).stubs().will(returnValue(true));
+    MOCKER(PageHuge).stubs().will(returnValue(0));
+    MOCKER(should_add_page).stubs().will(returnValue(false));
+    MOCKER(folio_put).stubs().will(invoke(FakeFolioPut));
+    EXPECT_EQ(2, handle_sync_migration(0x100, 0x1000, &pm)); /* PM_ADD_MIG_FOLIOS_SKIP */
+    EXPECT_EQ(0U, pm.sync_mig_info.mig_cnt);
+    EXPECT_EQ(1, g_putCnt);
+}
+
+TEST_F(AccessMMUTest, HandleSyncMigrationAddSuccess)
+{
+    struct folio *folios[4] = { 0 };
+    struct pagemapread pm = { 0 };
+    ResetSyncMigCapture();
+    g_syncRet = 1;
+    g_syncNode = 1;
+    pm.sync_mig_info.src_nid = 1;
+    pm.sync_mig_info.folios_len = 4;
+    pm.sync_mig_info.mig_cnt = 0;
+    pm.sync_mig_info.folios = folios;
+    MOCKER(pfn_to_online_page).stubs().will(invoke(FakePfnToOnlinePage));
+    MOCKER(page_to_nid).stubs().will(invoke(FakePageToNid));
+    MOCKER(is_page_ready_for_migrate).stubs().will(returnValue(true));
+    MOCKER(should_add_page).stubs().will(returnValue(true));
+    EXPECT_EQ(0, handle_sync_migration(0x100, 0x1000, &pm));
+    EXPECT_EQ(1U, pm.sync_mig_info.mig_cnt);
+    EXPECT_NE(nullptr, pm.sync_mig_info.folios[0]);
 }

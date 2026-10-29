@@ -171,10 +171,9 @@ static int thread_fn(void *data)
 	}
 	ms->end_time = ktime_get();
 	mig_time = ktime_to_us(ktime_sub(ms->end_time, ms->start_time));
-	if (ms->to_node >= nr_local_numa)
-		pr_debug(
-			"time spend: %lldus, to_node: %d, nr_folios: %u, nr_succeeded: %u\n",
-			mig_time, ms->to_node, ms->nr_folios, nr_succeeded);
+	pr_debug(
+		"time spend: %lldus, to_node: %d, nr_folios: %u, nr_succeeded: %u\n",
+		mig_time, ms->to_node, ms->nr_folios, nr_succeeded);
 	ms->failed_num = ms->nr_folios - nr_succeeded;
 	vfree(ms->folios);
 	complete(&ms->comp);
@@ -348,7 +347,8 @@ unsigned int smap_migrate(struct folio **folios, unsigned int nr_folios,
 			folios, nr_folios, smap_alloc_new_node_page_mig_back,
 			NULL, to_node, remote_migrate_mode, &nr_succeeded);
 		if (err) {
-			pr_err("failed to migrate back, ret: %d\n", err);
+			pr_err("failed to migrate back, ret: %d, "
+			       "nr_succeeded: %u\n", err, nr_succeeded);
 		}
 	} else if (MIGRATE_TYPE_HOTNESS == type) {
 		err = isolate_and_migrate_folios(folios, nr_folios,
@@ -356,17 +356,19 @@ unsigned int smap_migrate(struct folio **folios, unsigned int nr_folios,
 						 to_node, remote_migrate_mode,
 						 &nr_succeeded);
 		if (err) {
-			pr_err("failed to migrate, ret: %d\n", err);
+			pr_err("failed to migrate, ret: %d, "
+			       "nr_succeeded: %u\n", err, nr_succeeded);
 		}
 	} else if (MIGRATE_TYPE_REMOTE == type) {
 		err = smap_isolate_and_migrate_folios(
 			folios, nr_folios, smap_alloc_new_node_page, NULL,
 			to_node, remote_migrate_mode, &nr_succeeded);
 		if (err > 0)
-			pr_warn("isolat or migrate remote range err: %d\n",
-				err);
+			pr_warn("isolat or migrate remote range err: %d, "
+				"nr_succeeded: %u\n", err, nr_succeeded);
 		else if (err < 0)
-			pr_err("failed to migrate folios, err: %d\n", err);
+			pr_err("failed to migrate folios, err: %d, "
+			       "nr_succeeded: %u\n", err, nr_succeeded);
 	}
 	if (smap_pgtype == HUGE_PAGE) {
 		nr_succeeded >>= (__builtin_ctz(g_pagesize_huge) - PAGE_SHIFT);

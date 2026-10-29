@@ -289,6 +289,37 @@ bool ubturbo_smap_is_running(void);
  */
 int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime);
 
+typedef enum {
+    SYNC_MIGRATE_MODE_TOTAL, /* 一次性迁移全部 */
+    SYNC_MIGRATE_MODE_BATCH, /* 分批迁移 */
+} SyncMigrateMode;
+
+typedef struct SyncMigrateTask {
+    SyncMigrateMode mode;   // SYNC_MIGRATE_MODE_TOTAL / SYNC_MIGRATE_MODE_BATCH
+    int srcNid;             // 源NUMA节点
+    int destNid;            // 目的NUMA节点
+    pid_t pid;              // 目标进程
+    uint64_t totalSize;     // 迁移总大小(KB)
+    uint64_t batchSize;     // 每次批量大小(KB)
+    uint64_t sleepTimeUs;   // 批次间休眠时间(us)
+} SyncMigrateTask;
+
+/* 分批同步迁移的批次间隔时间(us)限制，与内核 common.h 保持一致 */
+#define MIGRATE_PAGES_BATCH_SLEEP_US_MIN 100
+#define MIGRATE_PAGES_BATCH_SLEEP_US_MAX 1000000
+
+/* *
+ * @brief   同步迁移进程指定大小内存(内核页表遍历+位图去重，阻塞等待完成)
+ *
+ * @param task [IN] 同步迁移任务，包含PID、源NUMA、目的NUMA与迁移大小
+ * @return int  0：迁移完成；非0：操作失败
+ *
+ * @note 同步接口，返回即代表本次迁移结束，可用于耗时测量。
+ *       同一物理页在进程多映射场景下只迁移一次；进程受SMAP管理时，
+ *       页面归属账目由后续扫描周期自动校正。
+ */
+int ubturbo_smap_migrate_pages(SyncMigrateTask *task);
+
 /* 迁移远端内存相关接口 */
 
 struct MigrateNumaMsg {

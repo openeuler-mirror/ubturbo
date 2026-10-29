@@ -25,7 +25,7 @@ struct ram_segment {
 void release_remote_ram(void);
 int refresh_remote_ram(void);
 int get_numa_by_pfn(unsigned long pfn);
-u64 get_node_page_cnt_iomem(int nid, int page_size);
+u32 get_node_page_cnt_iomem(int nid, int page_size);
 int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
 int calc_paddr_acidx_iomem_known_nid(u64 pa, int nid, u64 *index,
 				     int page_size);

@@ -5085,3 +5085,181 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigBothEnabled)
     MigrateAndCpuConfig();
     GlobalMockObject::verify();
 }
+
+/* ============ ubturbo_smap_migrate_pages tests ============ */
+
+extern "C" uint64_t GetNrFreePagesByNode(int nid);
+extern "C" uint64_t GetNrFreeHugePagesByNode(int nid);
+extern "C" ProcessAttr *GetProcessAttr(pid_t pid);
+
+static void SetupSyncMigrateTaskValid(void)
+{
+    g_processManager.nrLocalNuma = 2;
+    MOCKER(GetProcessManager).stubs().will(returnValue(&g_processManager));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    MOCKER(GetPageSize).stubs().will(returnValue((uint32_t)PAGESIZE_4K));
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(GetNormalPageSize).stubs().will(returnValue((uint32_t)PAGESIZE_4K));
+}
+
+static void InitSyncMigrateTask(SyncMigrateTask *task)
+{
+    task->mode = SYNC_MIGRATE_MODE_TOTAL;
+    task->srcNid = 0;
+    task->destNid = 2;
+    task->pid = 123;
+    task->totalSize = 2 * KB_PER_4KB; /* 8KB → 2页 */
+    task->batchSize = KB_PER_4KB;
+    task->sleepTimeUs = 1000;
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesNotRunning)
+{
+    SyncMigrateTask task = {};
+    EnvAtomicSet(&g_status, 0);
+    EXPECT_EQ(-EPERM, ubturbo_smap_migrate_pages(&task));
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesNullTask)
+{
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&g_processManager));
+    EXPECT_EQ(-EINVAL, ubturbo_smap_migrate_pages(nullptr));
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesInvalidNode)
+{
+    SyncMigrateTask task = {};
+    InitSyncMigrateTask(&task);
+    task.destNid = 100; /* 非法节点 */
+    g_processManager.nrLocalNuma = 2;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&g_processManager));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(false));
+    EXPECT_EQ(-EINVAL, ubturbo_smap_migrate_pages(&task));
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesSrcEqDest)
+{
+    SyncMigrateTask task = {};
+    InitSyncMigrateTask(&task);
+    task.destNid = task.srcNid;
+    g_processManager.nrLocalNuma = 2;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&g_processManager));
+    MOCKER(PidIsValid).stubs().will(returnValue(true));
+    EXPECT_EQ(-EINVAL, ubturbo_smap_migrate_pages(&task));
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesInvalidPid)
+{
+    SyncMigrateTask task = {};
+    InitSyncMigrateTask(&task);
+    g_processManager.nrLocalNuma = 2;
+    EnvAtomicSet(&g_status, 1);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&g_processManager));
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(PidIsValid).stubs().will(returnValue(false));
+    EXPECT_EQ(-EINVAL, ubturbo_smap_migrate_pages(&task));
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesInvalidMode)
+{
+    SyncMigrateTask task = {};
+    InitSyncMigrateTask(&task);
+    task.mode = static_cast<SyncMigrateMode>(SYNC_MIGRATE_MODE_BATCH + 1);
+    EnvAtomicSet(&g_status, 1);
+    SetupSyncMigrateTaskValid();
+    EXPECT_EQ(-EINVAL, ubturbo_smap_migrate_pages(&task));
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesTotalSizeZero)
+{
+    SyncMigrateTask task = {};
+    InitSyncMigrateTask(&task);
+    task.totalSize = 0;
+    EnvAtomicSet(&g_status, 1);
+    SetupSyncMigrateTaskValid();
+    EXPECT_EQ(-EINVAL, ubturbo_smap_migrate_pages(&task));
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesTotalSizeUnaligned)
+{
+    SyncMigrateTask task = {};
+    InitSyncMigrateTask(&task);
+    task.totalSize = KB_PER_4KB + 1; /* 5KB，非4KB对齐 */
+    EnvAtomicSet(&g_status, 1);
+    SetupSyncMigrateTaskValid();
+    EXPECT_EQ(-EINVAL, ubturbo_smap_migrate_pages(&task));
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesBatchZero)
+{
+    SyncMigrateTask task = {};
+    InitSyncMigrateTask(&task);
+    task.mode = SYNC_MIGRATE_MODE_BATCH;
+    task.batchSize = 0;
+    EnvAtomicSet(&g_status, 1);
+    SetupSyncMigrateTaskValid();
+    EXPECT_EQ(-EINVAL, ubturbo_smap_migrate_pages(&task));
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesBatchSleepInvalid)
+{
+    SyncMigrateTask task = {};
+    InitSyncMigrateTask(&task);
+    task.mode = SYNC_MIGRATE_MODE_BATCH;
+    task.sleepTimeUs = MIGRATE_PAGES_BATCH_SLEEP_US_MAX + 1;
+    EnvAtomicSet(&g_status, 1);
+    SetupSyncMigrateTaskValid();
+    EXPECT_EQ(-EINVAL, ubturbo_smap_migrate_pages(&task));
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesNoFreePages)
+{
+    SyncMigrateTask task = {};
+    InitSyncMigrateTask(&task);
+    EnvAtomicSet(&g_status, 1);
+    SetupSyncMigrateTaskValid();
+    MOCKER(GetNrFreePagesByNode).stubs().will(returnValue((uint64_t)1)); /* 需2页，仅1页 */
+    EXPECT_EQ(-ENOMEM, ubturbo_smap_migrate_pages(&task));
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesInProcMove)
+{
+    SyncMigrateTask task = {};
+    InitSyncMigrateTask(&task);
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.state = PROC_MOVE;
+    attr.next = nullptr;
+    g_processManager.processes = &attr;
+    EnvAtomicSet(&g_status, 1);
+    SetupSyncMigrateTaskValid();
+    MOCKER(GetNrFreePagesByNode).stubs().will(returnValue((uint64_t)1024));
+    EXPECT_EQ(-EBUSY, ubturbo_smap_migrate_pages(&task));
+    g_processManager.processes = nullptr;
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesIoctlFail)
+{
+    SyncMigrateTask task = {};
+    InitSyncMigrateTask(&task);
+    EnvAtomicSet(&g_status, 1);
+    SetupSyncMigrateTaskValid();
+    MOCKER(GetNrFreePagesByNode).stubs().will(returnValue((uint64_t)1024));
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-1));
+    EXPECT_EQ(-EIO, ubturbo_smap_migrate_pages(&task));
+}
+
+TEST_F(InterfaceTest, TestSmapMigratePagesSuccess)
+{
+    SyncMigrateTask task = {};
+    InitSyncMigrateTask(&task);
+    EnvAtomicSet(&g_status, 1);
+    SetupSyncMigrateTaskValid();
+    MOCKER(GetNrFreePagesByNode).stubs().will(returnValue((uint64_t)1024));
+    MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(0));
+    EXPECT_EQ(0, ubturbo_smap_migrate_pages(&task));
+}

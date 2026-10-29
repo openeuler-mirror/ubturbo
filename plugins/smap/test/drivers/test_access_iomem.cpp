@@ -197,11 +197,11 @@ TEST_F(AccessIomemTest, get_numa_by_pfn)
     list_del(&seg.node);
 }
 
-extern "C" u64 get_node_page_cnt_iomem(int nid, int page_size);
+extern "C" u32 get_node_page_cnt_iomem(int nid, int page_size);
 extern "C" int drivers_nr_local_numa;
 TEST_F(AccessIomemTest, get_node_page_cnt_iomem)
 {
-    u64 ret;
+    u32 ret;
     u64 len = 0;
     struct ram_segment seg1 = { .numa_node = 0 };
     struct ram_segment seg2 = { .numa_node = 1, .start = 0x0, .end = 0xfffff, };

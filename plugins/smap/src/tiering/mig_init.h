@@ -29,6 +29,7 @@
 #define SMAP_SET_UB_DMA_AVAIL _IOW(SMAP_MIG_MAGIC, 4, unsigned int)
 #define SMAP_MIG_MIGRATE_SET_STS \
 	_IOW(SMAP_MIG_MAGIC, 5, struct migrate_status_set_msg)
+#define SMAP_MIG_MIGRATE_PAGES _IOW(SMAP_MIG_MAGIC, 6, struct migrate_pages_msg)
 
 typedef struct {
 	u64 pme;
@@ -39,15 +40,46 @@ struct remote_migrate_info {
 	u64 page_cnt;
 	int remote_nid;
 	unsigned int mig_cnt;
-	u64 folios_len;
+	u32 folios_len;
 	struct folio **folios;
+};
+
+struct sync_migrate_info {
+	pid_t pid;
+	int src_nid;
+	unsigned int mig_cnt;
+	u32 folios_len;             /* 待迁移folio数量上限 */
+	struct folio **folios;      /* 收集到的folio列表 */
+	unsigned long *paddr_bm;    /* 物理地址去重位图 */
+	size_t bm_len;              /* 位图长度(以unsigned long为单位) */
+};
+
+struct page_migration_reject_statistics {
+	uint32_t nr_isolated_pages;    /* 隔离页 */
+	uint32_t nr_multi_mapped_pages; /* 多进程映射页 */
+	uint32_t nr_folio_get_fail;    /* folio引用获取失败 */
+	union {                        /* 按页模式区分 */
+		struct {
+			uint32_t nr_not_huge_page_head; /* 大页但非head page */
+		} page_mode_2m;
+		struct {
+			uint32_t nr_not_in_lru;            /* 不在LRU链表 */
+			uint32_t nr_zero_ref_pages;        /* 引用计数为0 */
+			uint32_t nr_transparent_huge_pages; /* 透明大页 */
+			uint32_t nr_huge_pages;            /* 常规大页 */
+		} page_mode_4k;
+	};
 };
 
 struct pagemapread {
 	int pos, len; /* units: PM_ENTRY_BYTES, not bytes */
 	migrate_type mig_type;
-	struct remote_migrate_info mig_info;
+	union {
+		struct remote_migrate_info mig_info;
+		struct sync_migrate_info sync_mig_info;
+	};
 	struct access_pid *ap;
+	struct page_migration_reject_statistics statistics;
 };
 
 static inline int get_max_pid_cnt(void)
@@ -60,7 +92,7 @@ extern void walk_pid_pagemap(struct pagemapread *pm);
 extern int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr);
 extern int smap_is_remote_addr_valid(int nid, u64 pa_start, u64 pa_end);
 
-extern u64 get_node_page_cnt_iomem(int nid, int page_size);
+extern u32 get_node_page_cnt_iomem(int nid, int page_size);
 int init_migrate(void);
 void exit_migrate(void);
 

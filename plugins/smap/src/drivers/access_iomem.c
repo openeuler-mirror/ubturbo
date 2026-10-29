@@ -185,7 +185,7 @@ int get_numa_by_pfn(unsigned long pfn)
 	return nid;
 }
 
-u64 get_node_page_cnt_iomem(int nid, int page_size)
+u32 get_node_page_cnt_iomem(int nid, int page_size)
 {
 	u64 len = 0;
 	struct ram_segment *seg, *tmp;
@@ -205,7 +205,7 @@ u64 get_node_page_cnt_iomem(int nid, int page_size)
 	}
 	read_unlock(&rem_ram_list_lock);
 
-	return len;
+	return (u32)len;
 }
 EXPORT_SYMBOL(get_node_page_cnt_iomem);
 

@@ -1434,6 +1434,98 @@ int main(void)
 }
 ```
 
+# ubturbo_smap_migrate_pages: 同步迁移进程指定大小内存
+
+## 库 LIBRARY
+
+SMAP库 (libsmap.so)
+
+## 摘要 SYNOPSIS
+
+```c
+#include "smap_interface.h"
+
+typedef enum {
+    SYNC_MIGRATE_MODE_TOTAL, /* 一次性迁移全部 */
+    SYNC_MIGRATE_MODE_BATCH, /* 分批迁移 */
+} SyncMigrateMode;
+
+typedef struct {
+    SyncMigrateMode mode;   // SYNC_MIGRATE_MODE_TOTAL / SYNC_MIGRATE_MODE_BATCH
+    int srcNid;             // 源NUMA节点
+    int destNid;            // 目的NUMA节点
+    pid_t pid;              // 目标进程
+    uint64_t totalSize;     // 迁移总大小(KB)
+    uint64_t batchSize;     // 每次批量大小(KB)
+    uint64_t sleepTimeUs;   // 批次间休眠时间(us)
+} SyncMigrateTask;
+
+int ubturbo_smap_migrate_pages(SyncMigrateTask *task);
+```
+
+## 描述 DESCRIPTION
+
+同步迁移指定进程位于 srcNid 上的 totalSize 内存到 destNid。接口返回即代表本次迁移结束（阻塞等待完成）。内核通过遍历进程页表按物理地址位图去重，保证同一物理页只迁移一次；全量/分批两种模式分别由 SYNC\_MIGRATE\_MODE\_TOTAL 与 SYNC\_MIGRATE\_MODE\_BATCH 指定。
+
+## 参数 Parameters
+
+| name | IN/OUT | description |
+| --- | --- | --- |
+| task | IN | 同步迁移任务，包含迁移模式、源NUMA、目的NUMA、目标进程PID、迁移总大小totalSize(KB)、批次大小batchSize(KB)与批次间休眠时间sleepTimeUs(us) |
+
+## 返回值 RETURN VALUE
+
+0：迁移完成。
+
+非0：操作失败。
+
+## 错误 ERRORS
+
+* EPERM：SMAP未初始化或未处于运行状态。
+* EINVAL：task为空、src/destNid非法或相同、pid非法、mode非法、totalSize非法（为0或未按页对齐）、BATCH模式下batchSize为0或sleepTimeUs超出[100, 1000000]us。
+* ENOMEM：目的节点空闲页数不足，无法满足迁移大小。
+* EBUSY：目标进程处于迁移中（PROC\_MOVE）状态。
+* EIO：内核迁移接口调用失败。
+
+## 约束 CONSTRAINTS
+
+* SMAP初始化后才能调用。
+* 同步接口，大规格迁移会阻塞调用线程直至完成。
+* 同一物理页在进程多映射场景下只迁移一次（物理地址位图去重）。
+* 若进程受SMAP管理，页面归属账目由后续扫描周期自动校正。
+
+## 附注 NOTES
+
+暂无
+
+## 样例 EXAMPLES
+
+以下程序将PID为12345的进程在本地NUMA 0上的2MB内存同步迁移到远端NUMA 2。
+
+```c
+#include <stdio.h>
+#include "smap_interface.h"
+
+int main(void)
+{
+    int ret;
+    SyncMigrateTask task = {
+        .mode = SYNC_MIGRATE_MODE_TOTAL,
+        .srcNid = 0,
+        .destNid = 2,
+        .pid = 12345,
+        .totalSize = 2048, /* 单位KB */
+    };
+
+    ret = ubturbo_smap_migrate_pages(&task);
+    if (ret != 0) {
+        return ret;
+    }
+
+    return 0;
+}
+```
+
 # ubturbo_smap_is_running: 查询SMAP的运行状态
 
 ## 库 LIBRARY
