@@ -360,6 +360,7 @@ TEST_F(InterfaceTest, IsMigParaValid)
         .pid = 123,
         .count = 1,
     };
+    payload.srcNid = -1;
     payload.inner[0].memSize = 10240;
     payload.inner[0].ratio = 25;
     payload.inner[0].migrateMode = MIG_MEMSIZE_MODE;
@@ -377,6 +378,7 @@ TEST_F(InterfaceTest, IsMigParaValidGreaterThanMigrateMode)
         .pid = 123,
         .count = 1,
     };
+    payload.srcNid = -1;
     payload.inner[0].memSize = 10240;
     payload.inner[0].ratio = 25;
     MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
@@ -405,6 +407,7 @@ TEST_F(InterfaceTest, IsMigParaValidLessThanMigrateMode)
         .pid = 123,
         .count = 1,
     };
+    payload.srcNid = -1;
     payload.inner[0].memSize = 10240;
     payload.inner[0].ratio = 25;
     payload.inner[0].migrateMode = static_cast<MigrateMode>(-1);
@@ -422,6 +425,7 @@ TEST_F(InterfaceTest, IsMigParaValidWaterlineModeAndMigMemsizeMode)
         .pid = 123,
         .count = 1,
     };
+    payload.srcNid = -1;
     payload.inner[0].memSize = 10240;
     payload.inner[0].ratio = 25;
     MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
@@ -440,6 +444,7 @@ TEST_F(InterfaceTest, IsMigParaValidMemPoolModeAndMigRatioMode)
         .pid = 123,
         .count = 1,
     };
+    payload.srcNid = -1;
     payload.inner[0].memSize = 10240;
     payload.inner[0].ratio = 25;
     MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
@@ -458,6 +463,7 @@ TEST_F(InterfaceTest, IsMigParaValidMigRatioModeWithInvalidRatio)
         .pid = 123,
         .count = 1,
     };
+    payload.srcNid = -1;
     payload.inner[0].memSize = 10240;
     payload.inner[0].ratio = 25;
     MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
@@ -476,6 +482,7 @@ TEST_F(InterfaceTest, IsMigParaValidInvalidMemSize)
         .pid = 123,
         .count = 1,
     };
+    payload.srcNid = -1;
     payload.inner[0].memSize = 10240;
     payload.inner[0].ratio = 25;
     MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
@@ -486,6 +493,71 @@ TEST_F(InterfaceTest, IsMigParaValidInvalidMemSize)
     payload.inner[0].memSize = 2049;
     ret = IsMigParaValid(&payload);
     EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, IsMigParaValidRejectsInvalidSrcNid)
+{
+    bool ret;
+    struct MigrateOutPayload payload = {
+        .pid = 123,
+        .count = 1,
+    };
+    payload.inner[0].memSize = 10240;
+    payload.inner[0].ratio = 25;
+    payload.inner[0].migrateMode = MIG_MEMSIZE_MODE;
+    MOCKER(IsDestNidValid).stubs().will(returnValue(true));
+    MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
+    g_processManager.nrLocalNuma = 4;
+
+    // srcNid 越界（>= nrLocalNuma）被拒绝。
+    payload.srcNid = 4;
+    EXPECT_EQ(false, IsMigParaValid(&payload));
+    // srcNid 为非法负值（非 -1）被拒绝。
+    payload.srcNid = -2;
+    EXPECT_EQ(false, IsMigParaValid(&payload));
+}
+
+TEST_F(InterfaceTest, IsMigParaValidAcceptsSpecifiedSrcNid)
+{
+    bool ret;
+    struct MigrateOutPayload payload = {
+        .pid = 123,
+        .count = 1,
+    };
+    payload.inner[0].memSize = 10240;
+    payload.inner[0].ratio = 25;
+    payload.inner[0].migrateMode = MIG_MEMSIZE_MODE;
+    MOCKER(IsRemoteNidValid).stubs().will(returnValue(true));
+    MOCKER(IsDestNidValid).stubs().will(returnValue(true));
+    MOCKER(GetRunMode).stubs().will(returnValue(MEM_POOL_MODE));
+    g_processManager.nrLocalNuma = 4;
+
+    // 合法指定源本地节点通过校验。
+    payload.srcNid = 2;
+    EXPECT_EQ(true, IsMigParaValid(&payload));
+}
+
+extern "C" void SetSpecifiedLocalNuma(ProcessAttr *attr, int srcNid);
+
+TEST_F(InterfaceTest, SetSpecifiedLocalNumaForcesSourceLocalNuma)
+{
+    ProcessAttr attr = {};
+    attr.pid = 123;
+    attr.numaAttr.numaNodes = 0x13; // L1: 0|1, L2: 4
+    attr.managedLocalState.managedLocalMask = 0x3;
+    g_processManager.nrLocalNuma = 4;
+
+    // 指定源节点 2：L1 收敛到 bit2，L2 保留，managedLocalMask=bit2。
+    SetSpecifiedLocalNuma(&attr, 2);
+    EXPECT_EQ(0x14U, attr.numaAttr.numaNodes);
+    EXPECT_EQ(0x4U, attr.managedLocalState.managedLocalMask);
+
+    // 越界 srcNid 不生效。
+    attr.numaAttr.numaNodes = 0x13;
+    attr.managedLocalState.managedLocalMask = 0x3;
+    SetSpecifiedLocalNuma(&attr, 4);
+    EXPECT_EQ(0x13U, attr.numaAttr.numaNodes);
+    EXPECT_EQ(0x3U, attr.managedLocalState.managedLocalMask);
 }
 
 TEST_F(InterfaceTest, TestIsDestNidValid)
@@ -2030,36 +2102,36 @@ extern "C" int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint16_t length
                                         int dataSource);
 extern "C" int QueryVMFreqFromKernel(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut);
 extern "C" int QueryVMFreqFromUser(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut);
-extern "C" int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource);
+extern "C" int ubturbo_smap_vm_freq_query(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut, int dataSource);
 TEST_F(InterfaceTest, TestSmapQueryVmFreqAbnormalOne)
 {
     int ret;
-    uint32_t lengthOut;
+    uint16_t lengthOut;
     struct ProcessManager manager;
     EnvAtomicSet(&g_status, 0);
-    ret = ubturbo_smap_freq_query(0, nullptr, 0, &lengthOut, 0);
+    ret = ubturbo_smap_vm_freq_query(0, nullptr, 0, &lengthOut, 0);
     EXPECT_EQ(-EPERM, ret);
 
     EnvAtomicSet(&g_status, 1);
     MOCKER(CheckQueryVMFreqMsgValid).stubs().will(returnValue(-EINVAL));
-    ret = ubturbo_smap_freq_query(0, nullptr, 0, &lengthOut, 0);
+    ret = ubturbo_smap_vm_freq_query(0, nullptr, 0, &lengthOut, 0);
     EXPECT_EQ(-EINVAL, ret);
 }
 
 TEST_F(InterfaceTest, TestSmapQueryVmFreqAbnormalTwo)
 {
     int ret;
-    uint32_t lengthOut;
+    uint16_t lengthOut;
     uint16_t data[3] = { 0 };
     struct ProcessManager manager;
     EnvAtomicSet(&g_status, 1);
     MOCKER(CheckQueryVMFreqMsgValid).stubs().will(returnValue(0));
     MOCKER(QueryVMFreqFromUser).stubs().will(returnValue(-EINVAL));
-    ret = ubturbo_smap_freq_query(0, data, 0, &lengthOut, 0);
+    ret = ubturbo_smap_vm_freq_query(0, data, 0, &lengthOut, 0);
     EXPECT_EQ(-EINVAL, ret);
 
     MOCKER(QueryVMFreqFromKernel).stubs().will(returnValue(-EINVAL));
-    ret = ubturbo_smap_freq_query(0, data, 0, &lengthOut, 1);
+    ret = ubturbo_smap_vm_freq_query(0, data, 0, &lengthOut, 1);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -2272,6 +2344,7 @@ TEST_F(InterfaceTest, PidNotManaged)
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
     // 模拟GetProcessAttr返回NULL
     MOCKER(GetProcessAttr).stubs().will(returnValue((ProcessAttribute *)nullptr));
 
@@ -2288,6 +2361,7 @@ TEST_F(InterfaceTest, DataSourceMismatch)
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
     ProcessAttr attr;
     attr.scanType = NORMAL_SCAN;
 
@@ -2307,6 +2381,7 @@ TEST_F(InterfaceTest, TimeCheckFailed)
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
     ProcessAttr attr;
     attr.scanType = STATISTIC_SCAN;
     attr.scanStart = time(nullptr) - 10; // 设置scanStart为10秒前
@@ -2327,6 +2402,7 @@ TEST_F(InterfaceTest, TimeCheckSuccess)
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(IsPidTypeValid).stubs().will(returnValue(true));
     ProcessAttr attr;
     attr.scanType = STATISTIC_SCAN;
     attr.scanStart = time(nullptr) - 10; // 设置scanStart为10秒前
@@ -4825,13 +4901,13 @@ TEST_F(InterfaceTest, TestSmapRemoteNumaInfoSetInvalidSrcNid)
     EnvAtomicSet(&g_status, SLEEP);
 }
 
-extern "C" int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource);
+extern "C" int ubturbo_smap_vm_freq_query(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut, int dataSource);
 TEST_F(InterfaceTest, TestSmapFreqQueryNotRunning)
 {
     uint16_t data[10];
-    uint32_t lengthOut;
+    uint16_t lengthOut;
     EnvAtomicSet(&g_status, SLEEP);
-    int ret = ubturbo_smap_freq_query(1, data, 10, &lengthOut, 0);
+    int ret = ubturbo_smap_vm_freq_query(1, data, 10, &lengthOut, 0);
     EXPECT_EQ(-EPERM, ret);
 }
 

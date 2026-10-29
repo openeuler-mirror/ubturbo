@@ -34,7 +34,6 @@ extern "C" int PageHuge(struct page *page);
 extern "C" int PageHead(struct page *page);
 extern "C" bool PageAnon(struct page *page);
 extern "C" void folio_put(struct folio *folio);
-extern "C" int node_is_critical_err(int nid);
 extern "C" int isolate_hugetlb(struct page *page, struct list_head *list);
 extern "C" int smap_add_page_for_migration(struct page *page, struct folio **folios,
     unsigned int *nr_folios, pid_t pid, bool migrate_all);
@@ -1457,20 +1456,6 @@ TEST_F(SmapMigratePagesTest, TestMigrateMultiThreadedInvalidThreadsMax)
 
 // ========== New DT supplement: smap_migrate_numa ==========
 
-TEST_F(SmapMigratePagesTest, TestSmapMigrateNumaCriticalErr)
-{
-    struct migrate_numa_inner_msg msg = {
-        .src_nid = 4,
-        .dest_nid = 5,
-        .count = 1,
-        .range = { { 0x0, 0x400000 } }
-    };
-
-    MOCKER(node_is_critical_err).stubs().will(returnValue(1));
-    unsigned int ret = smap_migrate_numa(&msg);
-    EXPECT_EQ((unsigned int)-EINVAL, ret);
-}
-
 TEST_F(SmapMigratePagesTest, TestSmapMigrateNumaRetryUntilSuccess)
 {
     struct migrate_numa_inner_msg msg = {
@@ -1481,7 +1466,6 @@ TEST_F(SmapMigratePagesTest, TestSmapMigrateNumaRetryUntilSuccess)
     };
 
     // First 10 retries fail, the 11th (retry=0) attempt succeeds
-    MOCKER(node_is_critical_err).stubs().will(returnValue(0));
     MOCKER(smap_migrate_range).expects(exactly(MAX_MIGRATE_NUMA_RETRY_TIME + 1))
         .will(repeat(-EINVAL, MAX_MIGRATE_NUMA_RETRY_TIME))
         .then(returnValue(0));
