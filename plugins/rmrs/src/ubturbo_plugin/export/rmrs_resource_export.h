@@ -67,6 +67,10 @@ public:
     static std::unordered_map<uint16_t, uint16_t> *GetCpuSocketMap();
     static std::unordered_map<uint16_t, uint16_t> *GetCpuNumaMap();
     static std::unordered_map<uint16_t, bool> *GetNumaLocalMap();
+    // 以下接口对静态拓扑容器加锁查询, 供IPC线程与ReInit并发使用, 返回值与map缺key时operator[]的默认值一致
+    static uint16_t GetCpuNumaId(uint16_t cpuId);
+    static uint16_t GetCpuSocketId(uint16_t cpuId);
+    static bool IsNumaLocalNode(uint16_t numaId);
     std::unordered_map<std::string, pid_t> *GetUuidPIDMap();
     std::unordered_map<uint16_t, std::unordered_set<pid_t>> *GetNumaVmPidMap();
     std::unordered_map<pid_t, std::string> *GetPidUUIDMap();

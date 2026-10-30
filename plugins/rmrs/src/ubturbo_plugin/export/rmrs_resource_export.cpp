@@ -44,6 +44,8 @@ std::vector<NumaInfo> ResourceExport::numaInfos{};
 std::string ResourceExport::numaNodePathHead = "/sys/devices/system/node/";
 std::string ResourceExport::cpuSocketPathPrefix = "/sys/devices/system/cpu/cpu";
 std::string ResourceExport::cpuSocketPath = "topology/physical_package_id";
+// 保护静态拓扑容器(cpuSocketMap/cpuNumaMap/numaLocalMap/numaInfos), 串行化ReInit写入与IPC线程读取
+static std::mutex g_reInitMutex;
 
 RmrsResult ResourceExport::remove_elements(std::vector<uint16_t> &vecA, std::vector<uint16_t> &vecB)
 {
@@ -67,6 +69,7 @@ std::string ResourceExport::GetHostName()
 
 RmrsResult ResourceExport::Init()
 {
+    std::lock_guard<std::mutex> locker(g_reInitMutex);
     hostName = GetHostName();
     // 初始化cpuId-socketId对照表
     auto ret = OsHelper::GetSocketCpuRelation(cpuSocketMap);
@@ -152,6 +155,7 @@ RmrsResult ResourceExport::CollectVmInfo()
 
 RmrsResult ResourceExport::CollectNumaInfo()
 {
+    std::lock_guard<std::mutex> locker(g_reInitMutex);
     for (auto &info : numaInfos) {
         info.numaMetaInfo.nodeId = nodeId;
         info.numaMetaInfo.hostName = hostName;
@@ -238,7 +242,10 @@ RmrsResult ResourceExport::GetNumaInfoImmediately(std::vector<NumaInfo> &numaInf
     }
     vmResourceCollect.CollectNumaInfo();
     vmResourceCollect.UpdateVmDomainInfo();
-    numaInfos = *vmResourceCollect.GetNumaInfos();
+    {
+        std::lock_guard<std::mutex> locker(g_reInitMutex);
+        numaInfos = *vmResourceCollect.GetNumaInfos();
+    }
     UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
         << "[RmrsResourceExport] [Immediately] Collect NumaInfo ended.";
     for (const NumaInfo info : numaInfos) {
@@ -247,8 +254,6 @@ RmrsResult ResourceExport::GetNumaInfoImmediately(std::vector<NumaInfo> &numaInf
     }
     return RMRS_OK;
 }
-
-static std::mutex g_reInitMutex;
 
 RmrsResult ResourceExport::ReInit()
 {
@@ -791,6 +796,27 @@ std::unordered_map<std::string, uint16_t> *ResourceExport::GetLocalNumaId()
 std::unordered_map<uint16_t, bool> *ResourceExport::GetNumaLocalMap()
 {
     return &numaLocalMap;
+}
+
+uint16_t ResourceExport::GetCpuNumaId(uint16_t cpuId)
+{
+    std::lock_guard<std::mutex> locker(g_reInitMutex);
+    auto it = cpuNumaMap.find(cpuId);
+    return it != cpuNumaMap.end() ? it->second : 0;
+}
+
+uint16_t ResourceExport::GetCpuSocketId(uint16_t cpuId)
+{
+    std::lock_guard<std::mutex> locker(g_reInitMutex);
+    auto it = cpuSocketMap.find(cpuId);
+    return it != cpuSocketMap.end() ? it->second : 0;
+}
+
+bool ResourceExport::IsNumaLocalNode(uint16_t numaId)
+{
+    std::lock_guard<std::mutex> locker(g_reInitMutex);
+    auto it = numaLocalMap.find(numaId);
+    return it != numaLocalMap.end() ? it->second : false;
 }
 
 std::unordered_map<uint16_t, uint64_t> *ResourceExport::GetNumaMemTotalMap()

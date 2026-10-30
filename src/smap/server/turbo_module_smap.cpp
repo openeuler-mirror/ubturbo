@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <cerrno>
+#include <cstdint>
 #include <fstream>
 
 #include "client/ulog.h"
@@ -29,6 +30,9 @@ using namespace turbo::smap::ulog;
 namespace turbo::smap {
 
 const std::string FILE_NAME = "/dev/shm/ubturbo_page_type.dat";
+
+// freq查询数组长度上限: 与RMRS侧SmapQueryVmFreq的uint16_t数据通路一致, 防止未校验lengthIn造成GB级分配
+constexpr uint32_t SMAP_QUERY_FREQ_LENGTH_MAX = UINT16_MAX;
 
 constexpr const char *LIB_SMAP_PATH = "/usr/lib64/libsmap.so";
 
@@ -353,7 +357,7 @@ RetCode SmapQueryFreqHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapQueryFreqHandler DecodeRequest error " << ret;
         return TURBO_ERROR;
     }
-    if (lengthIn == 0) {
+    if (lengthIn == 0 || lengthIn > SMAP_QUERY_FREQ_LENGTH_MAX) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapQueryFreqHandler invalid lengthIn " << lengthIn;
         return TURBO_ERROR;
     }

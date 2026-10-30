@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -61,6 +62,8 @@ const uint64_t RmrsMigrateModule::byte2KB = 1024;                       // bite�
 
 std::vector<uint16_t> RmrsMigrateModule::s_timeOutNumas;                      // 超时归还的numa信息
 std::map<pid_t, std::vector<uint16_t>> RmrsMigrateModule::s_pidRemoteNumaMap; // pid对应的远端numa信息Map
+// 保护上述两个静态容器, 串行化SetBorrowPlaneParam写入与并发IPC请求的读取
+static std::mutex s_paramMutex;
 
 #define LOG_DEBUG UBTURBO_LOG_DEBUG(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
 #define LOG_ERROR UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
@@ -72,6 +75,11 @@ void RmrsMigrateModule::DistributeNumaMemInfo(std::vector<rmrs::NumaInfo> &numaI
                                               std::map<uint16_t, NumaHugePageInfo> &numaInfoMap,
                                               std::vector<NumaHugePageInfo> &numaHugePageInfoSumList)
 {
+    std::vector<uint16_t> timeOutNumas;
+    {
+        std::lock_guard<std::mutex> locker(s_paramMutex);
+        timeOutNumas = s_timeOutNumas;
+    }
     for (rmrs::NumaInfo NumaInfoWithSize : numaInfos) {
         NumaHugePageInfo info;
         info.numaId = NumaInfoWithSize.numaMetaInfo.numaId;
@@ -82,8 +90,8 @@ void RmrsMigrateModule::DistributeNumaMemInfo(std::vector<rmrs::NumaInfo> &numaI
         info.isTimeOut = false;
 
         // 在超时numa里面找到该numa节点就标记一下超时
-        auto it = std::find(s_timeOutNumas.begin(), s_timeOutNumas.end(), info.numaId);
-        if (it != s_timeOutNumas.end()) {
+        auto it = std::find(timeOutNumas.begin(), timeOutNumas.end(), info.numaId);
+        if (it != timeOutNumas.end()) {
             LOG_WARN << "[MemMigrate][Strategy] Current numa = " << info.numaId << " is timeOut.";
             info.isTimeOut = true;
         }
@@ -582,12 +590,16 @@ bool RmrsMigrateModule::MigrateToNuma(DFSContext &ctx, const VmInfo &vm, size_t 
     }
 
     std::vector<uint16_t> remoteNumaList;
-    if (s_pidRemoteNumaMap.find(vm.pid) == s_pidRemoteNumaMap.end()) {
-        LOG_ERROR << "[MemMigrate][Strategy][MigrateToNuma] Cannot find the remote NUMA node to the PID for migration.";
-        return false;
+    {
+        std::lock_guard<std::mutex> locker(s_paramMutex);
+        auto mapIt = s_pidRemoteNumaMap.find(vm.pid);
+        if (mapIt == s_pidRemoteNumaMap.end()) {
+            LOG_ERROR
+                << "[MemMigrate][Strategy][MigrateToNuma] Cannot find the remote NUMA node to the PID for migration.";
+            return false;
+        }
+        remoteNumaList = mapIt->second;
     }
-
-    remoteNumaList = s_pidRemoteNumaMap[vm.pid];
 
     for (auto nid : remoteNumaList) {
         // 如果vm.pid所属的本地numa和借来的远端numa不是同一个平面，continue
@@ -781,6 +793,7 @@ RmrsResult RmrsMigrateModule::DFSGetMigrationActions(
 RmrsResult RmrsMigrateModule::SetBorrowPlaneParam(const std::map<pid_t, std::vector<uint16_t>> &pidRemoteNumaMap,
                                                   const std::vector<uint16_t> timeOutNumas)
 {
+    std::lock_guard<std::mutex> locker(s_paramMutex);
     // 清空原有数据
     s_pidRemoteNumaMap.clear();
     s_timeOutNumas.clear();
@@ -818,8 +831,14 @@ RmrsResult RmrsMigrateModule::CheckTimeOutNuma(const std::vector<NumaHugePageInf
         infoMap.emplace(info.numaId, info);
     }
 
+    std::vector<uint16_t> timeOutNumas;
+    {
+        std::lock_guard<std::mutex> locker(s_paramMutex);
+        timeOutNumas = s_timeOutNumas;
+    }
+
     // 逐一检查 s_timeOutNumas
-    for (uint16_t nid : s_timeOutNumas) {
+    for (uint16_t nid : timeOutNumas) {
         auto it = infoMap.find(nid);
         if (it == infoMap.end()) {
             LOG_ERROR << "[MemMigrate][Strategy] NumaId not found in remote list.";
@@ -843,6 +862,11 @@ RmrsResult RmrsMigrateModule::RemoveVmOfTimeOutNuma(const std::map<pid_t, VmNuma
                                                     std::vector<rmrs::serialization::VMPresetParam> &vmPresetParam)
 {
     std::vector<rmrs::serialization::VMPresetParam> keepList;
+    std::vector<uint16_t> timeOutNumas;
+    {
+        std::lock_guard<std::mutex> locker(s_paramMutex);
+        timeOutNumas = s_timeOutNumas;
+    }
 
     for (const auto &param : vmPresetParam) {
         auto it = vmNumaInfoMap.find(param.pid);
@@ -857,7 +881,7 @@ RmrsResult RmrsMigrateModule::RemoveVmOfTimeOutNuma(const std::map<pid_t, VmNuma
 
         // 判断 remoteNumaId 是否在 s_timeOutNumas 里
         bool isTimeOut = false;
-        for (auto numaId : s_timeOutNumas) {
+        for (auto numaId : timeOutNumas) {
             if (info.remoteNumaId == numaId) {
                 isTimeOut = true;
                 break;
