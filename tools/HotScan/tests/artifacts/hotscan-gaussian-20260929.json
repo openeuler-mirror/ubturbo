@@ -1,0 +1,23 @@
+{
+  "rounds": 244,
+  "target_pages_per_round": 256,
+  "all_process_pages": 272,
+  "target_index_start_in_global_plot": 3,
+  "target_index_end_in_global_plot": 258,
+  "base_va": "0xffffa87d0000",
+  "page_size": 4096,
+  "first_scan_relative_s": -0.3995,
+  "last_scan_relative_s": 23.9005,
+  "gaussian_center_page": 127.5,
+  "gaussian_sigma_pages": 35,
+  "stimulus_total_touches": 8374,
+  "scan_total_accesses_after_warmup": 6734,
+  "scan_peak_page": 128,
+  "scan_peak_count": 84,
+  "shape_pearson_r": 0.995007,
+  "stable_active_rounds": 90,
+  "stable_idle_rounds": 90,
+  "active_core_accesses_per_round": 33.9222,
+  "idle_core_accesses_per_round": 0.0333,
+  "parser_matches_raw": true
+}

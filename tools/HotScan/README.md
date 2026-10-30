@@ -2,7 +2,7 @@
 
 HotScan 是一个 ARM64 Linux 内核模块，按周期扫描指定进程的**已驻留匿名页**，读取并清除 PTE Access Flag，将每轮结果写为二进制文件。`parse_smap.py` 负责解析、汇总和绘图。访问标记表示自上次清除以来页面被访问过，不等于实际访问次数；首轮也可能包含模块加载前已有的标记。
 
-已在 aarch64 虚机用周期性高斯 VA 热区验证采集和 lifetime 绘图：目标 256 页全部覆盖，扫描频次与激励程序真实触碰次数的逐页相关系数为 **0.995007**。下方展示关键图片；原始数据和验证范围见[高斯热区虚机验证报告](docs/gaussian_vm_validation_2026-09-29.md)。
+已在 aarch64 虚机用周期性高斯 VA 热区验证采集和 lifetime 绘图：目标 256 页全部覆盖，扫描频次与激励程序真实触碰次数的逐页相关系数为 **0.995007**。下方展示关键图片。
 
 ## 快速开始
 
@@ -101,13 +101,12 @@ python3 parse_smap.py '/tmp/myrun/scan_*.out' zic --plot --sim-scan-period 10
 
 ![HotScan lifetime 频次、真实激励触碰次数与高斯概率对照](img/hotscan-gaussian-vm/gaussian_truth_overlay.png)
 
-[完整进程 lifetime 图](img/hotscan-gaussian-vm/plot_lifetime_hot_zone.png)还包含运行时的其他映射页；周期性的[开启与关闭响应图](img/hotscan-gaussian-vm/gaussian_phase_response.png)及原始扫描文件见[验证报告](docs/gaussian_vm_validation_2026-09-29.md)。重新校验与绘图：
+[完整进程 lifetime 图](img/hotscan-gaussian-vm/plot_lifetime_hot_zone.png)还包含运行时的其他映射页；周期性的[开启与关闭响应图](img/hotscan-gaussian-vm/gaussian_phase_response.png)。重新校验与绘图：
 
 ```bash
 python3 tests/analyze_gaussian_run.py tests/artifacts/hotscan-gaussian-20260929.tar.gz
 ```
 
-完整环境、核对方法和数据解读见[验证报告](docs/gaussian_vm_validation_2026-09-29.md)。
 
 ### 矩形热区与扫描吞吐
 
