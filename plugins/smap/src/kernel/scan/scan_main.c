@@ -67,7 +67,10 @@ struct access_scan_state {
 static struct access_scan_state scan_state;
 static u64 node_page_count[SMAP_MAX_NUMNODES];
 
-/* 远端扫描模式由用户态配置文件下发，缺省软硬结合；硬件子系统按需懒初始化 */
+/* Remote scan mode is delivered by the user-space config file; it defaults to
+ * combined software/hardware mode, and the hardware subsystem is lazily
+ * initialized on demand.
+ */
 static u8 remote_scan_mode = SMAP_REMOTE_SCAN_COMBINED;
 static bool hist_inited;
 static DEFINE_MUTEX(remote_scan_mode_lock);
@@ -89,9 +92,11 @@ bool is_freq_hist_only_node(int node)
 }
 
 /*
- * 设置远端扫描模式：纯软模式暂停硬件子系统；软硬结合/纯硬模式按需懒初始化
- * 硬件子系统（仅鲲鹏950机型支持），初始化失败时保持原模式并返回 -ENODEV，
- * 由用户态感知并降级为纯软行为。
+ * Set the remote scan mode: pure-software mode suspends the hardware
+ * subsystem; combined and pure-hardware modes lazily initialize it (only
+ * supported on Kunpeng 950). On initialization failure the previous mode is
+ * kept and -ENODEV is returned so user space can detect it and fall back to
+ * pure-software behavior.
  */
 int set_remote_scan_mode(u8 mode)
 {
@@ -114,8 +119,10 @@ int set_remote_scan_mode(u8 mode)
 	}
 
 	/*
-	 * 先启动硬件扫描线程再切模式，避免切换瞬间出现远端频次空窗；
-	 * 切到纯软时先切模式再暂停线程，保证软件累计不中断。
+	 * Start the hardware scan thread before switching mode to avoid a
+	 * remote freq gap during the switch; when switching to pure-software
+	 * mode, switch the mode before pausing the thread so software
+	 * accumulation is not interrupted.
 	 */
 	if (mode == SMAP_REMOTE_SCAN_SOFT) {
 		WRITE_ONCE(remote_scan_mode, mode);
@@ -481,10 +488,12 @@ static void access_work_func(struct work_struct *work)
 	}
 
 	/*
-	 * 当本轮扫描为最后一轮时，需要重新分配 bitmap 给下一轮使用。
-	 * 必须在 slot->ap_lock 写锁保护下执行位图的重分配，否则会与
-	 * convert_pos_to_paddr_sorted（持读锁访问 bitmap）产生 use-after-free
-	 * 竞态。per-slot 写锁仅阻塞该 pid 的读侧，不影响其他 pid 的扫描。
+	 * When this is the last scan round, the bitmap must be reallocated for
+	 * the next round. The reallocation must run under the slot->ap_lock
+	 * write lock; otherwise it races with convert_pos_to_paddr_sorted
+	 * (which reads the bitmap under the read lock) and causes a
+	 * use-after-free. The per-slot write lock only blocks readers of this
+	 * pid and does not affect scans of other pids.
 	 */
 	if (access_pid_cur_last_scanning(ap)) {
 		down_write(&slot->ap_lock);
@@ -493,6 +502,9 @@ static void access_work_func(struct work_struct *work)
 		if (ret)
 			goto scan_failed;
 	}
+
+	/* cumulative-freq decay cadence: age acc counters this round when due */
+	ap->prior_decay = access_pid_cur_prior_decay(ap);
 
 	down_read(&scan_state.lock);
 	down_read(&slot->ap_lock);
@@ -512,6 +524,7 @@ static void access_work_func(struct work_struct *work)
 		goto scan_failed;
 	}
 	ap->cur_times++;
+	ap->acc_times = ap->prior_decay ? 0 : (ap->acc_times + 1);
 	pr_debug("pid[%d] cpu[%d], scan took %lldus for %dth time\n", ap->pid,
 		 raw_smp_processor_id(), scan_time, ap->cur_times);
 

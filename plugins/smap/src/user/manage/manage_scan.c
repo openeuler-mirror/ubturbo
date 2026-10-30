@@ -86,7 +86,16 @@ void CalcActcStats(ProcessAttr *attr)
             }
             if (freq != 0) {
                 count->freqNum++;
-                count->freqSum += freq;
+                /*
+                 * freqSum 保持“当前窗口频次总和”语义：非 VM 的 actc 已合成
+                 * prior+freq，这里扣除 prior 还原，供 freq 查询类接口使用；
+                 * VM 的 prior 语义不同、未参与合成，直接累加。
+                 */
+                if (attr->type != VM_TYPE) {
+                    count->freqSum += (freq > actc[i].prior) ? (uint64_t)(freq - actc[i].prior) : 0;
+                } else {
+                    count->freqSum += freq;
+                }
             } else {
                 count->freqZero++;
             }
@@ -105,14 +114,34 @@ void CalcActcStats(ProcessAttr *attr)
                          attr->pid, nid, actcLen, count->freqMax, count->freqMin, count->freqNum, count->freqSum,
                          count->remoteHotNum, count->whiteNum);
 
-        /* 打印各频次桶的页面数（仅本地NUMA，跳过页面数为零的） */
-        if (nid < nrLocalNuma) {
-            for (int f = 0; f < FREQ_BUCKETS_SIZE; f++) {
-                if (count->freqBuckets[f] > 0) {
-                    SMAP_LOGGER_DEBUG("Node%d freq=%d pages=%u", nid, f, count->freqBuckets[f]);
-                }
+        /* 打印各频次桶的页面数（本地+远端NUMA，跳过页面数为零的） */
+        for (int f = 0; f < FREQ_BUCKETS_SIZE; f++) {
+            if (count->freqBuckets[f] > 0) {
+                SMAP_LOGGER_DEBUG("Node%d freq=%d pages=%u", nid, f, count->freqBuckets[f]);
             }
         }
+    }
+}
+
+/**
+ * MergeAccPriorToFreq - 用内核累计频次(prior/acc) + 当前窗口频次(freq) 合成决策分数
+ * @actc: 单个node的actc_data起始地址
+ * @actcLen: 该node的页数
+ *
+ * 决策分数 = 累计频次(prior) + 当前窗口频次(freq) 直接相加：
+ *   - 本轮被访问的页(freq>0)在同 prior 档内获得即时增量，不沉底；
+ *   - 真冷页 prior=0 且 freq=0 仍为 0；
+ *   - 相加结果饱和到 FREQ_BUCKETS_SIZE-1，避免越界。
+ * 合成后下游 freqBuckets/分位数阈值/选页机制原样复用单一 freq 指标。
+ * 新页起跑值 DECAY_CYCLE/2 高于冷门槛；file 页由选页层白名单拦截。
+ * VM 的 prior 来自前端采样数组，语义与内核 acc 不同，由调用方跳过合成。
+ */
+static void MergeAccPriorToFreq(ActcData *actc, size_t actcLen)
+{
+    for (size_t i = 0; i < actcLen; i++) {
+        /* merged = prior + freq：累计热度 + 当前窗口访问。 */
+        int merged = (int)actc[i].prior + (int)actc[i].freq;
+        actc[i].freq = (actc_t)MIN(merged, FREQ_BUCKETS_SIZE - 1);
     }
 }
 
@@ -121,6 +150,9 @@ void CalcActcStats(ProcessAttr *attr)
  * @attr: ProcessAttr结构体指针
  * @pmb: ProcessMemBitmap结构体指针
  * @buf: 读取的数据缓冲区
+ *
+ * 非 VM 在挂到 actcData 之前完成 prior+freq 合成，保证发布出去的缓冲区
+ * 一定是已合并状态，查询侧不会看到“已发布但未合并”的中间态。
  */
 void DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf)
 {
@@ -132,6 +164,9 @@ void DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcDat
         attr->scanAttr.actcLen[nid] = pmb->nrPages[nid];
         if (pmb->nrPages[nid] == 0) {
             continue;
+        }
+        if (attr->type != VM_TYPE) {
+            MergeAccPriorToFreq(buf + actc_offset, pmb->nrPages[nid]);
         }
         attr->scanAttr.actcData[nid] = buf + actc_offset;
         actc_offset += pmb->nrPages[nid];

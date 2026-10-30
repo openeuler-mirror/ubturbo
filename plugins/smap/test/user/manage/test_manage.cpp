@@ -1772,6 +1772,7 @@ TEST_F(ManageTest, TestCalcActcStats)
     data[1].freq = 3;
     data[1].isWhiteListPage = true;
     data[2].freq = 10;
+    data[2].prior = 4; // 缓存为合成值, freqSum 需扣除 prior 还原窗口频次
     attr.scanAttr.actcData[4] = data;
     attr.scanAttr.actcLen[4] = 3;
     attr.scanAttr.actCount[1].pageNum = 99;
@@ -1783,7 +1784,7 @@ TEST_F(ManageTest, TestCalcActcStats)
     EXPECT_EQ((uint8_t)10, attr.scanAttr.actCount[4].freqMax);
     EXPECT_EQ((uint8_t)0, attr.scanAttr.actCount[4].freqMin);
     EXPECT_EQ((uint64_t)2, attr.scanAttr.actCount[4].freqNum);
-    EXPECT_EQ((uint64_t)13, attr.scanAttr.actCount[4].freqSum);
+    EXPECT_EQ((uint64_t)9, attr.scanAttr.actCount[4].freqSum);
     EXPECT_EQ((uint32_t)1, attr.scanAttr.actCount[4].freqZero);
     EXPECT_EQ((uint64_t)1, attr.scanAttr.actCount[4].remoteHotNum);
     EXPECT_EQ((uint64_t)1, attr.scanAttr.actCount[4].whiteNum);
@@ -1838,6 +1839,68 @@ TEST_F(ManageTest, TestDistributeActcDataNullBuf)
     for (int nid = 0; nid < MAX_NODES; nid++) {
         EXPECT_EQ(nullptr, attr.scanAttr.actcData[nid]);
     }
+}
+
+extern "C" void MergeAccPriorToFreq(ActcData *actc, size_t actcLen);
+
+// 决策分数: freq' = prior + freq（累计热度 + 当前窗口访问）
+TEST_F(ManageTest, TestMergeAccPriorToFreq)
+{
+    ActcData data[6] = {};
+
+    data[0].freq = 0;
+    data[0].prior = 0;
+    data[1].freq = 3;   // freq' = 5 + 3
+    data[1].prior = 5;
+    data[2].freq = 10;  // freq' = 16 + 10
+    data[2].prior = 16;
+    data[3].freq = 7;   // freq' = 0 + 7（本轮热页不沉底）
+    data[3].prior = 0;
+    data[4].freq = 0;   // freq' = 8 + 0
+    data[4].prior = 8;
+    data[5].freq = 5;   // freq' = 4 + 5
+    data[5].prior = 4;
+
+    MergeAccPriorToFreq(data, 6);
+    EXPECT_EQ((uint8_t)0,  data[0].freq);
+    EXPECT_EQ((uint8_t)8,  data[1].freq);
+    EXPECT_EQ((uint8_t)26, data[2].freq);
+    EXPECT_EQ((uint8_t)7,  data[3].freq);
+    EXPECT_EQ((uint8_t)8,  data[4].freq);
+    EXPECT_EQ((uint8_t)9,  data[5].freq);
+    // prior 本身不被修改
+    EXPECT_EQ((uint8_t)16, data[2].prior);
+}
+
+TEST_F(ManageTest, TestDistributeActcDataVmSkipMerge)
+{
+    ProcessAttr attr = {};
+    struct ProcessMemBitmap pmb = {};
+    ActcData data[2] = {};
+
+    attr.type = VM_TYPE;
+    data[0].freq = 3;
+    data[0].prior = 5;
+    data[1].freq = 250;
+    data[1].prior = 10;
+    pmb.nrPages[1] = 2;
+
+    // VM 的 prior 来自前端采样数组, 语义不同, 不参与合成
+    DistributeActcData(&attr, &pmb, data);
+    EXPECT_EQ(data, attr.scanAttr.actcData[1]);
+    EXPECT_EQ((uint8_t)3, data[0].freq);
+    EXPECT_EQ((uint8_t)250, data[1].freq);
+}
+
+TEST_F(ManageTest, TestMergeAccPriorToFreqZeroLen)
+{
+    ActcData data[1] = {};
+    data[0].freq = 1;
+    data[0].prior = 2;
+
+    // 页数为零时不修改数据
+    MergeAccPriorToFreq(data, 0);
+    EXPECT_EQ((uint8_t)1, data[0].freq);
 }
 
 TEST_F(ManageTest, TestCheckAndRemoveInvalidProcess)

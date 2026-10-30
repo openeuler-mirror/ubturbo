@@ -19,6 +19,7 @@
 #include "dump_info.h"
 #include "smap_migrate_wrapper.h"
 #include "critical.h"
+#include "../scan/smap_page_flags.h"
 #include "smap_migrate_pages.h"
 
 #define MAX_MIGRATE_NUMA_RETRY_TIME 10
@@ -458,10 +459,11 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 		cnt++;
 	} while (nr_folios != 0);
 	/*
-	 * folio 引用在收集阶段由 smap_add_page_for_migration 获取，交给
-	 * smap_migrate 的部分由其消费；critical error 提前退出时，未移交的
-	 * folio 必须在此放回引用，否则页面泄漏。
-	 * 正常结束时 nr_folios 为 0，此循环为空。
+	 * folio references are taken at collection time by
+	 * smap_add_page_for_migration and consumed by the part handed over to
+	 * smap_migrate; on early exit due to a critical error, the references
+	 * of folios not yet handed over must be dropped here, otherwise pages
+	 * leak. On normal completion nr_folios is 0 and this loop is empty.
 	 */
 	for (j = cnt * NR_BATCHED_MIGRATION;
 	     j < cnt * NR_BATCHED_MIGRATION + nr_folios; j++) {
@@ -583,9 +585,10 @@ void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 			cnt++;
 		} while (mig_pages_cnt[i] != 0);
 		/*
-		 * critical error 提前退出时，未移交的 folio 引用在此放回
-		 * （收集阶段由 smap_add_page_for_migrate_back 获取）。
-		 * 正常结束时 mig_pages_cnt[i] 为 0，此循环为空。
+		 * On early exit due to a critical error, drop the references of
+		 * folios not yet handed over (taken at collection time by
+		 * smap_add_page_for_migrate_back). On normal completion
+		 * mig_pages_cnt[i] is 0 and this loop is empty.
 		 */
 		for (j = cnt * NR_BATCHED_MIGRATION;
 		     j < cnt * NR_BATCHED_MIGRATION + mig_pages_cnt[i]; j++) {
@@ -1026,10 +1029,11 @@ static unsigned int smap_migrate_range(int nid, u64 start_pa, u64 end_pa)
 			       nr_folios_min, nr_migrate_fail, start_pfn,
 			       end_pfn);
 			/*
-			 * 提前退出时未移交的 folio 引用在此放回（仅 4K 模式，
-			 * 收集阶段 folio_try_get 持有引用；huge 模式收集时
-			 * 未持引用，由 isolate 流程自行获取与释放）。
-			 * 正常结束时 nr_pre_migrate_cnt 为 0。
+			 * On early exit, drop the references of folios not yet handed
+			 * over (4K mode only: collection holds a reference via
+			 * folio_try_get; huge mode holds none and the isolate path
+			 * acquires and releases it itself). On normal completion
+			 * nr_pre_migrate_cnt is 0.
 			 */
 			if (!is_smap_pg_huge()) {
 				for (j = cnt * NR_BATCHED_MIGRATION;
@@ -1097,9 +1101,10 @@ struct folio *alloc_demote_page(struct folio *folio, unsigned long node)
 	};
 
 	/*
-	 * 目标节点为远端节点(node >= nr_local_numa, 即远端内存 tier)时,
-	 * 允许跳过水线检测, 保证内存压力下换出仍能成功; 本地节点分配则
-	 * 走正常水线回收逻辑。
+	 * When the target node is a remote node (node >= nr_local_numa, i.e.
+	 * the remote memory tier), watermark checks may be skipped so that
+	 * demotion still succeeds under memory pressure; allocation on a
+	 * local node follows the normal watermark reclaim logic.
 	 */
 	if (node >= nr_local_numa)
 		mtc.gfp_mask |= __GFP_MEMALLOC;
@@ -1165,17 +1170,25 @@ struct folio *smap_alloc_huge_page_node(struct folio *folio, int nid,
 
 struct folio *smap_alloc_new_node_page(struct folio *folio, unsigned long node)
 {
-	if (folio_test_hugetlb(folio)) {
-		return smap_alloc_huge_page_node(folio, node, false);
-	}
-	return alloc_demote_page(folio, node);
+	struct folio *dst_folio;
+
+	dst_folio = folio_test_hugetlb(folio)
+			    ? smap_alloc_huge_page_node(folio, node, false)
+			    : alloc_demote_page(folio, node);
+	/* inherit cumulative access count to avoid ping-pong migration */
+	migrate_folio_actc(folio, dst_folio);
+	return dst_folio;
 }
 
 struct folio *smap_alloc_new_node_page_mig_back(struct folio *folio,
 						unsigned long node)
 {
-	if (folio_test_hugetlb(folio)) {
-		return smap_alloc_huge_page_node(folio, node, true);
-	}
-	return alloc_demote_page(folio, node);
+	struct folio *dst_folio;
+
+	dst_folio = folio_test_hugetlb(folio)
+			    ? smap_alloc_huge_page_node(folio, node, true)
+			    : alloc_demote_page(folio, node);
+	/* inherit cumulative access count to avoid ping-pong migration */
+	migrate_folio_actc(folio, dst_folio);
+	return dst_folio;
 }

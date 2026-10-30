@@ -24,15 +24,37 @@
 #error "smap page flags require CONFIG_NUMA_BALANCING and LAST_CPUPID in page->flags"
 #endif
 
+/* The acc counter occupies bit[9..13] of the LAST_CPUPID field, so SMAP
+ * needs at least 14 bits of it (NR_CPUS_BITS >= 12 gives the full 20-bit
+ * field). With a narrower field it would spill into the spare (or
+ * KASAN/MTE tag) bits above LAST_CPUPID.
+ */
+#if LAST_CPUPID_WIDTH < 14
+#error "smap acc counter requires at least 14 bits of the LAST_CPUPID field"
+#endif
+
 /* ---- Frequency field layout (relative to LAST_CPUPID_PGSHIFT) ----
  *
  * bit[0..7]  freq counter   8 bits, value 0..255
  * bit[8]     freq sentinel   1 bit,  1 = "invalid / pending-clear"
- * bit[9..19] reserved       11 bits (for future cumulative freq)
+ * bit[9..13] acc counter    5 bits, cumulative access count 0..SMAP_ACC_CNT_MAX
+ *            (all-1s 0x1F = invalid marker: page free resets the whole
+ *            LAST_CPUPID field to all-1s, the same write the freq sentinel
+ *            relies on)
+ * bit[14..19] unused        6 bits
  *
  * Sentinel bit=1 means the freq counter is stale (e.g. page freed,
  * kernel wrote all-1s in LAST_CPUPID). get() returns 0; inc() resets
  * counter to 1 and clears sentinel.
+ *
+ * The acc counter accumulates one inc per scan cycle for young non
+ * white-list pages of NORMAL_SCAN pids; every SMAP_ACC_DECAY_CYCLE scan
+ * rounds a decay round halves all acc counters (hot pages (N+1)>>1 via
+ * smap_page_acc_inc, cold pages N>>1 via smap_page_acc_decay), keeping
+ * long-term hot pages distinguishable from transiently hot ones and
+ * letting cooled pages fall back to 0 so they can be demoted later. It
+ * is stored at 5-bit width and reported to user space unchanged in the
+ * 6-bit actc prior field (prior == acc, no quantization shift).
  */
 
 static inline bool smap_page_freq_try_get(struct page *page)
@@ -161,6 +183,170 @@ static inline u8 smap_page_freq_add(struct page *page, u8 val)
 	} while (unlikely(cmpxchg(&page->flags, old, nv) != old));
 	folio_put(page_folio(page));
 	return v;
+}
+
+/* ---- Cumulative access count (acc) ----
+ *
+ * Lives in bit[9..13] of the LAST_CPUPID field. Unlike the freq counter
+ * it is NOT read-cleared on report; it keeps accumulating across scan
+ * cycles and is only aged by the periodic decay cycle. Stored at 5-bit
+ * width, so the reported 6-bit actc prior is the acc value itself.
+ */
+
+#define SMAP_ACC_CNT_SHIFT (SMAP_FREQ_SENT_SHIFT + 1)
+#define SMAP_ACC_CNT_WIDTH 5
+#define SMAP_ACC_CNT_MASK ((1UL << SMAP_ACC_CNT_WIDTH) - 1)
+#define SMAP_ACC_CNT_FIELD_MASK (SMAP_ACC_CNT_MASK << SMAP_ACC_CNT_SHIFT)
+#define SMAP_ACC_CNT_MAX (SMAP_ACC_CNT_MASK - 1) /* 30 */
+#define SMAP_ACC_CNT_INVALID SMAP_ACC_CNT_MASK /* 0x1F, freed-page marker */
+#define SMAP_ACC_DECAY_CYCLE 4 /* decay cadence, in scan rounds */
+
+/* ---- Decay cadence ----
+ *
+ * acc counters are halved every SMAP_ACC_DECAY_CYCLE scan rounds,
+ * decoupled from the 5-bit saturating counter width.
+ *
+ * Decay halves instead of resetting, so a continuously-hot page's value
+ * spans about 2*SMAP_ACC_DECAY_CYCLE: one full cycle of increments piled
+ * on top of the half-history kept by the previous halving. Keeping that
+ * span inside the 5-bit range (SMAP_ACC_CNT_MAX = 30) requires D <= 15.
+ *
+ * D = 4 keeps the cumulative window short so acc tracks recent access
+ * tightly; the freed-page restart value DECAY_CYCLE/2 = 2 starts
+ * transient pages just above the cold threshold.
+ */
+
+/* Read current acc value (non-destructive); returns 0 when invalid. */
+static inline u8 smap_page_acc_get(struct page *page)
+{
+	unsigned long flags;
+	u8 v;
+
+	if (!smap_page_freq_try_get(page))
+		return 0;
+
+	flags = READ_ONCE(page->flags);
+	v = (u8)((flags >> SMAP_ACC_CNT_SHIFT) & SMAP_ACC_CNT_MASK);
+	if (v == SMAP_ACC_CNT_INVALID)
+		v = 0;
+	else
+		v = min_t(u8, v, SMAP_ACC_CNT_MAX);
+	folio_put(page_folio(page));
+	return v;
+}
+
+/*
+ * smap_page_acc_inc - cumulative access count +1
+ * @page: target page
+ * @decay: current scan cycle is a decay cycle
+ *
+ * decay: stored N -> (N+1)>>1 (count this round's access first, then
+ * halve the history, so a long-idle page can decay back to 0);
+ * otherwise N -> N+1. Saturates at SMAP_ACC_CNT_MAX; an invalid marker
+ * (freed page) restarts at SMAP_ACC_DECAY_CYCLE/2 so that transient
+ * briefly-accessed pages (temporary allocations) start above the cold
+ * threshold and are freed before they can be falsely demoted.
+ * Never touches the freq counter / sentinel bits.
+ */
+static inline void smap_page_acc_inc(struct page *page, bool decay)
+{
+	unsigned long old, nv;
+	u8 v;
+
+	if (!smap_page_freq_try_get(page))
+		return;
+
+	do {
+		old = READ_ONCE(page->flags);
+		v = (u8)((old >> SMAP_ACC_CNT_SHIFT) & SMAP_ACC_CNT_MASK);
+		if (v == SMAP_ACC_CNT_INVALID) {
+			v = SMAP_ACC_DECAY_CYCLE / 2;
+		} else {
+			if (decay)
+				v = (u8)((v + 1) >> 1);
+			else if (v >= SMAP_ACC_CNT_MAX)
+				break; /* saturated, leave as is */
+			else
+				v++;
+		}
+		nv = old & ~SMAP_ACC_CNT_FIELD_MASK;
+		nv |= (unsigned long)v << SMAP_ACC_CNT_SHIFT;
+	} while (unlikely(cmpxchg(&page->flags, old, nv) != old));
+	folio_put(page_folio(page));
+}
+
+/*
+ * smap_page_acc_decay - halve the cumulative access count of a cold page
+ * @page: target page (not accessed in this scan cycle)
+ *
+ * Decay cycle: stored N -> N>>1. Cold pages are never passed to
+ * smap_page_acc_inc, so without this helper a once-hot page would keep
+ * its historical acc forever, squatting on a local slot and never
+ * becoming demotable. An invalid marker (freed page) is left as is.
+ * Never touches the freq counter / sentinel bits.
+ */
+static inline void smap_page_acc_decay(struct page *page)
+{
+	unsigned long old, nv;
+	u8 v;
+
+	if (!smap_page_freq_try_get(page))
+		return;
+
+	do {
+		old = READ_ONCE(page->flags);
+		v = (u8)((old >> SMAP_ACC_CNT_SHIFT) & SMAP_ACC_CNT_MASK);
+		if (v == SMAP_ACC_CNT_INVALID || v == 0)
+			break; /* freed-page marker, or already zero */
+		v >>= 1;
+		nv = old & ~SMAP_ACC_CNT_FIELD_MASK;
+		nv |= (unsigned long)v << SMAP_ACC_CNT_SHIFT;
+	} while (unlikely(cmpxchg(&page->flags, old, nv) != old));
+	folio_put(page_folio(page));
+}
+
+/*
+ * migrate_folio_actc - inherit the cumulative access count across migration.
+ * @folio_from: source folio being migrated out
+ * @folio_to:   newly allocated destination folio
+ *
+ * A migrated page lands on a freshly allocated folio whose acc is 0, so the
+ * long-term heat is lost and the page may be misjudged cold again (ping-pong
+ * demote/promote). Copy the source acc into the destination so the history
+ * travels with the page, in both demote and promote directions.
+ *
+ * acc only exists for normal 4K pages of NORMAL_SCAN pids; hugetlb folios
+ * carry no acc (VM prior comes from the allocation-order mapping) and are
+ * skipped. A NULL destination (allocation failure) is ignored. The source is
+ * left untouched: it keeps reporting its own acc until it is freed, and the
+ * freed-page marker takes care of reuse.
+ */
+static inline void migrate_folio_actc(struct folio *folio_from,
+				      struct folio *folio_to)
+{
+	struct page *page;
+	unsigned long old, nv;
+	u8 acc;
+
+	if (!folio_from || !folio_to)
+		return;
+	if (folio_test_hugetlb(folio_from) || folio_test_hugetlb(folio_to))
+		return;
+
+	acc = smap_page_acc_get(&folio_from->page);
+	if (acc == 0)
+		return;
+
+	page = &folio_to->page;
+	if (!smap_page_freq_try_get(page))
+		return;
+
+	do {
+		old = READ_ONCE(page->flags);
+		nv = old & ~SMAP_ACC_CNT_FIELD_MASK;
+		nv |= (unsigned long)acc << SMAP_ACC_CNT_SHIFT;
+	} while (unlikely(cmpxchg(&page->flags, old, nv) != old));
+	folio_put(page_folio(page));
 }
 
 /* ---- Page classification helpers ---- */

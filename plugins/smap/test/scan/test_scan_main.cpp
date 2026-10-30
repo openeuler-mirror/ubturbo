@@ -22,6 +22,8 @@
 #include "acpi_mem.h"
 #include "iomem.h"
 #include "scan_ioctl.h"
+#include "access_pid.h"
+#include "accessed_bit.h"
 #include "scan_main.h"
 
 using namespace std;
@@ -68,10 +70,69 @@ TEST_F(AccessTrackingTest, node_page_count)
 }
 
 extern "C" void access_work_func(struct work_struct *work);
-extern "C" int access_walk_pagemap_prepare(struct access_pid *ap);
-extern "C" int scan_accessed_bit_forward_vm(struct access_pid *ap, int page_size);
-extern "C" int scan_accessed_bit_forward_mm(struct access_pid *ap, int page_size);
-extern "C" void ap_put_slot(struct ap_slot *slot);
+TEST_F(AccessTrackingTest, access_work_func)
+{
+    struct access_pid ap = {};
+
+    ap.pid = 1;
+    ap.pid_type = SMAP_PID_VM;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+    ap.acc_times = 0;
+    ap_slot_add(&ap);
+    MOCKER(scan_accessed_bit_forward_vm).stubs().will(returnValue(0));
+    MOCKER(queue_delayed_work).stubs().will(returnValue(true));
+    access_work_func(&ap.scan_work.work);
+    EXPECT_EQ(1, ap.cur_times);
+    EXPECT_EQ(1, ap.acc_times);
+
+    ap.ntimes = 1;
+    ap.type = STATISTIC_SCAN;
+    access_work_func(&ap.scan_work.work);
+    EXPECT_EQ(2, ap.cur_times);
+    EXPECT_EQ(2, ap.acc_times);
+    atomic_set(&ap.slot->state, AP_SLOT_FREE);
+    ap.slot->ap = nullptr;
+    ap.slot->pid = 0;
+    refcount_set(&ap.slot->refs, 0);
+}
+
+/* acc decay cadence: the round that reaches SMAP_ACC_DECAY_CYCLE ages acc
+ * counters (prior_decay) and resets acc_times to 0.
+ */
+TEST_F(AccessTrackingTest, access_work_func_prior_decay)
+{
+    struct access_pid ap = {};
+
+    ap.pid = 2;
+    ap.pid_type = SMAP_PID_VM;
+    ap.type = NORMAL_SCAN;
+    ap.cur_times = 0;
+    ap.ntimes = 10;
+    ap.acc_times = SMAP_ACC_DECAY_CYCLE - 1;
+    ap_slot_add(&ap);
+    MOCKER(scan_accessed_bit_forward_vm).stubs().will(returnValue(0));
+    MOCKER(queue_delayed_work).stubs().will(returnValue(true));
+
+    /* round below the threshold: plain accumulation round */
+    access_work_func(&ap.scan_work.work);
+    EXPECT_EQ(1, ap.cur_times);
+    EXPECT_EQ(SMAP_ACC_DECAY_CYCLE, ap.acc_times);
+    EXPECT_EQ(false, ap.prior_decay);
+
+    /* round at the threshold: decay round, acc_times restarts */
+    access_work_func(&ap.scan_work.work);
+    EXPECT_EQ(2, ap.cur_times);
+    EXPECT_EQ(0, ap.acc_times);
+    EXPECT_EQ(true, ap.prior_decay);
+
+    atomic_set(&ap.slot->state, AP_SLOT_FREE);
+    ap.slot->ap = nullptr;
+    ap.slot->pid = 0;
+    refcount_set(&ap.slot->refs, 0);
+}
+
+extern "C" void access_work_func(struct work_struct *work);
 extern "C" int __init scan_init(void);
 TEST_F(AccessTrackingTest, scan_prepare_failure_stops_without_retry)
 {
