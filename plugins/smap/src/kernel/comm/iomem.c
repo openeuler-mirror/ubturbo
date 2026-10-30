@@ -409,6 +409,33 @@ int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size)
 	return 0;
 }
 
+/* 仅求 nid：单次遍历、无临时存储，供逐页扫描热路径使用 */
+int calc_paddr_nid_iomem(u64 pa, int *nid, int page_size)
+{
+	struct ram_segment *seg;
+	int numa = NUMA_NO_NODE;
+
+	read_lock(&rem_ram_list_lock);
+	list_for_each_entry(seg, &remote_ram_list, node) {
+		if (seg->numa_node >= MAX_NUMNODES) {
+			pr_err("numa %d is invalid\n", seg->numa_node);
+			read_unlock(&rem_ram_list_lock);
+			return -ERANGE;
+		}
+		if (pa < seg->start)
+			break;
+		if (pa <= seg->end) {
+			numa = seg->numa_node;
+			break;
+		}
+	}
+	read_unlock(&rem_ram_list_lock);
+	if (unlikely(numa == NUMA_NO_NODE))
+		return -ERANGE;
+	*nid = numa;
+	return 0;
+}
+
 int calc_paddr_acidx_iomem_known_nid(u64 pa, int nid, u64 *index, int page_size)
 {
 	struct ram_segment *seg;

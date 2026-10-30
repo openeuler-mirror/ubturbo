@@ -1459,8 +1459,6 @@ int ubturbo_smap_remove(struct RemoveMsg *msg, int pageType)
 
 static bool HasRemotePages(ProcessAttr *attr)
 {
-    int nrLocalNuma = GetNrLocalNuma();
-
     int nid;
     for_each_remote_nid(nid)
     {

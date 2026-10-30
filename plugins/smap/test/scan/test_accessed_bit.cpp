@@ -467,6 +467,7 @@ TEST_F(AccessedBitTest, post_scan_kvm_memslots)
 
 extern "C" unsigned long huge_page_size(struct hstate *h);
 extern "C" int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
+extern "C" int calc_paddr_nid_iomem(u64 pa, int *nid, int page_size);
 extern "C" int get_vma_numa_node(struct kvm *kvm, struct vm_area_struct *vma, unsigned long addr);
 TEST_F(AccessedBitTest, GetVmaNUmaNode)
 {
@@ -477,7 +478,7 @@ TEST_F(AccessedBitTest, GetVmaNUmaNode)
     MOCKER(huge_page_size).stubs().will(returnValue(PMD_SIZE));
     MOCKER(huge_pte_offset).stubs().will(returnValue(&pte));
     MOCKER(smap_huge_ptep_get).stubs().will(returnValue(pte));
-    MOCKER(calc_paddr_acidx_iomem).stubs().will(returnValue(1));
+    MOCKER(calc_paddr_nid_iomem).stubs().will(returnValue(1));
     MOCKER(calc_paddr_acidx_acpi).stubs().will(returnValue(1));
     int ret = get_vma_numa_node(&kvm, nullptr, 0);
     EXPECT_EQ(NUMA_NO_NODE, ret);
@@ -1189,7 +1190,7 @@ TEST_F(AccessedBitTest, FillPteVaIomemFallback)
     pw.nr_page[L2] = 0;
     walk.private_data = &pw;
     MOCKER(calc_paddr_acidx_acpi).stubs().will(returnValue(-1));
-    MOCKER(calc_paddr_acidx_iomem).stubs().will(returnValue(0));
+    MOCKER(calc_paddr_nid_iomem).stubs().will(returnValue(0));
     int ret = fill_pte_va(&pte, 0x1000, 0x2000, &walk);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1, pw.nr_page[L2]);

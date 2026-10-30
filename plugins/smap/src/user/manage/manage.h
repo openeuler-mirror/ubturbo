@@ -975,7 +975,6 @@ static inline void AddAttrL2(ProcessAttr *attr, int nid)
 static inline void SetL2ByNid(NumaBitmap *nodes, int nid)
 {
     NumaClearL2(nodes, GetNrLocalNuma());
-    NumaClearL1(nodes, GetNrLocalNuma());
     NumaBitmapSet(nodes, nid);
 }
 

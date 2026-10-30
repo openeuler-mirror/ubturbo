@@ -322,9 +322,19 @@ int BuildPidData(ProcessAttr *attr)
             }
         }
     }
-    /* 释放旧位图，由新合成位图接管所有权（cap 之外的远端位随之清空） */
-    NumaBitmapFree(&attr->numaAttr.numaNodes);
-    attr->numaAttr.numaNodes = numaNodes;
+    /*
+     * 原位覆写 attr 现有位图，避免在扫描热路径上释放读侧（查询/序列化
+     * 线程）正引用的 bits；仅在属性未绑定或字数不一致时才替换句柄。
+     */
+    NumaBitmap *attrNodes = &attr->numaAttr.numaNodes;
+    if (attrNodes->bits != NULL && attrNodes->nWords == numaNodes.nWords) {
+        size_t bytes = (size_t)numaNodes.nWords * sizeof(unsigned long);
+        (void)memcpy_s(attrNodes->bits, bytes, numaNodes.bits, bytes);
+        NumaBitmapFree(&numaNodes);
+    } else {
+        NumaBitmapFree(attrNodes);
+        *attrNodes = numaNodes;
+    }
     SMAP_LOGGER_INFO("Pid %d, numaNodes nWords %u, nrLocalNuma %u.", attr->pid, attr->numaAttr.numaNodes.nWords,
                      GetProcessManager()->nrLocalNuma);
     ret = FillPidData(attr, &pmb);

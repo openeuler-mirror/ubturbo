@@ -973,7 +973,7 @@ static int get_vma_numa_node(struct kvm *kvm, struct vm_area_struct *vma,
 
 	paddr = PFN_PHYS(pte_pfn(pte));
 	page_size = g_pagesize_huge;
-	if (calc_paddr_acidx_iomem(paddr, &node_calc, &index, page_size) == 0) {
+	if (calc_paddr_nid_iomem(paddr, &node_calc, page_size) == 0) {
 		return node_calc;
 	} else if (calc_paddr_acidx_acpi(paddr, &node_calc, &index,
 					 page_size) == 0) {
@@ -1230,7 +1230,7 @@ static int fill_pte_va(pte_t *pte, unsigned long addr, unsigned long next,
 		return 0;
 	}
 
-	ret = calc_paddr_acidx_iomem(paddr, &nid, &pa_index, page_size);
+	ret = calc_paddr_nid_iomem(paddr, &nid, page_size);
 	if (ret == 0) {
 		pr_debug("write %#lx %d to %llu entry\n", addr, nid,
 			 pte_walk->index);
