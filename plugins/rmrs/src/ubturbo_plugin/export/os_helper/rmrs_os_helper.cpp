@@ -525,7 +525,6 @@ uint32_t OsHelper::GetInfoFromNumaMaps(const std::string &uuid, const std::strin
     std::regex n1Regex("N(\\d+)=(\\d+)");
     std::regex n2Regex("N(\\d+)=(\\d+) N(\\d+)=(\\d+)");
     std::unordered_map<uint16_t, uint64_t> usedMemMap;
-    auto numaLocalMap = ResourceExport::GetNumaLocalMap();
     auto uuidNumaMap = resourceCollect->GetUuidNumaMap();
     auto localNumaIdMap = resourceCollect->GetLocalNumaId();
     auto remoteNumaIdMap = resourceCollect->GetRemoteNumaId();
@@ -551,7 +550,7 @@ uint32_t OsHelper::GetInfoFromNumaMaps(const std::string &uuid, const std::strin
         return RMRS_ERROR;
     }
     for (const auto &pair : usedMemMap) {
-        if ((*numaLocalMap)[pair.first]) {
+        if (ResourceExport::IsNumaLocalNode(pair.first)) {
             (*localNumaIdMap)[uuid] = pair.first;
             (*localUsedMemMap)[uuid] = pair.second;
         } else {

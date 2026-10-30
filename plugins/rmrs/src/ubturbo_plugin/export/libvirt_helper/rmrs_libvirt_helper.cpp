@@ -243,8 +243,6 @@ uint32_t LibvirtHelper::GetVmVCpuInfo(ResourceExport *vmInfoHandler, virDomainIn
     if (vmInfoHandler == nullptr || domain == nullptr) {
         return RMRS_ERROR;
     }
-    auto cpuNumaMap = ResourceExport::GetCpuNumaMap();
-    auto cpuSocketMap = ResourceExport::GetCpuSocketMap();
     auto vmNumaCpuInfos = vmInfoHandler->GetVmNumaCpuInfos();
     auto vmNumaCpuIds = vmInfoHandler->GetVmNumaCpuIds();
     auto *virCpu = static_cast<virVcpuInfo *>(malloc(sizeof(virVcpuInfo) * info.nrVirtCpu));
@@ -272,9 +270,9 @@ uint32_t LibvirtHelper::GetVmVCpuInfo(ResourceExport *vmInfoHandler, virDomainIn
         // 获取cpuInfos
         vmCpuInfo.cpuId = virCpu[n].cpu;
         vmCpuInfo.vCpuId = virCpu[n].number;
-        vmCpuInfo.cpuNumaId = (*cpuNumaMap)[vmCpuInfo.cpuId];
+        vmCpuInfo.cpuNumaId = ResourceExport::GetCpuNumaId(vmCpuInfo.cpuId);
         vmCpuInfo.cpuTime = static_cast<time_t>(virCpu[n].cpuTime);
-        vmCpuInfo.socketId = (*cpuSocketMap)[vmCpuInfo.cpuId];
+        vmCpuInfo.socketId = ResourceExport::GetCpuSocketId(vmCpuInfo.cpuId);
         vmInfo.cpuInfos.push_back(vmCpuInfo);
         // 虚机所绑定的numa上占用的cpu数量
         if (vmNumaCpuInfos->find(vmCpuInfo.cpuNumaId) != vmNumaCpuInfos->end()) {

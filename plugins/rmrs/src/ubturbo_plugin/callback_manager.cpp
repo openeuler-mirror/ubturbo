@@ -178,6 +178,17 @@ RmrsResult CallbackManager::MigrateExecuteRecvHandler(const TurboByteBuffer &req
         }
     }
 
+    // waitingTime为0表示同步迁出不等待; 非0时与MigrateStrategy路径输出的合法范围一致, 防止超大值阻塞IPC线程
+    if (migrateStrategyResult.waitingTime != 0 &&
+        (migrateStrategyResult.waitingTime < RmrsMigrateModule::smapMigrateOutWaitingTimeMin ||
+         migrateStrategyResult.waitingTime > RmrsMigrateModule::smapMigrateOutWaitingTimeMax)) {
+        UBTURBO_LOG_ERROR(RMRS_MODULE_NAME, RMRS_MODULE_CODE)
+            << "[MemMigrate][MemMigrate] WaitingTime is out of range, waitingTime=" << migrateStrategyResult.waitingTime
+            << ", validRange=[" << RmrsMigrateModule::smapMigrateOutWaitingTimeMin << ", "
+            << RmrsMigrateModule::smapMigrateOutWaitingTimeMax << "].";
+        return RMRS_ERROR;
+    }
+
     std::ofstream fout;
     if (std::filesystem::exists(MIGREATE_RECORD_PATH)) {
         fout.open(MIGREATE_RECORD_FILE, std::ios::out | std::ios::binary);
