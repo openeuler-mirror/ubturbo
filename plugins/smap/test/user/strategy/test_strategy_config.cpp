@@ -42,14 +42,12 @@ using StrategyConfigReadFunc = int32_t (*)(char *, char *);
 
 typedef struct {
     char *substr;
+    bool seen;
     StrategyConfigReadFunc func;
-    uint32_t needCfg;
-    uint32_t realCfg;
 } StrategyConfigReadElem;
 
 extern "C" StrategyConfig g_tmpStrategyConfig;
 extern "C" StrategyConfig g_strategyConfig;
-extern "C" StrategyConfig g_lastValidStrategyConfig;
 extern "C" StrategyConfigReadElem g_strategyConfigRead[];
 
 extern "C" uint32_t GetScanPeriodConfig(void);
@@ -210,17 +208,6 @@ TEST_F(PeriodConfigTest, SetMigrateModeChangedTest)
     EXPECT_EQ(true, g_strategyConfig.migrateModeChanged);
 }
 
-extern "C" bool GetMigrateModeEnableConfig(void);
-TEST_F(PeriodConfigTest, GetMigrateModeEnableConfigTest)
-{
-    g_strategyConfig.migrateModeEnable = true;
-    bool ret = GetMigrateModeEnableConfig();
-    EXPECT_EQ(true, ret);
-    g_strategyConfig.migrateModeEnable = false;
-    ret = GetMigrateModeEnableConfig();
-    EXPECT_EQ(false, ret);
-}
-
 extern "C" uint32_t GetScanCpuMinConfig(void);
 TEST_F(PeriodConfigTest, GetScanCpuMinConfigTest)
 {
@@ -256,27 +243,6 @@ TEST_F(PeriodConfigTest, SetScanCpuChangedTest)
     EXPECT_EQ(false, g_strategyConfig.scanCpuChanged);
     SetScanCpuChanged(true);
     EXPECT_EQ(true, g_strategyConfig.scanCpuChanged);
-}
-
-extern "C" int32_t ConfigMigrateModeEnable(char *substr, char *value);
-TEST_F(PeriodConfigTest, ConfigMigrateModeEnableTest)
-{
-    char *substr = "smap.migrate.mode.enable";
-    char *value1 = "true";
-    g_tmpStrategyConfig.migrateModeEnable = false;
-    int32_t ret = ConfigMigrateModeEnable(substr, value1);
-    EXPECT_EQ(true, g_tmpStrategyConfig.migrateModeEnable);
-    EXPECT_EQ(0, ret);
-
-    char *value2 = "false";
-    g_tmpStrategyConfig.migrateModeEnable = true;
-    ret = ConfigMigrateModeEnable(substr, value2);
-    EXPECT_EQ(false, g_tmpStrategyConfig.migrateModeEnable);
-    EXPECT_EQ(0, ret);
-
-    char *value3 = "invalid";
-    ret = ConfigMigrateModeEnable(substr, value3);
-    EXPECT_EQ(-1, ret);
 }
 
 extern "C" int32_t ConfigScanCpu(char *substr, char *value);
@@ -331,18 +297,15 @@ TEST_F(PeriodConfigTest, ConfigScanCpuTestMinGreaterThanMax)
 extern "C" void UpdateMigrateModeAndScanCpu(void);
 TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuMigrateModeChanged)
 {
-    g_strategyConfig.migrateMode = 1;
-    g_strategyConfig.migrateModeEnable = false;
+    g_strategyConfig.migrateMode = 0;
     g_strategyConfig.scanCpuMin = 1;
     g_strategyConfig.scanCpuMax = 3;
-    g_tmpStrategyConfig.migrateMode = 2;
-    g_tmpStrategyConfig.migrateModeEnable = true;
+    g_tmpStrategyConfig.migrateMode = 1;
     g_tmpStrategyConfig.scanCpuMin = 1;
     g_tmpStrategyConfig.scanCpuMax = 3;
 
     UpdateMigrateModeAndScanCpu();
-    EXPECT_EQ(2, g_strategyConfig.migrateMode);
-    EXPECT_EQ(true, g_strategyConfig.migrateModeEnable);
+    EXPECT_EQ(1, g_strategyConfig.migrateMode);
     EXPECT_EQ(true, g_strategyConfig.migrateModeChanged);
     EXPECT_EQ(true, g_tmpStrategyConfig.migrateModeChanged);
 }
@@ -350,31 +313,26 @@ TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuMigrateModeChanged)
 TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuMigrateModeNoChange)
 {
     g_strategyConfig.migrateMode = 1;
-    g_strategyConfig.migrateModeEnable = false;
     g_strategyConfig.migrateModeChanged = false;
     g_strategyConfig.scanCpuMin = 1;
     g_strategyConfig.scanCpuMax = 3;
     g_tmpStrategyConfig.migrateMode = 1;
-    g_tmpStrategyConfig.migrateModeEnable = true;
     g_tmpStrategyConfig.migrateModeChanged = false;
     g_tmpStrategyConfig.scanCpuMin = 1;
     g_tmpStrategyConfig.scanCpuMax = 3;
 
     UpdateMigrateModeAndScanCpu();
     EXPECT_EQ(1, g_strategyConfig.migrateMode);
-    EXPECT_EQ(true, g_strategyConfig.migrateModeEnable);
     EXPECT_EQ(false, g_strategyConfig.migrateModeChanged);
     EXPECT_EQ(false, g_tmpStrategyConfig.migrateModeChanged);
 }
 
 TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuScanCpuChanged)
 {
-    g_strategyConfig.migrateModeEnable = false;
     g_strategyConfig.migrateModeChanged = false;
     g_strategyConfig.scanCpuChanged = false;
     g_strategyConfig.scanCpuMin = 1;
     g_strategyConfig.scanCpuMax = 3;
-    g_tmpStrategyConfig.migrateModeEnable = false;
     g_tmpStrategyConfig.scanCpuMin = 5;
     g_tmpStrategyConfig.scanCpuMax = 7;
 
@@ -411,12 +369,10 @@ TEST_F(PeriodConfigTest, TestUpdateRemoteScanModeNoChange)
 
 TEST_F(PeriodConfigTest, TestUpdateMigrateModeAndScanCpuNoChange)
 {
-    g_strategyConfig.migrateModeEnable = false;
     g_strategyConfig.migrateModeChanged = false;
     g_strategyConfig.scanCpuChanged = false;
     g_strategyConfig.scanCpuMin = 1;
     g_strategyConfig.scanCpuMax = 3;
-    g_tmpStrategyConfig.migrateModeEnable = false;
     g_tmpStrategyConfig.scanCpuMin = 1;
     g_tmpStrategyConfig.scanCpuMax = 3;
 
@@ -441,10 +397,10 @@ TEST_F(PeriodConfigTest, ConfigMigrateModeTest)
     EXPECT_EQ(-1, ret);
 
     GlobalMockObject::verify();
-    char *value1 = "2";
+    char *value1 = "1";
     ret = ConfigMigrateMode(substr, value1);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(2, g_tmpStrategyConfig.migrateMode);
+    EXPECT_EQ(1, g_tmpStrategyConfig.migrateMode);
 }
 
 extern "C" bool GetScanPeriodChanged(void);
@@ -498,22 +454,17 @@ extern "C" int32_t ConfigScanPeriod(char *substr, char *value);
 TEST_F(PeriodConfigTest, ConfigScanPeriodTest)
 {
     char *substr = "scanPeriod";
-    char *value = "123";
-    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
+    /* non-digit -> parse fail */
+    char *value = "abc";
     int32_t ret = ConfigScanPeriod(substr, value);
     EXPECT_EQ(-1, ret);
 
-    char *substr2 = "scanPeriod";
-    char *value2 = "123";
+    /* below MIN_SCAN_PERIOD -> range fail, tmp untouched */
+    char *value2 = "10";
     g_tmpStrategyConfig.scanPeriod = 0;
-    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
-    ret = ConfigScanPeriod(substr2, value2);
+    ret = ConfigScanPeriod(substr, value2);
     EXPECT_EQ(RETURN_ERROR, ret);
-
-    g_tmpStrategyConfig.scanPeriod = 0;
-    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
-    ret = ConfigScanPeriod(substr2, value2);
-    EXPECT_EQ(RETURN_ERROR, ret);
+    EXPECT_EQ(0, g_tmpStrategyConfig.scanPeriod);
 }
 
 TEST_F(PeriodConfigTest, ConfigScanPeriodTestSuccess)
@@ -522,31 +473,33 @@ TEST_F(PeriodConfigTest, ConfigScanPeriodTestSuccess)
     char *substr2 = "scanPeriod";
     char *value2 = "123";
     g_tmpStrategyConfig.scanPeriod = 100UL;
-    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
     ret = ConfigScanPeriod(substr2, value2);
     EXPECT_EQ(0, ret);
+    EXPECT_EQ(123, g_tmpStrategyConfig.scanPeriod);
 }
 
 extern "C" int32_t ConfigMigratePeriod(char *substr, char *value);
 TEST_F(PeriodConfigTest, ConfigMigratePeriodTest)
 {
     char *substr = "migratePeriod";
-    char *value = "123";
-    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
+    /* non-digit -> parse fail */
+    char *value = "abc";
     int32_t ret = ConfigMigratePeriod(substr, value);
     EXPECT_EQ(-1, ret);
 
+    /* below MIN_MIGRATE_PERIOD -> range fail, tmp untouched */
     g_tmpStrategyConfig.migratePeriod = 0;
-    GlobalMockObject::verify();
-    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
-    ret = ConfigMigratePeriod(substr, value);
+    char *value2 = "123";
+    ret = ConfigMigratePeriod(substr, value2);
     EXPECT_EQ(RETURN_ERROR, ret);
+    EXPECT_EQ(0, g_tmpStrategyConfig.migratePeriod);
 
+    /* in range -> success */
     g_tmpStrategyConfig.migratePeriod = 1000;
-    GlobalMockObject::verify();
-    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
-    ret = ConfigMigratePeriod(substr, value);
+    char *value3 = "1234";
+    ret = ConfigMigratePeriod(substr, value3);
     EXPECT_EQ(0, ret);
+    EXPECT_EQ(1234, g_tmpStrategyConfig.migratePeriod);
 }
 
 extern "C" int32_t ConfigRemoteFreqPercentile(char *substr, char *value);
@@ -554,17 +507,11 @@ TEST_F(PeriodConfigTest, ConfigRemoteFreqPercentileTest)
 {
     char *substr = "smap.remote.freq.percentile";
     char *value = "101";
-    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
-    int32_t ret = ConfigRemoteFreqPercentile(substr, value);
-    EXPECT_EQ(-1, ret);
-
     g_tmpStrategyConfig.remoteFreqPercentile = 0;
-    GlobalMockObject::verify();
-    ret = ConfigRemoteFreqPercentile(substr, value);
+    int32_t ret = ConfigRemoteFreqPercentile(substr, value);
     EXPECT_EQ(RETURN_ERROR, ret);
-    EXPECT_EQ(101, g_tmpStrategyConfig.remoteFreqPercentile);
+    EXPECT_EQ(0, g_tmpStrategyConfig.remoteFreqPercentile);
 
-    GlobalMockObject::verify();
     char *value1 = "100";
     ret = ConfigRemoteFreqPercentile(substr, value1);
     EXPECT_EQ(0, ret);
@@ -578,17 +525,12 @@ TEST_F(PeriodConfigTest, ConfigSlowThresholdTest)
     constexpr uint32_t invalidSlowThreshold = MAX_MIGRATE_PERIOD / MIN_SCAN_PERIOD + 1;
     char value[16] = {};
     (void)snprintf(value, sizeof(value), "%u", invalidSlowThreshold);
-    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
-    int32_t ret = ConfigSlowThreshold(substr, value);
-    EXPECT_EQ(-1, ret);
 
     g_tmpStrategyConfig.slowThreshold = 0;
-    GlobalMockObject::verify();
-    ret = ConfigSlowThreshold(substr, value);
+    int32_t ret = ConfigSlowThreshold(substr, value);
     EXPECT_EQ(RETURN_ERROR, ret);
-    EXPECT_EQ(invalidSlowThreshold, g_tmpStrategyConfig.slowThreshold);
+    EXPECT_EQ(0, g_tmpStrategyConfig.slowThreshold);
 
-    GlobalMockObject::verify();
     char *value1 = "40";
     ret = ConfigSlowThreshold(substr, value1);
     EXPECT_EQ(0, ret);
@@ -788,13 +730,12 @@ TEST_F(PeriodConfigTest, ConfigReadSearchSubStringTest)
     EXPECT_EQ('2', res[0]);
 }
 
-extern "C" int StrategyConfigAnalyze(const char *str);
+extern "C" void StrategyConfigAnalyze(const char *str, int lineNo);
 TEST_F(PeriodConfigTest, PeriodConfigAnalyzeTest)
 {
     char *str = "smap";
     MOCKER(ConfigReadSearchSubString).stubs().will(returnValue(static_cast<char *>(nullptr)));
-    uint32_t ret = StrategyConfigAnalyze(str);
-    EXPECT_EQ(0, ret);
+    StrategyConfigAnalyze(str, 1);
 }
 
 extern "C" int32_t ConfigReadByLine(FILE *fptemp, char *buf, int32_t readLine);
@@ -812,28 +753,17 @@ TEST_F(PeriodConfigTest, ConfigReadByLineTest)
     free(fptemp);
 }
 
-extern "C" int ConfigReadReadFile(const char *configFile);
-extern "C" int32_t StrategyConfigReview(void);
+extern "C" int32_t ValidatePeriodConstraint(void);
 TEST_F(PeriodConfigTest, PeriodConfigReviewTest)
 {
-    g_strategyConfigRead[0].needCfg = 1UL;
-    g_strategyConfigRead[0].realCfg = 0UL;
-    int32_t ret = StrategyConfigReview();
-    EXPECT_EQ(-1, ret);
-
-    uint32_t num = 19;
-    for (int i = 0; i < num; i++) {
-        g_strategyConfigRead[i].needCfg = 2UL;
-        g_strategyConfigRead[i].realCfg = 2UL;
-    }
     g_tmpStrategyConfig.scanPeriod = 1000;
     g_tmpStrategyConfig.migratePeriod = 500;
-    ret = StrategyConfigReview();
+    int32_t ret = ValidatePeriodConstraint();
     EXPECT_EQ(-1, ret);
 
     g_tmpStrategyConfig.scanPeriod = 500;
     g_tmpStrategyConfig.migratePeriod = 1000;
-    ret = StrategyConfigReview();
+    ret = ValidatePeriodConstraint();
     EXPECT_EQ(0, ret);
 }
 
@@ -841,19 +771,15 @@ extern "C" void PeriodConifgReset(void);
 TEST_F(PeriodConfigTest, PeriodConifgResetTest)
 {
     for (int i = 0; i < 3; i++) {
-        g_strategyConfigRead[i].realCfg = 1;
+        g_strategyConfigRead[i].seen = true;
     }
     PeriodConifgReset();
-    EXPECT_EQ(0, g_strategyConfigRead[0].realCfg);
+    EXPECT_EQ(false, g_strategyConfigRead[0].seen);
 }
 
 extern "C" void InitStrategyConfig(void);
 TEST_F(PeriodConfigTest, InitPeriodConfigTest)
 {
-    /* mock fopen 失败，GetSystemCpuRange 走"读取失败用默认 0-0"回退路径，
-     * 使 scanCpu 初始化结果确定，不依赖运行环境的实际 CPU 拓扑 */
-    MOCKER(fopen).stubs().will(returnValue(static_cast<FILE *>(nullptr)));
-
     g_strategyConfig.scanPeriod = 10;
     g_strategyConfig.migratePeriod = 10;
     g_strategyConfig.migrateMode = 5;
@@ -869,29 +795,15 @@ TEST_F(PeriodConfigTest, InitPeriodConfigTest)
     EXPECT_EQ(0, g_strategyConfig.groupSwapMinRemoteFreq);
     EXPECT_EQ(0, g_strategyConfig.groupSwapMinFreqGain);
     EXPECT_EQ(95, g_strategyConfig.groupSwapLocalWatermarkRatio);
-    EXPECT_EQ(1, g_strategyConfig.migrateMode);
+    EXPECT_EQ(0, g_strategyConfig.migrateMode);
     EXPECT_EQ(false, g_strategyConfig.migrateModeChanged);
     EXPECT_EQ(true, g_strategyConfig.zeroFreqMigrateEnable);
     EXPECT_EQ(true, g_strategyConfig.adaptiveRatioEnable);
     EXPECT_EQ(false, g_strategyConfig.fileConfSwitch);
     EXPECT_EQ(false, g_strategyConfig.scanPeriodChanged);
     EXPECT_EQ(false, g_strategyConfig.migratePeriodChanged);
-    EXPECT_EQ(false, g_strategyConfig.migrateModeEnable);
-    EXPECT_EQ(0, g_strategyConfig.scanCpuMin);
-    EXPECT_EQ(0, g_strategyConfig.scanCpuMax);
     EXPECT_EQ(false, g_strategyConfig.scanCpuChanged);
-    EXPECT_EQ(g_strategyConfig.scanPeriod, g_lastValidStrategyConfig.scanPeriod);
-}
-
-extern "C" int32_t EnsureDirectoryExists(const char *dirPath);
-TEST_F(PeriodConfigTest, TestEnsureDirectoryExists)
-{
-    const char *dir = "/home/test";
-    MOCKER(stat).stubs().will(returnValue(1));
-    MOCKER(mkdir).stubs().will(returnValue(1));
-    int32_t ret = EnsureDirectoryExists(dir);
-
-    EXPECT_EQ(-1, ret);
+    EXPECT_EQ(false, g_strategyConfig.scanCpuConfigured);
 }
 
 extern "C" bool UpdateStrategyConfigChanged(void);
@@ -981,74 +893,32 @@ TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedAdaptiveRatioChanged)
     EXPECT_EQ(true, ret);
 }
 
-extern "C" void StrategyConfigRead(const char *configFile);
-extern "C" void RestoreStrategyConfigFile(const char *configFile);
-TEST_F(PeriodConfigTest, RestoreStrategyConfigFileTest)
-{
-    const char *configFile = "./smap_period_restore_test.config";
-    (void)unlink(configFile);
-
-    memset(&g_lastValidStrategyConfig, 0, sizeof(g_lastValidStrategyConfig));
-    g_lastValidStrategyConfig.scanPeriod = 500;
-    g_lastValidStrategyConfig.migratePeriod = 1000;
-    g_lastValidStrategyConfig.fileConfSwitch = true;
-    g_lastValidStrategyConfig.remoteScanMode = 2;
-
-    RestoreStrategyConfigFile(configFile);
-
-    FILE *fp = fopen(configFile, "r");
-    ASSERT_NE(nullptr, fp);
-    char buf[512] = {0};
-    bool scanPeriodFound = false;
-    bool switchFound = false;
-    bool remoteScanModeFound = false;
-    while (fgets(buf, sizeof(buf), fp) != nullptr) {
-        if (strstr(buf, "smap.scan.period = 500") != nullptr) {
-            scanPeriodFound = true;
-        }
-        if (strstr(buf, "smap.period.file.config.switch = true") != nullptr) {
-            switchFound = true;
-        }
-        if (strstr(buf, "smap.remote.scan.mode = 2") != nullptr) {
-            remoteScanModeFound = true;
-        }
-    }
-    (void)fclose(fp);
-    (void)unlink(configFile);
-
-    EXPECT_TRUE(scanPeriodFound);
-    EXPECT_TRUE(switchFound);
-    EXPECT_TRUE(remoteScanModeFound);
-}
+extern "C" void StrategyConfigRead(void);
+extern "C" int ConfigReadReadFile(const char *configFile);
 
 TEST_F(PeriodConfigTest, PeriodConfigReadTestReadFileFailed)
 {
-    const char *configFile = "/test";
     MOCKER(ConfigReadReadFile).stubs().will(returnValue(-1));
-    MOCKER(RestoreStrategyConfigFile).expects(once()).will(ignoreReturnValue());
 
-    StrategyConfigRead(configFile);
+    StrategyConfigRead();
 }
 
 TEST_F(PeriodConfigTest, PeriodConfigReadTestConfigReviewFailed)
 {
-    const char *configFile = "/test";
     MOCKER(ConfigReadReadFile).stubs().will(returnValue(0));
-    MOCKER(StrategyConfigReview).stubs().will(returnValue(-1));
-    MOCKER(RestoreStrategyConfigFile).expects(once()).will(ignoreReturnValue());
+    MOCKER(ValidatePeriodConstraint).stubs().will(returnValue(-1));
 
-    StrategyConfigRead(configFile);
+    StrategyConfigRead();
 }
 
 TEST_F(PeriodConfigTest, PeriodConfigReadTestSuccess)
 {
-    const char *configFile = "/test";
     MOCKER(ConfigReadReadFile).stubs().will(returnValue(0));
-    MOCKER(StrategyConfigReview).stubs().will(returnValue(0));
+    MOCKER(ValidatePeriodConstraint).stubs().will(returnValue(0));
     MOCKER(UpdateStrategyConfigChanged).stubs().will(returnValue(false));
     MOCKER(PeriodConifgReset).stubs().will(ignoreReturnValue());
 
-    StrategyConfigRead(configFile);
+    StrategyConfigRead();
 }
 
 extern "C" uint32_t GetUbBwThresholdConfig(void);
@@ -1092,7 +962,6 @@ TEST_F(PeriodConfigTest, ConfigUbBwThresholdSuccess)
     char *substr = "smap.ub.bw.threshold";
     char *value = "1000";
     g_tmpStrategyConfig.ubBwThreshold = 1000;
-    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
     int32_t ret = ConfigUbBwThreshold(substr, value);
     EXPECT_EQ(0, ret);
 }
@@ -1102,7 +971,6 @@ TEST_F(PeriodConfigTest, ConfigUbBwThresholdZeroAllowed)
     char *substr = "smap.ub.bw.threshold";
     char *value = "0";
     g_tmpStrategyConfig.ubBwThreshold = 0;
-    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
     int32_t ret = ConfigUbBwThreshold(substr, value);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(0, g_tmpStrategyConfig.ubBwThreshold);

@@ -21,6 +21,8 @@ Requires:      kernel >= 5.10.0-136.12.0.86
 %define ucache_dir /lib/modules/ucache
 %define smap_libsmap_dir /usr/lib64
 %define udev_rules_dir %{_sysconfdir}/udev/rules.d
+%define smap_conf_dir /opt/ubturbo/conf/smap
+%define smap_conf_file %{smap_conf_dir}/smap_strategy.conf
 
 %description
 This package contains the openEuler SMAP Driver
@@ -42,9 +44,11 @@ mkdir -p -m755 ${RPM_BUILD_ROOT}/%{smap_dir}
 mkdir -p -m755 ${RPM_BUILD_ROOT}/%{ucache_dir}
 mkdir -p -m755 ${RPM_BUILD_ROOT}/%{smap_libsmap_dir}
 mkdir -p -m755 ${RPM_BUILD_ROOT}/%{udev_rules_dir}
+mkdir -p -m755 ${RPM_BUILD_ROOT}/%{smap_conf_dir}
 %{__install} -b -m 0500 %{_builddir}/smap/src/kernel/smap.ko ${RPM_BUILD_ROOT}/%{smap_dir}
 %{__install} -b -m 0500 %{_builddir}/smap/src/ucache/ucache.ko ${RPM_BUILD_ROOT}/%{ucache_dir}
 %{__install} -b -m 0500 %{_builddir}/smap/output/smap/lib/libsmap.so ${RPM_BUILD_ROOT}/%{smap_libsmap_dir}
+%{__install} -b -m 0640 %{_builddir}/smap/conf/smap_strategy.conf ${RPM_BUILD_ROOT}/%{smap_conf_file}
 %{__install} -b -m 0640 %{_builddir}/smap/99-smap.rules ${RPM_BUILD_ROOT}/%{udev_rules_dir}
 
 %clean
@@ -55,12 +59,15 @@ rm -rf ${RPM_BUILD_ROOT}
 %{smap_dir}/smap.ko
 %{ucache_dir}/ucache.ko
 %{smap_libsmap_dir}/libsmap.so
+%dir %attr(0755,ubturbo,ubturbo) %{smap_conf_dir}
+# Semantics changed in recent releases (keys removed/renamed, defaults adjusted);
+# upgrade must overwrite the old config. Local modifications are saved as .rpmorig.
+%config %attr(0640,ubturbo,ubturbo) %{smap_conf_file}
 %{udev_rules_dir}/99-smap.rules
 
 %pre
 
 %post
-rm -f /opt/ubturbo/conf/smap/period.config
 cd %{smap_dir}
 depmod -a
 echo "external 6.6.0-* %{smap_dir}" > /etc/depmod.d/smap.conf

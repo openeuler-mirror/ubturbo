@@ -100,10 +100,8 @@ void SeparateStrategyinit(ActcData actcData1[2], ActcData actcData2[4], ProcessA
 
 TEST_F(SeparateStrategyTest, TestPeriodConfig)
 {
-    int ret = GenerateStrategyConfigFile("./example2.config");
-    EXPECT_EQ(0, ret);
-
-    StrategyConfigRead("./example2.config");
+    /* config file is RPM-installed at a fixed path; read must not crash with or without it */
+    StrategyConfigRead();
 }
 
 TEST_F(SeparateStrategyTest, TestShouldMigrate)

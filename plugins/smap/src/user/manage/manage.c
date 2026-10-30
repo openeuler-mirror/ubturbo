@@ -303,11 +303,7 @@ int ProcessManagerInit(uint32_t pageType)
         SMAP_LOGGER_ERROR("Clear critical error nodes memory failed: %d.", ret);
         return -ret;
     }
-    ret = GenerateStrategyConfigFile(STRATEGY_CONFIG_PATH);
-    if (ret != 0) {
-        SMAP_LOGGER_ERROR("Generate strategy config file failed, ret is %d.", ret);
-    }
-    StrategyConfigRead(STRATEGY_CONFIG_PATH);
+    StrategyConfigRead();
     int size = sysconf(_SC_PAGESIZE);
     if (size != PAGESIZE_4K && size != PAGESIZE_64K) {
         SMAP_LOGGER_ERROR("Get pagesize failed.");

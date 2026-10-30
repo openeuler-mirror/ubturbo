@@ -182,6 +182,6 @@ fi
 ./smap_dt
 
 mkdir -p build/gcovr_report
-lcov --d ./ --c --output-file test.info --rc branch_coverage=1
-lcov -e test.info "*/dt_src/src/*" -output-file coverage.info --rc branch_coverage=1
-genhtml -o gcovr_report coverage.info --show-details --legend --rc branch_coverage=1
+lcov --d ./ --c --output-file test.info --rc branch_coverage=1 --ignore-errors inconsistent,unused,empty
+lcov -e test.info "*/dt_src/src/*" -output-file coverage.info --rc branch_coverage=1 --ignore-errors inconsistent,unused,empty
+genhtml --ignore-errors inconsistent,corrupt -o gcovr_report coverage.info --show-details --legend --rc branch_coverage=1

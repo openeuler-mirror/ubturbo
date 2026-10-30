@@ -115,7 +115,7 @@ sudo rpm -Uvh output/ubturbo-smap-*.aarch64.rpm
 sudo modprobe smap
 ```
 
-远端扫描模式由 `/opt/ubturbo/conf/smap/period.config` 中的 `smap.remote.scan.mode` 控制：
+远端扫描模式由 `/opt/ubturbo/conf/smap/smap_strategy.conf` 中的 `smap.remote.scan.mode` 控制：
 `0` 为纯软扫描，`1` 为软硬结合（默认），`2` 为纯硬扫描。硬件判热仅鲲鹏950机型支持，
 硬件不可用时自动降级为纯软扫描；运行期可通过配置切换，无需重插模块。
 页面类型由 `ubturbo_smap_start(pageType)` 指定，`0` 为 4K，`1` 为 2M，与模块加载解耦。

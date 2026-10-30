@@ -56,7 +56,6 @@
 
 #define MMAP_TYPE_STRING_LEN 20
 
-#define STRATEGY_CONFIG_PATH "/opt/ubturbo/conf/smap/period.config"
 #define DEFAULT_NMEMB 1
 #define MAX_MIGRATE_BACK_WAIT_TIME 60
 #define MIGRATE_BACK_CHECK_PERIOD 1000

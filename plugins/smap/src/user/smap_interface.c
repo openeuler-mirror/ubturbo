@@ -1683,15 +1683,16 @@ static bool CheckUbFeatureUbDma(void)
 
 static void MigrateAndCpuConfig(void)
 {
-    if (GetMigrateModeEnableConfig()) {
-        unsigned int mode = GetMigrateModeConfig();
-        if (mode == MIGRATE_MODE_URMA) {
-            mode = CheckUbFeatureUbDma() ? MIGRATE_MODE_URMA : MIGRATE_MODE_LD_ST;
-        }
-        IoctlUpdateUbDmaAvail(mode);
+    unsigned int mode = GetMigrateModeConfig();
+    if (mode == MIGRATE_MODE_URMA) {
+        mode = CheckUbFeatureUbDma() ? MIGRATE_MODE_URMA : MIGRATE_MODE_LD_ST;
     }
+    IoctlUpdateUbDmaAvail(mode);
 
-    IoctlSetScanCpuRange(GetScanCpuMinConfig(), GetScanCpuMaxConfig());
+    /* scan.cpu empty = unset: kernel default cpumask (all cpus), no push */
+    if (GetScanCpuConfigured()) {
+        IoctlSetScanCpuRange(GetScanCpuMinConfig(), GetScanCpuMaxConfig());
+    }
     IoctlSetRemoteScanMode(GetRemoteScanModeConfig());
 }
 

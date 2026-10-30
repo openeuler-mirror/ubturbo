@@ -1,0 +1,6 @@
+3rdparty/googletest/
+dt_src/
+gcovr_report/
+tmp
+skip_files
+build/

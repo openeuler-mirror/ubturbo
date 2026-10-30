@@ -29,7 +29,7 @@ extern "C" {
 #define MIGRATE_MODE_URMA 1
 #define MIGRATE_MODE_LD_ST 0
 
-/* 策略配置结构由实现和测试共用，避免布局漂移。 */
+/* Strategy config struct shared by impl and tests to avoid layout drift. */
 typedef struct {
     uint32_t scanPeriod;
     uint32_t migratePeriod;
@@ -43,7 +43,6 @@ typedef struct {
     uint32_t groupSwapLocalWatermarkRatio;
     uint32_t migrateMode;
     bool migrateModeChanged;
-    bool migrateModeEnable;
     bool zeroFreqMigrateEnable;
     bool adaptiveRatioEnable;
     bool fileConfSwitch;
@@ -55,6 +54,7 @@ typedef struct {
     uint32_t ubBwThreshold;
     uint32_t remoteScanMode;
     bool remoteScanModeChanged;
+    bool scanCpuConfigured;
 } StrategyConfig;
 
 uint32_t GetScanPeriodConfig(void);
@@ -75,8 +75,6 @@ bool GetMigrateModeChanged(void);
 
 void SetMigrateModeChanged(bool val);
 
-bool GetMigrateModeEnableConfig(void);
-
 uint32_t GetScanCpuMinConfig(void);
 
 uint32_t GetScanCpuMaxConfig(void);
@@ -84,6 +82,8 @@ uint32_t GetScanCpuMaxConfig(void);
 bool GetScanCpuChanged(void);
 
 void SetScanCpuChanged(bool val);
+
+bool GetScanCpuConfigured(void);
 
 uint32_t GetGroupSwapRatioConfig(void);
 
@@ -99,12 +99,6 @@ bool GetAdaptiveRatioEnableConfig(void);
 
 bool GetFileConfSwitchConfig(void);
 
-/* smap.scan.migrate.mode 配置：true=event（事件驱动），false=poll（定时轮询） */
-bool GetScanEventModeConfig(void);
-
-/* smap.scan.pool.workers 配置：per-pid 任务线程池 worker 数 */
-uint32_t GetScanPoolWorkersConfig(void);
-
 uint32_t GetUbBwThresholdConfig(void);
 
 uint32_t GetRemoteScanModeConfig(void);
@@ -112,8 +106,6 @@ uint32_t GetRemoteScanModeConfig(void);
 bool GetRemoteScanModeChanged(void);
 
 void SetRemoteScanModeChanged(bool val);
-
-int32_t GenerateStrategyConfigFile(const char *configFile);
 
 bool GetScanPeriodChanged(void);
 
@@ -123,7 +115,9 @@ void SetScanPeriodChanged(bool val);
 
 void SetMigratePeriodChanged(bool val);
 
-void StrategyConfigRead(const char *configFile);
+/* Read strategy config. Path is fixed in the impl (/opt/ubturbo/conf/smap/smap_strategy.conf).
+ * Periodic calls support config hot-reload. */
+void StrategyConfigRead(void);
 
 #ifdef __cplusplus
 }
