@@ -1850,24 +1850,24 @@ TEST_F(ManageTest, TestMergeAccPriorToFreq)
 
     data[0].freq = 0;
     data[0].prior = 0;
-    data[1].freq = 3;   // freq' = 5 + 3
+    data[1].freq = 3; // freq' = 5 + 3
     data[1].prior = 5;
-    data[2].freq = 10;  // freq' = 16 + 10
+    data[2].freq = 10; // freq' = 16 + 10
     data[2].prior = 16;
-    data[3].freq = 7;   // freq' = 0 + 7（本轮热页不沉底）
+    data[3].freq = 7; // freq' = 0 + 7（本轮热页不沉底）
     data[3].prior = 0;
-    data[4].freq = 0;   // freq' = 8 + 0
+    data[4].freq = 0; // freq' = 8 + 0
     data[4].prior = 8;
-    data[5].freq = 5;   // freq' = 4 + 5
+    data[5].freq = 5; // freq' = 4 + 5
     data[5].prior = 4;
 
     MergeAccPriorToFreq(data, 6);
-    EXPECT_EQ((uint8_t)0,  data[0].freq);
-    EXPECT_EQ((uint8_t)8,  data[1].freq);
+    EXPECT_EQ((uint8_t)0, data[0].freq);
+    EXPECT_EQ((uint8_t)8, data[1].freq);
     EXPECT_EQ((uint8_t)26, data[2].freq);
-    EXPECT_EQ((uint8_t)7,  data[3].freq);
-    EXPECT_EQ((uint8_t)8,  data[4].freq);
-    EXPECT_EQ((uint8_t)9,  data[5].freq);
+    EXPECT_EQ((uint8_t)7, data[3].freq);
+    EXPECT_EQ((uint8_t)8, data[4].freq);
+    EXPECT_EQ((uint8_t)9, data[5].freq);
     // prior 本身不被修改
     EXPECT_EQ((uint8_t)16, data[2].prior);
 }
@@ -5938,4 +5938,51 @@ TEST_F(ManageTest, TestBuildPidDataUntrackedPid)
 TEST_F(ManageTest, TestBuildPidDataNullAttr)
 {
     EXPECT_EQ(-EINVAL, BuildPidData(nullptr));
+}
+
+/* ========== manage_pair.c white-list deduction tests ========== */
+
+extern "C" uint64_t BuildManagedTotalPages(const ProcessAttr *attr, int nrLocalNuma);
+
+TEST_F(ManageTest, TestBuildManagedTotalPagesDeductWhiteNum)
+{
+    ProcessAttr attr = {};
+    attr.managedLocalState.managedLocalMask = 0x3;
+    attr.walkPage.nrPages[0] = 100;
+    attr.walkPage.nrPages[1] = 50;
+    attr.scanAttr.actCount[0].whiteNum = 30;
+    attr.scanAttr.actCount[1].whiteNum = 60; // 白名单页数超过页数时饱和扣到 0
+    attr.walkPage.nrPages[2] = 7;            // 远端页数不扣白名单
+
+    /* (100 - 30) + 0 + 7 */
+    EXPECT_EQ((uint64_t)77, BuildManagedTotalPages(&attr, 2));
+}
+
+extern "C" void BuildLocalRemainingPages(const ProcessAttr *attr, const PairRequestContext *context,
+                                         uint64_t pairRequests[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
+                                         uint64_t remainingPages[LOCAL_NUMA_NUM]);
+
+TEST_F(ManageTest, TestBuildLocalRemainingPagesDeductWhiteNum)
+{
+    ProcessAttr attr = {};
+    PairRequestContext context = {};
+    uint64_t pairRequests[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = {0};
+    uint64_t remainingPages[LOCAL_NUMA_NUM] = {0};
+
+    context.nrLocalNuma = 2;
+    attr.walkPage.nrPages[0] = 100;
+    attr.walkPage.nrPages[1] = 10;
+    attr.scanAttr.actCount[0].whiteNum = 30;
+    attr.scanAttr.actCount[1].whiteNum = 40; // 饱和扣到 0
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 20;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[1][0] = 5;
+    pairRequests[0][0] = 10;
+    pairRequests[1][0] = 5;
+
+    BuildLocalRemainingPages(&attr, &context, pairRequests, remainingPages);
+
+    /* local0: (100 - 30) + 20 - 10 */
+    EXPECT_EQ((uint64_t)80, remainingPages[0]);
+    /* local1: (10 - 40 => 0) + 5 - 5 */
+    EXPECT_EQ((uint64_t)0, remainingPages[1]);
 }

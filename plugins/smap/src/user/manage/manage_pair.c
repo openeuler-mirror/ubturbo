@@ -262,9 +262,11 @@ static uint64_t BuildManagedTotalPages(const ProcessAttr *attr, int nrLocalNuma)
     uint32_t managedLocalMask = attr->managedLocalState.managedLocalMask;
 
     for (int local = 0; local < nrLocalNuma; local++) {
-        if (InL1(managedLocalMask, local)) {
-            managedTotalPages += attr->walkPage.nrPages[local];
+        if (!InL1(managedLocalMask, local)) {
+            continue;
         }
+        uint64_t whiteNum = attr->scanAttr.actCount[local].whiteNum;
+        managedTotalPages += attr->walkPage.nrPages[local] > whiteNum ? attr->walkPage.nrPages[local] - whiteNum : 0;
     }
     for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
         managedTotalPages += attr->walkPage.nrPages[nrLocalNuma + remote];
@@ -362,7 +364,9 @@ static void BuildLocalRemainingPages(const ProcessAttr *attr, const PairRequestC
                                      uint64_t remainingPages[LOCAL_NUMA_NUM])
 {
     for (int local = 0; local < context->nrLocalNuma; local++) {
-        uint64_t allocatablePages = attr->walkPage.nrPages[local];
+        uint64_t whiteNum = attr->scanAttr.actCount[local].whiteNum;
+        uint64_t allocatablePages =
+            attr->walkPage.nrPages[local] > whiteNum ? attr->walkPage.nrPages[local] - whiteNum : 0;
         uint64_t requestedPages = 0;
 
         for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
