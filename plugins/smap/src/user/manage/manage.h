@@ -695,6 +695,8 @@ bool CheckReadyMigrateBack(int destNid);
 RunMode GetRunMode(void);
 void SetRunMode(RunMode runMode);
 
+/* NORMAL_SCAN: enabled file configuration > PID attributes > fixed defaults. */
+void GetProcessPeriods(const ProcessAttr *attr, uint32_t *scanTime, uint32_t *duration);
 void PidSlotInit(struct ProcessManager *manager);
 void PidSlotDestroy(struct ProcessManager *manager);
 int PidSlotAdd(struct ProcessManager *manager, ProcessAttr *attr);

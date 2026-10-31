@@ -258,26 +258,6 @@ bool GetFileConfSwitchConfig(void)
     return g_strategyConfig.fileConfSwitch;
 }
 
-bool GetScanPeriodChanged(void)
-{
-    return g_strategyConfig.scanPeriodChanged;
-}
-
-bool GetMigratePeriodChanged(void)
-{
-    return g_strategyConfig.migratePeriodChanged;
-}
-
-void SetScanPeriodChanged(bool val)
-{
-    g_strategyConfig.scanPeriodChanged = val;
-}
-
-void SetMigratePeriodChanged(bool val)
-{
-    g_strategyConfig.migratePeriodChanged = val;
-}
-
 uint32_t GetUbBwThresholdConfig(void)
 {
     return g_strategyConfig.ubBwThreshold;
@@ -954,12 +934,6 @@ static bool UpdateStrategyConfigChanged(void)
         return false;
     }
 
-    if (old.scanPeriod != g_tmpStrategyConfig.scanPeriod) {
-        g_tmpStrategyConfig.scanPeriodChanged = true;
-    }
-    if (old.migratePeriod != g_tmpStrategyConfig.migratePeriod) {
-        g_tmpStrategyConfig.migratePeriodChanged = true;
-    }
     LogStrategyConfigValueChanges(&old);
     return true;
 }
@@ -997,7 +971,6 @@ void StrategyConfigRead(void)
         g_strategyConfig = g_tmpStrategyConfig;
     }
     PeriodConifgReset();
-    SMAP_LOGGER_DEBUG("Scan: %d, Migrate: %d, FileConfSwitch: %d.", g_strategyConfig.scanPeriod,
-                      g_strategyConfig.migratePeriod, g_strategyConfig.fileConfSwitch);
+    SMAP_LOGGER_DEBUG("FileConfSwitch: %d.", g_strategyConfig.fileConfSwitch);
     return;
 }

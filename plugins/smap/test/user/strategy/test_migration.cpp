@@ -17,8 +17,6 @@ extern "C" int CalcDurationUs(struct timeval start, struct timeval end);
 extern "C" void ApplyUbBwStop(ProcessAttr *current, struct ProcessManager *manager);
 extern "C" int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload);
 extern "C" void IoctlUpdateUbDmaAvail(uint32_t value);
-extern "C" int UpdateScanTime(ProcessAttr *process);
-extern "C" void UpdatePeriodFromConfig(struct ProcessManager *manager);
 extern "C" uint32_t g_pageSizeHuge;
 #include "manage/thread.h"
 #include "strategy/migration.h"
@@ -1079,20 +1077,6 @@ static int CheckFrozenPairPlanApplied(struct ProcessManager *manager, const Pair
     return 0;
 }
 
-TEST_F(MigrationTest, TestUpdateScanTime)
-{
-    int ret;
-    ProcessAttr process;
-    process.pid = 123;
-    process.numaAttr.numaNodes = 0b00010001;
-    process.scanType = NORMAL_SCAN;
-    process.sceneInfo.cycles.scanCycle = 4;
-
-    MOCKER(AccessIoctlAddPid).stubs().will(returnValue(0));
-    ret = UpdateScanTime(&process);
-    EXPECT_EQ(0, ret);
-}
-
 extern "C" void UpdateScene(struct ProcessManager *manager);
 TEST_F(MigrationTest, TestUpdateScene)
 {
@@ -1110,138 +1094,6 @@ TEST_F(MigrationTest, TestUpdateScene)
     EXPECT_EQ(current.sceneInfo.pageInfo[1].nrHot, 0);
     EXPECT_EQ(current.sceneInfo.pageInfo[1].nrL1Guarantee, 0);
     EXPECT_EQ(current.sceneInfo.currScene, HEAVY_STABLE_SCENE);
-}
-
-extern "C" int HandleScene(struct ProcessManager *manager);
-TEST_F(MigrationTest, TestHandleSceneFirstScanNoPages)
-{
-    struct ProcessManager manager;
-    memset(&manager, 0, sizeof(manager));
-    ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &current);
-    current.next = nullptr;
-    current.isFirstScan = true;
-    current.walkPage.nrPage = 0;
-    current.scanTime = 0;
-
-    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
-
-    int ret = HandleScene(&manager);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(DEFAULT_SCAN_PERIOD, current.scanTime);
-}
-
-TEST_F(MigrationTest, TestHandleSceneFirstScanWithPages)
-{
-    struct ProcessManager manager;
-    memset(&manager, 0, sizeof(manager));
-    ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &current);
-    current.next = nullptr;
-    current.isFirstScan = true;
-    current.walkPage.nrPage = 1;
-    current.scanType = NORMAL_SCAN;
-
-    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
-    MOCKER(UpdateScanTime).stubs().will(returnValue(0));
-
-    int ret = HandleScene(&manager);
-    EXPECT_EQ(0, ret);
-    EXPECT_FALSE(current.isFirstScan);
-}
-
-TEST_F(MigrationTest, TestHandleSceneFirstScanUpdateScanTimeFail)
-{
-    struct ProcessManager manager;
-    memset(&manager, 0, sizeof(manager));
-    ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &current);
-    current.next = nullptr;
-    current.isFirstScan = true;
-    current.walkPage.nrPage = 1;
-    current.scanType = NORMAL_SCAN;
-
-    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
-    MOCKER(UpdateScanTime).stubs().will(returnValue(-1));
-
-    int ret = HandleScene(&manager);
-    EXPECT_EQ(0, ret);
-    EXPECT_TRUE(current.isFirstScan);
-}
-
-TEST_F(MigrationTest, TestUodatePeriodFromConfig)
-{
-    struct ProcessManager manager;
-    memset(&manager, 0, sizeof(manager));
-    manager.migPeriod = 500;
-    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(true));
-    MOCKER(GetScanPeriodChanged).stubs().will(returnValue(false));
-    MOCKER(GetMigratePeriodChanged).stubs().will(returnValue(true));
-    MOCKER(GetMigratePeriodConfig).stubs().will(returnValue(1000));
-    MOCKER(IoctlUpdateUbDmaAvail).stubs();
-    MOCKER(GetMigrateModeConfig).stubs().will(returnValue(0));
-    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
-
-    UpdatePeriodFromConfig(&manager);
-    EXPECT_EQ(1000, manager.migPeriod);
-}
-
-TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanNoPages)
-{
-    struct ProcessManager manager;
-    memset(&manager, 0, sizeof(manager));
-    ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &current);
-    manager.migPeriod = 500;
-    current.next = nullptr;
-    current.isFirstScan = true;
-    current.walkPage.nrPage = 0;
-    current.scanTime = 0;
-
-    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(true));
-    MOCKER(GetScanPeriodChanged).stubs().will(returnValue(false));
-    MOCKER(GetMigratePeriodChanged).stubs().will(returnValue(false));
-    MOCKER(IoctlUpdateUbDmaAvail).stubs();
-    MOCKER(GetMigrateModeConfig).stubs().will(returnValue(0));
-    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
-
-    UpdatePeriodFromConfig(&manager);
-    EXPECT_EQ(DEFAULT_SCAN_PERIOD, current.scanTime);
-}
-
-TEST_F(MigrationTest, TestUpdatePeriodFromConfigRestoreFirstScanWithPages)
-{
-    struct ProcessManager manager;
-    memset(&manager, 0, sizeof(manager));
-    ProcessAttr current = {};
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &current);
-    manager.migPeriod = 500;
-    current.next = nullptr;
-    current.isFirstScan = true;
-    current.walkPage.nrPage = 1;
-    current.scanType = NORMAL_SCAN;
-
-    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(true));
-    MOCKER(GetScanPeriodChanged).stubs().will(returnValue(false));
-    MOCKER(GetMigratePeriodChanged).stubs().will(returnValue(false));
-    MOCKER(IoctlUpdateUbDmaAvail).stubs();
-    MOCKER(GetMigrateModeConfig).stubs().will(returnValue(0));
-    MOCKER(EnvMutexLock).stubs().will(ignoreReturnValue());
-    MOCKER(EnvMutexUnlock).stubs().will(ignoreReturnValue());
-    MOCKER(UpdateScanTime).stubs().will(returnValue(0));
-
-    UpdatePeriodFromConfig(&manager);
-    EXPECT_FALSE(current.isFirstScan);
 }
 
 extern "C" void UpdateMigResult(struct MigrateMsg *mMsg, struct ProcessManager *manager);

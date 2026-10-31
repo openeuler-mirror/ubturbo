@@ -1500,26 +1500,6 @@ static void NumaMigReduceDeal(ProcessAttr *current)
     }
 }
 
-static int UpdateScanTime(ProcessAttr *process)
-{
-    struct AccessAddPidPayload payload;
-    payload.pid = process->pid;
-    payload.numaNodes = process->numaAttr.numaNodes;
-    payload.type = process->scanType;
-    payload.duration = GetFileConfSwitchConfig() ? GetMigratePeriodConfig() : process->sceneInfo.cycles.migCycle;
-    payload.pidType = process->type;
-    payload.scanTime = GetFileConfSwitchConfig() ? GetScanPeriodConfig() : process->sceneInfo.cycles.scanCycle;
-    int ret = AccessIoctlAddPid(1, &payload);
-    if (ret) {
-        SMAP_LOGGER_ERROR("Update scan time failed for pid %d, ret=%d.", process->pid, ret);
-    } else {
-        process->scanTime = payload.scanTime;
-        process->duration = payload.duration;
-        SMAP_LOGGER_INFO("Update pid %d scan cycle to %dms.", process->pid, payload.scanTime);
-    }
-    return ret;
-}
-
 static void UpdateScenePerPid(ProcessAttr *process)
 {
     if (process->scanType == NORMAL_SCAN) {
@@ -1527,65 +1507,6 @@ static void UpdateScenePerPid(ProcessAttr *process)
     }
 }
 
-static inline void HandleHighScan(ProcessAttr *current)
-{
-    int ret = UpdateScanTime(current);
-    if (ret) {
-        SMAP_LOGGER_WARNING("Update scan time failed for pid %d.", current->pid);
-    } else {
-        current->isFirstScan = false;
-    }
-}
-
-static int HandleScenePerPid(ProcessAttr *current)
-{
-    PageType pageType = IsHugeMode() ? PAGETYPE_HUGE : PAGETYPE_NORMAL;
-    SceneInfo *info = &current->sceneInfo;
-
-    GetProcessSceneAttr(info->currScene, info, pageType);
-    if (current->isFirstScan) {
-        if (current->walkPage.nrPage == 0) {
-            current->scanTime = DEFAULT_SCAN_PERIOD;
-            return 0;
-        }
-        HandleHighScan(current);
-        return 0;
-    }
-    if (info->currScene != info->lastScene && UpdateScanTime(current)) {
-        SMAP_LOGGER_WARNING("Update scan time failed for pid %d.", current->pid);
-    }
-    return 0;
-}
-
-static void RestoreProcessScanTimePerPid(ProcessAttr *process)
-{
-    if (!process->isFirstScan) {
-        return;
-    }
-    if (process->walkPage.nrPage == 0) {
-        process->scanTime = DEFAULT_SCAN_PERIOD;
-        SMAP_LOGGER_INFO("Skip pid %d scan cycle restore, nrPages=0, keep high-freq scan.", process->pid);
-        return;
-    }
-    if (process->scanType == NORMAL_SCAN) {
-        HandleHighScan(process);
-    }
-}
-
-static void UpdatePeriodFromConfigPerPid(ProcessAttr *process)
-{
-    RestoreProcessScanTimePerPid(process);
-    if (!process->isFirstScan &&
-        (process->scanTime != GetScanPeriodConfig() || process->duration != GetMigratePeriodConfig())) {
-        if (UpdateScanTime(process)) {
-            SMAP_LOGGER_WARNING("Update pid %d scan and migrate periods from config failed.", process->pid);
-        }
-    }
-}
-
-/* 批量接口（供周期维护旧口径调用）：对全部受管 pid 逐个执行 per-pid 处理 */
-static void RestoreProcessScanTime(struct ProcessManager *manager);
-static void UpdatePeriodFromConfig(struct ProcessManager *manager);
 static void UpdateScene(struct ProcessManager *manager)
 {
     struct PidSlot *all[MAX_PID_SLOTS];
@@ -1593,57 +1514,6 @@ static void UpdateScene(struct ProcessManager *manager)
     for (size_t k = 0; k < n; k++) {
         if (all[k]->attr) {
             UpdateScenePerPid(all[k]->attr);
-        }
-    }
-    PidSlotReleaseRefs(all, n);
-}
-
-static int HandleScene(struct ProcessManager *manager)
-{
-    int ret = 0;
-    struct PidSlot *all[MAX_PID_SLOTS];
-    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
-    for (size_t k = 0; k < n && ret == 0; k++) {
-        if (all[k]->attr) {
-            ret = HandleScenePerPid(all[k]->attr);
-        }
-    }
-    PidSlotReleaseRefs(all, n);
-    return ret;
-}
-
-static void UpdatePeriodFromConfig(struct ProcessManager *manager)
-{
-    if (!GetFileConfSwitchConfig()) {
-        return;
-    }
-    RestoreProcessScanTime(manager);
-    if (GetMigratePeriodChanged()) {
-        SMAP_LOGGER_INFO("Start update migrate period time from config to %u.", GetMigratePeriodConfig());
-        manager->migPeriod = GetMigratePeriodConfig();
-        SetMigratePeriodChanged(false);
-    }
-    if (GetScanPeriodChanged()) {
-        SMAP_LOGGER_INFO("Start update scan period time from config");
-        struct PidSlot *all[MAX_PID_SLOTS];
-        size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
-        for (size_t k = 0; k < n; k++) {
-            if (all[k]->attr) {
-                UpdatePeriodFromConfigPerPid(all[k]->attr);
-            }
-        }
-        PidSlotReleaseRefs(all, n);
-        SetScanPeriodChanged(false);
-    }
-}
-
-static void RestoreProcessScanTime(struct ProcessManager *manager)
-{
-    struct PidSlot *all[MAX_PID_SLOTS];
-    size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
-    for (size_t k = 0; k < n; k++) {
-        if (all[k]->attr) {
-            RestoreProcessScanTimePerPid(all[k]->attr);
         }
     }
     PidSlotReleaseRefs(all, n);
@@ -1898,6 +1768,23 @@ static bool SmapAutoRemovePidIfRemoteEmpty(ProcessAttr *attr)
     return true;
 }
 
+/* Reapply effective periods before the next scan window; failed ioctls retry next window. */
+static void UpdateProcessPeriods(ProcessAttr *attr)
+{
+    struct AccessAddPidPayload payload = {
+        .pid = attr->pid,
+        .numaNodes = attr->numaAttr.numaNodes,
+        .type = NORMAL_SCAN,
+        .pidType = attr->type,
+        .scanTime = attr->scanTime,
+        .duration = attr->duration,
+    };
+    int ret = AccessIoctlAddPid(1, &payload);
+    if (ret) {
+        SMAP_LOGGER_WARNING("Update pid %d periods failed: %d.", attr->pid, ret);
+    }
+}
+
 /* 执行单 PID 的扫描、规划和迁移；调用方须持有 slot 引用。 */
 static int ProcessPidScanMigrate(struct ProcessManager *manager, struct PidSlot *slot)
 {
@@ -1908,6 +1795,10 @@ static int ProcessPidScanMigrate(struct ProcessManager *manager, struct PidSlot 
     struct timeval start, end;
     int ret = 0;
 
+    /* The completed window is stable; configure the next one before restarting. */
+    if (attr && attr->scanType == NORMAL_SCAN) {
+        UpdateProcessPeriods(attr);
+    }
     if (!attr || attr->scanType != NORMAL_SCAN || attr->state != PROC_IDLE) {
         goto enable;
     }
@@ -1920,14 +1811,8 @@ static int ProcessPidScanMigrate(struct ProcessManager *manager, struct PidSlot 
     if (SmapAutoRemovePidIfRemoteEmpty(attr)) {
         return 0;
     }
-    if (GetFileConfSwitchConfig()) {
-        UpdatePeriodFromConfigPerPid(attr);
-    } else {
+    if (!GetFileConfSwitchConfig()) {
         UpdateScenePerPid(attr);
-        ret = HandleScenePerPid(attr);
-        if (ret) {
-            goto enable;
-        }
     }
     ApplyUbBwStop(attr, manager);
     /* 候选切换（attrLock 双检），与 API 线程状态读写序列化 */
@@ -1994,6 +1879,7 @@ int ManagerDaemonWork(struct ProcessManager *manager)
     }
     EventLoopEnsureRegistered(manager);
     StrategyConfigRead(); // read strategy config from file
+    manager->migPeriod = GetMigratePeriodConfig();
     manager->ubBwMonitor.ubBwThreshold = GetUbBwThresholdConfig();
     if (GetFileConfSwitchConfig()) {
         SetAdaptMem(GetAdaptiveRatioEnableConfig());

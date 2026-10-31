@@ -20,6 +20,7 @@
 #include "smap_interface.h"
 #include "smap_user_log.h"
 #include "strategy/migration.h"
+#include "strategy/strategy_config.h"
 
 using namespace std;
 
@@ -273,7 +274,6 @@ TEST_F(InterfaceTest, TestInitAllThreads)
 }
 
 extern "C" bool GetFileConfSwitchConfig(void);
-extern "C" uint32_t GetMigratePeriodConfig(void);
 TEST_F(InterfaceTest, TestInitAllThreadsHugeMode)
 {
     int ret;
@@ -284,7 +284,10 @@ TEST_F(InterfaceTest, TestInitAllThreadsHugeMode)
     MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
     MOCKER(ThreadPoolInit).stubs().will(returnValue(0));
     MOCKER(InitEventLoop).stubs().will(returnValue(0));
-    MOCKER(InitScanMigrateThread).stubs().will(returnValue(0));
+    MOCKER(InitScanMigrateThread)
+        .expects(once())
+        .with(any(), eq(uint32_t(LIGHT_STABLE_MIGRATE_CYCLE)))
+        .will(returnValue(0));
     ret = InitAllThreads(&pm);
     EXPECT_EQ(0, ret);
 }
@@ -299,7 +302,10 @@ TEST_F(InterfaceTest, TestInitAllThreadsProcessMode)
     MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(false));
     MOCKER(ThreadPoolInit).stubs().will(returnValue(0));
     MOCKER(InitEventLoop).stubs().will(returnValue(0));
-    MOCKER(InitScanMigrateThread).stubs().will(returnValue(0));
+    MOCKER(InitScanMigrateThread)
+        .expects(once())
+        .with(any(), eq(uint32_t(PROCESS_LIGHT_STABLE_MIGRATE_CYCLE)))
+        .will(returnValue(0));
     ret = InitAllThreads(&pm);
     EXPECT_EQ(0, ret);
 }
@@ -5267,4 +5273,18 @@ TEST_F(InterfaceTest, TestMigrateAndCpuConfigBothEnabled)
     MOCKER(IoctlSetRemoteScanMode).stubs().will(ignoreReturnValue());
     MigrateAndCpuConfig();
     GlobalMockObject::verify();
+}
+
+TEST_F(InterfaceTest, TestInitAllThreadsUsesConfiguredPeriod)
+{
+    ProcessManager pm = {};
+    EnvMutexInit(&pm.threadLock);
+    MOCKER(IsHugeMode).stubs().will(returnValue(false));
+    MOCKER(GetFileConfSwitchConfig).stubs().will(returnValue(true));
+    MOCKER(GetMigratePeriodConfig).stubs().will(returnValue(uint32_t(7000)));
+    MOCKER(ThreadPoolInit).stubs().will(returnValue(0));
+    MOCKER(InitEventLoop).stubs().will(returnValue(0));
+    MOCKER(InitScanMigrateThread).expects(once()).with(any(), eq(uint32_t(7000))).will(returnValue(0));
+    EXPECT_EQ(0, InitAllThreads(&pm));
+    EnvMutexDestroy(&pm.threadLock);
 }

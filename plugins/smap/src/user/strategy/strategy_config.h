@@ -31,6 +31,7 @@ extern "C" {
 
 /* Strategy config struct shared by impl and tests to avoid layout drift. */
 typedef struct {
+    /* Effective periods override per-PID values while file configuration is enabled. */
     uint32_t scanPeriod;
     uint32_t migratePeriod;
     uint32_t remoteFreqPercentile;
@@ -46,8 +47,6 @@ typedef struct {
     bool zeroFreqMigrateEnable;
     bool adaptiveRatioEnable;
     bool fileConfSwitch;
-    bool scanPeriodChanged;
-    bool migratePeriodChanged;
     bool scanCpuChanged;
     uint32_t scanCpuMin;
     uint32_t scanCpuMax;
@@ -58,7 +57,6 @@ typedef struct {
 } StrategyConfig;
 
 uint32_t GetScanPeriodConfig(void);
-
 uint32_t GetMigratePeriodConfig(void);
 
 uint32_t GetRemoteFreqPercentileConfig(void);
@@ -106,14 +104,6 @@ uint32_t GetRemoteScanModeConfig(void);
 bool GetRemoteScanModeChanged(void);
 
 void SetRemoteScanModeChanged(bool val);
-
-bool GetScanPeriodChanged(void);
-
-bool GetMigratePeriodChanged(void);
-
-void SetScanPeriodChanged(bool val);
-
-void SetMigratePeriodChanged(bool val);
 
 /* Read strategy config. Path is fixed in the impl (/opt/ubturbo/conf/smap/smap_strategy.conf).
  * Periodic calls support config hot-reload. */

@@ -434,6 +434,16 @@ static void FreeProceccesAttr(ProcessAttr *attr)
     free(attr);
 }
 
+void GetProcessPeriods(const ProcessAttr *attr, uint32_t *scanTime, uint32_t *duration)
+{
+    *scanTime = attr && attr->scanTime ? attr->scanTime : DEFAULT_SCAN_PERIOD;
+    *duration = attr && attr->duration ? attr->duration : DEFAULT_MIGRATE_PERIOD;
+    if (GetFileConfSwitchConfig()) {
+        *scanTime = GetScanPeriodConfig();
+        *duration = GetMigratePeriodConfig();
+    }
+}
+
 void PidSlotInit(struct ProcessManager *manager)
 {
     for (int i = 0; i < MAX_PID_SLOTS; i++) {
@@ -478,6 +488,10 @@ int PidSlotAdd(struct ProcessManager *manager, ProcessAttr *attr)
         struct PidSlot *s = &manager->slots[i];
         if (EnvAtomicCmpAndSwap(PID_SLOT_FREE, PID_SLOT_RESERVED, &s->state) != PID_SLOT_FREE) {
             continue;
+        }
+        if (attr->scanType == NORMAL_SCAN) {
+            attr->scanTime = DEFAULT_SCAN_PERIOD;
+            attr->duration = DEFAULT_MIGRATE_PERIOD;
         }
         s->pid = attr->pid;
         s->attr = attr;
@@ -950,16 +964,6 @@ void DiscardProcessManageCandidate(ProcessManageCandidate *candidate)
     *candidate = (ProcessManageCandidate){ 0 };
 }
 
-/* Sum the configured migrate memSize (KB) of an already-managed pid. */
-static uint64_t SumAttrMigrateMemSize(const ProcessAttr *attr)
-{
-    uint64_t total = 0;
-    for (int i = 0; i < attr->remoteNumaCnt; i++) {
-        total += attr->migrateParam[i].memSize;
-    }
-    return total;
-}
-
 int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate)
 {
     if (!param || !candidate) {
@@ -1022,29 +1026,11 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
     candidate->prepared = prepared;
     candidate->isNew = active == NULL;
     candidate->isPending = active && active->state == PROC_MIGRATE;
-    /* memSize 增大时重置 isFirstScan，使下一轮高频扫描快速迁移新增需求 */
-    uint64_t oldMemSize = active ? SumAttrMigrateMemSize(active) : 0;
     ret = ConfigureMigrationTargetsWithCapacityPolicy(prepared, &config, param->ignoreRemoteCapacity, false);
     if (ret) {
         PutProcessAttr(candidate->active);
         DiscardProcessManageCandidate(candidate);
         return ret;
-    }
-    if (active && !IsHugeMode()) {
-        uint64_t newMemSize = SumAttrMigrateMemSize(prepared);
-        if (newMemSize > oldMemSize) {
-            /* memSize 增大时直接设置扫描周期为 DEFAULT_SCAN_PERIOD 立即生效，
-             * 同时置 isFirstScan 防止正常扫描周期更新逻辑立即重置。
-             * 设到 prepared 上，由 TrackMigrateOutCandidates 读取
-             * prepared->scanTime 下发内核态，再由 PublishProcessTargetCandidate
-             * 传播到 active。
-             * 仅 4K 场景生效：2M 虚机场景扫描周期由内核态管理，无需用户态重置。
-             */
-            prepared->isFirstScan = true;
-            prepared->scanTime = DEFAULT_SCAN_PERIOD;
-            SMAP_LOGGER_INFO("pid %d memSize increased %lu->%lu, reset scan period to %ums.", prepared->pid, oldMemSize,
-                             newMemSize, DEFAULT_SCAN_PERIOD);
-        }
     }
     if (candidate->isNew) {
         /*
@@ -1055,6 +1041,7 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
          */
         prepared->numaAttr.numaNodes |= prepared->managedLocalState.managedLocalMask;
         prepared->scanTime = DEFAULT_SCAN_PERIOD;
+        prepared->duration = param->scanType == NORMAL_SCAN ? DEFAULT_MIGRATE_PERIOD : param->duration;
     }
     return 0;
 }
