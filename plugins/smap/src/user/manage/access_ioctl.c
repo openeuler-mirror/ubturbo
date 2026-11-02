@@ -23,7 +23,7 @@
 
 int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
 {
-    if (len <= 0 || len > GetCurrentMaxNrPid()) {
+    if (!payload || len <= 0 || len > GetCurrentMaxNrPid()) {
         SMAP_LOGGER_ERROR("AccessIoctlAddPid: invalid len %d.", len);
         return -EINVAL;
     }
@@ -40,15 +40,21 @@ int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
     for (int i = 0; i < len; i++) {
         accessMsg.payload[i].pid = payload[i].pid;
         accessMsg.payload[i].numaNodes = payload[i].numaNodes;
-        if (payload[i].scanTime == 0) {
-            SMAP_LOGGER_ERROR("AccessIoctlAddPid: invalid payload[%d].scanTime %u.", i, payload[i].scanTime);
+        accessMsg.payload[i].scanTime = payload[i].scanTime;
+        accessMsg.payload[i].duration = payload[i].duration;
+        if (payload[i].type == NORMAL_SCAN) {
+            ProcessAttr *attr = GetProcessAttr(payload[i].pid);
+            GetProcessPeriods(attr, &accessMsg.payload[i].scanTime, &accessMsg.payload[i].duration);
+            PutProcessAttr(attr);
+        }
+        if (accessMsg.payload[i].scanTime == 0) {
             free(accessMsg.payload);
             return -EINVAL;
         }
-        accessMsg.payload[i].scanTime = payload[i].scanTime;
-        accessMsg.payload[i].duration = payload[i].duration;
         if (payload[i].type == STATISTIC_SCAN) {
             accessMsg.payload[i].nTimes = payload[i].duration * MS_PER_SEC / payload[i].scanTime;
+        } else if (payload[i].type == NORMAL_SCAN) {
+            accessMsg.payload[i].nTimes = accessMsg.payload[i].duration / accessMsg.payload[i].scanTime;
         } else {
             accessMsg.payload[i].nTimes = migrationPeriod / payload[i].scanTime;
         }

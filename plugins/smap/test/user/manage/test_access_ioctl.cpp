@@ -34,7 +34,10 @@ TEST_F(AccessIoctlTest, TestAccessIoctlAddPid)
 {
     int ret;
     int len = 0;
-    struct AccessAddPidPayload payload;
+    struct AccessAddPidPayload payload = {};
+    payload.scanTime = 200;
+    payload.type = STATISTIC_SCAN;
+    payload.duration = 1;
     ret = AccessIoctlAddPid(len, &payload);
     EXPECT_EQ(-EINVAL, ret);
     MOCKER((int (*)(int, unsigned long, void *))ioctl).stubs().will(returnValue(-1));

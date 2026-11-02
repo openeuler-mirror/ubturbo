@@ -15,6 +15,7 @@
 #include "advanced-strategy/scene.h"
 #include "smap_user_log.h"
 #include "smap_log_core.h"
+#include "strategy/strategy_config.h"
 
 int SmapEnableAdaptMem(int flag)
 {
@@ -93,4 +94,46 @@ int SmapSetLogLevel(int level)
     SmapLogCoreSetMinLogLevel(level);
     SMAP_LOGGER_INFO("Log level set to %s.", SmapLogCoreGetMinLogLevel() == level ? "success" : "failed");
     return 0;
+}
+
+static int SetPidPeriod(pid_t pid, uint32_t scanPeriodMs, uint32_t migratePeriodMs)
+{
+    if (!ubturbo_smap_is_running()) {
+        return -EPERM;
+    }
+    if (pid <= 0) {
+        return -EINVAL;
+    }
+    struct PidSlot *slot = PidSlotGetRef(pid);
+    if (!slot) {
+        return -ENOENT;
+    }
+    int ret = 0;
+    EnvMutexLock(&slot->attrLock);
+    ProcessAttr *attr = slot->attr;
+    if (EnvAtomicRead(&slot->state) != PID_SLOT_INUSE || !attr) {
+        ret = -ENOENT;
+    } else if (attr->scanType != NORMAL_SCAN) {
+        ret = -EOPNOTSUPP;
+    } else {
+        attr->scanTime = scanPeriodMs;
+        attr->duration = migratePeriodMs;
+    }
+    EnvMutexUnlock(&slot->attrLock);
+    PidSlotReleaseRefs(&slot, 1);
+    return ret;
+}
+
+int SmapSetPidPeriod(pid_t pid, uint32_t scanPeriodMs, uint32_t migratePeriodMs)
+{
+    if (scanPeriodMs < MIN_SCAN_PERIOD || scanPeriodMs > MAX_SCAN_PERIOD || migratePeriodMs < MIN_MIGRATE_PERIOD ||
+        migratePeriodMs > MAX_MIGRATE_PERIOD || scanPeriodMs > migratePeriodMs) {
+        return -EINVAL;
+    }
+    return SetPidPeriod(pid, scanPeriodMs, migratePeriodMs);
+}
+
+int SmapResetPidPeriod(pid_t pid)
+{
+    return SetPidPeriod(pid, DEFAULT_SCAN_PERIOD, DEFAULT_MIGRATE_PERIOD);
 }

@@ -50,22 +50,6 @@ extern "C" StrategyConfig g_tmpStrategyConfig;
 extern "C" StrategyConfig g_strategyConfig;
 extern "C" StrategyConfigReadElem g_strategyConfigRead[];
 
-extern "C" uint32_t GetScanPeriodConfig(void);
-TEST_F(PeriodConfigTest, GetScanPeriodConfigTest)
-{
-    g_strategyConfig.scanPeriod = 1;
-    uint32_t ret = GetScanPeriodConfig();
-    EXPECT_EQ(1, ret);
-}
-
-extern "C" uint32_t GetMigratePeriodConfig(void);
-TEST_F(PeriodConfigTest, GetMigratePeriodConfigTest)
-{
-    g_strategyConfig.migratePeriod = 2;
-    uint32_t ret = GetMigratePeriodConfig();
-    EXPECT_EQ(2, ret);
-}
-
 extern "C" bool GetZeroFreqMigrateEnableConfig(void);
 TEST_F(PeriodConfigTest, GetZeroFreqMigrateEnableConfigTest)
 {
@@ -403,38 +387,6 @@ TEST_F(PeriodConfigTest, ConfigMigrateModeTest)
     EXPECT_EQ(1, g_tmpStrategyConfig.migrateMode);
 }
 
-extern "C" bool GetScanPeriodChanged(void);
-TEST_F(PeriodConfigTest, GetScanPeriodChangedTest)
-{
-    g_strategyConfig.scanPeriodChanged = true;
-    bool ret = GetScanPeriodChanged();
-    EXPECT_EQ(true, ret);
-}
-
-extern "C" bool GetMigratePeriodChanged(void);
-TEST_F(PeriodConfigTest, GetMigratePeriodChangedTest)
-{
-    g_strategyConfig.migratePeriodChanged = true;
-    bool ret = GetMigratePeriodChanged();
-    EXPECT_EQ(true, ret);
-}
-
-extern "C" void SetScanPeriodChanged(bool val);
-TEST_F(PeriodConfigTest, SetScanPeriodChangedTest)
-{
-    g_strategyConfig.scanPeriodChanged = true;
-    SetScanPeriodChanged(false);
-    EXPECT_EQ(false, g_strategyConfig.scanPeriodChanged);
-}
-
-extern "C" void SetMigratePeriodChanged(bool val);
-TEST_F(PeriodConfigTest, SetMigratePeriodChangedTest)
-{
-    g_strategyConfig.migratePeriodChanged = false;
-    SetMigratePeriodChanged(true);
-    EXPECT_EQ(true, g_strategyConfig.migratePeriodChanged);
-}
-
 extern "C" int32_t ConfigReadValueToInt(char *pvalue, uint32_t *resultvalue);
 TEST_F(PeriodConfigTest, ConfigReadValueToIntTest)
 {
@@ -448,58 +400,6 @@ TEST_F(PeriodConfigTest, ConfigReadValueToIntTest)
     uint32_t resultvalue2 = 0;
     ret = ConfigReadValueToInt(pvalue2, &resultvalue2);
     EXPECT_EQ(RETURN_ERROR, ret);
-}
-
-extern "C" int32_t ConfigScanPeriod(char *substr, char *value);
-TEST_F(PeriodConfigTest, ConfigScanPeriodTest)
-{
-    char *substr = "scanPeriod";
-    /* non-digit -> parse fail */
-    char *value = "abc";
-    int32_t ret = ConfigScanPeriod(substr, value);
-    EXPECT_EQ(-1, ret);
-
-    /* below MIN_SCAN_PERIOD -> range fail, tmp untouched */
-    char *value2 = "10";
-    g_tmpStrategyConfig.scanPeriod = 0;
-    ret = ConfigScanPeriod(substr, value2);
-    EXPECT_EQ(RETURN_ERROR, ret);
-    EXPECT_EQ(0, g_tmpStrategyConfig.scanPeriod);
-}
-
-TEST_F(PeriodConfigTest, ConfigScanPeriodTestSuccess)
-{
-    int ret;
-    char *substr2 = "scanPeriod";
-    char *value2 = "123";
-    g_tmpStrategyConfig.scanPeriod = 100UL;
-    ret = ConfigScanPeriod(substr2, value2);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(123, g_tmpStrategyConfig.scanPeriod);
-}
-
-extern "C" int32_t ConfigMigratePeriod(char *substr, char *value);
-TEST_F(PeriodConfigTest, ConfigMigratePeriodTest)
-{
-    char *substr = "migratePeriod";
-    /* non-digit -> parse fail */
-    char *value = "abc";
-    int32_t ret = ConfigMigratePeriod(substr, value);
-    EXPECT_EQ(-1, ret);
-
-    /* below MIN_MIGRATE_PERIOD -> range fail, tmp untouched */
-    g_tmpStrategyConfig.migratePeriod = 0;
-    char *value2 = "123";
-    ret = ConfigMigratePeriod(substr, value2);
-    EXPECT_EQ(RETURN_ERROR, ret);
-    EXPECT_EQ(0, g_tmpStrategyConfig.migratePeriod);
-
-    /* in range -> success */
-    g_tmpStrategyConfig.migratePeriod = 1000;
-    char *value3 = "1234";
-    ret = ConfigMigratePeriod(substr, value3);
-    EXPECT_EQ(0, ret);
-    EXPECT_EQ(1234, g_tmpStrategyConfig.migratePeriod);
 }
 
 extern "C" int32_t ConfigRemoteFreqPercentile(char *substr, char *value);
@@ -785,12 +685,8 @@ TEST_F(PeriodConfigTest, InitPeriodConfigTest)
     g_strategyConfig.migrateMode = 5;
     g_strategyConfig.migrateModeChanged = true;
     g_strategyConfig.fileConfSwitch = true;
-    g_strategyConfig.scanPeriodChanged = true;
-    g_strategyConfig.migratePeriodChanged = true;
 
     InitStrategyConfig();
-    EXPECT_EQ(200, g_strategyConfig.scanPeriod);
-    EXPECT_EQ(2000, g_strategyConfig.migratePeriod);
     EXPECT_EQ(1, g_strategyConfig.groupSwapRatio);
     EXPECT_EQ(0, g_strategyConfig.groupSwapMinRemoteFreq);
     EXPECT_EQ(0, g_strategyConfig.groupSwapMinFreqGain);
@@ -800,8 +696,6 @@ TEST_F(PeriodConfigTest, InitPeriodConfigTest)
     EXPECT_EQ(true, g_strategyConfig.zeroFreqMigrateEnable);
     EXPECT_EQ(true, g_strategyConfig.adaptiveRatioEnable);
     EXPECT_EQ(false, g_strategyConfig.fileConfSwitch);
-    EXPECT_EQ(false, g_strategyConfig.scanPeriodChanged);
-    EXPECT_EQ(false, g_strategyConfig.migratePeriodChanged);
     EXPECT_EQ(false, g_strategyConfig.scanCpuChanged);
     EXPECT_EQ(false, g_strategyConfig.scanCpuConfigured);
 }
@@ -809,16 +703,12 @@ TEST_F(PeriodConfigTest, InitPeriodConfigTest)
 extern "C" bool UpdateStrategyConfigChanged(void);
 TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChanged)
 {
+    g_strategyConfig = {};
+    g_tmpStrategyConfig = {};
     g_tmpStrategyConfig.fileConfSwitch = true;
-    g_strategyConfig.scanPeriod = 500;
-    g_strategyConfig.migratePeriod = 1000;
-    g_strategyConfig.migrateMode = 1;
-    g_tmpStrategyConfig.scanPeriod = 1500;
-    g_tmpStrategyConfig.migratePeriod = 2000;
-    g_tmpStrategyConfig.migrateMode = 1;
-
-    bool ret = UpdateStrategyConfigChanged();
-    EXPECT_EQ(true, ret);
+    g_strategyConfig.remoteFreqPercentile = 99;
+    g_tmpStrategyConfig.remoteFreqPercentile = 90;
+    EXPECT_TRUE(UpdateStrategyConfigChanged());
 }
 
 TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedNoChange)
@@ -826,8 +716,6 @@ TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedNoChange)
     (void)memset_s(&g_tmpStrategyConfig, sizeof(g_tmpStrategyConfig), 0, sizeof(g_tmpStrategyConfig));
     (void)memset_s(&g_strategyConfig, sizeof(g_strategyConfig), 0, sizeof(g_strategyConfig));
     g_tmpStrategyConfig.fileConfSwitch = true;
-    g_strategyConfig.scanPeriod = 500;
-    g_strategyConfig.migratePeriod = 1000;
     g_strategyConfig.remoteHotThreshold = 10;
     g_strategyConfig.remoteFreqPercentile = 95;
     g_strategyConfig.slowThreshold = 40;
@@ -839,8 +727,6 @@ TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedNoChange)
     g_strategyConfig.migrateMode = 1;
     g_strategyConfig.zeroFreqMigrateEnable = true;
     g_strategyConfig.adaptiveRatioEnable = true;
-    g_tmpStrategyConfig.scanPeriod = 500;
-    g_tmpStrategyConfig.migratePeriod = 1000;
     g_tmpStrategyConfig.remoteHotThreshold = 10;
     g_tmpStrategyConfig.remoteFreqPercentile = 95;
     g_tmpStrategyConfig.slowThreshold = 40;
@@ -860,13 +746,9 @@ TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedNoChange)
 TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedZeroFreqChanged)
 {
     g_tmpStrategyConfig.fileConfSwitch = true;
-    g_strategyConfig.scanPeriod = 500;
-    g_strategyConfig.migratePeriod = 1000;
     g_strategyConfig.migrateMode = 1;
     g_strategyConfig.zeroFreqMigrateEnable = true;
     g_strategyConfig.adaptiveRatioEnable = true;
-    g_tmpStrategyConfig.scanPeriod = 500;
-    g_tmpStrategyConfig.migratePeriod = 1000;
     g_tmpStrategyConfig.migrateMode = 1;
     g_tmpStrategyConfig.zeroFreqMigrateEnable = false;
     g_tmpStrategyConfig.adaptiveRatioEnable = true;
@@ -878,13 +760,9 @@ TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedZeroFreqChanged)
 TEST_F(PeriodConfigTest, TestUpdatePeriodConfigChangedAdaptiveRatioChanged)
 {
     g_tmpStrategyConfig.fileConfSwitch = true;
-    g_strategyConfig.scanPeriod = 500;
-    g_strategyConfig.migratePeriod = 1000;
     g_strategyConfig.migrateMode = 1;
     g_strategyConfig.zeroFreqMigrateEnable = true;
     g_strategyConfig.adaptiveRatioEnable = true;
-    g_tmpStrategyConfig.scanPeriod = 500;
-    g_tmpStrategyConfig.migratePeriod = 1000;
     g_tmpStrategyConfig.migrateMode = 1;
     g_tmpStrategyConfig.zeroFreqMigrateEnable = true;
     g_tmpStrategyConfig.adaptiveRatioEnable = false;
@@ -974,4 +852,89 @@ TEST_F(PeriodConfigTest, ConfigUbBwThresholdZeroAllowed)
     int32_t ret = ConfigUbBwThreshold(substr, value);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(0, g_tmpStrategyConfig.ubBwThreshold);
+}
+
+TEST_F(PeriodConfigTest, PeriodKeysUpdateInitialValues)
+{
+    g_strategyConfig = {};
+    g_tmpStrategyConfig = {};
+    g_tmpStrategyConfig.fileConfSwitch = true;
+    StrategyConfigAnalyze("smap.scan.period = 500", 1);
+    StrategyConfigAnalyze("smap.migrate.period = 5000", 2);
+    EXPECT_TRUE(UpdateStrategyConfigChanged());
+    g_strategyConfig = g_tmpStrategyConfig;
+    EXPECT_EQ(500u, GetScanPeriodConfig());
+    EXPECT_EQ(5000u, GetMigratePeriodConfig());
+}
+
+extern "C" int32_t ConfigScanPeriod(char *substr, char *value);
+extern "C" int32_t ConfigMigratePeriod(char *substr, char *value);
+
+TEST_F(PeriodConfigTest, GetScanPeriodConfigTest)
+{
+    g_strategyConfig.scanPeriod = 1;
+    uint32_t ret = GetScanPeriodConfig();
+    EXPECT_EQ(1, ret);
+}
+
+TEST_F(PeriodConfigTest, GetMigratePeriodConfigTest)
+{
+    g_strategyConfig.migratePeriod = 2;
+    uint32_t ret = GetMigratePeriodConfig();
+    EXPECT_EQ(2, ret);
+}
+
+TEST_F(PeriodConfigTest, ConfigScanPeriodTest)
+{
+    char *substr = "scanPeriod";
+    char *value = "123";
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
+    int32_t ret = ConfigScanPeriod(substr, value);
+    EXPECT_EQ(-1, ret);
+
+    char *substr2 = "scanPeriod";
+    char *value2 = "123";
+    g_tmpStrategyConfig.scanPeriod = 0;
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
+    ret = ConfigScanPeriod(substr2, value2);
+    EXPECT_EQ(RETURN_ERROR, ret);
+
+    g_tmpStrategyConfig.scanPeriod = 0;
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(0));
+    ret = ConfigScanPeriod(substr2, value2);
+    EXPECT_EQ(RETURN_ERROR, ret);
+}
+
+TEST_F(PeriodConfigTest, ConfigScanPeriodTestSuccess)
+{
+    int ret;
+    char *substr2 = "scanPeriod";
+    char *value2 = "123";
+    g_tmpStrategyConfig.scanPeriod = 100UL;
+    ret = ConfigScanPeriod(substr2, value2);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(123, g_tmpStrategyConfig.scanPeriod);
+}
+
+TEST_F(PeriodConfigTest, ConfigMigratePeriodTest)
+{
+    char *substr = "migratePeriod";
+    /* non-digit -> parse fail */
+    char *value = "abc";
+    int32_t ret = ConfigMigratePeriod(substr, value);
+    EXPECT_EQ(-1, ret);
+
+    /* below MIN_MIGRATE_PERIOD -> range fail, tmp untouched */
+    g_tmpStrategyConfig.migratePeriod = 0;
+    char *value2 = "123";
+    ret = ConfigMigratePeriod(substr, value2);
+    EXPECT_EQ(RETURN_ERROR, ret);
+    EXPECT_EQ(0, g_tmpStrategyConfig.migratePeriod);
+
+    /* in range -> success */
+    g_tmpStrategyConfig.migratePeriod = 1000;
+    char *value3 = "1234";
+    ret = ConfigMigratePeriod(substr, value3);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1234, g_tmpStrategyConfig.migratePeriod);
 }
