@@ -531,14 +531,19 @@ TEST_F(SmapMigratePagesTest, DoMigrateTestOnce)
 extern "C" bool is_filter_anon(struct page *page);
 TEST_F(SmapMigratePagesTest, DoMigrateMultiListFailed)
 {
-    struct page p_page;
-    struct migrate_msg msg;
-    struct mig_list mig_list[2];
-    u64 addr = 1;
-    mig_list[0].addr = &addr;
-    mig_list[1].addr = &addr;
+    struct page p_page = {};
+    struct migrate_msg msg = {};
+    struct mig_list mig_list[2] = {};
+    u64 firstAddr[3] = {1, 1, 1};
+    u64 secondAddr[1] = {1};
+    int savedNrLocalNuma = nr_local_numa;
+    nr_local_numa = 4;
+    mig_list[0].addr = firstAddr;
+    mig_list[1].addr = secondAddr;
     unsigned int nr_folios = 1;
     msg.cnt = 2;
+    msg.page_size = 0x1000;
+    msg.mig_list = mig_list;
     mig_list[0].from = 0;
     mig_list[0].pid = 1;
     mig_list[0].to = 4;
@@ -562,6 +567,7 @@ TEST_F(SmapMigratePagesTest, DoMigrateMultiListFailed)
     EXPECT_EQ(0, mig_list[0].failed_pre_migrated_nr);
     EXPECT_EQ(0, mig_list[1].failed_mig_nr);
     EXPECT_EQ(0, mig_list[1].failed_pre_migrated_nr);
+    nr_local_numa = savedNrLocalNuma;
 }
 
 // do_migrate must group entries per pid and, within each pid, interleave

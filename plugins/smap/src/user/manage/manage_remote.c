@@ -40,7 +40,9 @@ void InitProcessTargetConfig(ProcessTargetConfig *config)
         return;
     }
 
-    *config = (ProcessTargetConfig){ 0 };
+    *config = (ProcessTargetConfig){
+        .sourceLocalNid = NUMA_NO_NODE,
+    };
 }
 
 void ClearProcessTargetConfig(ProcessTargetConfig *config)
@@ -73,6 +75,9 @@ bool RemoveProcessRemoteTarget(ProcessTargetConfig *config, int remoteNid)
             config->targets[j - 1] = config->targets[j];
         }
         config->targets[--config->count] = (ProcessRemoteTarget){ 0 };
+        if (config->count == 0) {
+            config->sourceLocalNid = NUMA_NO_NODE;
+        }
         return true;
     }
     return false;
@@ -149,6 +154,10 @@ int ValidateProcessTargetConfig(const ProcessTargetConfig *config)
 {
     ProcessTargetConfig copy;
     if (CopyProcessTargetConfig(&copy, config)) {
+        return -EINVAL;
+    }
+    int nrLocalNuma = GetNrLocalNuma();
+    if (copy.sourceLocalNid < NUMA_NO_NODE || copy.sourceLocalNid >= nrLocalNuma) {
         return -EINVAL;
     }
 

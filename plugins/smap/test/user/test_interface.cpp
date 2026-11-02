@@ -394,6 +394,7 @@ extern "C" bool IsDestNidVaild(int nid, pid_t pid);
 TEST_F(InterfaceTest, IsMigParaValid)
 {
     struct MigrateOutPayload payload = {
+        .srcNid = NUMA_NO_NODE,
         .pid = 123,
         .count = 1,
     };
@@ -411,6 +412,7 @@ TEST_F(InterfaceTest, IsMigParaValid)
 TEST_F(InterfaceTest, IsMigParaValidGreaterThanMigrateMode)
 {
     struct MigrateOutPayload payload = {
+        .srcNid = NUMA_NO_NODE,
         .pid = 123,
         .count = 1,
     };
@@ -439,6 +441,7 @@ TEST_F(InterfaceTest, IsMigParaValidLessThanMigrateMode)
 {
     bool ret;
     struct MigrateOutPayload payload = {
+        .srcNid = NUMA_NO_NODE,
         .pid = 123,
         .count = 1,
     };
@@ -456,6 +459,7 @@ TEST_F(InterfaceTest, IsMigParaValidWaterlineModeAndMigMemsizeMode)
 {
     bool ret;
     struct MigrateOutPayload payload = {
+        .srcNid = NUMA_NO_NODE,
         .pid = 123,
         .count = 1,
     };
@@ -474,6 +478,7 @@ TEST_F(InterfaceTest, IsMigParaValidMemPoolModeAndMigRatioMode)
 {
     bool ret;
     struct MigrateOutPayload payload = {
+        .srcNid = NUMA_NO_NODE,
         .pid = 123,
         .count = 1,
     };
@@ -492,6 +497,7 @@ TEST_F(InterfaceTest, IsMigParaValidMigRatioModeWithInvalidRatio)
 {
     bool ret;
     struct MigrateOutPayload payload = {
+        .srcNid = NUMA_NO_NODE,
         .pid = 123,
         .count = 1,
     };
@@ -510,6 +516,7 @@ TEST_F(InterfaceTest, IsMigParaValidInvalidMemSize)
 {
     bool ret;
     struct MigrateOutPayload payload = {
+        .srcNid = NUMA_NO_NODE,
         .pid = 123,
         .count = 1,
     };
@@ -523,6 +530,24 @@ TEST_F(InterfaceTest, IsMigParaValidInvalidMemSize)
     payload.inner[0].memSize = 2049;
     ret = IsMigParaValid(&payload);
     EXPECT_EQ(false, ret);
+}
+
+TEST_F(InterfaceTest, TestIsMigParaValidSourceLocalNid)
+{
+    struct MigrateOutPayload payload = {
+        .srcNid = NUMA_NO_NODE,
+        .pid = 123,
+        .count = 0,
+    };
+    g_processManager.nrLocalNuma = 4;
+
+    EXPECT_TRUE(IsMigParaValid(&payload));
+    payload.srcNid = 3;
+    EXPECT_TRUE(IsMigParaValid(&payload));
+    payload.srcNid = 4;
+    EXPECT_FALSE(IsMigParaValid(&payload));
+    payload.srcNid = NUMA_NO_NODE - 1;
+    EXPECT_FALSE(IsMigParaValid(&payload));
 }
 
 TEST_F(InterfaceTest, TestIsDestNidVaild)
@@ -843,6 +868,22 @@ extern "C" int BuildMigrateOutProcessParamWithCapacityPolicy(const struct Migrat
                                                              ProcessParam *param, bool ignoreRemoteCapacity);
 extern "C" int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate);
 extern "C" void DiscardMigrateOutCandidates(ProcessManageCandidate *candidates, int count);
+TEST_F(InterfaceTest, TestBuildMigrateOutProcessParamKeepsSourceLocalNid)
+{
+    struct MigrateOutPayload payload = {
+        .srcNid = 2,
+        .pid = 1234,
+        .count = 1,
+        .inner = {{.destNid = 4, .ratio = 25, .migrateMode = MIG_RATIO_MODE}},
+    };
+    ProcessParam param = {};
+
+    ASSERT_EQ(0, BuildMigrateOutProcessParamWithCapacityPolicy(&payload, &param, false));
+    EXPECT_TRUE(param.targetConfigValid);
+    EXPECT_EQ(2, param.targetConfig.sourceLocalNid);
+    EXPECT_FALSE(param.ignoreRemoteCapacity);
+}
+
 TEST_F(InterfaceTest, TestSmapMigrateOut)
 {
     int ret;
@@ -1490,12 +1531,12 @@ TEST_F(InterfaceTest, TestCheckSmapRemoveMsgWithIsCountValidFailed)
 
 TEST_F(InterfaceTest, TestCheckSmapRemoveMsgWithPageTypeMismatch)
 {
+    struct RemoveMsg msg = {.count = 1};
+    int pageType = PAGETYPE_HUGE;
     int ret;
-    struct RemoveMsg msg;
-    int pidType = VM_TYPE;
     MOCKER(IsCountValid).stubs().will(returnValue(true));
     MOCKER(IsPageTypeConsistent).stubs().will(returnValue(false));
-    ret = CheckSmapRemoveMsg(&msg, pidType);
+    ret = CheckSmapRemoveMsg(&msg, pageType);
     EXPECT_EQ(-EINVAL, ret);
 }
 

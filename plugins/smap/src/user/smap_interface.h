@@ -75,7 +75,7 @@ struct MigrateOutPayloadInner {
 };
 
 struct MigrateOutPayload {
-    int srcNid; // 普通 migrate-out 永久忽略，仅为兼容既有 ABI 保留
+    int srcNid; // -1表示自动选择来源；合法本地NUMA表示固定迁出来源
     pid_t pid;
     int count;
     struct MigrateOutPayloadInner inner[REMOTE_NUMA_NUM];

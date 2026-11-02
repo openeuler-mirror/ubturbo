@@ -222,7 +222,8 @@ static int ValidatePairRequestInput(const ProcessAttr *attr, const PairRequestCo
 
     const ProcessTargetConfig *config = &attr->targetConfig;
     if (config->count > REMOTE_NUMA_NUM ||
-        (config->migrateMode != MIG_RATIO_MODE && config->migrateMode != MIG_MEMSIZE_MODE)) {
+        (config->migrateMode != MIG_RATIO_MODE && config->migrateMode != MIG_MEMSIZE_MODE) ||
+        config->sourceLocalNid < NUMA_NO_NODE || config->sourceLocalNid >= context->nrLocalNuma) {
         return -EINVAL;
     }
 
@@ -375,7 +376,12 @@ static void BuildLocalRemainingPages(const ProcessAttr *attr, const PairRequestC
 
 static uint32_t BuildActivePairMask(const ProcessAttr *attr, const PairRequestContext *context, int remote)
 {
-    return BuildEligiblePairMask(attr, context, remote) & attr->managedLocalState.residentLocalMask;
+    uint32_t activeMask = BuildEligiblePairMask(attr, context, remote) & attr->managedLocalState.residentLocalMask;
+    int sourceLocalNid = attr->targetConfig.sourceLocalNid;
+    if (attr->targetConfig.count > 0 && sourceLocalNid != NUMA_NO_NODE) {
+        activeMask &= 1U << sourceLocalNid;
+    }
+    return activeMask;
 }
 
 static void AllocateRemotePairRequest(const ProcessAttr *attr, const PairRequestContext *context, int remote,

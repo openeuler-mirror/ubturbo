@@ -566,7 +566,18 @@ extern "C" int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayload 
 TEST_F(SmapConfigTest, TestAssignProcessAttr)
 {
     ProcessAttr attr;
-    struct ProcessPayload payload = {1025, NORMAL_SCAN, VM_TYPE, PROC_MOVE, 0, 0x11, 200, 1, 1};
+    struct ProcessPayload payload = {
+        .pid = 1025,
+        .scanType = NORMAL_SCAN,
+        .type = VM_TYPE,
+        .state = PROC_MOVE,
+        .migrateMode = MIG_RATIO_MODE,
+        .srcNid = NUMA_NO_NODE,
+        .numaNodes = 0x11,
+        .scanTime = 200,
+        .duration = 1,
+        .count = 1,
+    };
     payload.migrateParam[0].nid = 4;
     payload.migrateParam[0].ratio = 50;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
@@ -588,6 +599,7 @@ TEST_F(SmapConfigTest, TestAssignProcessAttr)
     EXPECT_EQ(attr.scanType, payload.scanType);
     EXPECT_EQ(attr.scanTime, payload.scanTime);
     ASSERT_EQ(attr.numaAttr.numaNodes, payload.numaNodes);
+    EXPECT_EQ(NUMA_NO_NODE, attr.targetConfig.sourceLocalNid);
     EXPECT_EQ(attr.isFirstScan, true);
     EXPECT_EQ(attr.enableSwap, true);
 }
@@ -679,6 +691,7 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfig)
                   .type = PROCESS_TYPE,
                   .state = PROC_IDLE,
                   .migrateMode = MIG_RATIO_MODE,
+                  .srcNid = NUMA_NO_NODE,
                   .numaNodes = 0x11,
                   .scanTime = 200,
                   .count = 1,
@@ -688,6 +701,7 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfig)
                   .type = PROCESS_TYPE,
                   .state = PROC_IDLE,
                   .migrateMode = MIG_RATIO_MODE,
+                  .srcNid = NUMA_NO_NODE,
                   .numaNodes = 0x21,
                   .scanTime = 200,
                   .count = 1,
@@ -725,6 +739,7 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigTwo)
                                         .type = PROCESS_TYPE,
                                         .state = PROC_IDLE,
                                         .migrateMode = MIG_RATIO_MODE,
+                                        .srcNid = NUMA_NO_NODE,
                                         .numaNodes = 0x11,
                                         .scanTime = 200,
                                         .count = 1,
@@ -780,7 +795,8 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigRestoresPairMultiRemoteTarget)
         .type = PROCESS_TYPE,
         .state = PROC_IDLE,
         .migrateMode = MIG_MEMSIZE_MODE,
-        .numaNodes = 0x53,
+        .srcNid = 2,
+        .numaNodes = 0x57,
         .scanTime = 200,
         .count = 2,
         .migrateParam = {{.nid = 4, .memSize = 2048}, {.nid = 6, .memSize = 4096}},
@@ -797,6 +813,8 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigRestoresPairMultiRemoteTarget)
     ASSERT_NE(nullptr, PmHeadAttr(&manager));
     EXPECT_EQ(2U, PmHeadAttr(&manager)->targetConfig.count);
     EXPECT_EQ(MIG_MEMSIZE_MODE, PmHeadAttr(&manager)->targetConfig.migrateMode);
+    EXPECT_EQ(2, PmHeadAttr(&manager)->targetConfig.sourceLocalNid);
+    EXPECT_EQ(0x57U, PmHeadAttr(&manager)->numaAttr.numaNodes);
     EXPECT_EQ(4, PmHeadAttr(&manager)->targetConfig.targets[0].remoteNid);
     EXPECT_EQ(2048U, PmHeadAttr(&manager)->targetConfig.targets[0].memSizeKB);
     EXPECT_EQ(6, PmHeadAttr(&manager)->targetConfig.targets[1].remoteNid);
@@ -859,6 +877,7 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
     attr1->state = PROC_IDLE;
     attr1->scanTime = 200;
     attr1->scanType = NORMAL_SCAN;
+    attr1->targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr1->numaAttr.numaNodes = 0x22;
     attr2->type = VM_TYPE;
     attr2->pid = 1026;
@@ -866,6 +885,7 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
     attr2->state = PROC_IDLE;
     attr2->scanTime = 200;
     attr2->scanType = NORMAL_SCAN;
+    attr2->targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr2->numaAttr.numaNodes = 0x44;
 
     PidSlotAdd(&manager, attr1);
@@ -915,6 +935,7 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
     attr1->state = PROC_IDLE;
     attr1->scanTime = 2000;
     attr1->scanType = NORMAL_SCAN;
+    attr1->targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr1->numaAttr.numaNodes = 0x22;
     attr2->type = VM_TYPE;
     attr2->pid = 1235;
@@ -922,6 +943,7 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
     attr2->state = PROC_IDLE;
     attr2->scanTime = 3000;
     attr2->scanType = HAM_SCAN;
+    attr2->targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr2->numaAttr.numaNodes = 0x44;
 
     PidSlotAdd(&manager, attr1);
@@ -957,11 +979,13 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffe
     attr.state = PROC_MIGRATE;
     attr.numaAttr.numaNodes = 0x53;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.sourceLocalNid = 0;
     attr.targetConfig.count = 2;
     attr.targetConfig.targets[0] = {4, 0, 2048};
     attr.targetConfig.targets[1] = {6, 0, 4096};
     attr.pendingTargetConfigValid = true;
     attr.pendingTargetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.pendingTargetConfig.sourceLocalNid = 2;
     attr.pendingTargetConfig.count = 1;
     attr.pendingTargetConfig.targets[0] = {8, 0, 8192};
     memset(&manager.slots, 0, sizeof(manager.slots));
@@ -978,6 +1002,7 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffe
     /* numaAttr.numaNodes is user-synthesized; persisted value is the last read-back result. */
     EXPECT_EQ(0x53U, payload[0].numaNodes);
     EXPECT_EQ(MIG_MEMSIZE_MODE, payload[0].migrateMode);
+    EXPECT_EQ(2, payload[0].srcNid);
     EXPECT_EQ(1, payload[0].count);
     EXPECT_EQ(8, payload[0].migrateParam[0].nid);
     EXPECT_EQ(8192U, payload[0].migrateParam[0].memSize);

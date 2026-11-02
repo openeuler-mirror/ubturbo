@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <cstdlib>
+#include <errno.h>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
@@ -843,6 +844,40 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansUsesRemainingBidirectionalBudget)
     EXPECT_EQ(5U, plan.swapPages);
     EXPECT_EQ(12U, budget.plannedPages);
     EXPECT_EQ(5U, context.plannedPages[0]);
+    EXPECT_EQ(0, EnvMutexDestroy(&manager.threadLock));
+}
+
+TEST_F(MigrationTest, TestBuildPairSwapPlansSkipsNonConfiguredSourceLocal)
+{
+    ProcessManager manager = {};
+    manager.nrLocalNuma = 2;
+    ProcessAttr process = {.pid = 100, .scanType = NORMAL_SCAN};
+    ActcData localPages[10] = {};
+    ActcData remotePages[10] = {};
+    process.enableSwap = true;
+    process.targetConfig.migrateMode = MIG_RATIO_MODE;
+    process.targetConfig.sourceLocalNid = 1;
+    process.targetConfig.count = 1;
+    process.targetConfig.targets[0] = {2, 50, 0};
+    process.scanAttr.actcData[0] = localPages;
+    process.scanAttr.actcData[2] = remotePages;
+    process.scanAttr.actcLen[0] = 10;
+    process.scanAttr.actcLen[2] = 10;
+    process.scanAttr.actCount[0].freqBuckets[0] = 10;
+    process.scanAttr.actCount[2].freqBuckets[5] = 10;
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &process);
+    ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
+
+    PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 10);
+    PairPlanContext context = {.nrLocalNuma = 2};
+    context.freePages[0] = 10;
+    PairPidBudget budget = {.pid = 100, .maxMigratePages = 12};
+
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&process));
+    ASSERT_EQ(0, BuildPairSwapPlans(&manager, &plan, 1, &context, &budget, 1));
+    EXPECT_EQ(0U, plan.swapPages);
+    EXPECT_EQ(0U, budget.plannedPages);
+    EXPECT_EQ(0U, context.plannedPages[0]);
     EXPECT_EQ(0, EnvMutexDestroy(&manager.threadLock));
 }
 

@@ -76,6 +76,7 @@ struct ProcessPayload {
     uint8_t type;
     uint8_t state;
     uint8_t migrateMode;
+    int srcNid;
     uint32_t numaNodes;
     uint32_t scanTime;
     uint32_t duration;

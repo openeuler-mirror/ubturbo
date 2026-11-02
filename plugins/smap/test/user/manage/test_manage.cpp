@@ -166,6 +166,7 @@ TEST_F(ManageTest, TestInitAndClearProcessTargetConfig)
 
     InitProcessTargetConfig(&config);
     EXPECT_EQ(MIG_RATIO_MODE, config.migrateMode);
+    EXPECT_EQ(NUMA_NO_NODE, config.sourceLocalNid);
     EXPECT_EQ(0U, config.count);
     EXPECT_EQ(0, config.targets[0].remoteNid);
     EXPECT_EQ(0U, config.targets[0].ratio);
@@ -174,6 +175,7 @@ TEST_F(ManageTest, TestInitAndClearProcessTargetConfig)
     config.count = 1;
     config.targets[0].remoteNid = 5;
     ClearProcessTargetConfig(&config);
+    EXPECT_EQ(NUMA_NO_NODE, config.sourceLocalNid);
     EXPECT_EQ(0U, config.count);
     EXPECT_EQ(0, config.targets[0].remoteNid);
 
@@ -185,6 +187,7 @@ TEST_F(ManageTest, TestCopyProcessTargetConfig)
 {
     ProcessTargetConfig source = {};
     source.migrateMode = MIG_MEMSIZE_MODE;
+    source.sourceLocalNid = 1;
     source.count = 2;
     source.targets[0] = {4, 0, 2048};
     source.targets[1] = {5, 0, 4096};
@@ -192,6 +195,7 @@ TEST_F(ManageTest, TestCopyProcessTargetConfig)
 
     EXPECT_EQ(0, CopyProcessTargetConfig(&dest, &source));
     EXPECT_EQ(MIG_MEMSIZE_MODE, dest.migrateMode);
+    EXPECT_EQ(1, dest.sourceLocalNid);
     EXPECT_EQ(2U, dest.count);
     EXPECT_EQ(4, dest.targets[0].remoteNid);
     EXPECT_EQ(2048U, dest.targets[0].memSizeKB);
@@ -215,16 +219,21 @@ TEST_F(ManageTest, TestRemoveProcessRemoteTarget)
 {
     ProcessTargetConfig config = {};
     config.migrateMode = MIG_MEMSIZE_MODE;
+    config.sourceLocalNid = 2;
     config.count = 2;
     config.targets[0] = {4, 0, 2048};
     config.targets[1] = {6, 0, 4096};
 
     EXPECT_TRUE(RemoveProcessRemoteTarget(&config, 4));
+    EXPECT_EQ(2, config.sourceLocalNid);
     EXPECT_EQ(1U, config.count);
     EXPECT_EQ(6, config.targets[0].remoteNid);
     EXPECT_EQ(0, config.targets[1].remoteNid);
     EXPECT_FALSE(RemoveProcessRemoteTarget(&config, 4));
     EXPECT_FALSE(RemoveProcessRemoteTarget(nullptr, 6));
+
+    EXPECT_TRUE(RemoveProcessRemoteTarget(&config, 6));
+    EXPECT_EQ(NUMA_NO_NODE, config.sourceLocalNid);
 
     config.count = REMOTE_NUMA_NUM + 1;
     EXPECT_FALSE(RemoveProcessRemoteTarget(&config, 6));
@@ -266,6 +275,7 @@ TEST_F(ManageTest, TestUpdateManagedProcessTrackingModeKeepsMigrationConfig)
     attr.migrateMode = MIG_MEMSIZE_MODE;
     attr.remoteNumaCnt = 2;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 2;
     attr.targetConfig.targets[0] = {4, 0, 2048};
     attr.targetConfig.targets[1] = {6, 0, 4096};
@@ -328,6 +338,7 @@ TEST_F(ManageTest, TestUpdateManagedProcessTrackingModeRejectsActiveMigration)
     attr.state = PROC_IDLE;
     attr.scanType = NORMAL_SCAN;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 1;
     attr.targetConfig.targets[0] = {4, 0, 2048};
 
@@ -342,6 +353,7 @@ TEST_F(ManageTest, TestUpdateManagedProcessTrackingModeKeepsMigrationDisabled)
     attr.state = PROC_MOVE;
     attr.scanType = NORMAL_SCAN;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 1;
     attr.targetConfig.targets[0] = {4, 0, 2048};
 
@@ -627,6 +639,7 @@ TEST_F(ManageTest, TestConfigureMigrationTargetsStagesWhileMigrating)
     attr.pid = 123;
     attr.state = PROC_MIGRATE;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 1;
     attr.targetConfig.targets[0] = {4, 25, 0};
     attr.migrateMode = MIG_RATIO_MODE;
@@ -637,6 +650,7 @@ TEST_F(ManageTest, TestConfigureMigrationTargetsStagesWhileMigrating)
 
     ProcessTargetConfig config = {};
     config.migrateMode = MIG_MEMSIZE_MODE;
+    config.sourceLocalNid = NUMA_NO_NODE;
     config.count = 1;
     config.targets[0] = {5, 0, 4096};
     g_processManager.nrLocalNuma = 4;
@@ -662,9 +676,11 @@ TEST_F(ManageTest, TestApplyPendingMigrationTargets)
     attr.state = PROC_MIGRATE;
     attr.numaAttr.numaNodes = 0x1;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 1;
     attr.targetConfig.targets[0] = {4, 25, 0};
     attr.pendingTargetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.pendingTargetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.pendingTargetConfig.count = 1;
     attr.pendingTargetConfig.targets[0] = {5, 0, 4096};
     attr.pendingTargetConfigValid = true;
@@ -1304,6 +1320,7 @@ TEST_F(ManageTest, TestPublishProcessManageCandidateStagesCapacityBypass)
     active.pid = 123;
     prepared->pid = active.pid;
     prepared->pendingTargetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    prepared->pendingTargetConfig.sourceLocalNid = NUMA_NO_NODE;
     prepared->pendingTargetConfig.count = 1;
     prepared->pendingTargetConfig.targets[0] = {4, 0, 2048};
     prepared->pendingTargetConfigValid = true;
@@ -4277,6 +4294,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsRatioOneByOne)
     ProcessAttr attr = {};
     attr.pid = 100;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 1;
     attr.targetConfig.targets[0] = {1, 50, 0};
     attr.managedLocalState.managedLocalMask = BIT(0);
@@ -4309,6 +4327,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsMemsizeOneByOne)
     ProcessAttr attr = {};
     attr.pid = 107;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 1;
     attr.targetConfig.targets[0] = {1, 0, 160};
     attr.managedLocalState.managedLocalMask = BIT(0);
@@ -4335,6 +4354,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsMemsizeTwoByOne)
     ProcessAttr attr = {};
     attr.pid = 101;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 1;
     attr.targetConfig.targets[0] = {2, 0, 320};
     attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
@@ -4366,6 +4386,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsRatioTwoByOne)
     ProcessAttr attr = {};
     attr.pid = 108;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 1;
     attr.targetConfig.targets[0] = {2, 50, 0};
     attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
@@ -4395,6 +4416,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsRatioTwoByTwo)
     ProcessAttr attr = {};
     attr.pid = 102;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 2;
     attr.targetConfig.targets[0] = {2, 50, 0};
     attr.targetConfig.targets[1] = {3, 25, 0};
@@ -4435,6 +4457,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsReroutesAsymmetricCandidates)
     ProcessAttr attr = {};
     attr.pid = 111;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 2;
     attr.targetConfig.targets[0] = {2, 50, 0};
     attr.targetConfig.targets[1] = {3, 50, 0};
@@ -4466,6 +4489,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsMemsizeTwoByTwoScales)
     ProcessAttr attr = {};
     attr.pid = 103;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 2;
     attr.targetConfig.targets[0] = {2, 0, 320};
     attr.targetConfig.targets[1] = {3, 0, 320};
@@ -4501,6 +4525,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsShrinksExistingPairs)
     ProcessAttr attr = {};
     attr.pid = 104;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 1;
     attr.targetConfig.targets[0] = {2, 0, 200};
     attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
@@ -4526,6 +4551,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsDeletedRemoteEmitsZeroPair)
     ProcessAttr attr = {};
     attr.pid = 109;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 0;
     attr.managedLocalState.managedLocalMask = BIT(0);
     attr.managedLocalState.accountLocalMask[0] = BIT(0);
@@ -4551,6 +4577,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsNoCapacityKeepsRequest)
     ProcessAttr attr = {};
     attr.pid = 110;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 1;
     attr.targetConfig.targets[0] = {1, 50, 0};
     attr.managedLocalState.managedLocalMask = BIT(0);
@@ -4577,6 +4604,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsNewLocalKeepsAccount)
     ProcessAttr attr = {};
     attr.pid = 105;
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 1;
     attr.targetConfig.targets[0] = {2, 0, 240};
     attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
@@ -4615,6 +4643,7 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsSkipsEmptyLocal)
     ProcessAttr attr = {};
     attr.pid = 106;
     attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr.targetConfig.count = 1;
     attr.targetConfig.targets[0] = {2, 50, 0};
     attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
@@ -4630,6 +4659,60 @@ TEST_F(ManageTest, TestBuildPairRequestedTargetsSkipsEmptyLocal)
     ASSERT_EQ(0, result.ret);
     EXPECT_EQ(20U, result.Find(0, 2));
     EXPECT_EQ(0U, result.Find(1, 2));
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsUsesConfiguredSourceLocal)
+{
+    ProcessAttr attr = {};
+    attr.pid = 112;
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.sourceLocalNid = 1;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = {2, 50, 0};
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
+    attr.walkPage.nrPages[0] = 40;
+    attr.walkPage.nrPages[1] = 40;
+    attr.walkPage.nrPages[2] = 20;
+    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 20;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 2;
+    context.pageSizeKB = 4;
+    context.capacityLocalMask[0] = BIT(0) | BIT(1);
+    PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(50U, result.summary.effectiveRemotePages[0]);
+    EXPECT_EQ(20U, result.Find(0, 2));
+    EXPECT_EQ(30U, result.Find(1, 2));
+    EXPECT_EQ(0U, result.summary.unassignedRequestedPages[0]);
+}
+
+TEST_F(ManageTest, TestBuildPairRequestedTargetsDoesNotBorrowOtherLocal)
+{
+    ProcessAttr attr = {};
+    attr.pid = 113;
+    attr.targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr.targetConfig.sourceLocalNid = 1;
+    attr.targetConfig.count = 1;
+    attr.targetConfig.targets[0] = {2, 50, 0};
+    attr.managedLocalState.managedLocalMask = BIT(0) | BIT(1);
+    attr.managedLocalState.residentLocalMask = BIT(0) | BIT(1);
+    attr.walkPage.nrPages[0] = 60;
+    attr.walkPage.nrPages[1] = 20;
+
+    PairRequestContext context = {};
+    context.nrLocalNuma = 2;
+    context.pageSizeKB = 4;
+    context.capacityLocalMask[0] = BIT(0) | BIT(1);
+    PairRequestResult result = RunBuildPairRequestedTargets(attr, context);
+
+    ASSERT_EQ(0, result.ret);
+    EXPECT_EQ(40U, result.summary.effectiveRemotePages[0]);
+    EXPECT_EQ(0U, result.Find(0, 2));
+    EXPECT_EQ(20U, result.Find(1, 2));
+    EXPECT_EQ(20U, result.summary.unassignedRequestedPages[0]);
 }
 
 struct AllPairTargetResult {
@@ -4680,6 +4763,7 @@ static void InitRatioPairProcess(ProcessAttr *attr, pid_t pid, int nrLocalNuma, 
     attr->pid = pid;
     attr->scanType = NORMAL_SCAN;
     attr->targetConfig.migrateMode = MIG_RATIO_MODE;
+    attr->targetConfig.sourceLocalNid = NUMA_NO_NODE;
     attr->targetConfig.count = 1;
     attr->targetConfig.targets[0] = {nrLocalNuma, ratio, 0};
     attr->walkPage.nrPages[0] = local0Pages;
@@ -5479,6 +5563,7 @@ TEST_F(ManageTest, TestValidateProcessTargetConfigRatioModeValid)
 {
     ProcessTargetConfig config = {};
     config.migrateMode = MIG_RATIO_MODE;
+    config.sourceLocalNid = NUMA_NO_NODE;
     config.count = 2;
     config.targets[0].remoteNid = 4;
     config.targets[0].ratio = 50;
@@ -5491,6 +5576,7 @@ TEST_F(ManageTest, TestValidateProcessTargetConfigRatioModeDuplicateNid)
 {
     ProcessTargetConfig config = {};
     config.migrateMode = MIG_RATIO_MODE;
+    config.sourceLocalNid = NUMA_NO_NODE;
     config.count = 2;
     config.targets[0].remoteNid = 4;
     config.targets[0].ratio = 50;
@@ -5503,6 +5589,7 @@ TEST_F(ManageTest, TestValidateProcessTargetConfigRatioModeExceedHundred)
 {
     ProcessTargetConfig config = {};
     config.migrateMode = MIG_RATIO_MODE;
+    config.sourceLocalNid = NUMA_NO_NODE;
     config.count = 2;
     config.targets[0].remoteNid = 4;
     config.targets[0].ratio = 60;
@@ -5515,6 +5602,7 @@ TEST_F(ManageTest, TestValidateProcessTargetConfigRatioModeSingleExceedHundred)
 {
     ProcessTargetConfig config = {};
     config.migrateMode = MIG_RATIO_MODE;
+    config.sourceLocalNid = NUMA_NO_NODE;
     config.count = 1;
     config.targets[0].remoteNid = 4;
     config.targets[0].ratio = 101;
@@ -5525,6 +5613,7 @@ TEST_F(ManageTest, TestValidateProcessTargetConfigMemSizeModeValid)
 {
     ProcessTargetConfig config = {};
     config.migrateMode = MIG_MEMSIZE_MODE;
+    config.sourceLocalNid = NUMA_NO_NODE;
     config.count = 1;
     config.targets[0].remoteNid = 4;
     config.targets[0].memSizeKB = 4096;
@@ -5535,10 +5624,25 @@ TEST_F(ManageTest, TestValidateProcessTargetConfigMemSizeModeNotAligned)
 {
     ProcessTargetConfig config = {};
     config.migrateMode = MIG_MEMSIZE_MODE;
+    config.sourceLocalNid = NUMA_NO_NODE;
     config.count = 1;
     config.targets[0].remoteNid = 4;
     /* pageSizeKB = 4 (normal mode), 3 is not page-aligned */
     config.targets[0].memSizeKB = 3;
+    EXPECT_EQ(-EINVAL, ValidateProcessTargetConfig(&config));
+}
+
+TEST_F(ManageTest, TestValidateProcessTargetConfigSourceLocalNid)
+{
+    ProcessTargetConfig config = {};
+    config.migrateMode = MIG_RATIO_MODE;
+    config.sourceLocalNid = 3;
+    g_processManager.nrLocalNuma = 4;
+
+    EXPECT_EQ(0, ValidateProcessTargetConfig(&config));
+    config.sourceLocalNid = 4;
+    EXPECT_EQ(-EINVAL, ValidateProcessTargetConfig(&config));
+    config.sourceLocalNid = NUMA_NO_NODE - 1;
     EXPECT_EQ(-EINVAL, ValidateProcessTargetConfig(&config));
 }
 
@@ -5569,6 +5673,7 @@ TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamZeroCount)
     EXPECT_EQ(0, BuildProcessTargetConfigFromParam(&param, &config));
     EXPECT_EQ(0U, config.count);
     EXPECT_EQ(MIG_RATIO_MODE, config.migrateMode);
+    EXPECT_EQ(NUMA_NO_NODE, config.sourceLocalNid);
 }
 
 TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamDefaultL2Node)
@@ -5579,6 +5684,7 @@ TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamDefaultL2Node)
     param.numaParam[0].nid = DEFAULT_L2_NODE;
     EXPECT_EQ(0, BuildProcessTargetConfigFromParam(&param, &config));
     EXPECT_EQ(0U, config.count);
+    EXPECT_EQ(NUMA_NO_NODE, config.sourceLocalNid);
 }
 
 TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamRatioMode)
@@ -5594,6 +5700,7 @@ TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamRatioMode)
     param.numaParam[1].migrateMode = MIG_RATIO_MODE;
     EXPECT_EQ(0, BuildProcessTargetConfigFromParam(&param, &config));
     EXPECT_EQ(MIG_RATIO_MODE, config.migrateMode);
+    EXPECT_EQ(NUMA_NO_NODE, config.sourceLocalNid);
     EXPECT_EQ(2U, config.count);
     EXPECT_EQ(4, config.targets[0].remoteNid);
     EXPECT_EQ(50, config.targets[0].ratio);
@@ -5631,11 +5738,14 @@ TEST_F(ManageTest, TestBuildProcessTargetConfigFromParamTargetConfigValid)
     ProcessTargetConfig config = {};
     param.targetConfigValid = true;
     param.targetConfig.migrateMode = MIG_RATIO_MODE;
+    param.targetConfig.sourceLocalNid = 2;
     param.targetConfig.count = 1;
     param.targetConfig.targets[0].remoteNid = 4;
     param.targetConfig.targets[0].ratio = 50;
+    g_processManager.nrLocalNuma = 4;
     EXPECT_EQ(0, BuildProcessTargetConfigFromParam(&param, &config));
     EXPECT_EQ(MIG_RATIO_MODE, config.migrateMode);
+    EXPECT_EQ(2, config.sourceLocalNid);
     EXPECT_EQ(1U, config.count);
     EXPECT_EQ(4, config.targets[0].remoteNid);
 }
