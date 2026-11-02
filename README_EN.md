@@ -1,11 +1,11 @@
-<div align="center">
+<h1 style="text-align:center"><img src="docs/images/ubturbo-logo.png" alt="UBTurbo" width="50%" /></h1>
 
-<h1><img src="docs/images/ubturbo-logo.png" alt="UBTurbo" width="50%" /></h1>
+<div style="text-align:center">
 
 In-node resource management and tiered-memory scheduling for openEuler
 
 [![License](https://img.shields.io/badge/license-MulanPSL--2.0-orange.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-openEuler%20aarch64-blue.svg)](#software-and-hardware-compatibility)
+[![Platform](https://img.shields.io/badge/platform-openEuler%20aarch64-blue.svg)](./README_EN.md#-software-and-hardware-compatibility)
 [![Language](https://img.shields.io/badge/language-C%20%7C%20C%2B%2B-lightgrey.svg)](CMakeLists.txt)
 
 [简体中文](README.md) | [English](README_EN.md)
@@ -101,7 +101,7 @@ throughout the operation.
 
 Use the following guides to get started:
 
-- [Build and installation](docs/installation.md): dependencies, source builds, RPM installation, SMAP loading, and
+- [Build and installation](docs/ubturbo_installation.md): dependencies, source builds, RPM installation, SMAP loading, and
   service verification.
 - [Build and unit testing](docs/unit_testing.md): step-by-step repository build and UBTurbo, RMRS, and SMAP unit
   test instructions.
@@ -112,11 +112,12 @@ Use the following guides to get started:
 
 - [Features and architecture](docs/architecture.md): system boundaries, component responsibilities, lifecycle, and
   IPC data flow.
-- [C/C++ API](docs/api_reference.md): common data types and client, server, configuration, and logging interfaces.
-- [Configuration reference](docs/configuration.md): UBTurbo, RMRS, UCache, and SMAP configuration items.
+- [C/C++ API](docs/ubturbo_api_reference.md): common data types and client, server, configuration, and logging interfaces.
+- [Configuration reference](docs/ubturbo_configuration.md): UBTurbo, RMRS, UCache, and SMAP configuration items.
 - [Plugin development](docs/developer_guide.md): development environment, plugin entry points, IPC service
   registration, testing, and submission checks.
 - [IPC Python client](tools/ubturbo_ipc/README.md): commands, page modes, and invocation security constraints.
+
 ## 📦 Software and Hardware Compatibility
 
 - Hardware platform
@@ -130,7 +131,8 @@ Use the following guides to get started:
 > module package — **ubturbo-smap-dkms** (source tree automatically built by dkms into
 > `/lib/modules/<kver>/updates/`) or **ubturbo-smap-kmod** (prebuilt modules installed to `extra/`). The kernel
 > module has been unified into a single `smap.ko`, loaded via `modprobe smap`; see
-> [installation guide](docs/installation.md) and [SMAP docs](docs/smap/README.md).
+> [installation guide](docs/ubturbo_installation.md) and [SMAP docs](docs/smap/README.md).
+
 - RMRS: `libvirt-devel`
 - SMAP: matching `kernel-devel`, `libsmap.so`, and SMAP kernel modules
 

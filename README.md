@@ -1,11 +1,11 @@
-<div align="center">
+<h1 style="text-align:center"><img src="docs/images/ubturbo-logo.png" alt="UBTurbo" width="50%" /></h1>
 
-<h1><img src="docs/images/ubturbo-logo.png" alt="UBTurbo" width="50%" /></h1>
+<div style="text-align:center">
 
 面向 openEuler 的节点内资源管理与多级内存调度框架
 
 [![License](https://img.shields.io/badge/license-MulanPSL--2.0-orange.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-openEuler%20aarch64-blue.svg)](#软件硬件配套说明)
+[![Platform](https://img.shields.io/badge/platform-openEuler%20aarch64-blue.svg)](./README.md#-软件硬件配套说明)
 [![Language](https://img.shields.io/badge/language-C%20%7C%20C%2B%2B-lightgrey.svg)](CMakeLists.txt)
 
 [简体中文](README.md) | [English](README_EN.md)
@@ -88,7 +88,7 @@ UBTurbo 是一款开源的节点内资源管理框架，面向 openEuler aarch64
 
 请访问以下文档获取简易教程。
 
-- [编译安装](docs/installation.md)：介绍依赖准备、源码构建、RPM 安装、SMAP 加载和服务验证。
+- [编译安装](docs/ubturbo_installation.md)：介绍依赖准备、源码构建、RPM 安装、SMAP 加载和服务验证。
 - [构建与单元测试](docs/unit_testing.md)：按步骤编译仓库并运行 UBTurbo、RMRS 和 SMAP 单元测试。
 - [服务使用](docs/user_guide.md)：介绍配置插件、启动服务、检查状态和常见故障处理。
 - [样例执行](docs/tutorial.md)：介绍如何调用 Client SDK、RMRS 与 SMAP 能力。
@@ -96,8 +96,8 @@ UBTurbo 是一款开源的节点内资源管理框架，面向 openEuler aarch64
 ## 📑 学习教程
 
 - [功能与架构](docs/architecture.md)：介绍系统边界、组件职责、生命周期和 IPC 数据流。
-- [C/C++ API](docs/api_reference.md)：介绍公共数据类型、客户端、服务端、配置和日志接口。
-- [配置参考](docs/configuration.md)：介绍 UBTurbo、RMRS、UCache 和 SMAP 配置项。
+- [C/C++ API](docs/ubturbo_api_reference.md)：介绍公共数据类型、客户端、服务端、配置和日志接口。
+- [配置参考](docs/ubturbo_configuration.md)：介绍 UBTurbo、RMRS、UCache 和 SMAP 配置项。
 - [插件开发](docs/developer_guide.md)：介绍开发环境、插件入口、IPC 服务注册、测试和提交检查。
 - [IPC Python 客户端](tools/ubturbo_ipc/README.md)：介绍命令、页面模式和调用安全约束。
 
@@ -114,7 +114,7 @@ UBTurbo 是一款开源的节点内资源管理框架，面向 openEuler aarch64
 > **SMAP 交付形态**：使用 SMAP 能力需提前安装 SMAP，包含用户态包 `ubturbo-smap` 与内核模块包
 > `ubturbo-smap-dkms`（源码包，dkms 自动编译部署至 `/lib/modules/<内核版本>/updates/`）或
 > `ubturbo-smap-kmod`（预编译包，安装至 `extra/`）二选一。内核模块已统一为单个 `smap.ko`，经
-> `modprobe smap` 加载；详见 [安装指南](docs/installation.md) 与 [SMAP 文档](docs/smap/README.md)。
+> `modprobe smap` 加载；详见 [安装指南](docs/ubturbo_installation.md) 与 [SMAP 文档](docs/smap/README.md)。
 
 ## 📌 FAQ
 

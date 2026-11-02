@@ -79,8 +79,8 @@ ub_turbo_exec / libubturbo_client.so / librmrs_ubturbo_plugin.so
 
 | 日期 | 变更内容 |
 |------|----------|
-| 2026-08 | libboundscheck 移除 submodule，改用 openEuler 发行版软件包（动态链接） |
-| 2026-08 | rapidjson 移除 submodule，改用 openEuler 发行版软件包 rapidjson-devel（header-only） |
-| 2026-08 | googletest 移除 submodule，切换为 openEuler 社区开源件 src-openeuler/googletest（humble 分支，1.10.9004），构建时自动拉取 |
-| 2026-08 | mockcpp 维持原有静态依赖方式（源码由 git submodule / 手动放置于 `test/3rdparty/mockcpp`），不随仓库内置 |
-| 2026-08 | 补充 mockcpp 64K 内存页兼容性限制说明；UT 执行脚本增加内存页大小检测，非 4K 页环境自动跳过 UT 执行，不影响整体流程 |
+| 2026-08 | libboundscheck 移除 submodule，改用 openEuler 发行版软件包（动态链接）。 |
+| 2026-08 | rapidjson 移除 submodule，改用 openEuler 发行版软件包 rapidjson-devel（header-only）。 |
+| 2026-08 | googletest 移除 submodule，切换为 openEuler 社区开源件 src-openeuler/googletest（humble 分支，1.10.9004），构建时自动拉取。 |
+| 2026-08 | mockcpp 维持原有静态依赖方式（源码由 git submodule / 手动放置于 `test/3rdparty/mockcpp`），不随仓库内置。 |
+| 2026-08 | 补充 mockcpp 64K 内存页兼容性限制说明；UT 执行脚本增加内存页大小检测，非 4K 页环境自动跳过 UT 执行，不影响整体流程。 |

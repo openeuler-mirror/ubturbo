@@ -6,7 +6,9 @@ HotScan 是一个 ARM64 Linux 内核模块，按周期扫描指定进程的**已
 
 ## 快速开始
 
-要求：ARM64 Linux 6.6 系列内核及匹配的内核构建目录、GCC、Python 3、NumPy、Matplotlib。模块加载与卸载需要 root 权限。模块按 4 KB PTE 扫描，不支持透明大页；对目标映射禁用 THP，或在采集前关闭系统 THP：
+**要求**
+
+ARM64 Linux 6.6 系列内核及匹配的内核构建目录、GCC、Python 3、NumPy、Matplotlib。模块加载与卸载需要 root 权限。模块按 4 KB PTE 扫描，不支持透明大页；对目标映射禁用 THP，或在采集前关闭系统 THP：
 
 ```bash
 echo never | sudo tee /sys/kernel/mm/transparent_hugepage/enabled
@@ -33,9 +35,9 @@ python3 parse_smap.py '/tmp/myrun/scan_*.out' zic --plot
 | `target_pid` | `0` | 必填，必须是大于零的目标 PID |
 | `scan_period_ms` | `1000` | 定时触发周期，毫秒，必须大于零 |
 | `test_tag` | 加载时的 Unix 秒级时间戳 | `/tmp/<test_tag>/` 输出目录名 |
-| `num_workers` | `20` | 并行 worker 数量，范围 1–64 |
+| `num_workers` | `20` | 并行 worker 数量，范围 1 ~ 64 |
 
-每轮写一个 `scan_<N>.out`。扫描只记录存在且已驻留的匿名 PTE；文件映射、未分配或已换出的页面不会出现。worker 并行写入缓冲区，因此**文件内条目不保证按 VA 排序**，解析脚本会自行排序。若上一轮尚未完成，定时触发可能跳过；需要判断实际轮次时，以文件和内核日志为准：
+每轮写一个 `scan_<N>.out`。扫描只记录存在且已驻留的匿名 PTE；文件映射、未分配或已换出的页面不会出现。worker 并行写入缓冲区，因此**文件内条目不保证按 VA 排序**，解析脚本会自行排序。若上一轮尚未完成，定时触发可能被跳过；需要判断实际轮次时，以文件和内核日志为准：
 
 ```bash
 sudo dmesg | grep hotscan
@@ -107,7 +109,6 @@ python3 parse_smap.py '/tmp/myrun/scan_*.out' zic --plot --sim-scan-period 10
 python3 tests/analyze_gaussian_run.py tests/artifacts/hotscan-gaussian-20260929.tar.gz
 ```
 
-
 ### 矩形热区与扫描吞吐
 
 [`tests/hot_region_stimulus.c`](tests/hot_region_stimulus.c) 提供可用信号切换的两组矩形热区；[`tests/verify_hot_regions.py`](tests/verify_hot_regions.py) 对指定稳定轮次核对 256 页覆盖、VA 唯一性与访问标记。切换信号附近的轮次应跳过：
@@ -129,11 +130,11 @@ python3 tests/verify_hot_regions.py /tmp/verify "$BASE_VA" \
   --phase-a 5:35 --phase-b 45:75 --idle 85:105
 ```
 
-区间仅是示例，须根据实际发信号时间选取。吞吐测试使用 [`tests/scan_bench_target.c`](tests/scan_bench_target.c) 和 [`tests/bench_vm.py`](tests/bench_vm.py)；脚本会在每组测试后卸载模块并清理对应输出。2026-09-29 在 16 vCPU 虚机上，以 2 GiB 匿名映射、2 ms 触发周期测试，批量写入后的完成频率为单 worker **83.36 轮/秒**、16 worker **472.63 轮/秒**。完成频率以内核日志时间戳计算，低于标称触发频率表示触发可能被跳过。
+区间仅是示例，须根据实际发信号时间选取。吞吐测试使用 [`tests/scan_bench_target.c`](tests/scan_bench_target.c) 和 [`tests/bench_vm.py`](tests/bench_vm.py)；脚本会在每组测试后卸载模块并清理对应输出。2026-09-29 在 16 vCPU 虚机上，以 2 GiB 匿名映射和2 ms 触发周期进行测试，批量写入后的完成频率为单 worker **83.36 轮每秒**、16 worker **472.63 轮每秒**。完成频率以内核日志时间戳计算，低于标称触发频率表示触发可能被跳过。
 
 ## 实现概览
 
-`hrtimer` 定时触发扫描；调度 work 获取目标进程 `mm` 并分配结果缓冲区；多个 worker 分段遍历匿名 PTE，读取并清除 Access Flag；最后一个 worker 失效目标 TLB，再由独立的有序 I/O workqueue 写入文件。扫描 workqueue 尝试绑定 CPU 0–19；若设置亲和性失败，则使用默认调度。详细实现见 [`hotscan_main.c`](hotscan_main.c)。
+`hrtimer` 定时触发扫描；调度 work 获取目标进程 `mm` 并分配结果缓冲区；多个 worker 分段遍历匿名 PTE，读取并清除 Access Flag；最后一个 worker 失效目标 TLB，再由独立的有序 I/O workqueue 写入文件。扫描 workqueue 尝试绑定 CPU 0–19；若设置亲和性失败，则使用默认调度。详细实现参见 [`hotscan_main.c`](hotscan_main.c)。
 
 ## 许可证
 
