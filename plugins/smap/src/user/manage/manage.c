@@ -438,13 +438,13 @@ static void FreeProceccesAttr(ProcessAttr *attr)
     free(attr);
 }
 
-void GetProcessPeriods(const ProcessAttr *attr, uint32_t *scanTime, uint32_t *duration)
+void GetProcessPeriods(const ProcessAttr *attr, uint32_t *scanTime, uint32_t *migPeriod)
 {
     *scanTime = attr && attr->scanTime ? attr->scanTime : DEFAULT_SCAN_PERIOD;
-    *duration = attr && attr->duration ? attr->duration : DEFAULT_MIGRATE_PERIOD;
+    *migPeriod = attr && attr->scanType == NORMAL_SCAN && attr->migPeriod ? attr->migPeriod : DEFAULT_MIGRATE_PERIOD;
     if (GetFileConfSwitchConfig()) {
         *scanTime = GetScanPeriodConfig();
-        *duration = GetMigratePeriodConfig();
+        *migPeriod = GetMigratePeriodConfig();
     }
 }
 
@@ -495,7 +495,7 @@ int PidSlotAdd(struct ProcessManager *manager, ProcessAttr *attr)
         }
         if (attr->scanType == NORMAL_SCAN) {
             attr->scanTime = DEFAULT_SCAN_PERIOD;
-            attr->duration = DEFAULT_MIGRATE_PERIOD;
+            attr->migPeriod = DEFAULT_MIGRATE_PERIOD;
         }
         s->pid = attr->pid;
         s->attr = attr;
@@ -1045,7 +1045,7 @@ int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessMana
          */
         prepared->numaAttr.numaNodes |= prepared->managedLocalState.managedLocalMask;
         prepared->scanTime = DEFAULT_SCAN_PERIOD;
-        prepared->duration = param->scanType == NORMAL_SCAN ? DEFAULT_MIGRATE_PERIOD : param->duration;
+        prepared->migPeriod = param->scanType == NORMAL_SCAN ? DEFAULT_MIGRATE_PERIOD : 0;
     }
     return 0;
 }

@@ -358,7 +358,8 @@ struct ProcessAttribute {
     pid_t pid;
     enum ProcessState state;
     uint32_t scanTime;
-    uint32_t duration; // scanType为统计模式时记录统计时长
+    uint32_t duration; // HAM_SCAN和STATISTIC_SCAN模式下的扫描时长，单位秒
+    uint32_t migPeriod; // 仅NORMAL_SCAN模式生效，进程迁移周期，单位毫秒
     ScanType scanType; // 标识添加进程组件
     time_t scanStart;
     SceneInfo sceneInfo; // 场景：轻载/重载/稳态/非稳态，扫描周期等
@@ -697,7 +698,7 @@ RunMode GetRunMode(void);
 void SetRunMode(RunMode runMode);
 
 /* NORMAL_SCAN: enabled file configuration > PID attributes > fixed defaults. */
-void GetProcessPeriods(const ProcessAttr *attr, uint32_t *scanTime, uint32_t *duration);
+void GetProcessPeriods(const ProcessAttr *attr, uint32_t *scanTime, uint32_t *migPeriod);
 void PidSlotInit(struct ProcessManager *manager);
 void PidSlotDestroy(struct ProcessManager *manager);
 int PidSlotAdd(struct ProcessManager *manager, ProcessAttr *attr);

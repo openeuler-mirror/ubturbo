@@ -123,13 +123,65 @@ TEST_F(PidPeriodTest, InnerDirectlyChangesOnlyTargetAttributes)
     auto *second = Add(101);
     EXPECT_EQ(0, SmapSetPidPeriod(100, 300, 1000));
     EXPECT_EQ(300u, first->scanTime);
-    EXPECT_EQ(1000u, first->duration);
+    EXPECT_EQ(1000u, first->migPeriod);
     EXPECT_EQ(200u, second->scanTime);
-    EXPECT_EQ(2000u, second->duration);
+    EXPECT_EQ(2000u, second->migPeriod);
     EXPECT_EQ(0u, captured[0].nTimes); // setter performs no ioctl
     UpdateProcessPeriods(first);
+    EXPECT_EQ(1000u, captured[0].duration);
     EXPECT_EQ(3u, captured[0].nTimes);
     EXPECT_EQ(2000u, manager->migPeriod);
+}
+
+TEST_F(PidPeriodTest, TrackingModeAndDurationDoNotOverwriteMigrationPeriod)
+{
+    auto *attr = Add(100);
+    attr->state = PROC_MOVE;
+    ASSERT_EQ(0, SmapSetPidPeriod(100, 500, 5000));
+    ASSERT_EQ(0, UpdateManagedProcessTrackingMode(attr, HAM_SCAN, 300, 123));
+    EXPECT_EQ(123u, attr->duration);
+    EXPECT_EQ(5000u, attr->migPeriod);
+    AccessAddPidPayload payload = {};
+    payload.pid = 100;
+    payload.type = HAM_SCAN;
+    payload.scanTime = attr->scanTime;
+    payload.duration = attr->duration;
+    ASSERT_EQ(0, AccessIoctlAddPid(1, &payload));
+    EXPECT_EQ(123u, captured[0].duration);
+    EXPECT_EQ(6u, captured[0].nTimes);
+
+    ASSERT_EQ(0, UpdateManagedProcessTrackingMode(attr, STATISTIC_SCAN, 100, 2));
+    EXPECT_EQ(2u, attr->duration);
+    EXPECT_EQ(5000u, attr->migPeriod);
+    payload.type = STATISTIC_SCAN;
+    payload.scanTime = attr->scanTime;
+    payload.duration = attr->duration;
+    ASSERT_EQ(0, AccessIoctlAddPid(1, &payload));
+    EXPECT_EQ(2u, captured[0].duration);
+    EXPECT_EQ(20u, captured[0].nTimes);
+
+    ASSERT_EQ(0, UpdateManagedProcessTrackingMode(attr, NORMAL_SCAN, 500, 120));
+    EXPECT_EQ(5000u, attr->migPeriod);
+    UpdateProcessPeriods(attr);
+    EXPECT_EQ(5000u, captured[0].duration);
+    EXPECT_EQ(10u, captured[0].nTimes);
+    EXPECT_EQ(120u, attr->duration);
+    ASSERT_EQ(0, SmapSetPidPeriod(100, 600, 6000));
+    EXPECT_EQ(120u, attr->duration);
+    ASSERT_EQ(0, SmapResetPidPeriod(100));
+    EXPECT_EQ(120u, attr->duration);
+    EXPECT_EQ(2000u, attr->migPeriod);
+}
+
+TEST_F(PidPeriodTest, SlotDefaultsPreserveScanDuration)
+{
+    auto *attr = static_cast<ProcessAttr *>(calloc(1, sizeof(ProcessAttr)));
+    attr->pid = 100;
+    attr->scanType = NORMAL_SCAN;
+    attr->duration = 123;
+    ASSERT_GE(PidSlotAdd(manager, attr), 0);
+    EXPECT_EQ(123u, attr->duration);
+    EXPECT_EQ(DEFAULT_MIGRATE_PERIOD, attr->migPeriod);
 }
 
 TEST_F(PidPeriodTest, FileOverridesInnerAndChangesApplyToExistingPid)
@@ -140,36 +192,43 @@ TEST_F(PidPeriodTest, FileOverridesInnerAndChangesApplyToExistingPid)
     UpdateProcessPeriods(attr);
     EXPECT_EQ(1000u, captured[0].scanTime);
     EXPECT_EQ(10000u, captured[0].duration);
+    EXPECT_EQ(10u, captured[0].nTimes);
     EXPECT_EQ(500u, attr->scanTime);
     fileScan = 700;
     fileMigrate = 7000;
     UpdateProcessPeriods(attr);
     EXPECT_EQ(700u, captured[0].scanTime);
+    EXPECT_EQ(7000u, captured[0].duration);
     ASSERT_EQ(0, SmapSetPidPeriod(100, 600, 6000));
     UpdateProcessPeriods(attr);
     EXPECT_EQ(700u, captured[0].scanTime);
+    EXPECT_EQ(7000u, captured[0].duration);
     fileEnabled = false;
     UpdateProcessPeriods(attr);
     EXPECT_EQ(600u, captured[0].scanTime);
     EXPECT_EQ(6000u, captured[0].duration);
+    EXPECT_EQ(10u, captured[0].nTimes);
 }
 
 TEST_F(PidPeriodTest, DefaultsAndResetRespectFilePriority)
 {
     auto *attr = Add(100);
     EXPECT_EQ(200u, attr->scanTime);
-    EXPECT_EQ(2000u, attr->duration);
+    EXPECT_EQ(2000u, attr->migPeriod);
     UpdateProcessPeriods(attr);
     EXPECT_EQ(200u, captured[0].scanTime);
+    EXPECT_EQ(2000u, captured[0].duration);
     ASSERT_EQ(0, SmapSetPidPeriod(100, 500, 5000));
     fileEnabled = true;
     ASSERT_EQ(0, SmapResetPidPeriod(100));
     EXPECT_EQ(200u, attr->scanTime);
     UpdateProcessPeriods(attr);
     EXPECT_EQ(1000u, captured[0].scanTime);
+    EXPECT_EQ(10000u, captured[0].duration);
     fileEnabled = false;
     UpdateProcessPeriods(attr);
     EXPECT_EQ(200u, captured[0].scanTime);
+    EXPECT_EQ(2000u, captured[0].duration);
 }
 
 TEST_F(PidPeriodTest, NonDivisibleMaximumWindowMatchesKernel)
@@ -234,6 +293,7 @@ TEST_F(PidPeriodTest, NewPidKernelTrackingUsesFileBeforeSlotPublication)
     ASSERT_EQ(0, AccessIoctlAddPid(1, &payload));
     EXPECT_EQ(1000u, captured[0].scanTime);
     EXPECT_EQ(10000u, captured[0].duration);
+    EXPECT_EQ(10u, captured[0].nTimes);
 }
 
 TEST_F(PidPeriodTest, SetAndResetWaitForOwningSlotLock)
@@ -253,7 +313,7 @@ TEST_F(PidPeriodTest, SetAndResetWaitForOwningSlotLock)
         EnvMutexUnlock(&slot->attrLock);
         EXPECT_EQ(0, worker.get());
         EXPECT_EQ(reset ? 200u : 500u, attr->scanTime);
-        EXPECT_EQ(reset ? 2000u : 5000u, attr->duration);
+        EXPECT_EQ(reset ? 2000u : 5000u, attr->migPeriod);
     }
     EXPECT_EQ(2, EnvAtomicRead(&slot->refs));
     PidSlotReleaseRefs(&slot, 1);
