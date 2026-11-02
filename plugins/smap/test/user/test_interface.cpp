@@ -2406,6 +2406,40 @@ TEST_F(InterfaceTest, TestQueryVMFreqFromUserNormalThree)
     EXPECT_EQ(0, ret);
 }
 
+TEST_F(InterfaceTest, TestQueryVMFreqFromUserSubtractPrior)
+{
+    int pid = 1;
+    uint16_t lengthOut;
+    uint16_t data[3] = {0};
+    size_t dataLen = sizeof(data) / sizeof(uint16_t);
+    struct ProcessManager manager;
+    ProcessAttr attr = {.pid = 1, .next = nullptr};
+    /* 缓存中为合成值(prior + 窗口freq), 查询接口应扣除 prior 还原窗口频次 */
+    ActcData actcData1[3] = {};
+    actcData1[0].freq = 5;
+    actcData1[0].prior = 5;
+    actcData1[1].freq = 7;
+    actcData1[1].prior = 2;
+    actcData1[2].freq = 2;
+    actcData1[2].prior = 0;
+    int len1 = sizeof(actcData1) / sizeof(ActcData);
+    EnvAtomicSet(&g_status, 1);
+    attr.scanAttr.actcData[0] = actcData1;
+    attr.scanAttr.actcLen[0] = len1;
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    PidSlotAdd(&manager, &attr);
+    manager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&manager.threadLock);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+    int ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(3, lengthOut);
+    EXPECT_EQ(0, data[0]); // 合成值等于 prior, 表示窗口内未访问
+    EXPECT_EQ(5, data[1]);
+    EXPECT_EQ(2, data[2]);
+}
+
 TEST_F(InterfaceTest, DataNull)
 {
     int pid = 123;

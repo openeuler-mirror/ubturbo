@@ -42,7 +42,8 @@ struct access_pid_struct ap_data = {
  * ap_data.lock rw_semaphore with a fixed-length (AP_MAX_SLOTS) table of
  * ap_slot, each carrying its own refcount and ap_lock. Readers are lock-free
  * (atomic state read + refcount_inc_not_zero + double-check state); the last
- * releaser reclaims the access_pid. See 内核态ap_data锁保护设计.md.
+ * releaser reclaims the access_pid. See the ap_data lock protection design
+ * document.
  *
  * Reclaim mirrors the user-space PidSlotTryReclaim scheme (!364): the last
  * releaser only decrements refs and, on transition to 0, hands off to
@@ -53,7 +54,7 @@ struct access_pid_struct ap_data = {
  * the slot and overwrite s->ap mid-destroy.
  */
 
-/* 引用归零后唯一清理者：释放 ap 并把槽位恢复为 FREE */
+/* Sole reclaimer once refs drop to zero: free ap and restore the slot to FREE */
 static void ap_slot_try_reclaim(int i)
 {
 	struct ap_slot *s = &ap_data.slots[i];
@@ -518,8 +519,10 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 			continue;
 		}
 
-		/* VM 场景 guest RAM 经 memfd/hugetlbfs 后端分配，天然非匿名，
-		 * is_file_or_shared_page() 会误判全部白名单；VM 暂不标记白名单。 */
+		/* VM guest RAM is backed by memfd/hugetlbfs and is therefore
+		 * inherently non-anonymous, so is_file_or_shared_page() would
+		 * mark every page as white-listed. Skip the whitelist for VMs.
+		 */
 		if (ap->pid_type != SMAP_PID_VM && is_file_or_shared_page(page))
 			flags |= ACTC_WHITE_LIST_BIT;
 
@@ -529,7 +532,9 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 			actc[len_cnt].freq = smap_page_freq_read_clear(page);
 		}
 
-		/* Fill prior from priors array */
+		/* Fill prior: VM uses the priors array, while a normal process
+		 * uses the cumulative access count kept in page->flags.
+		 */
 		if (ap->info.vm_size && ap->info.priors) {
 			if ((mapping_offset + len_cnt) < ap->info.vm_size) {
 				flags |= ACTC_PRIOR_SET(
@@ -537,7 +542,7 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 							len_cnt]);
 			}
 		} else {
-			flags |= ACTC_PRIOR_SET(0);
+			flags |= ACTC_PRIOR_SET(smap_page_acc_get(page));
 		}
 
 		actc[len_cnt].flags = flags;
@@ -549,12 +554,12 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 }
 
 /**
- * fill_pid_actc_data - 为整个pid生成actc_data数组（遍历所有node）
- * @ap: access_pid结构体指针
- * @actc: actc_data数组指针（连续存储各node数据）
- * @actc_len: 各node的actc_len数组（输出）
+ * fill_pid_actc_data - build the actc_data array for a whole pid (all nodes)
+ * @ap: access_pid pointer
+ * @actc: actc_data array (per-node data stored contiguously)
+ * @actc_len: per-node actc_len array (output)
  *
- * 对每个node调用fill_actc_data_by_bitmap生成actc_data。
+ * Calls fill_actc_data_by_bitmap for each node to build the actc_data.
  */
 static void fill_pid_actc_data(struct access_pid *ap, struct actc_data *actc,
 			       u32 actc_len[SMAP_MAX_NUMNODES])
@@ -1169,10 +1174,11 @@ static void move_to_ap_data_list(struct list_head *tmp_head)
 }
 
 /*
- * 已占用 slot 的配置更新：逐字段比较，仅更新不一致项。字段集与
- * init_access_pid 的拷贝集一致(scan_time/ntimes/type/pid_type)，避免
- * 对已存在 pid 走 init_access_pid 的无谓
- * alloc/bitmap-prep/procfs/kvm-scan 开销。
+ * Config update for an already occupied slot: compare field by field and
+ * update only the mismatching ones. The field set matches the copy set of
+ * init_access_pid (scan_time/ntimes/type/pid_type), avoiding the needless
+ * alloc/bitmap-prep/procfs/kvm-scan cost of init_access_pid for an existing
+ * pid.
  */
 static void ap_slot_update_config(struct ap_slot *s,
 				  struct access_add_pid_payload *payload)
@@ -1223,8 +1229,9 @@ int access_add_pid(int len, struct access_add_pid_payload *payload)
 			}
 		}
 		/*
-		 * pid 已占用 slot：原位更新配置，跳过 init_access_pid，
-		 * 无需重新 alloc/bitmap-prep/procfs/kvm-scan
+		 * pid already occupies a slot: update config in place and skip
+		 * init_access_pid, so no re-allocation/bitmap-prep/procfs/
+		 * kvm-scan is needed
 		 */
 		existing = ap_get_slot(payload[i].pid);
 		if (existing) {

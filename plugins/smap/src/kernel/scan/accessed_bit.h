@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Description: SMAP Tiering Memory Solution: get accessed bit模块
+ * Description: SMAP Tiering Memory Solution: get accessed bit module
  */
 
 #ifndef _SRC_ACCESSED_BIT_H
@@ -26,12 +26,12 @@ struct statistics_tracking_info {
 	pid_t pid;
 	int l1_node;
 	int l2_node;
-	u64 page_num[NR_LEVEL]; // 近远端页面数
-	u64 *vaddr[NR_LEVEL]; // 虚地址数组, 顺序排序
-	u32 scan_num; // 已扫描次数，次数 % 窗口个数 = 待更新窗口
-	u8 **sliding_windows; // 统计时长除以单次周期 = 窗口个数， 单个窗口大小 = Pagenum(l1) + Pagenum(l2)
+	u64 page_num[NR_LEVEL]; // page count of local/remote levels
+	u64 *vaddr[NR_LEVEL]; // virtual address array, sorted
+	u32 scan_num; // number of scans done; scan_num % window_num = window to update
+	u8 **sliding_windows; // windows = statistics duration / scan period; size = Pagenum(l1) + Pagenum(l2)
 	struct list_head node;
-	u64 window_num; // 窗口个数
+	u64 window_num; // number of windows
 };
 
 struct ham_tracking_info {
@@ -52,7 +52,6 @@ struct hva_info {
 
 struct scan_result_entry {
 	phys_addr_t paddr;
-	u8 nid;
 	u8 hot;
 };
 
@@ -73,7 +72,7 @@ struct pte_walk {
 	bool group_hot;
 	u64 group_hot_skip_cnt;
 	struct scan_result_entry *scan_results;
-	u64 scan_result_cnt; /* 当前缓冲区计数 */
+	u64 scan_result_cnt; /* current buffer count */
 };
 
 int smap_create_tracking_info_file(struct ham_tracking_info *info);

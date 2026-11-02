@@ -17,6 +17,7 @@
 #include "common.h"
 #include "drv_common.h"
 #include "kernel_common.h"
+#include "smap_page_flags.h"
 
 #define MAX_PATH_LENGTH 64
 #define AP_PROCFS_DIR_LEN 32
@@ -87,6 +88,8 @@ struct access_pid {
 	u32 scan_time;
 	u32 ntimes;
 	u32 cur_times;
+	u32 acc_times; /* scan rounds since last cumulative-freq decay */
+	bool prior_decay; /* current round ages cumulative freq (see smap_page_flags.h) */
 	struct delayed_work scan_work;
 	struct completion work_done;
 	/* Notify readers only after scanning and bitmap construction finish. */
@@ -165,6 +168,17 @@ static inline bool access_pid_is_scanning(pid_t pid)
 static inline bool access_pid_cur_last_scanning(struct access_pid *ap)
 {
 	return ap->type == NORMAL_SCAN && ap->cur_times + 1 >= ap->ntimes;
+}
+
+/*
+ * Cumulative-freq decay round: every SMAP_ACC_DECAY_CYCLE scan rounds the
+ * 5-bit acc counters stored in page->flags are aged (halved) on increment,
+ * so that long-term hot pages stay distinguishable from transiently hot
+ * ones within the 5-bit range.
+ */
+static inline bool access_pid_cur_prior_decay(struct access_pid *ap)
+{
+	return ap->type == NORMAL_SCAN && ap->acc_times >= SMAP_ACC_DECAY_CYCLE;
 }
 
 static inline void clear_vm_mapping(u8 *priors, u32 len)

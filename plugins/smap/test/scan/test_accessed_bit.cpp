@@ -1220,14 +1220,13 @@ TEST_F(AccessedBitTest, ProcessScanResultsLocalNidAcpi)
     struct scan_result_entry entries[2];
 
     entries[0].paddr = 0x1000;
-    entries[0].nid = 0;
     entries[0].hot = true;
     entries[1].paddr = 0x2000;
-    entries[1].nid = 0;
     entries[1].hot = false;
 
     ap.pid = 1;
     ap.type = NORMAL_SCAN;
+    ap.prior_decay = false;
     ap.cur_times = 0;
     ap.ntimes = 10;
     struct pte_walk pw;
@@ -1246,7 +1245,6 @@ TEST_F(AccessedBitTest, ProcessScanResultsRemoteNidIomem)
     struct scan_result_entry entries[1];
 
     entries[0].paddr = 0x1000;
-    entries[0].nid = nr_local_numa;
     entries[0].hot = true;
 
     ap.pid = 1;
@@ -1270,11 +1268,11 @@ TEST_F(AccessedBitTest, ProcessScanResultsLastScanAddToBm)
     struct access_pid ap = {};
     struct scan_result_entry entries[1];
     entries[0].paddr = 0x1000;
-    entries[0].nid = 0;
     entries[0].hot = false;
 
     ap.pid = 1;
     ap.type = NORMAL_SCAN;
+    ap.prior_decay = false;
     ap.cur_times = 9;
     ap.ntimes = 10;
     struct pte_walk pw = {.ap = &ap, .scan_results = entries, .scan_result_cnt = 1};
@@ -1410,7 +1408,6 @@ TEST_F(AccessedBitTest, ProcessScanResultsLocalNidFallbackToSearch)
     ap.remote_snapshot = &snapshot;
     struct scan_result_entry entries[1];
     entries[0].paddr = 0x1000;
-    entries[0].nid = 0;
     entries[0].hot = true;
 
     ap.pid = 1;
@@ -1433,7 +1430,6 @@ TEST_F(AccessedBitTest, ProcessScanResultsRemoteNidFallbackToSearch)
     struct access_pid ap;
     struct scan_result_entry entries[1];
     entries[0].paddr = 0x1000;
-    entries[0].nid = nr_local_numa;
     entries[0].hot = true;
 
     ap.pid = 1;
@@ -1458,7 +1454,6 @@ TEST_F(AccessedBitTest, ProcessScanResultsBothFallbacksFail)
     ap.remote_snapshot = &snapshot;
     struct scan_result_entry entries[1];
     entries[0].paddr = 0x1000;
-    entries[0].nid = 0;
     entries[0].hot = true;
 
     ap.pid = 1;
