@@ -41,7 +41,7 @@ int SmapQueryVmMemRatio(struct VmRatioMsg *vrMsg);
 int SmapSetLogLevel(int level);
 
 /* NORMAL_SCAN only. Milliseconds: scan [50, 60000], migrate [500, 300000], scan <= migrate.
- * Directly updates the PID's scanTime/duration under its slot attrLock.
+ * Directly updates the PID's scanTime/migPeriod under its slot attrLock.
  * Effective priority: enabled file configuration > PID values > defaults (200/2000 ms).
  * Kernel scanning uses these values from the next window; ioctl failures retry next window.
  * Errors: -EPERM, -ENOENT, -EINVAL, -EOPNOTSUPP.

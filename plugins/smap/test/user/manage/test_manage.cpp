@@ -1559,8 +1559,8 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     EXPECT_EQ(1, g_processManager.nr[VM_TYPE]);
     EXPECT_NE(nullptr, PmHeadAttr(&g_processManager));
     EXPECT_EQ(DEFAULT_SCAN_PERIOD, PmHeadAttr(&g_processManager)->scanTime); // 首次扫描使用DEFAULT_SCAN_PERIOD
-    EXPECT_EQ(param.scanType == NORMAL_SCAN ? DEFAULT_MIGRATE_PERIOD : param.duration,
-              PmHeadAttr(&g_processManager)->duration);
+    EXPECT_EQ(param.duration, PmHeadAttr(&g_processManager)->duration);
+    EXPECT_EQ(param.scanType == NORMAL_SCAN ? DEFAULT_MIGRATE_PERIOD : 0, PmHeadAttr(&g_processManager)->migPeriod);
     EXPECT_EQ(50, PmHeadAttr(&g_processManager)->initLocalMemRatio);
 
     // when scanType is HAM_SCAN/STATISTIC_SCAN, state should be set to PROC_MOVE
@@ -1576,8 +1576,8 @@ TEST_F(ManageTest, TestProcessAddManageNewPid)
     EXPECT_NE(nullptr, PmHeadAttr(&g_processManager));
     EXPECT_EQ(DEFAULT_SCAN_PERIOD,
               PmHeadAttr(&g_processManager)->scanTime); // 首次扫描使用DEFAULT_SCAN_PERIOD
-    EXPECT_EQ(param.scanType == NORMAL_SCAN ? DEFAULT_MIGRATE_PERIOD : param.duration,
-              PmHeadAttr(&g_processManager)->duration);
+    EXPECT_EQ(param.duration, PmHeadAttr(&g_processManager)->duration);
+    EXPECT_EQ(param.scanType == NORMAL_SCAN ? DEFAULT_MIGRATE_PERIOD : 0, PmHeadAttr(&g_processManager)->migPeriod);
     EXPECT_EQ(50, PmHeadAttr(&g_processManager)->initLocalMemRatio);
     EXPECT_EQ(PROC_MOVE, PmHeadAttr(&g_processManager)->state);
 }
@@ -3557,7 +3557,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeIncreasePreservesPidP
     PidSlotAdd(&g_processManager, &active);
     active.scanType = NORMAL_SCAN;
     active.scanTime = 1000;
-    active.duration = 5000;
+    active.migPeriod = 5000;
     g_processManager.nrLocalNuma = 4;
     g_pageSizeNormal = PAGESIZE_4K;
     g_pageSizeHuge = PAGESIZE_2M;
@@ -3583,7 +3583,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeIncreasePreservesPidP
     ASSERT_NE(nullptr, candidate.prepared);
     EXPECT_FALSE(candidate.prepared->isFirstScan);
     EXPECT_EQ(1000u, candidate.prepared->scanTime);
-    EXPECT_EQ(5000u, candidate.prepared->duration);
+    EXPECT_EQ(5000u, candidate.prepared->migPeriod);
 
     DiscardProcessManageCandidate(&candidate);
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
@@ -3603,7 +3603,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeDecreaseKeepsNormalSc
     PidSlotAdd(&g_processManager, &active);
     active.scanType = NORMAL_SCAN;
     active.scanTime = 1000;
-    active.duration = 5000;
+    active.migPeriod = 5000;
     g_processManager.nrLocalNuma = 4;
     g_pageSizeNormal = PAGESIZE_4K;
     g_pageSizeHuge = PAGESIZE_2M;
@@ -3629,7 +3629,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeDecreaseKeepsNormalSc
     ASSERT_NE(nullptr, candidate.prepared);
     EXPECT_FALSE(candidate.prepared->isFirstScan); // memSize shrank -> no high-freq scan
     EXPECT_EQ(1000u, candidate.prepared->scanTime);
-    EXPECT_EQ(5000u, candidate.prepared->duration);
+    EXPECT_EQ(5000u, candidate.prepared->migPeriod);
 
     DiscardProcessManageCandidate(&candidate);
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
@@ -3649,7 +3649,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeUnchangedKeepsNormalS
     PidSlotAdd(&g_processManager, &active);
     active.scanType = NORMAL_SCAN;
     active.scanTime = 1000;
-    active.duration = 5000;
+    active.migPeriod = 5000;
     g_processManager.nrLocalNuma = 4;
     g_pageSizeNormal = PAGESIZE_4K;
     g_pageSizeHuge = PAGESIZE_2M;
@@ -3675,7 +3675,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeUnchangedKeepsNormalS
     ASSERT_NE(nullptr, candidate.prepared);
     EXPECT_FALSE(candidate.prepared->isFirstScan); // memSize unchanged -> no high-freq scan
     EXPECT_EQ(1000u, candidate.prepared->scanTime);
-    EXPECT_EQ(5000u, candidate.prepared->duration);
+    EXPECT_EQ(5000u, candidate.prepared->migPeriod);
 
     DiscardProcessManageCandidate(&candidate);
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
@@ -3699,7 +3699,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeIncreaseHugeModeNoRes
     PidSlotAdd(&g_processManager, &active);
     active.scanType = NORMAL_SCAN;
     active.scanTime = 1000;
-    active.duration = 5000;
+    active.migPeriod = 5000;
     g_processManager.nrLocalNuma = 4;
     g_pageSizeNormal = PAGESIZE_4K;
     g_pageSizeHuge = PAGESIZE_2M;
@@ -3725,7 +3725,7 @@ TEST_F(ManageTest, TestPrepareProcessManageCandidateMemSizeIncreaseHugeModeNoRes
     ASSERT_NE(nullptr, candidate.prepared);
     EXPECT_FALSE(candidate.prepared->isFirstScan); // 2M mode -> no high-freq scan reset
     EXPECT_EQ(1000u, candidate.prepared->scanTime);
-    EXPECT_EQ(5000u, candidate.prepared->duration);
+    EXPECT_EQ(5000u, candidate.prepared->migPeriod);
 
     DiscardProcessManageCandidate(&candidate);
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));

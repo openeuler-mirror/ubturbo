@@ -117,7 +117,7 @@ static int SetPidPeriod(pid_t pid, uint32_t scanPeriodMs, uint32_t migratePeriod
         ret = -EOPNOTSUPP;
     } else {
         attr->scanTime = scanPeriodMs;
-        attr->duration = migratePeriodMs;
+        attr->migPeriod = migratePeriodMs;
     }
     EnvMutexUnlock(&slot->attrLock);
     PidSlotReleaseRefs(&slot, 1);
