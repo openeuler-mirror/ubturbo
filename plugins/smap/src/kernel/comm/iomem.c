@@ -86,7 +86,7 @@ static int insert_remote_ram(u64 pa_start, u64 pa_end, struct list_head *head)
 		if (nid == NUMA_NO_NODE)
 			return -EINVAL;
 		end = start + MIN_MEMORY_BLOCK_SIZE - 1;
-		if (nid >= SMAP_MAX_NUMNODES) {
+		if (nid >= MAX_NUMNODES) {
 			start = end + 1;
 			continue;
 		}
@@ -241,27 +241,36 @@ u64 remote_ram_snapshot_page_count(const struct remote_ram_snapshot *snapshot,
 int remote_ram_snapshot_paddr_acidx(const struct remote_ram_snapshot *snapshot,
 				    u64 pa, int *nid, u64 *index, int page_size)
 {
-	u64 offsets[SMAP_MAX_NUMNODES] = { 0 };
+	u64 *offsets;
 	u32 i;
 	int shift = __builtin_ctz(page_size);
 
 	if (!snapshot || !nid || !index)
 		return -EINVAL;
+	/* per-node 定维用内核编译期 MAX_NUMNODES 并改为堆分配：
+	 * 按 ABI 定宽 SMAP_MAX_NUMNODES 放栈上会超出单栈帧上限 */
+	offsets = kcalloc(MAX_NUMNODES, sizeof(*offsets), GFP_KERNEL);
+	if (!offsets)
+		return -ENOMEM;
 	for (i = 0; i < snapshot->nr_ranges; i++) {
 		const struct remote_ram_range *range = &snapshot->ranges[i];
 		int node = range->numa_node;
 
-		if (unlikely(node < 0 || node >= SMAP_MAX_NUMNODES))
+		if (unlikely(node < 0 || node >= MAX_NUMNODES)) {
+			kfree(offsets);
 			return -ERANGE;
+		}
 		if (pa < range->start)
 			break;
 		if (pa <= range->end) {
 			*nid = node;
 			*index = offsets[node] + ((pa - range->start) >> shift);
+			kfree(offsets);
 			return 0;
 		}
 		offsets[node] += (range->end - range->start + 1) >> shift;
 	}
+	kfree(offsets);
 	return -ERANGE;
 }
 
@@ -362,13 +371,18 @@ int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size)
 	struct ram_segment *seg;
 	int shift = __builtin_ctz(page_size);
 	int numa = NUMA_NO_NODE;
-	u64 idx[SMAP_MAX_NUMNODES] = { 0 };
+	u64 *idx;
+
+	idx = kcalloc(MAX_NUMNODES, sizeof(*idx), GFP_KERNEL);
+	if (!idx)
+		return -ENOMEM;
 
 	read_lock(&rem_ram_list_lock);
 	list_for_each_entry(seg, &remote_ram_list, node) {
-		if (seg->numa_node >= SMAP_MAX_NUMNODES) {
+		if (seg->numa_node >= MAX_NUMNODES) {
 			pr_err("numa %d is invalid\n", seg->numa_node);
 			read_unlock(&rem_ram_list_lock);
+			kfree(idx);
 			return -ERANGE;
 		}
 		if (pa < seg->start)
@@ -383,13 +397,17 @@ int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size)
 
 	if (unlikely(list_entry_is_head(seg, &remote_ram_list, node))) {
 		read_unlock(&rem_ram_list_lock);
+		kfree(idx);
 		return -ERANGE;
 	}
 	read_unlock(&rem_ram_list_lock);
-	if (unlikely(numa == NUMA_NO_NODE))
+	if (unlikely(numa == NUMA_NO_NODE)) {
+		kfree(idx);
 		return -ERANGE;
+	}
 	*nid = numa;
 	*index = idx[numa];
+	kfree(idx);
 	return 0;
 }
 

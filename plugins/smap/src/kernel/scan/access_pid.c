@@ -249,7 +249,7 @@ void destroy_access_pid(struct access_pid *elem)
 	}
 	if (elem->proc_root)
 		proc_remove(elem->proc_root);
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
+	for (i = 0; i < MAX_NUMNODES; i++) {
 		vfree(elem->paddr_bm[i]);
 		elem->paddr_bm[i] = NULL;
 		elem->bm_len[i] = 0;
@@ -560,27 +560,36 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
  * @actc_len: per-node actc_len array (output)
  *
  * Calls fill_actc_data_by_bitmap for each node to build the actc_data.
+ * actc_len is dimensioned by the node count (~4KB), which exceeds the kernel
+ * stack limit, so it is allocated on the heap.
  */
-static void fill_pid_actc_data(struct access_pid *ap, struct actc_data *actc,
-			       u32 actc_len[SMAP_MAX_NUMNODES])
+static int fill_pid_actc_data(struct access_pid *ap, struct actc_data *actc)
 {
 	int nid;
 	u32 mapping_offset = 0;
 	size_t actc_offset = 0;
+	u32 *actc_len;
 
-	for (nid = 0; nid < SMAP_MAX_NUMNODES; nid++) {
+	actc_len = kcalloc(MAX_NUMNODES, sizeof(*actc_len), GFP_KERNEL);
+	if (!actc_len)
+		return -ENOMEM;
+
+	for (nid = 0; nid < MAX_NUMNODES; nid++) {
 		fill_actc_data_by_bitmap(ap, nid, actc + actc_offset,
 					 &actc_len[nid], mapping_offset);
 		mapping_offset += actc_len[nid];
 		actc_offset += ap->page_num[nid];
 	}
+
+	kfree(actc_len);
+	return 0;
 }
 
 static inline size_t calc_process_page_number(struct access_pid *ap)
 {
 	int i;
 	size_t ret_len = 0;
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
+	for (i = 0; i < MAX_NUMNODES; i++) {
 		ret_len += ap->page_num[i];
 	}
 	return ret_len;
@@ -594,7 +603,6 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 	struct ap_slot *slot;
 	ssize_t len;
 	size_t total_len;
-	u32 actc_len[SMAP_MAX_NUMNODES];
 
 	pr_debug("enter mem_freq_read\n");
 	slot = ap_get_slot(ap->pid);
@@ -628,7 +636,10 @@ static ssize_t mem_freq_read(struct file *file, char __user *buf, size_t cnt,
 	else
 		len = cnt;
 
-	fill_pid_actc_data(ap, actc, actc_len);
+	if (fill_pid_actc_data(ap, actc)) {
+		len = -ENOMEM;
+		goto out_free;
+	}
 	if (copy_to_user(buf, actc + (*ppos / sizeof(struct actc_data)), len)) {
 		len = -EFAULT;
 		goto out_free;
@@ -745,7 +756,7 @@ int init_access_pid(struct access_add_pid_payload *payload,
 	ap->type = payload->type;
 	init_completion(&ap->work_done);
 	init_waitqueue_head(&ap->wq);
-	for (int i = 0; i < SMAP_MAX_NUMNODES; i++) {
+	for (int i = 0; i < MAX_NUMNODES; i++) {
 		ap->scan_count[i] = 0;
 		ap->page_num[i] = 0;
 		ap->bm_len[i] = 0;
@@ -832,51 +843,41 @@ static int init_ham_pid_len(struct ham_tracking_info *tmp)
 	return 0;
 }
 
-static inline int find_first_local_numa(unsigned long *nodes)
+static inline int find_first_local_numa(unsigned long *nodes, u32 nr_words)
 {
 	unsigned long pos;
-	unsigned long size;
-
-	if (!nodes || nr_local_numa < 0) {
+	if (!nodes || nr_local_numa < 0 || nr_words == 0) {
 		return NUMA_NO_NODE;
 	}
-	size = BITS_PER_BYTE * sizeof(unsigned long);
-	pos = find_first_bit(nodes, size);
-	return pos >= 0 && pos < (u32)nr_local_numa ? pos : NUMA_NO_NODE;
+	pos = find_first_bit(nodes, (unsigned long)nr_words * BITS_PER_LONG);
+	return pos < (unsigned long)nr_local_numa ? (int)pos : NUMA_NO_NODE;
 }
 
-static int find_first_remote_numa(unsigned long *nodes)
+static int find_first_remote_numa(unsigned long *nodes, u32 nr_words)
 {
-	unsigned long pos;
-	int nid;
-	unsigned long size;
-
-	if (!nodes || nr_local_numa < 0) {
+	unsigned long pos, nr_bits;
+	if (!nodes || nr_local_numa < 0 || nr_words == 0) {
 		return NUMA_NO_NODE;
 	}
-	size = BITS_PER_BYTE * sizeof(unsigned long);
-	pos = find_next_bit(nodes, size, nr_local_numa);
-	nid = convert_pos_to_nid(pos);
-	if ((nid >= nr_local_numa) &&
-	    (nid < nr_local_numa + SMAP_MAX_REMOTE_NUMNODES)) {
-		return nid;
-	} else {
-		return NUMA_NO_NODE;
+	nr_bits = (unsigned long)nr_words * BITS_PER_LONG;
+	pos = find_next_bit(nodes, nr_bits, nr_local_numa);
+	if (pos < nr_bits) {
+		return (int)pos;
 	}
+	return NUMA_NO_NODE;
 }
 
 static int init_access_ham_pid(struct access_add_pid_payload *payload)
 {
 	struct ham_tracking_info *tmp;
 	int l1_node, l2_node;
-	unsigned long numa_nodes;
 
 	if (!payload) {
 		return -EINVAL;
 	}
-	numa_nodes = (unsigned long)payload->numa_nodes;
-	l1_node = find_first_local_numa(&numa_nodes);
-	l2_node = find_first_remote_numa(&numa_nodes);
+	l1_node = find_first_local_numa(payload->numa_nodes, payload->nr_words);
+	l2_node =
+		find_first_remote_numa(payload->numa_nodes, payload->nr_words);
 	if (l1_node == NUMA_NO_NODE) {
 		pr_err("invalid local node: %d passed to init access HAM pid\n",
 		       l1_node);
@@ -923,17 +924,19 @@ static int init_access_ham_pid(struct access_add_pid_payload *payload)
 	return 0;
 }
 
-int access_add_ham_pid(int len, struct access_add_pid_payload *payload)
+int access_add_ham_pid(int len, struct access_add_pid_payload *payload,
+		       u32 stride)
 {
 	int ret = 0;
 	for (int i = 0; i < len; i++) {
-		if (payload[i].type == HAM_SCAN) {
-			pr_debug("init access ham pid %d\n", payload[i].pid);
-			ret = init_access_ham_pid(&payload[i]);
+		struct access_add_pid_payload *p =
+			access_add_pid_payload_at(payload, i, stride);
+		if (p->type == HAM_SCAN) {
+			pr_debug("init access ham pid %d\n", p->pid);
+			ret = init_access_ham_pid(p);
 		}
 		if (ret) {
-			pr_err("unable to init HAM access pid: %d\n",
-			       payload[i].pid);
+			pr_err("unable to init HAM access pid: %d\n", p->pid);
 			return ret;
 		}
 	}
@@ -973,14 +976,13 @@ static int init_access_statistic_pid_2m(struct access_add_pid_payload *payload)
 {
 	struct statistics_tracking_info *tmp, *ap;
 	int l1_node, l2_node, ret;
-	unsigned long numa_nodes;
 
 	if (!payload)
 		return -EINVAL;
 
-	numa_nodes = (unsigned long)payload->numa_nodes;
-	l1_node = find_first_local_numa(&numa_nodes);
-	l2_node = find_first_remote_numa(&numa_nodes);
+	l1_node = find_first_local_numa(payload->numa_nodes, payload->nr_words);
+	l2_node =
+		find_first_remote_numa(payload->numa_nodes, payload->nr_words);
 	if (l1_node == NUMA_NO_NODE) {
 		pr_err("invalid local node passed to init statistic access of pid: %d\n",
 		       payload->pid);
@@ -1043,14 +1045,13 @@ static int init_access_statistic_pid_4k(struct access_add_pid_payload *payload)
 	struct statistics_tracking_info *tmp, *ap;
 	int l1_node, l2_node, ret;
 	u64 total_pages, total_size_gb, suggested_scan_time;
-	unsigned long numa_nodes;
 
 	if (!payload)
 		return -EINVAL;
 
-	numa_nodes = (unsigned long)payload->numa_nodes;
-	l1_node = find_first_local_numa(&numa_nodes);
-	l2_node = find_first_remote_numa(&numa_nodes);
+	l1_node = find_first_local_numa(payload->numa_nodes, payload->nr_words);
+	l2_node =
+		find_first_remote_numa(payload->numa_nodes, payload->nr_words);
 	if (l1_node == NUMA_NO_NODE) {
 		pr_err("invalid local node passed to init statistic access of pid: %d\n",
 		       payload->pid);
@@ -1126,23 +1127,25 @@ static int init_access_statistic_pid(struct access_add_pid_payload *payload,
 }
 
 int access_add_statistic_pid(int len, struct access_add_pid_payload *payload,
-			     int page_size)
+			     u32 stride, int page_size)
 {
 	int ret = 0;
 	int i;
 	for (i = 0; i < len; i++) {
-		if (payload[i].type != STATISTIC_SCAN)
+		struct access_add_pid_payload *p =
+			access_add_pid_payload_at(payload, i, stride);
+		if (p->type != STATISTIC_SCAN)
 			continue;
-		if (payload[i].duration > MAX_SCAN_DURATION_SEC) {
+		if (p->duration > MAX_SCAN_DURATION_SEC) {
 			pr_err("invalid scan duration: %u of pid: %d passed to add statistic access tracking\n",
-			       payload[i].duration, payload[i].pid);
+			       p->duration, p->pid);
 			return -EINVAL;
 		}
-		pr_debug("init access statistic pid %d\n", payload[i].pid);
-		ret = init_access_statistic_pid(&payload[i], page_size);
+		pr_debug("init access statistic pid %d\n", p->pid);
+		ret = init_access_statistic_pid(p, page_size);
 		if (ret) {
 			pr_err("failed to add statistic access pid: %d\n",
-			       payload[i].pid);
+			       p->pid);
 			return ret;
 		}
 	}
@@ -1210,7 +1213,7 @@ static void ap_slot_update_config(struct ap_slot *s,
 	up_write(&s->ap_lock);
 }
 
-int access_add_pid(int len, struct access_add_pid_payload *payload)
+int access_add_pid(int len, struct access_add_pid_payload *payload, u32 stride)
 {
 	int i, ret;
 	struct access_pid *ap, *tmp;
@@ -1218,12 +1221,14 @@ int access_add_pid(int len, struct access_add_pid_payload *payload)
 
 	for (i = 0; i < len; i++) {
 		struct ap_slot *existing;
+		struct access_add_pid_payload *p =
+			access_add_pid_payload_at(payload, i, stride);
 
-		if (payload[i].pid < 0)
+		if (p->pid < 0)
 			continue;
 		/* check if payload has duplicate pid */
 		list_for_each_entry(tmp, &tmp_head, node) {
-			if (unlikely(payload[i].pid == tmp->pid)) {
+			if (unlikely(p->pid == tmp->pid)) {
 				ret = -EINVAL;
 				goto err;
 			}
@@ -1233,14 +1238,14 @@ int access_add_pid(int len, struct access_add_pid_payload *payload)
 		 * init_access_pid, so no re-allocation/bitmap-prep/procfs/
 		 * kvm-scan is needed
 		 */
-		existing = ap_get_slot(payload[i].pid);
+		existing = ap_get_slot(p->pid);
 		if (existing) {
-			ap_slot_update_config(existing, &payload[i]);
+			ap_slot_update_config(existing, p);
 			ap_put_slot(existing);
 			continue;
 		}
 		/* allocate memory for pid */
-		ret = init_access_pid(&payload[i], &ap);
+		ret = init_access_pid(p, &ap);
 		if (ret)
 			goto err;
 		list_add_tail(&ap->node, &tmp_head);
@@ -1376,7 +1381,7 @@ static inline void free_ap_bm(struct access_pid *ap)
 	if (!ap) {
 		return;
 	}
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
+	for (i = 0; i < MAX_NUMNODES; i++) {
 		vfree(ap->paddr_bm[i]);
 		ap->paddr_bm[i] = NULL;
 		ap->bm_len[i] = 0;
@@ -1388,7 +1393,7 @@ int init_ap_bm(int node_len, u64 *node_page_count, struct access_pid *ap)
 	size_t nr_bytes = sizeof(unsigned long);
 	int i;
 
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
+	for (i = 0; i < MAX_NUMNODES; i++) {
 		ap->page_num[i] = 0;
 		ap->bm_len[i] = BITS_TO_LONGS(node_page_count[i]);
 		if (ap->bm_len[i] == 0)
@@ -1421,7 +1426,7 @@ void change_ap_type(pid_t pid)
 void clean_last_ap_data(struct access_pid *ap)
 {
 	int i;
-	for (i = 0; i < SMAP_MAX_NUMNODES; i++) {
+	for (i = 0; i < MAX_NUMNODES; i++) {
 		vfree(ap->paddr_bm[i]);
 		ap->paddr_bm[i] = NULL;
 		ap->bm_len[i] = 0;
@@ -1436,30 +1441,41 @@ void clean_last_ap_data(struct access_pid *ap)
 int access_walk_pagemap_prepare(struct access_pid *ap)
 {
 	int ret;
-	u64 nodes_page_count[SMAP_MAX_NUMNODES] = { 0 };
+	u64 *nodes_page_count;
+
 	if (!ap) {
 		return -EINVAL;
 	}
 	if (ap->type != NORMAL_SCAN) {
 		return 0;
 	}
+
+	nodes_page_count =
+		kcalloc(MAX_NUMNODES, sizeof(*nodes_page_count), GFP_KERNEL);
+	if (!nodes_page_count) {
+		return -ENOMEM;
+	}
+
 	copy_node_page_count(nodes_page_count);
-	for (int i = nr_local_numa; i < SMAP_MAX_NUMNODES; i++) {
+	for (int i = nr_local_numa; i < MAX_NUMNODES; i++) {
 		nodes_page_count[i] = remote_ram_snapshot_page_count(
 			ap->remote_snapshot, i, get_scan_page_size());
 	}
 	clean_last_ap_data(ap);
-	ret = init_ap_bm(SMAP_MAX_NUMNODES, nodes_page_count, ap);
+	ret = init_ap_bm(MAX_NUMNODES, nodes_page_count, ap);
 	if (ret) {
+		kfree(nodes_page_count);
 		pr_err("unable to init access bitmap for pid: %d\n", ap->pid);
 		return ret;
 	}
 	ret = init_vm_mapping(&ap->info);
 	if (ret) {
+		kfree(nodes_page_count);
 		pr_err("unable to init vm mapping for pid: %d\n", ap->pid);
 		free_ap_bm(ap);
 		return ret;
 	}
+	kfree(nodes_page_count);
 	return 0;
 }
 

@@ -20,7 +20,22 @@
 #include "scan_ioctl.h"
 #include "scan_main.h"
 
+#include <cstring>
+
 using namespace std;
+
+/*
+ * 方案B：内核 struct access_add_pid_payload 的 numa_nodes 已由定长数组改为柔性数组，
+ * 单条记录字节数由 access_add_pid_msg.stride 给出（= 定长头 + nr_words * sizeof(unsigned long)）。
+ * 测试按 stride 构造记录缓冲，位图字数取编译期上界 NUMA_NODES_BIT_WORDS。
+ */
+static constexpr u32 kAddPidStride =
+    (u32)(sizeof(struct access_add_pid_payload) + NUMA_NODES_BIT_WORDS * sizeof(unsigned long));
+
+static inline struct access_add_pid_payload *AddPidAt(struct access_add_pid_payload *base, int i)
+{
+    return access_add_pid_payload_at(base, i, kAddPidStride);
+}
 
 extern "C" struct access_pid_struct ap_data;
 
@@ -40,7 +55,6 @@ static void ap_test_reset_slots(void)
 class ScanIoctlTestKernel : public ::testing::Test {
 public:
     static struct access_add_pid_msg m_msg;
-    static constexpr int BITMAP_BUF_LEN = 10;
 
 protected:
     void SetUp() override
@@ -66,7 +80,7 @@ protected:
 struct access_add_pid_msg ScanIoctlTestKernel::m_msg = {.count = 0, .payload = NULL};
 
 extern "C" long ioctl_add_pid(void __user *argp);
-extern "C" int add_payload(int len, struct access_add_pid_payload *payload, int page_size);
+extern "C" int add_payload(int len, struct access_add_pid_payload *payload, u32 stride, int page_size);
 extern "C" int check_msg_validity(struct access_add_pid_msg *msg);
 
 unsigned long ScanIoctlTestKernel::mockCopyFromUserSetMsg(void *to, const void *from, unsigned long n)
@@ -81,11 +95,11 @@ unsigned long ScanIoctlTestKernel::mockCopyFromUserSetPayload(void *to, const vo
 {
     cout << "mockCopyFromUserSetPayload" << endl;
     struct access_add_pid_payload *tmpPayload = (struct access_add_pid_payload *)to;
-    if (n / sizeof(struct access_add_pid_payload) != m_msg.count) {
+    if (n != (unsigned long)m_msg.count * kAddPidStride) {
         return n;
     }
     for (int i = 0; i < m_msg.count; ++i) {
-        tmpPayload[i] = m_msg.payload[i];
+        memcpy(AddPidAt(tmpPayload, i), AddPidAt(m_msg.payload, i), kAddPidStride);
     }
     return 0UL;
 };
@@ -123,15 +137,18 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidWithOnePid)
     struct access_add_pid_msg msg;
 
     msg.count = 1;
-    msg.payload = (struct access_add_pid_payload *)vzalloc(sizeof(struct access_add_pid_payload) * msg.count);
+    msg.stride = kAddPidStride;
+    msg.payload = (struct access_add_pid_payload *)vzalloc((size_t)msg.count * msg.stride);
     ASSERT_NE(nullptr, msg.payload);
     for (i = 0; i < msg.count; i++) {
-        msg.payload[i].pid = 14587;
-        msg.payload[i].numa_nodes = 0x10;
-        msg.payload[i].scan_time = 50;
-        msg.payload[i].ntimes = 40;
-        msg.payload[i].duration = 1;
-        msg.payload[i].type = HAM_SCAN;
+        struct access_add_pid_payload *p = AddPidAt(msg.payload, i);
+        p->nr_words = NUMA_NODES_BIT_WORDS;
+        p->pid = 14587;
+        p->numa_nodes[0] = 0x10;
+        p->scan_time = 50;
+        p->ntimes = 40;
+        p->duration = 1;
+        p->type = HAM_SCAN;
     }
 
     // success case
@@ -147,11 +164,11 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidWithOnePid)
 
     // following tests will not run add_payload, since don't need add_payload mock
     // invalid scan_type case
-    msg.payload[0].type = (scan_type)-1;
+    AddPidAt(msg.payload, 0)->type = (scan_type) - 1;
     ret = checkIoctlAddPid(msg);
     EXPECT_EQ(-EINVAL, ret);
 
-    msg.payload[0].type = MAX_SCAN_TYPE;
+    AddPidAt(msg.payload, 0)->type = MAX_SCAN_TYPE;
     ret = checkIoctlAddPid(msg);
     EXPECT_EQ(-EINVAL, ret);
 
@@ -167,20 +184,23 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidWithMultiPid)
     struct access_add_pid_msg msg;
 
     msg.count = 15;
-    msg.payload = (struct access_add_pid_payload *)vzalloc(sizeof(struct access_add_pid_payload) * msg.count);
+    msg.stride = kAddPidStride;
+    msg.payload = (struct access_add_pid_payload *)vzalloc((size_t)msg.count * msg.stride);
     ASSERT_NE(nullptr, msg.payload);
     for (i = 0; i < msg.count; i++) {
-        msg.payload[i].pid = 14587 + i;
-        msg.payload[i].numa_nodes = 0x10;
-        msg.payload[i].duration = 1;
+        struct access_add_pid_payload *p = AddPidAt(msg.payload, i);
+        p->nr_words = NUMA_NODES_BIT_WORDS;
+        p->pid = 14587 + i;
+        p->numa_nodes[0] = 0x10;
+        p->duration = 1;
         if (i % 2) {
-            msg.payload[i].scan_time = 50;
-            msg.payload[i].ntimes = 40;
-            msg.payload[i].type = HAM_SCAN;
+            p->scan_time = 50;
+            p->ntimes = 40;
+            p->type = HAM_SCAN;
         } else {
-            msg.payload[i].scan_time = 10;
-            msg.payload[i].ntimes = 200;
-            msg.payload[i].type = STATISTIC_SCAN;
+            p->scan_time = 10;
+            p->ntimes = 200;
+            p->type = STATISTIC_SCAN;
         }
     }
     // set add_payload mock
@@ -196,7 +216,7 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidWithMultiPid)
 
     // following tests will not run add_payload, since don't need add_payload mock
     // invalid scan_type case
-    msg.payload[14].type = (scan_type)-1;
+    AddPidAt(msg.payload, 14)->type = (scan_type)-1;
     ret = checkIoctlAddPid(msg);
     EXPECT_EQ(-EINVAL, ret);
 
@@ -207,24 +227,36 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidWithMultiPid)
 TEST_F(ScanIoctlTestKernel, AddPayloadTest)
 {
     int len = 1;
-    struct access_add_pid_payload payload;
-    MOCKER(access_add_ham_pid).stubs().will(returnValue(-EINVAL)).then(returnValue(0));
-    MOCKER(access_add_statistic_pid).stubs().will(returnValue(-EINVAL)).then(returnValue(0));
-    MOCKER(access_add_pid).stubs().will(returnValue(-EINVAL)).then(returnValue(0));
+    alignas(8) unsigned long payload_storage[4 + NUMA_NODES_BIT_WORDS] = {};
+    struct access_add_pid_payload *payload =
+        reinterpret_cast<struct access_add_pid_payload *>(payload_storage);
+    payload->nr_words = NUMA_NODES_BIT_WORDS;
+    MOCKER(access_add_ham_pid).stubs()
+        .will(returnValue(-EINVAL))
+        .then(returnValue(0));
+    MOCKER(access_add_statistic_pid).stubs()
+        .will(returnValue(-EINVAL))
+        .then(returnValue(0));
+    MOCKER(access_add_pid).stubs()
+        .will(returnValue(-EINVAL))
+        .then(returnValue(0));
 
     // test all case
-    EXPECT_EQ(-EINVAL, add_payload(len, &payload, PMD_SIZE));
-    EXPECT_EQ(-EINVAL, add_payload(len, &payload, PMD_SIZE));
-    EXPECT_EQ(-EINVAL, add_payload(len, &payload, PMD_SIZE));
-    EXPECT_EQ(0, add_payload(len, &payload, PMD_SIZE));
+    EXPECT_EQ(-EINVAL, add_payload(len, payload, kAddPidStride, PMD_SIZE));
+    EXPECT_EQ(-EINVAL, add_payload(len, payload, kAddPidStride, PMD_SIZE));
+    EXPECT_EQ(-EINVAL, add_payload(len, payload, kAddPidStride, PMD_SIZE));
+    EXPECT_EQ(0, add_payload(len, payload, kAddPidStride, PMD_SIZE));
 }
 
 TEST_F(ScanIoctlTestKernel, CheckMsgValidityTest)
 {
     struct access_add_pid_msg msg;
-    struct access_add_pid_payload payload;
+    alignas(8) unsigned long payload_storage[4 + NUMA_NODES_BIT_WORDS] = {};
+    struct access_add_pid_payload *payload =
+        reinterpret_cast<struct access_add_pid_payload *>(payload_storage);
     msg.count = 1;
-    msg.payload = &payload;
+    msg.stride = kAddPidStride;
+    msg.payload = payload;
     // success case
     EXPECT_EQ(0, check_msg_validity(&msg));
     // failed case
@@ -249,8 +281,9 @@ static unsigned long mock_copy_from_user(void *to, const void *from, unsigned lo
     if (n == sizeof(struct access_add_pid_msg) && g_test_msg) {
         *(struct access_add_pid_msg *)to = *g_test_msg;
     } else if (n == g_test_payload_size && g_test_payload) {
-        for (size_t i = 0; i < n / sizeof(struct access_add_pid_payload); i++) {
-            ((struct access_add_pid_payload *)to)[i] = g_test_payload[i];
+        for (size_t i = 0; i < n / kAddPidStride; i++) {
+            memcpy(AddPidAt((struct access_add_pid_payload *)to, (int)i),
+                   AddPidAt(g_test_payload, (int)i), kAddPidStride);
         }
     }
     return 0UL;
@@ -264,22 +297,24 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPid)
     int ret = 0;
 
     msg.count = 1;
-    payload_data = (struct access_add_pid_payload *)vzalloc(sizeof(struct access_add_pid_payload) * msg.count);
+    msg.stride = kAddPidStride;
+    payload_data = (struct access_add_pid_payload *)vzalloc((size_t)msg.count * msg.stride);
     ASSERT_NE(nullptr, payload_data);
     msg.payload = payload_data;
     ASSERT_NE(nullptr, msg.payload);
     for (i = 0; i < msg.count; i++) {
-        msg.payload[i].pid = i;
-        msg.payload[i].numa_nodes = 0x10;
-        payload_data[i].scan_time = 50;
-        payload_data[i].ntimes = 40;
+        struct access_add_pid_payload *p = AddPidAt(payload_data, i);
+        p->nr_words = NUMA_NODES_BIT_WORDS;
+        p->pid = i;
+        p->numa_nodes[0] = 0x10;
+        p->ntimes = 40;
         /* check_payload_validity 要求 scan_time 在 (0, MAX_SCAN_PERIOD] 内 */
-        payload_data[i].scan_time = 100;
+        p->scan_time = 100;
     }
 
     g_test_msg = &msg;
     g_test_payload = payload_data;
-    g_test_payload_size = sizeof(struct access_add_pid_payload) * msg.count;
+    g_test_payload_size = (size_t)msg.count * msg.stride;
 
     MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user));
 
@@ -302,11 +337,14 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidTwo)
     int ret = 0;
 
     msg.count = 1;
-    msg.payload = (struct access_add_pid_payload *)vzalloc(sizeof(struct access_add_pid_payload) * msg.count);
+    msg.stride = kAddPidStride;
+    msg.payload = (struct access_add_pid_payload *)vzalloc((size_t)msg.count * msg.stride);
     ASSERT_NE(nullptr, msg.payload);
     for (i = 0; i < msg.count; i++) {
-        msg.payload[i].pid = i;
-        msg.payload[i].numa_nodes = 0x10;
+        struct access_add_pid_payload *p = AddPidAt(msg.payload, i);
+        p->nr_words = NUMA_NODES_BIT_WORDS;
+        p->pid = i;
+        p->numa_nodes[0] = 0x10;
     }
 
     MOCKER(copy_from_user)
@@ -342,23 +380,26 @@ TEST_F(ScanIoctlTestKernel, IoctlAddPidThree)
     GlobalMockObject::reset();
 
     msg.count = 1;
-    payload_data = (struct access_add_pid_payload *)vzalloc(sizeof(struct access_add_pid_payload) * msg.count);
+    msg.stride = kAddPidStride;
+    payload_data = (struct access_add_pid_payload *)vzalloc((size_t)msg.count * msg.stride);
     ASSERT_NE(nullptr, payload_data);
     msg.payload = payload_data;
 
     for (i = 0; i < msg.count; i++) {
-        payload_data[i].pid = i;
-        payload_data[i].numa_nodes = 0x10;
-        payload_data[i].ntimes = 40;
-        payload_data[i].type = HAM_SCAN;
-        payload_data[i].duration = 0;
+        struct access_add_pid_payload *p = AddPidAt(payload_data, i);
+        p->nr_words = NUMA_NODES_BIT_WORDS;
+        p->pid = i;
+        p->numa_nodes[0] = 0x10;
+        p->ntimes = 40;
+        p->type = HAM_SCAN;
+        p->duration = 0;
         /* check_payload_validity 要求 scan_time 在 (0, MAX_SCAN_PERIOD] 内 */
-        payload_data[i].scan_time = 100;
+        p->scan_time = 100;
     }
 
     g_test_msg = &msg;
     g_test_payload = payload_data;
-    g_test_payload_size = sizeof(struct access_add_pid_payload) * msg.count;
+    g_test_payload_size = (size_t)msg.count * msg.stride;
 
     MOCKER(copy_from_user).stubs().will(invoke(mock_copy_from_user));
 

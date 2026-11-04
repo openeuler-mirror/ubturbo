@@ -65,7 +65,8 @@ struct access_scan_state {
 };
 
 static struct access_scan_state scan_state;
-static u64 node_page_count[SMAP_MAX_NUMNODES];
+/* 内核内部节点页计数（随内核 MAX_NUMNODES 自适应，非 ABI 定宽） */
+static u64 node_page_count[MAX_NUMNODES];
 
 /* Remote scan mode is delivered by the user-space config file; it defaults to
  * combined software/hardware mode, and the hardware subsystem is lazily
@@ -157,14 +158,14 @@ bool is_access_hugepage(void)
 
 u64 get_node_page_count(int node)
 {
-	if (node < 0 || node >= SMAP_MAX_NUMNODES)
+	if (node < 0 || node >= MAX_NUMNODES)
 		return 0;
 	return READ_ONCE(node_page_count[node]);
 }
 
 void set_node_page_count(int node, u64 page_count)
 {
-	if (node >= 0 && node < SMAP_MAX_NUMNODES)
+	if (node >= 0 && node < MAX_NUMNODES)
 		WRITE_ONCE(node_page_count[node], page_count);
 }
 
@@ -172,7 +173,7 @@ void copy_node_page_count(u64 *page_count)
 {
 	int node;
 
-	for (node = 0; node < SMAP_MAX_NUMNODES; node++)
+	for (node = 0; node < MAX_NUMNODES; node++)
 		page_count[node] = get_node_page_count(node);
 }
 
@@ -354,7 +355,7 @@ static void refresh_node_page_count(void)
 	int node;
 
 	access_print_acpi_mem();
-	for (node = 0; node < SMAP_MAX_NUMNODES; node++) {
+	for (node = 0; node < MAX_NUMNODES; node++) {
 		u64 page_count;
 
 		page_count = calc_node_page_count(node);

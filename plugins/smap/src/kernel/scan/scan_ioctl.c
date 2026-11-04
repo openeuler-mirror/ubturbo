@@ -10,6 +10,7 @@
 #include <linux/vmalloc.h>
 #include <linux/slab.h>
 #include <linux/list.h>
+#include <linux/numa.h>
 
 #include "acpi_mem.h"
 #include "iomem.h"
@@ -55,60 +56,75 @@ static int check_msg_validity(struct access_add_pid_msg *msg)
 		pr_err("null payload passed to access tracking\n");
 		return -EINVAL;
 	}
+	/* stride = 定长头 + 尾部位图字数×8，范围由运行期 cap 折算，越界即非法 */
+	if (msg->stride < sizeof(struct access_add_pid_payload) ||
+	    msg->stride >
+		    sizeof(struct access_add_pid_payload) +
+			    NUMA_NODES_BIT_WORDS * sizeof(unsigned long)) {
+		pr_err("invalid payload stride: %u passed to access tracking\n",
+		       msg->stride);
+		return -EINVAL;
+	}
 	return 0;
 }
 
 static int add_payload(int len, struct access_add_pid_payload *payload,
-		       int page_size)
+		       u32 stride, int page_size)
 {
 	int ret;
-	ret = access_add_ham_pid(len, payload);
+	ret = access_add_ham_pid(len, payload, stride);
 	if (ret) {
 		pr_err("failed to add HAM pid tracking task, ret: %d\n", ret);
 		return ret;
 	}
-	ret = access_add_statistic_pid(len, payload, page_size);
+	ret = access_add_statistic_pid(len, payload, stride, page_size);
 	if (ret) {
 		pr_err("failed to add statistic pid tracking task, ret: %d\n",
 		       ret);
 		return ret;
 	}
-	ret = access_add_pid(len, payload);
+	ret = access_add_pid(len, payload, stride);
 	return ret;
 }
 
 static bool check_payload_validity(struct access_add_pid_payload *payload,
-				   int len)
+				   int len, u32 stride)
 {
 	int i;
 
 	for (i = 0; i < len; i++) {
-		if (payload[i].pid == NON_EXIST_PID)
+		struct access_add_pid_payload *p =
+			access_add_pid_payload_at(payload, i, stride);
+
+		if (p->pid == NON_EXIST_PID)
 			continue;
-		pr_info("[%d] pid %d, numa_nodes %#x, scan_time %u, ntimes %u, duration %u, type %d\n",
-			i, payload[i].pid, payload[i].numa_nodes,
-			payload[i].scan_time, payload[i].ntimes,
-			payload[i].duration, payload[i].type);
-		if (payload[i].type >= MAX_SCAN_TYPE || payload[i].type < 0) {
+		if (p->nr_words > NUMA_NODES_BIT_WORDS) {
+			pr_err("invalid numa_nodes words %u of message payload[%d]\n",
+			       p->nr_words, i);
+			return false;
+		}
+		pr_info("[%d] pid %d, numa_nodes %*pb, scan_time %u, ntimes %u, duration %u, type %d\n",
+			i, p->pid, (int)(p->nr_words * BITS_PER_LONG),
+			p->numa_nodes, p->scan_time, p->ntimes, p->duration,
+			p->type);
+		if (p->type >= MAX_SCAN_TYPE || p->type < 0) {
 			pr_err("invalid scan type %d of message payload[%d]\n",
-			       payload[i].type, i);
+			       p->type, i);
 			return false;
 		}
-		if (payload[i].ntimes == 0) {
+		if (p->ntimes == 0) {
 			pr_err("invalid scan times %d of message payload[%d]\n",
-			       payload[i].ntimes, i);
+			       p->ntimes, i);
 			return false;
 		}
-		if (payload[i].scan_time == 0 ||
-		    payload[i].scan_time > MAX_SCAN_PERIOD) {
+		if (p->scan_time == 0 || p->scan_time > MAX_SCAN_PERIOD) {
 			pr_err("invalid scan time %d of message payload[%d]\n",
-			       payload[i].scan_time, i);
+			       p->scan_time, i);
 			return false;
 		}
-		if (payload[i].ntimes >
-		    (MAX_MIGRATE_PERIOD / payload[i].scan_time)) {
+		if (p->ntimes > (MAX_MIGRATE_PERIOD / p->scan_time)) {
 			pr_err("invalid scan ntimes %d of message payload[%d]\n",
-			       payload[i].ntimes, i);
+			       p->ntimes, i);
 			return false;
 		}
 	}
@@ -128,23 +144,23 @@ static long ioctl_add_pid(void __user *argp)
 	if (check_msg_validity(&msg))
 		return -EINVAL;
 
-	payload = vzalloc(sizeof(struct access_add_pid_payload) * msg.count);
+	payload = vzalloc((size_t)msg.count * msg.stride);
 	if (!payload) {
 		pr_err("unable to allocate memory for access pid payload\n");
 		return -ENOMEM;
 	}
 	if (copy_from_user(payload, msg.payload,
-			   sizeof(struct access_add_pid_payload) * msg.count)) {
+			   (size_t)msg.count * msg.stride)) {
 		ret = -EFAULT;
 		goto out_free_payload;
 	}
 
 	pr_info("adding pid payload:\n");
-	if (!check_payload_validity(payload, msg.count)) {
+	if (!check_payload_validity(payload, msg.count, msg.stride)) {
 		ret = -EINVAL;
 		goto out_free_payload;
 	}
-	ret = add_payload(msg.count, payload, page_size);
+	ret = add_payload(msg.count, payload, msg.stride, page_size);
 out_free_payload:
 	vfree(payload);
 	return ret;
@@ -248,14 +264,21 @@ static long ioctl_create_smap_procfs(void __user *argp)
 /* Return the tracked PID's page counts. Callers read them after its scan-ready event. */
 static long ioctl_walk_pagemap(void __user *argp)
 {
-	struct smap_pid_page_num param;
+	struct smap_pid_page_num *param;
 	struct ap_slot *s;
 	struct access_pid *ap;
 	bool found = false;
 	int i;
 
-	if (copy_from_user(&param, argp, sizeof(param)))
+	/* param 含 SMAP_MAX_NUMNODES 个 size_t（约 8KB），不能放在内核栈上 */
+	param = kzalloc(sizeof(*param), GFP_KERNEL);
+	if (!param)
+		return -ENOMEM;
+
+	if (copy_from_user(param, argp, sizeof(*param))) {
+		kfree(param);
 		return -EFAULT;
+	}
 
 	for (i = 0; i < AP_MAX_SLOTS && !found; i++) {
 		s = ap_get_slot_at(i);
@@ -263,9 +286,14 @@ static long ioctl_walk_pagemap(void __user *argp)
 			continue;
 		down_read(&s->ap_lock);
 		ap = s->ap;
-		if (ap->type == NORMAL_SCAN && ap->pid == param.pid) {
-			memcpy(param.page_num, ap->page_num,
-			       sizeof(param.page_num));
+		if (ap->type == NORMAL_SCAN && ap->pid == param->pid) {
+			/* ap->page_num 按内核 MAX_NUMNODES 定维，ABI 流按
+			 * SMAP_MAX_NUMNODES 定宽：先清零再拷贝，超出内核节点
+			 * 空间的槽位保持 0（与用户态解析一致，见
+			 * manage_scan.c ParseBitmapNrPages） */
+			memset(param->page_num, 0, sizeof(param->page_num));
+			memcpy(param->page_num, ap->page_num,
+			       sizeof(ap->page_num));
 			found = true;
 		}
 		up_read(&s->ap_lock);
@@ -273,13 +301,17 @@ static long ioctl_walk_pagemap(void __user *argp)
 	}
 
 	if (!found) {
-		pr_debug("walk pagemap: pid %d not tracked\n", param.pid);
+		pr_debug("walk pagemap: pid %d not tracked\n", param->pid);
+		kfree(param);
 		return -ESRCH;
 	}
 
-	if (copy_to_user(argp, &param, sizeof(param)))
+	if (copy_to_user(argp, param, sizeof(*param))) {
+		kfree(param);
 		return -EFAULT;
+	}
 
+	kfree(param);
 	return 0;
 }
 
@@ -421,15 +453,23 @@ static long ioctl_tracking_scan_mode(unsigned long arg)
 
 static long ioctl_tracking_ub_watch(void __user *argp)
 {
-	struct ub_flux_mb_statistic result = { 0 };
+	struct ub_flux_mb_statistic *result;
 	int ret;
 
 	if (!argp || !is_remote_scan_hist_active())
 		return -ENODEV;
-	ret = hist_tracking_ub_watch(&result);
-	if (ret)
+	/* flux[SMAP_MAX_NUMNODES] 约 3KB，超过内核推荐的单栈帧大小，改用堆分配 */
+	result = kvcalloc(1, sizeof(*result), GFP_KERNEL);
+	if (!result)
+		return -ENOMEM;
+	ret = hist_tracking_ub_watch(result);
+	if (ret) {
+		kvfree(result);
 		return ret;
-	return copy_to_user(argp, &result, sizeof(result)) ? -EFAULT : 0;
+	}
+	ret = copy_to_user(argp, result, sizeof(*result)) ? -EFAULT : 0;
+	kvfree(result);
+	return ret;
 }
 
 static long ioctl_tracking_ub_watch_config(void __user *argp)

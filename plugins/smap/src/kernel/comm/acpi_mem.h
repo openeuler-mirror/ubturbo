@@ -7,6 +7,7 @@
 #define SMAP_ACPI_MEM_H
 
 #include "iomem.h"
+#include "kernel_common.h"
 
 struct acpi_mem_segment {
 	int node;
@@ -31,20 +32,5 @@ int calc_paddr_acidx_acpi(u64 paddr, int *nid, u64 *index, int page_size);
 int calc_paddr_acidx_acpi_known_nid(u64 paddr, int nid, u64 *index,
 				    int page_size);
 int calc_acidx_paddr_acpi(int nid, u64 acidx, u64 *paddr, int page_size);
-
-static inline int convert_nid_to_pos(int nid)
-{
-	return nid >= nr_local_numa
-		       ? nid - nr_local_numa + SMAP_MAX_LOCAL_NUMNODES
-		       : nid;
-}
-
-/* 将numa_node中的偏移量转换为远端numa */
-static inline int convert_pos_to_nid(unsigned long pos)
-{
-	return pos >= SMAP_MAX_LOCAL_NUMNODES ? (pos - SMAP_MAX_LOCAL_NUMNODES +
-						 (unsigned long)nr_local_numa)
-					      : pos;
-}
 
 #endif /* SMAP_ACPI_MEM_H */
