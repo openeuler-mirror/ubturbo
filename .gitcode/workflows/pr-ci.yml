@@ -39,7 +39,7 @@ stages:
       pre_commit:
         name: pre-commit
         if: ${{ inputs.target_branch == 'master' }}
-        runs-on: [self-hosted, openeuler, arm, cpu=8]
+        runs-on: [self-hosted, ubse, arm, cpu=8]
         container:
           image: swr.cn-north-4.myhuaweicloud.com/ubscore/soe:latest
 
@@ -104,7 +104,7 @@ stages:
 
       build_x86_64:
         name: build-x86-64
-        runs-on: [self-hosted, openeuler, x86, cpu=8]
+        runs-on: [self-hosted, ubse, x86, cpu=8]
         timeout-minutes: 5
 
         steps:
@@ -135,7 +135,7 @@ stages:
 
       build_aarch64:
         name: build-aarch64
-        runs-on: [self-hosted, openeuler, arm, cpu=8]
+        runs-on: [self-hosted, ubse, arm, cpu=8]
         container:
           image: swr.cn-north-4.myhuaweicloud.com/openeuler/aarch64/ci/common:24.03-lts-sp1-rust
 
@@ -281,7 +281,7 @@ stages:
 
       dt:
         name: DT
-        runs-on: [self-hosted, openeuler, arm, cpu=8]
+        runs-on: [self-hosted, ubse, arm, cpu=8]
         timeout-minutes: 60
         container:
           image: swr.cn-north-4.myhuaweicloud.com/ubscore/openeuler-24.03-lts-sp3_ci_build:latest
