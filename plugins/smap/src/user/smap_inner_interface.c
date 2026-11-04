@@ -12,6 +12,7 @@
 #include "smap_inner_interface.h"
 
 #include "manage/manage.h"
+#include "manage/node_matrix.h"
 #include "advanced-strategy/scene.h"
 #include "smap_user_log.h"
 #include "smap_log_core.h"
@@ -72,7 +73,7 @@ int SmapQueryVmMemRatio(struct VmRatioMsg *vrMsg)
         vrMsg->vr[vrMsg->nrVm].pid = current->pid;
         vrMsg->vr[vrMsg->nrVm].ratio = HUNDRED;
         if (l2Node >= nrLocalNuma) {
-            vrMsg->vr[vrMsg->nrVm].ratio -= current->strategyAttr.l3RemoteMemRatio[l1Node][l2Node - nrLocalNuma];
+            vrMsg->vr[vrMsg->nrVm].ratio -= NM_AT(current->strategyAttr.l3RemoteMemRatio, l1Node, l2Node - nrLocalNuma);
         }
         vrMsg->nrVm++;
     }

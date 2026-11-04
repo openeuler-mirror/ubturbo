@@ -13,6 +13,7 @@
 #include "manage/access_ioctl.h"
 #include "manage/device.h"
 #include "manage/manage.h"
+#include "manage/node_matrix.h"
 #include "manage/smap_config.h"
 #include "manage/thread.h"
 #include "securec.h"
@@ -4046,6 +4047,7 @@ TEST_F(InterfaceTest, TestSmapQueryProcessConfigNormal)
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(attr2));
     PidSlotAdd(&manager, attr1);
     PidSlotAdd(&manager, attr2);
     EnvMutexInit(&manager.threadLock);
@@ -4058,7 +4060,7 @@ TEST_F(InterfaceTest, TestSmapQueryProcessConfigNormal)
     EXPECT_EQ(attr2->state, payload[0].state);
     EXPECT_EQ(attr2->scanTime, payload[0].scanTime);
     EXPECT_EQ(attr2->scanType, payload[0].scanType);
-    EXPECT_EQ(attr2->strategyAttr.initRemoteMemRatio[0][0], payload[0].ratio);
+    EXPECT_EQ(NM_AT(attr2->strategyAttr.initRemoteMemRatio, 0, 0), payload[0].ratio);
     EXPECT_EQ(GetAttrL1(attr2), payload[0].l1Node[0]);
     EXPECT_EQ(GetAttrL2(attr2), payload[0].l2Node[0]);
     EXPECT_EQ(NUMA_NO_NODE, payload[0].l1Node[1]);
@@ -4111,6 +4113,7 @@ TEST_F(InterfaceTest, TestSmapQueryProcessConfigNormalTwo)
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(attr2));
     PidSlotAdd(&manager, attr1);
     PidSlotAdd(&manager, attr2);
     EnvMutexInit(&manager.threadLock);
@@ -4124,6 +4127,7 @@ TEST_F(InterfaceTest, TestSmapQueryProcessConfigNormalTwo)
     EXPECT_EQ(attr2->scanTime, payload[0].scanTime);
     EXPECT_EQ(attr2->scanType, payload[0].scanType);
     free(attr1);
+    FreeProcessAttrArrays(attr2);
     free(attr2);
 }
 
@@ -4167,6 +4171,7 @@ TEST_F(InterfaceTest, TestSmapQueryProcessConfigNormalThree)
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(attr2));
     PidSlotAdd(&manager, attr1);
     PidSlotAdd(&manager, attr2);
     EnvMutexInit(&manager.threadLock);
@@ -4180,6 +4185,7 @@ TEST_F(InterfaceTest, TestSmapQueryProcessConfigNormalThree)
     EXPECT_EQ(attr2->scanTime, payload[0].scanTime);
     EXPECT_EQ(attr2->scanType, payload[0].scanType);
     free(attr1);
+    FreeProcessAttrArrays(attr2);
     free(attr2);
 }
 
@@ -4281,18 +4287,20 @@ extern "C" bool IsScanTypeValid(pid_t *pidArr, int len);
 TEST_F(InterfaceTest, TestGetAttrNidInitRatio)
 {
     ProcessAttr attr = {.pid = 1};
-    attr.strategyAttr.initRemoteMemRatio[0][0] = 50.0;
     g_processManager.nrLocalNuma = 4;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    NM_AT(attr.strategyAttr.initRemoteMemRatio, 0, 0) = 50.0;
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     PidSlotAdd(&g_processManager, &attr);
 
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     MOCKER(GetAttrL1).stubs().will(returnValue(0));
 
     // Test that function can be called (coverage purpose)
     GetAttrNidInitRatio(1, 4);
 
+    FreeProcessAttrArrays(&attr);
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
@@ -4341,13 +4349,14 @@ TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaCheckInner)
     msg.payload[0].ratio = 50;
 
     ProcessAttr attr = {.pid = 1};
-    attr.strategyAttr.initRemoteMemRatio[0][0] = 100.0;
-    attr.numaAttr.numaNodes = 0b00110000;
     g_processManager.nrLocalNuma = 4;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    NM_AT(attr.strategyAttr.initRemoteMemRatio, 0, 0) = 100.0;
+    attr.numaAttr.numaNodes = 0b00110000;
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     PidSlotAdd(&g_processManager, &attr);
 
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetRunMode).stubs().will(returnValue(WATERLINE_MODE));
     MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
@@ -4356,6 +4365,7 @@ TEST_F(InterfaceTest, TestSmapMigratePidRemoteNumaCheckInner)
     // Test that function can be called (coverage purpose)
     SmapMigratePidRemoteNumaCheckInner(&msg);
 
+    FreeProcessAttrArrays(&attr);
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 
@@ -4371,12 +4381,13 @@ TEST_F(InterfaceTest, TestBuildMigRemoteNumaMsg)
     struct MigPidRemoteNumaIoctlMsg ioctlMsg = {};
 
     ProcessAttr attr = {.pid = 1};
-    attr.strategyAttr.initRemoteMemRatio[0][0] = 100.0;
     g_processManager.nrLocalNuma = 4;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    NM_AT(attr.strategyAttr.initRemoteMemRatio, 0, 0) = 100.0;
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
     PidSlotAdd(&g_processManager, &attr);
 
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetRunMode).stubs().will(returnValue(WATERLINE_MODE));
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     MOCKER(GetAttrL1).stubs().will(returnValue(0));
@@ -4386,6 +4397,7 @@ TEST_F(InterfaceTest, TestBuildMigRemoteNumaMsg)
 
     free(ioctlMsg.payloads);
     free(ioctlMsg.migResArray);
+    FreeProcessAttrArrays(&attr);
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
 }
 

@@ -8,6 +8,7 @@
 #include "mockcpp/mokc.h"
 
 #include "manage/manage.h"
+#include "manage/node_matrix.h"
 #include "smap_inner_interface.h"
 #include "smap_log_core.h"
 
@@ -80,12 +81,15 @@ TEST_F(InnerInterfaceTest, TestSmapQueryVmMemRatio)
     current.next = nullptr;
     current.type = VM_TYPE;
     current.pid = 1;
-    current.strategyAttr.l3RemoteMemRatio[0][0] = TEST_DEFAULT_LOCAL_MEM_RATIO;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&current));
+    NM_AT(current.strategyAttr.l3RemoteMemRatio, 0, 0) = TEST_DEFAULT_LOCAL_MEM_RATIO;
     memset(&manager->slots, 0, sizeof(manager->slots));
     PidSlotAdd(manager, &current);
     ret = SmapQueryVmMemRatio(&msg);
     EXPECT_EQ(1, msg.vr[0].pid);
     EXPECT_EQ(HUNDRED - TEST_DEFAULT_LOCAL_MEM_RATIO, msg.vr[0].ratio);
+    FreeProcessAttrArrays(&current);
 }
 
 /* --- SmapSetLogLevel tests --- */

@@ -198,6 +198,15 @@ int InitTrackingDev(struct ProcessManager *manager)
     }
     manager->fds.access = fd;
 
+    /* cap 获取与设备无关（procfs 通道），但保持在设备初始化路径统一申请；
+     * 解析失败由 GetNodeCapFromStatus 回退 SMAP_NODE_CAP_LIMIT，不拒启 */
+    uint32_t nodeCap = 0;
+    ret = GetNodeCapFromStatus(&nodeCap);
+    if (ret) {
+        SMAP_LOGGER_WARNING("parse node cap from status failed: %d, use fallback cap %u.", ret, nodeCap);
+    }
+    SetNumaCap(nodeCap);
+
     ret = ConfigureTrackingDevices(manager);
     if (ret) {
         SMAP_LOGGER_ERROR("config tracking devices failed : %d.", ret);
@@ -245,6 +254,75 @@ void GetUbFluxMb(void)
                          manager->ubBwMonitor.currentFluxMb.flux[i].readMb,
                          manager->ubBwMonitor.currentFluxMb.flux[i].writeMb, totalBw);
     }
+}
+
+/* 扫描 sysfs 收集远端在线 nid，升序写入 out，返回数量 */
+int ScanRemoteNids(int *out, int outCap)
+{
+    DIR *dir = opendir("/sys/devices/system/node");
+    if (!dir) {
+        SMAP_LOGGER_ERROR("opendir /sys/devices/system/node failed: %d", errno);
+        return -errno;
+    }
+    int n = 0;
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL && n < outCap) {
+        int nid;
+        if (sscanf_s(ent->d_name, "node%d", &nid) != 1)
+            continue;
+        if (nid < 0 || nid < GetNrLocalNuma())
+            continue;
+        if (nid >= SMAP_MAX_NUMNODES) {
+            SMAP_LOGGER_ERROR("node %d exceeds SMAP_MAX_NUMNODES %d, skip.", nid, SMAP_MAX_NUMNODES);
+            continue;
+        }
+        out[n++] = nid;
+    }
+    closedir(dir);
+    /* 升序保证结果确定、便于 diff */
+    for (int i = 0; i < n - 1; i++) {
+        for (int j = 0; j < n - 1 - i; j++) {
+            if (out[j] > out[j + 1]) {
+                int t = out[j];
+                out[j] = out[j + 1];
+                out[j + 1] = t;
+            }
+        }
+    }
+    return n;
+}
+
+/* 重建 g_remoteNids 列表（不变化则跳过） */
+void RebuildRemoteNids(void)
+{
+    int tmp[SMAP_MAX_NUMNODES];
+    int n = ScanRemoteNids(tmp, SMAP_MAX_NUMNODES);
+    if (n < 0) {
+        SMAP_LOGGER_WARNING("ScanRemoteNids failed, keep current remote list");
+        return;
+    }
+    /* 先填充 g_remoteNids 内容，最后再发布 g_nrRemote：并发读者（for_each_remote_nid）
+     * 要么看到旧计数+旧内容，要么看到新计数+新内容，不会看到新计数+未填充的尾部 */
+    for (int i = 0; i < n; i++) {
+        g_remoteNids[i] = tmp[i];
+    }
+    g_nrRemote = n;
+}
+
+/* 检测远端节点集合是否变化 */
+bool RemoteNidSetChanged(void)
+{
+    int tmp[SMAP_MAX_NUMNODES];
+    int n = ScanRemoteNids(tmp, SMAP_MAX_NUMNODES);
+    if (n < 0)
+        return false; // 扫描失败保留现状
+    if (n != g_nrRemote)
+        return true;
+    for (int i = 0; i < n; i++) {
+        if (g_remoteNids[i] != tmp[i])
+            return true;
+    }
+    return false;
 }
 
 int ConfigUbWatch(uint32_t durationMs)

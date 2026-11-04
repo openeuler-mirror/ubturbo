@@ -15,6 +15,7 @@
 #include "securec.h"
 #include "smap_user_log.h"
 #include "manage/manage.h"
+#include "manage/node_matrix.h"
 #include "strategy.h"
 #include "strategy_config.h"
 #include "separate_strategy.h"
@@ -481,8 +482,8 @@ int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][
     StrategyAttribute *strategy = &process->strategyAttr;
     for (int localNid = 0; localNid < nrLocalNuma; localNid++) {
         for (int remoteNid = nrLocalNuma; remoteNid < nrLocalNuma + REMOTE_NUMA_NUM; remoteNid++) {
-            uint32_t localToRemote = strategy->nrMigratePages[localNid][remoteNid];
-            uint32_t remoteToLocal = strategy->nrMigratePages[remoteNid][localNid];
+            uint32_t localToRemote = NM_AT(strategy->nrMigratePages, localNid, remoteNid);
+            uint32_t remoteToLocal = NM_AT(strategy->nrMigrateBackPages, localNid, remoteNid);
             if (IsNodeForbidden(remoteNid)) {
                 if (localToRemote > 0 || remoteToLocal > 0) {
                     SMAP_LOGGER_INFO("Pid %d pair %d-%d skips migration to and from disabled remote.", process->pid,
@@ -524,8 +525,8 @@ static int SeparateStrategyInner(ProcessAttr *process, struct MigList mlist[MAX_
     int localNid = info.localNid;
     int remoteNid = info.remoteNid;
     StrategyAttribute *strat = &process->strategyAttr;
-    uint32_t demotePageNr = strat->nrMigratePages[localNid][remoteNid];
-    uint32_t promotePageNr = strat->nrMigratePages[remoteNid][localNid];
+    uint32_t demotePageNr = NM_AT(strat->nrMigratePages, localNid, remoteNid);
+    uint32_t promotePageNr = NM_AT(strat->nrMigrateBackPages, localNid, remoteNid);
     SMAP_LOGGER_INFO("Pid %lld NUMA%u to NUMA%u swap %llu demote %u promote %u\n", process->pid, localNid, remoteNid,
                      swapNum, demotePageNr, promotePageNr);
 
@@ -574,9 +575,12 @@ static void UpdateSwapNum(ProcessAttr *process, uint64_t swapNum[LOCAL_NUMA_BITS
     uint64_t numaOffset[MAX_NODES] = { 0 };
     StrategyAttribute *sa = &process->strategyAttr;
 
-    for (int nid1 = 0; nid1 < MAX_NODES; nid1++) {
-        for (int nid2 = 0; nid2 < MAX_NODES; nid2++) {
-            numaOffset[nid1] += sa->nrMigratePages[nid1][nid2];
+    /* 各节点迁出量：demote 从本地节点流出（front[l][r]），promote 从远端节点流出（back[l][r]）；
+     * 方向矩阵第一维按 nrLocalNuma 分配，不可用绝对 nid 作第一维下标 */
+    for (int l = 0; l < localNumaNum; l++) {
+        for (int r = localNumaNum; r < localNumaNum + REMOTE_NUMA_NUM; r++) {
+            numaOffset[l] += NM_AT(sa->nrMigratePages, l, r);
+            numaOffset[r] += NM_AT(sa->nrMigrateBackPages, l, r);
         }
     }
     for (int remoteNid = localNumaNum; remoteNid < localNumaNum + REMOTE_NUMA_NUM; remoteNid++) {
@@ -589,8 +593,8 @@ static void UpdateSwapNum(ProcessAttr *process, uint64_t swapNum[LOCAL_NUMA_BITS
                 continue;
             }
             // memSize and nrMigratePages both being zero means no swap should happen for processes in MIG_MEMSIZE_MODE.
-            if (process->migrateMode == MIG_MEMSIZE_MODE && sa->memSize[localNid][remoteIndex] == 0 &&
-                sa->nrMigratePages[localNid][remoteNid] == 0) {
+            if (process->migrateMode == MIG_MEMSIZE_MODE && NM_AT(sa->memSize, localNid, remoteIndex) == 0 &&
+                NM_AT(sa->nrMigratePages, localNid, remoteNid) == 0) {
                 continue;
             }
             swapNum[localNid][remoteNid] = CalcSwapNum(process, localNid, remoteNid, numaOffset, numaFreePage);
@@ -1176,13 +1180,13 @@ static void CalculateMigInfo(ProcessAttr *process, RemoteMigInfo remoteMigInfo[R
                 continue;
             }
             int index = l2Node - nrLocalNuma;
-            if (process->strategyAttr.nrMigratePages[l1Node][l2Node] > 0) {
+            if (NM_AT(process->strategyAttr.nrMigratePages, l1Node, l2Node) > 0) {
                 remoteMigInfo[index].dir = DEMOTE;
-                remoteMigInfo[index].nrMig = process->strategyAttr.nrMigratePages[l1Node][l2Node];
+                remoteMigInfo[index].nrMig = NM_AT(process->strategyAttr.nrMigratePages, l1Node, l2Node);
                 *demoteNum += remoteMigInfo[index].nrMig;
-            } else if (process->strategyAttr.nrMigratePages[l2Node][l1Node] > 0) {
+            } else if (NM_AT(process->strategyAttr.nrMigrateBackPages, l1Node, l2Node) > 0) {
                 remoteMigInfo[index].dir = PROMOTE;
-                remoteMigInfo[index].nrMig = process->strategyAttr.nrMigratePages[l2Node][l1Node];
+                remoteMigInfo[index].nrMig = NM_AT(process->strategyAttr.nrMigrateBackPages, l1Node, l2Node);
                 *promoteNum += remoteMigInfo[index].nrMig;
             } else {
                 remoteMigInfo[index].nrMig = 0;

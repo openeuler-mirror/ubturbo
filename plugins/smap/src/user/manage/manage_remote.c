@@ -32,6 +32,7 @@
 #include "strategy/strategy.h"
 #include "strategy/migration.h"
 #include "manage.h"
+#include "node_matrix.h"
 #include "manage_internal.h"
 
 void InitProcessTargetConfig(ProcessTargetConfig *config)
@@ -273,7 +274,7 @@ void MigratePagesToRemote(ProcessAttr *attr, int l2Index, const uint64_t pagesPe
     for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM && pagesToMigrate > 0; i++) {
         if (InAttrL1(attr, i)) {
             uint64_t allocPages = MIN(pagesPerNuma[i], pagesToMigrate);
-            attr->strategyAttr.memSize[i][l2Index] += allocPages * (pageSize / KIB);
+            NM_AT(attr->strategyAttr.memSize, i, l2Index) += allocPages * (pageSize / KIB);
             pagesToMigrate -= allocPages;
         }
     }
@@ -282,7 +283,7 @@ void MigratePagesToRemote(ProcessAttr *attr, int l2Index, const uint64_t pagesPe
 static void ClearSingleRemoteTarget(ProcessAttr *attr, int l2Index, int nrLocalNuma)
 {
     for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-        attr->strategyAttr.memSize[i][l2Index] = 0;
+        NM_AT(attr->strategyAttr.memSize, i, l2Index) = 0;
         attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index] = 0;
     }
 }
@@ -390,13 +391,13 @@ static void SetSingleRemoteTargetPages(ProcessAttr *attr, int l2Index, const uin
         uint64_t accounted = attr->strategyAttr.remoteNrPagesAfterMigrate[i][l2Index];
         uint64_t capacity = accounted + pagesPerNuma[i];
         uint64_t nrPages = MIN(capacity, nrLeft);
-        attr->strategyAttr.memSize[i][l2Index] = nrPages * (pageSize / KIB);
+        NM_AT(attr->strategyAttr.memSize, i, l2Index) = nrPages * (pageSize / KIB);
         nrLeft -= nrPages;
         lastLocal = i;
     }
 
     if (nrLeft > 0 && lastLocal != NUMA_NO_NODE) {
-        attr->strategyAttr.memSize[lastLocal][l2Index] += nrLeft * (pageSize / KIB);
+        NM_AT(attr->strategyAttr.memSize, lastLocal, l2Index) += nrLeft * (pageSize / KIB);
     }
 }
 
@@ -409,9 +410,9 @@ void RecallPagesFromRemote(ProcessAttr *attr, int l2Index, uint64_t pages)
 
     for (int i = nrLocalNuma - 1; i >= 0 && pagesToRecall > 0; i--) {
         if (InAttrL1(attr, i)) {
-            uint64_t existingMemSizePages = attr->strategyAttr.memSize[i][l2Index] / (pageSize / KIB);
+            uint64_t existingMemSizePages = NM_AT(attr->strategyAttr.memSize, i, l2Index) / (pageSize / KIB);
             uint64_t recallPages = MIN(existingMemSizePages, pagesToRecall);
-            attr->strategyAttr.memSize[i][l2Index] -= recallPages * (pageSize / KIB);
+            NM_AT(attr->strategyAttr.memSize, i, l2Index) -= recallPages * (pageSize / KIB);
             pagesToRecall -= recallPages;
         }
     }
@@ -442,7 +443,7 @@ int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLoca
 
     /* Set ratio for all local NUMAs */
     for (int i = 0; i < nrLocalNuma && i < LOCAL_NUMA_NUM; i++) {
-        attr->strategyAttr.initRemoteMemRatio[i][l2Index] = param->numaParam[0].ratio;
+        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, l2Index) = param->numaParam[0].ratio;
     }
 
     ClearSingleRemoteTarget(attr, l2Index, nrLocalNuma);
@@ -461,20 +462,25 @@ int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLoca
 
 static void ClearCompatibleProcessTargets(ProcessAttr *attr)
 {
+    /* initRemoteMemRatio 等 5 个数组第一维仅分配 nrLocalNuma 行 */
+    int nrLocalNuma = GetNrLocalNuma();
     for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
         attr->migrateParam[i].nid = DEFAULT_L2_NODE;
         attr->migrateParam[i].memSize = 0;
-        for (int j = 0; j < LOCAL_NUMA_NUM; j++) {
-            attr->strategyAttr.initRemoteMemRatio[j][i] = 0;
-            attr->strategyAttr.memSize[j][i] = 0;
-            attr->strategyAttr.allocRemoteNrPages[j][i] = 0;
-            attr->strategyAttr.l2RemoteMemRatio[j][i] = 0;
-            attr->strategyAttr.l3RemoteMemRatio[j][i] = 0;
+        for (int j = 0; j < nrLocalNuma; j++) {
+            NM_AT(attr->strategyAttr.initRemoteMemRatio, j, i) = 0;
+            NM_AT(attr->strategyAttr.memSize, j, i) = 0;
+            NM_AT(attr->strategyAttr.allocRemoteNrPages, j, i) = 0;
+            NM_AT(attr->strategyAttr.l2RemoteMemRatio, j, i) = 0;
+            NM_AT(attr->strategyAttr.l3RemoteMemRatio, j, i) = 0;
         }
     }
-    for (int i = 0; i < MAX_NODES; i++) {
-        for (int j = 0; j < MAX_NODES; j++) {
-            attr->strategyAttr.nrMigratePages[i][j] = 0;
+    /* 迁移量方向矩阵第一维按 nrLocalNuma 分配，按 [local][远端绝对 nid] 清零 */
+    int cap = (int)GetNumaCap();
+    for (int j = 0; j < nrLocalNuma; j++) {
+        for (int i = 0; i < cap; i++) {
+            NM_AT(attr->strategyAttr.nrMigratePages, j, i) = 0;
+            NM_AT(attr->strategyAttr.nrMigrateBackPages, j, i) = 0;
         }
     }
 }
@@ -629,7 +635,24 @@ void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *candida
     attr->ignoreRemoteCapacity = candidate->ignoreRemoteCapacity;
     attr->numaAttr = candidate->numaAttr;
     attr->managedLocalState = candidate->managedLocalState;
-    attr->strategyAttr = candidate->strategyAttr;
+    /*
+     * strategyAttr 含运行期分配的堆指针成员（5 个节点维度数组），禁止整体赋值：
+     * 候选由浅拷贝派生后会持有独立数组，整体赋值会把候选的指针搬给 active，
+     * 候选销毁时数组被 free，active 即成悬垂指针并在后续释放时二次释放。
+     * 内嵌数组逐项拷贝，指针数组由 CopyProcessAttrArrays 按内容拷贝
+     * （指针相同即栈候选共享时跳过）。
+     */
+    attr->strategyAttr.separateParam = candidate->strategyAttr.separateParam;
+    (void)memcpy_s(attr->strategyAttr.nrPagesPerLocalNuma, sizeof(attr->strategyAttr.nrPagesPerLocalNuma),
+                   candidate->strategyAttr.nrPagesPerLocalNuma, sizeof(attr->strategyAttr.nrPagesPerLocalNuma));
+    (void)memcpy_s(attr->strategyAttr.remoteNrPagesAfterMigrate, sizeof(attr->strategyAttr.remoteNrPagesAfterMigrate),
+                   candidate->strategyAttr.remoteNrPagesAfterMigrate,
+                   sizeof(attr->strategyAttr.remoteNrPagesAfterMigrate));
+    (void)memcpy_s(attr->strategyAttr.dir, sizeof(attr->strategyAttr.dir), candidate->strategyAttr.dir,
+                   sizeof(attr->strategyAttr.dir));
+    (void)memcpy_s(attr->strategyAttr.ubBwRestrict, sizeof(attr->strategyAttr.ubBwRestrict),
+                   candidate->strategyAttr.ubBwRestrict, sizeof(attr->strategyAttr.ubBwRestrict));
+    CopyProcessAttrArrays(attr, candidate);
     attr->isFirstScan = candidate->isFirstScan;
     attr->scanTime = candidate->scanTime;
     for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
@@ -1171,7 +1194,7 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
         if (attr->migrateMode == MIG_MEMSIZE_MODE) {
             attr->migrateParam[0].nid = destNodeIndex + nrLocalNuma;
         } else {
-            if (ratio >= attr->strategyAttr.initRemoteMemRatio[l1node][srcNodeIndex]) {
+            if (ratio >= NM_AT(attr->strategyAttr.initRemoteMemRatio, l1node, srcNodeIndex)) {
                 ClearNodeBit(&attr->numaAttr.numaNodes, srcNodeIndex + LOCAL_NUMA_BITS);
             }
         }
@@ -1180,24 +1203,25 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
             if (!InAttrL1(attr, i)) {
                 continue;
             }
-            if (attr->migrateMode == MIG_MEMSIZE_MODE && attr->strategyAttr.memSize[i][srcNodeIndex] == 0) {
+            if (attr->migrateMode == MIG_MEMSIZE_MODE && NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) == 0) {
                 continue;
             }
-            attr->strategyAttr.initRemoteMemRatio[i][destNodeIndex] += ratio;
-            attr->strategyAttr.initRemoteMemRatio[i][srcNodeIndex] -= ratio;
-            attr->strategyAttr.memSize[i][destNodeIndex] += memSize;
-            if (attr->strategyAttr.memSize[i][srcNodeIndex] >= memSize) {
-                attr->strategyAttr.memSize[i][srcNodeIndex] -= memSize;
+            NM_AT(attr->strategyAttr.initRemoteMemRatio, i, destNodeIndex) += ratio;
+            NM_AT(attr->strategyAttr.initRemoteMemRatio, i, srcNodeIndex) -= ratio;
+            NM_AT(attr->strategyAttr.memSize, i, destNodeIndex) += memSize;
+            if (NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) >= memSize) {
+                NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) -= memSize;
             } else {
-                attr->strategyAttr.memSize[i][srcNodeIndex] = 0;
+                NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) = 0;
             }
-            if (attr->migrateMode == MIG_MEMSIZE_MODE && attr->strategyAttr.memSize[i][srcNodeIndex] != 0) {
+            if (attr->migrateMode == MIG_MEMSIZE_MODE && NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) != 0) {
                 migOutAll = false;
             }
 
             SMAP_LOGGER_INFO("[change_remote] pid=%d local=%d old_remote=%d new_remote=%d old_sz=%llu new_sz=%llu",
-                             attr->pid, i, srcNodeIndex, destNodeIndex, attr->strategyAttr.memSize[i][srcNodeIndex],
-                             attr->strategyAttr.memSize[i][destNodeIndex]);
+                             attr->pid, i, srcNodeIndex, destNodeIndex,
+                             NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex),
+                             NM_AT(attr->strategyAttr.memSize, i, destNodeIndex));
         }
         /* 部分迁移时保留原节点L2位，否则同源节点后续迁移请求可能会被拒绝 */
         if (attr->migrateMode == MIG_MEMSIZE_MODE && migOutAll) {
@@ -1230,11 +1254,11 @@ static void ChangePidRemoteMemory(ProcessAttr *attr, int srcNodeIndex, int destN
             if (!InAttrL1(attr, i)) {
                 continue;
             }
-            attr->strategyAttr.memSize[i][destNodeIndex] += memSize;
-            if (attr->strategyAttr.memSize[i][srcNodeIndex] >= memSize) {
-                attr->strategyAttr.memSize[i][srcNodeIndex] -= memSize;
+            NM_AT(attr->strategyAttr.memSize, i, destNodeIndex) += memSize;
+            if (NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) >= memSize) {
+                NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) -= memSize;
             } else {
-                attr->strategyAttr.memSize[i][srcNodeIndex] = 0;
+                NM_AT(attr->strategyAttr.memSize, i, srcNodeIndex) = 0;
             }
         }
     }
@@ -1272,10 +1296,11 @@ static void ChangePidRemoteMemoryByNuma(ProcessAttr *attr, int srcNode, int dest
 {
     int nrLocalNuma = GetProcessManager()->nrLocalNuma;
     for (int i = 0; i < nrLocalNuma; i++) {
-        attr->strategyAttr.initRemoteMemRatio[i][destNode] = attr->strategyAttr.initRemoteMemRatio[i][srcNode];
-        attr->strategyAttr.initRemoteMemRatio[i][srcNode] = 0;
-        attr->strategyAttr.memSize[i][destNode] = attr->strategyAttr.memSize[i][srcNode];
-        attr->strategyAttr.memSize[i][srcNode] = 0;
+        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, destNode) =
+            NM_AT(attr->strategyAttr.initRemoteMemRatio, i, srcNode);
+        NM_AT(attr->strategyAttr.initRemoteMemRatio, i, srcNode) = 0;
+        NM_AT(attr->strategyAttr.memSize, i, destNode) = NM_AT(attr->strategyAttr.memSize, i, srcNode);
+        NM_AT(attr->strategyAttr.memSize, i, srcNode) = 0;
     }
     for (int i = 0; i < attr->remoteNumaCnt; i++) {
         if (attr->migrateParam[i].nid == srcNode + nrLocalNuma)
@@ -1581,16 +1606,16 @@ static int SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRem
         if (runMode == WATERLINE_MODE) {
             bool clearSrc;
             if (attr->migrateMode == MIG_MEMSIZE_MODE) {
-                clearSrc = msg->payloads[i].memSize >= attr->strategyAttr.memSize[l1node][l2node - nrLocalNuma];
+                clearSrc = msg->payloads[i].memSize >= NM_AT(attr->strategyAttr.memSize, l1node, l2node - nrLocalNuma);
             } else {
-                int initRatio = attr->strategyAttr.initRemoteMemRatio[l1node][l2node - nrLocalNuma];
+                int initRatio = NM_AT(attr->strategyAttr.initRemoteMemRatio, l1node, l2node - nrLocalNuma);
                 clearSrc = msg->payloads[i].ratio >= initRatio;
             }
             if (clearSrc) {
                 ClearNodeBit(&payload[found].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
             }
         } else {
-            if (msg->payloads[i].memSize >= attr->strategyAttr.memSize[l1node][l2node - nrLocalNuma]) {
+            if (msg->payloads[i].memSize >= NM_AT(attr->strategyAttr.memSize, l1node, l2node - nrLocalNuma)) {
                 ClearNodeBit(&payload[found].numaNodes, l2node + (LOCAL_NUMA_BITS - nrLocalNuma));
             }
         }

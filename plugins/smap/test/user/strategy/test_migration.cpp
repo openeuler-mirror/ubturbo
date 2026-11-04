@@ -14,6 +14,7 @@
 #include "advanced-strategy/scene_info.h"
 #include "manage/device.h"
 #include "manage/manage.h"
+#include "manage/node_matrix.h"
 extern "C" int CalcDurationUs(struct timeval start, struct timeval end);
 extern "C" void ApplyUbBwStop(ProcessAttr *current, struct ProcessManager *manager);
 extern "C" int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload);
@@ -287,9 +288,13 @@ TEST_F(MigrationTest, TestBuildMigrationMsgNoPage)
     g_processManager.nrLocalNuma = 4;
     EnvAtomicSet(&g_forbiddenNodes[nid], 0);
 
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+
     MOCKER(AddMigListCapped).stubs().will(returnValue(0));
     ret = BuildMigrationMsg(&process, &mMsg, &pages);
     EXPECT_EQ(0, ret);
+    FreeProcessAttrArrays(&process);
 }
 
 extern "C" bool IsPidAnyRemoteNodeForbidden(ProcessAttr *attr);
@@ -400,8 +405,10 @@ TEST_F(MigrationTest, TestBuildMigrationMsgSuccess)
     int ret;
     uint64_t pages = 0;
     ProcessAttr process = {};
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     process.pid = 1234;
-    process.strategyAttr.nrMigratePages[0][0] = 100;
+    NM_AT(process.strategyAttr.nrMigratePages, 0, 0) = 100;
     process.numaAttr.numaNodes = 0b00010001;
     struct MigrateMsg mMsg = {};
     ActcData actc = {};
@@ -409,13 +416,13 @@ TEST_F(MigrationTest, TestBuildMigrationMsgSuccess)
     EnvAtomicSet(&g_forbiddenNodes[4], 0);
 
     MOCKER(CheckActcDataValid).stubs().will(returnValue(0));
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(RunStrategy).stubs().will(invoke(RunStrategyStub));
     MOCKER(AddMigListCapped).stubs().will(returnValue(0));
 
     ret = BuildMigrationMsg(&process, &mMsg, &pages);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(144, pages);
+    FreeProcessAttrArrays(&process);
 }
 
 extern "C" int DoMigration(struct MigrateMsg *mMsg, struct ProcessManager *manager);
@@ -577,13 +584,15 @@ extern "C" void CalProcessNuma(StrategyAttribute *strategyAttr);
 TEST_F(MigrationTest, TestCalProcessNuma)
 {
     ProcessAttr attr = {};
-    attr.strategyAttr.nrPagesPerLocalNuma[0] = 100;
-    attr.strategyAttr.allocRemoteNrPages[0][0] = 200;
-    attr.strategyAttr.l3RemoteMemRatio[0][0] = 50;
-
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    attr.strategyAttr.nrPagesPerLocalNuma[0] = 100;
+    NM_AT(attr.strategyAttr.allocRemoteNrPages, 0, 0) = 200;
+    NM_AT(attr.strategyAttr.l3RemoteMemRatio, 0, 0) = 50;
+
     CalProcessNuma(&attr.strategyAttr);
-    EXPECT_EQ(150, attr.strategyAttr.nrMigratePages[4][0]);
+    EXPECT_EQ(150, NM_AT(attr.strategyAttr.nrMigrateBackPages, 0, 4));
+    FreeProcessAttrArrays(&attr);
 }
 
 typedef struct {
@@ -624,26 +633,28 @@ TEST_F(MigrationTest, TestNumaSwapMemPool)
 {
     int l2Node = 4;
     ProcessAttr attr = {};
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(l2Node));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.numaAttr.numaNodes = 0x11;
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 5;
     attr.walkPage.nrPages[l2Node] = 5;
-    attr.strategyAttr.memSize[0][0] = 4096; // 2 hugepage
+    NM_AT(attr.strategyAttr.memSize, 0, 0) = 4096; // 2 hugepage
     g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.tracking.pageSize = g_pageSizeHuge;
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(l2Node));
 
     // promote case
     NumaSwapMemPool(&attr);
-    EXPECT_EQ(3, attr.strategyAttr.nrMigratePages[l2Node][0]);
+    EXPECT_EQ(3, NM_AT(attr.strategyAttr.nrMigrateBackPages, 0, l2Node));
 
     // demote case
     attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 140;
     attr.walkPage.nrPages[0] = 200;
     attr.walkPage.nrPages[l2Node] = 140;
-    attr.strategyAttr.memSize[0][0] = 307200; // 150 hugepage
+    NM_AT(attr.strategyAttr.memSize, 0, 0) = 307200; // 150 hugepage
     NumaSwapMemPool(&attr);
-    EXPECT_EQ(10, attr.strategyAttr.nrMigratePages[0][l2Node]);
+    EXPECT_EQ(10, NM_AT(attr.strategyAttr.nrMigratePages, 0, l2Node));
+    FreeProcessAttrArrays(&attr);
 }
 
 extern "C" void NumaMigReduceDeal(ProcessAttr *current);
@@ -651,13 +662,15 @@ TEST_F(MigrationTest, TestNumaMigReduceDeal)
 {
     ProcessAttr attr = {};
     attr.strategyAttr.nrPagesPerLocalNuma[0] = 100;
-    attr.strategyAttr.allocRemoteNrPages[0][0] = 200;
-    attr.strategyAttr.l3RemoteMemRatio[0][0] = 50;
-
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetRunMode).stubs().will(returnValue(0));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    NM_AT(attr.strategyAttr.allocRemoteNrPages, 0, 0) = 200;
+    NM_AT(attr.strategyAttr.l3RemoteMemRatio, 0, 0) = 50;
+
     NumaMigReduceDeal(&attr);
-    EXPECT_EQ(150, attr.strategyAttr.nrMigratePages[4][0]);
+    EXPECT_EQ(150, NM_AT(attr.strategyAttr.nrMigrateBackPages, 0, 4));
+    FreeProcessAttrArrays(&attr);
 }
 
 static PairPlan MakePairPlan(pid_t pid, int localNid, int remoteNid, int remoteIndex, uint32_t targetPages,
@@ -1036,9 +1049,14 @@ TEST_F(MigrationTest, TestApplyPairPlansForStateRebuildsMigratingMatrixOnly)
     PidSlotAdd(&manager, &first);
     PidSlotAdd(&manager, &second);
     PidSlotAdd(&manager, &grouped);
-    first.strategyAttr.nrMigratePages[7][7] = 7;
-    second.strategyAttr.nrMigratePages[6][6] = 6;
-    grouped.strategyAttr.nrMigratePages[5][5] = 5;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&first));
+    ASSERT_EQ(0, InitProcessAttrArrays(&second));
+    ASSERT_EQ(0, InitProcessAttrArrays(&grouped));
+    /* 方向矩阵拆分后第一维仅 nrLocalNuma 行，陈旧值须落在未被本用例写到的 [local][远端 nid] 槽位 */
+    NM_AT(first.strategyAttr.nrMigrateBackPages, 0, 3) = 7;
+    NM_AT(second.strategyAttr.nrMigrateBackPages, 0, 3) = 6;
+    NM_AT(grouped.strategyAttr.nrMigrateBackPages, 1, 2) = 5;
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
     PairPlan plans[] = {
@@ -1050,13 +1068,16 @@ TEST_F(MigrationTest, TestApplyPairPlansForStateRebuildsMigratingMatrixOnly)
     plans[1].promotePages = 40;
 
     ASSERT_EQ(0, ApplyPairPlansForState(&manager, plans, 2));
-    EXPECT_EQ(65U, first.strategyAttr.nrMigratePages[0][2]);
-    EXPECT_EQ(5U, first.strategyAttr.nrMigratePages[2][0]);
-    EXPECT_EQ(40U, first.strategyAttr.nrMigratePages[3][1]);
-    EXPECT_EQ(0U, first.strategyAttr.nrMigratePages[7][7]);
-    EXPECT_EQ(6U, second.strategyAttr.nrMigratePages[6][6]);
-    EXPECT_EQ(5U, grouped.strategyAttr.nrMigratePages[5][5]);
+    EXPECT_EQ(65U, NM_AT(first.strategyAttr.nrMigratePages, 0, 2));
+    EXPECT_EQ(5U, NM_AT(first.strategyAttr.nrMigrateBackPages, 0, 2));
+    EXPECT_EQ(40U, NM_AT(first.strategyAttr.nrMigrateBackPages, 1, 3));
+    EXPECT_EQ(0U, NM_AT(first.strategyAttr.nrMigrateBackPages, 0, 3));
+    EXPECT_EQ(6U, NM_AT(second.strategyAttr.nrMigrateBackPages, 0, 3));
+    EXPECT_EQ(5U, NM_AT(grouped.strategyAttr.nrMigrateBackPages, 1, 2));
     EXPECT_EQ(0, EnvMutexDestroy(&manager.threadLock));
+    FreeProcessAttrArrays(&first);
+    FreeProcessAttrArrays(&second);
+    FreeProcessAttrArrays(&grouped);
 }
 
 TEST_F(MigrationTest, TestApplyPairPlansForStateFailureKeepsOldMatrix)
@@ -1065,9 +1086,11 @@ TEST_F(MigrationTest, TestApplyPairPlansForStateFailureKeepsOldMatrix)
     manager.nrLocalNuma = 2;
     ProcessAttr process = {.pid = 100, .scanType = NORMAL_SCAN};
     process.state = PROC_MIGRATE;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     memset(&manager.slots, 0, sizeof(manager.slots));
     PidSlotAdd(&manager, &process);
-    process.strategyAttr.nrMigratePages[0][2] = 7;
+    NM_AT(process.strategyAttr.nrMigratePages, 0, 2) = 7;
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
     PairPlan plan = MakePairPlan(100, 0, 2, 0, 80, 20);
@@ -1075,8 +1098,9 @@ TEST_F(MigrationTest, TestApplyPairPlansForStateFailureKeepsOldMatrix)
     plan.promotePages = 1;
 
     EXPECT_EQ(-EINVAL, ApplyPairPlansForState(&manager, &plan, 1));
-    EXPECT_EQ(7U, process.strategyAttr.nrMigratePages[0][2]);
+    EXPECT_EQ(7U, NM_AT(process.strategyAttr.nrMigratePages, 0, 2));
     EXPECT_EQ(0, EnvMutexDestroy(&manager.threadLock));
+    FreeProcessAttrArrays(&process);
 }
 
 static int BuildDisabledPairPlanInput(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
@@ -1641,12 +1665,15 @@ TEST_F(MigrationTest, TestApplyUbBwStopThresholdZero)
     memset(&manager, 0, sizeof(manager));
     manager.ubBwMonitor.ubBwThreshold = 0;
     manager.ubBwMonitor.currentFluxRet = 0;
-    current.strategyAttr.nrMigratePages[0][1] = 100;
-    current.strategyAttr.nrMigratePages[1][0] = 200;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&current));
+    NM_AT(current.strategyAttr.nrMigratePages, 0, 1) = 100;
+    NM_AT(current.strategyAttr.nrMigratePages, 1, 0) = 200;
 
     ApplyUbBwStop(&current, &manager);
-    EXPECT_EQ(100, current.strategyAttr.nrMigratePages[0][1]);
-    EXPECT_EQ(200, current.strategyAttr.nrMigratePages[1][0]);
+    EXPECT_EQ(100, NM_AT(current.strategyAttr.nrMigratePages, 0, 1));
+    EXPECT_EQ(200, NM_AT(current.strategyAttr.nrMigratePages, 1, 0));
+    FreeProcessAttrArrays(&current);
 }
 
 TEST_F(MigrationTest, TestApplyUbBwStopFluxRetFailed)
@@ -1656,10 +1683,13 @@ TEST_F(MigrationTest, TestApplyUbBwStopFluxRetFailed)
     memset(&manager, 0, sizeof(manager));
     manager.ubBwMonitor.ubBwThreshold = 1000;
     manager.ubBwMonitor.currentFluxRet = -1;
-    current.strategyAttr.nrMigratePages[0][1] = 100;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&current));
+    NM_AT(current.strategyAttr.nrMigratePages, 0, 1) = 100;
 
     ApplyUbBwStop(&current, &manager);
-    EXPECT_EQ(100, current.strategyAttr.nrMigratePages[0][1]);
+    EXPECT_EQ(100, NM_AT(current.strategyAttr.nrMigratePages, 0, 1));
+    FreeProcessAttrArrays(&current);
 }
 
 TEST_F(MigrationTest, TestApplyUbBwStopBwExceedThreshold)
@@ -1673,17 +1703,20 @@ TEST_F(MigrationTest, TestApplyUbBwStopBwExceedThreshold)
     manager.ubBwMonitor.currentFluxMb.flux[0].numaId = 2;
     manager.ubBwMonitor.currentFluxMb.flux[0].readMb = 300;
     manager.ubBwMonitor.currentFluxMb.flux[0].writeMb = 300;
-    current.strategyAttr.nrMigratePages[0][2] = 100;
-    current.strategyAttr.nrMigratePages[2][0] = 200;
-    current.strategyAttr.nrMigratePages[1][2] = 50;
-    current.strategyAttr.nrMigratePages[2][1] = 60;
-    current.strategyAttr.nrMigratePages[0][1] = 300;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&current));
+    NM_AT(current.strategyAttr.nrMigratePages, 0, 2) = 100;
+    NM_AT(current.strategyAttr.nrMigratePages, 2, 0) = 200;
+    NM_AT(current.strategyAttr.nrMigratePages, 1, 2) = 50;
+    NM_AT(current.strategyAttr.nrMigratePages, 2, 1) = 60;
+    NM_AT(current.strategyAttr.nrMigratePages, 0, 1) = 300;
 
     ApplyUbBwStop(&current, &manager);
     /* ApplyUbBwStop only sets ubBwRestrict flag; nrMigratePages cleared by strategy layer */
     EXPECT_EQ(UB_BW_SWAP_STOP, current.strategyAttr.ubBwRestrict[2]);
     EXPECT_EQ(UB_BW_NORMAL, current.strategyAttr.ubBwRestrict[0]);
     EXPECT_EQ(UB_BW_NORMAL, current.strategyAttr.ubBwRestrict[1]);
+    FreeProcessAttrArrays(&current);
 }
 
 TEST_F(MigrationTest, TestApplyUbBwStopBwBelowThreshold)
@@ -1697,11 +1730,14 @@ TEST_F(MigrationTest, TestApplyUbBwStopBwBelowThreshold)
     manager.ubBwMonitor.currentFluxMb.flux[0].numaId = 2;
     manager.ubBwMonitor.currentFluxMb.flux[0].readMb = 300;
     manager.ubBwMonitor.currentFluxMb.flux[0].writeMb = 300;
-    current.strategyAttr.nrMigratePages[0][2] = 100;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&current));
+    NM_AT(current.strategyAttr.nrMigratePages, 0, 2) = 100;
 
     ApplyUbBwStop(&current, &manager);
-    EXPECT_EQ(100, current.strategyAttr.nrMigratePages[0][2]);
+    EXPECT_EQ(100, NM_AT(current.strategyAttr.nrMigratePages, 0, 2));
     EXPECT_EQ(UB_BW_NORMAL, current.strategyAttr.ubBwRestrict[2]);
+    FreeProcessAttrArrays(&current);
 }
 
 TEST_F(MigrationTest, TestApplyUbBwStopMultipleNumaMixed)
@@ -1718,15 +1754,18 @@ TEST_F(MigrationTest, TestApplyUbBwStopMultipleNumaMixed)
     manager.ubBwMonitor.currentFluxMb.flux[1].numaId = 3;
     manager.ubBwMonitor.currentFluxMb.flux[1].readMb = 100;
     manager.ubBwMonitor.currentFluxMb.flux[1].writeMb = 100;
-    current.strategyAttr.nrMigratePages[0][1] = 100;
-    current.strategyAttr.nrMigratePages[1][0] = 200;
-    current.strategyAttr.nrMigratePages[0][3] = 50;
-    current.strategyAttr.nrMigratePages[3][0] = 60;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&current));
+    NM_AT(current.strategyAttr.nrMigratePages, 0, 1) = 100;
+    NM_AT(current.strategyAttr.nrMigratePages, 1, 0) = 200;
+    NM_AT(current.strategyAttr.nrMigratePages, 0, 3) = 50;
+    NM_AT(current.strategyAttr.nrMigratePages, 3, 0) = 60;
 
     ApplyUbBwStop(&current, &manager);
     /* ApplyUbBwStop only sets ubBwRestrict flag; nrMigratePages cleared by strategy layer */
     EXPECT_EQ(UB_BW_SWAP_STOP, current.strategyAttr.ubBwRestrict[1]);
     EXPECT_EQ(UB_BW_NORMAL, current.strategyAttr.ubBwRestrict[3]);
+    FreeProcessAttrArrays(&current);
 }
 
 TEST_F(MigrationTest, TestBuildMigrationMsgL2NodeCriticalErr)

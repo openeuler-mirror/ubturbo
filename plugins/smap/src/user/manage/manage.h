@@ -77,7 +77,10 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-extern EnvAtomic g_forbiddenNodes[MAX_NODES];
+/* 单例全局按绝对上界静态定维（内核 MAX_NUMNODES 数组同款双轨），运行期以 GetNumaCap() 为界 */
+extern EnvAtomic g_forbiddenNodes[SMAP_NODE_CAP_LIMIT];
+extern int g_remoteNids[SMAP_NODE_CAP_LIMIT];
+extern int g_nrRemote;
 
 #define NODE_FORBIDDEN_USER (1 << 0)
 #define NODE_FORBIDDEN_MIGBACK_DONE (1 << 1)
@@ -220,11 +223,11 @@ typedef struct {
 
 typedef struct {
     uint32_t nrPage; // 进程使用的page数量
-    uint32_t nrPages[MAX_NODES]; // 进程在近远端使用的page数量
+    uint32_t nrPages[SMAP_NODE_CAP_LIMIT]; // 进程在近远端使用的page数量
 } WalkPage;
 
 typedef struct {
-    uint32_t cpuMask[LOCAL_NUMA_NUM]; // CPU绑定情况
+    uint32_t cpuMask[SMAP_NODE_CAP_LIMIT]; // CPU绑定情况
     uint32_t numaNodes; // numa bitmap: 0-unused, 1-used
 } NumaAttribute;
 
@@ -246,7 +249,7 @@ typedef struct {
     MigrateMode migrateMode;
     int sourceLocalNid;
     uint32_t count;
-    ProcessRemoteTarget targets[REMOTE_NUMA_NUM];
+    ProcessRemoteTarget targets[SMAP_MAX_NUMNODES];
 } ProcessTargetConfig;
 
 typedef struct {
@@ -255,7 +258,7 @@ typedef struct {
     uint32_t residentLocalMask;
     uint32_t affinityLocalMask;
     uint32_t affinityRefreshElapsedMs;
-    uint32_t accountLocalMask[REMOTE_NUMA_NUM];
+    uint32_t accountLocalMask[SMAP_NODE_CAP_LIMIT];
     bool affinityValid;
     bool affinitySampled;
 } ManagedLocalState;
@@ -277,21 +280,21 @@ typedef struct {
 typedef struct {
     int nrLocalNuma;
     uint64_t pageSizeKB;
-    uint32_t capacityLocalMask[REMOTE_NUMA_NUM];
+    uint32_t capacityLocalMask[SMAP_MAX_NUMNODES];
 } PairRequestContext;
 
 typedef struct {
     uint64_t managedTotalPages;
     /* Original aggregate request derived from ProcessTargetConfig. */
-    uint64_t requestedRemotePages[REMOTE_NUMA_NUM];
+    uint64_t requestedRemotePages[SMAP_MAX_NUMNODES];
     /* Aggregate request limited only by the process's managed pages. */
-    uint64_t effectiveRemotePages[REMOTE_NUMA_NUM];
+    uint64_t effectiveRemotePages[SMAP_MAX_NUMNODES];
     /*
      * Portion of effectiveRemotePages that cannot currently be assigned to
      * any eligible local -> remote Pair. The aggregate request remains in
      * ProcessTargetConfig and can be assigned when Pair eligibility returns.
      */
-    uint64_t unassignedRequestedPages[REMOTE_NUMA_NUM];
+    uint64_t unassignedRequestedPages[SMAP_MAX_NUMNODES];
 } PairRequestSummary;
 
 /* Runtime-only migration decision for one local-to-remote pair. */
@@ -310,9 +313,9 @@ typedef struct {
 /* Per-cycle destination-node budget shared by all processes and Pairs. */
 typedef struct {
     int nrLocalNuma;
-    uint64_t freePages[MAX_NODES];
-    uint64_t safetyReservePages[MAX_NODES];
-    uint64_t plannedPages[MAX_NODES];
+    uint64_t freePages[SMAP_MAX_NUMNODES];
+    uint64_t safetyReservePages[SMAP_MAX_NUMNODES];
+    uint64_t plannedPages[SMAP_MAX_NUMNODES];
 } PairPlanContext;
 
 /* Per-cycle migration budget shared by all Pairs of one process. */
@@ -327,25 +330,32 @@ typedef struct {
      * Pair-level compatibility fields generated from ProcessTargetConfig.
      * They are runtime state, not the source of the user-requested target.
      */
-    double initRemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
-    uint64_t memSize[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
-    uint32_t allocRemoteNrPages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 根据账本计算的，各本地numa对应的远端page的数量
-    uint32_t nrPagesPerLocalNuma[LOCAL_NUMA_NUM]; // 根据账本计算的，各本地numa可支配的内存
-    double l2RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
-    double l3RemoteMemRatio[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
-    uint32_t nrMigratePages[MAX_NODES][MAX_NODES]; // 水线场景：消减后的迁移量；密度场景：接口设置的比例
+    double *initRemoteMemRatio;
+    uint64_t *memSize;
+    uint32_t *allocRemoteNrPages; // 根据账本计算的，各本地numa对应的远端page的数量
+    uint32_t nrPagesPerLocalNuma[SMAP_NODE_CAP_LIMIT]; // 根据账本计算的，各本地numa可支配的内存
+    double *l2RemoteMemRatio;
+    double *l3RemoteMemRatio;
+    /*
+     * 迁移量按方向拆为两个矩阵：nrMigratePages[l][r] 为 demote+swap（l→r）迁移量；
+     * nrMigrateBackPages[l][r] 为 promote+swap（r→l）迁移量。两矩阵均为行主序扁平
+     * 存储（T *），第一维为本地 nid（[0, nrLocalNuma)），第二维为远端绝对 nid，
+     * 分配尺寸 = nrLocalNuma × GetNumaCap()，经 NM_AT/NM_ROW 宏访问。
+     */
+    uint32_t *nrMigratePages; // 水线场景：消减后的迁移量（demote 方向）；密度场景：接口设置的比例
+    uint32_t *nrMigrateBackPages; // 水线场景：消减后的迁移量（promote 方向）
     uint32_t remoteNrPagesAfterMigrate[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 迁移后记录账本
-    MigrateDirection dir[MAX_NODES]; // 算法决策各numa的迁出的方向 demote/promote/swap
-    UbBwRestrictType ubBwRestrict[MAX_NODES]; // 各NUMA的UB带宽限制策略
+    MigrateDirection dir[SMAP_NODE_CAP_LIMIT]; // 算法决策各numa的迁出的方向 demote/promote/swap
+    UbBwRestrictType ubBwRestrict[SMAP_NODE_CAP_LIMIT]; // 各NUMA的UB带宽限制策略
     SeparateParam separateParam;
 } StrategyAttribute;
 
 typedef struct {
     uint32_t scanTime;
     ScanType scanType; // 标识添加进程组件 HAM/普通冷热
-    uint64_t actcLen[MAX_NODES];
-    ActcData *actcData[MAX_NODES]; // actc数据，按nid偏移指向同一连续缓冲区，第一个非空即缓冲区起始
-    ActCount actCount[MAX_NODES]; // 统计数据
+    uint64_t actcLen[SMAP_NODE_CAP_LIMIT];
+    ActcData *actcData[SMAP_NODE_CAP_LIMIT]; // actc数据，按nid偏移指向同一连续缓冲区，第一个非空即缓冲区起始
+    ActCount actCount[SMAP_NODE_CAP_LIMIT]; // 统计数据
     uint32_t selectedBuckets[MAX_NODES][FREQ_BUCKETS_SIZE]; // 已选频次为freq的页面数
 } ScanAttribute;
 
@@ -378,7 +388,7 @@ struct ProcessAttribute {
     struct { // 迁移相关参数
         int nid;
         uint64_t memSize; // 迁移内存大小,单位为KB
-    } migrateParam[REMOTE_NUMA_NUM];
+    } migrateParam[SMAP_MAX_NUMNODES];
     ProcessTargetConfig targetConfig;
     ProcessTargetConfig pendingTargetConfig;
     bool pendingTargetConfigValid;
@@ -609,6 +619,22 @@ int MoveProcessRemoteTarget(ProcessTargetConfig *config, int srcNid, int destNid
 const ProcessRemoteTarget *FindProcessRemoteTarget(const ProcessTargetConfig *config, int remoteNid);
 int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex);
 void InitProcessMigrationTargetState(ProcessAttr *attr);
+
+/*
+ * ProcessAttr 内嵌二维指针成员的生命周期管理：
+ * - InitProcessAttrArrays: 在 ProcessAttr 创建后分配 strategyAttr 的 [local][remote] 数组
+ *   （第一维按 nrLocalNuma 分配，列向按运行期 GetNumaCap() 收敛）
+ * - FreeProcessAttrArrays: 释放上述数组（幂等，重复调用安全）
+ * - CloneProcessAttrArrays: 浅拷贝出的 ProcessAttr 共享源数组指针，调用本函数
+ *   替换为独立深拷贝，避免候选配置写入污染 active 状态；失败时回收已克隆数组
+ *   并将 dst 数组指针全部置空，调用方直接丢弃 dst 即可
+ * - CopyProcessAttrArrays: 将 src 数组内容拷贝到 dst 已分配的数组（指针相同则跳过）
+ */
+int InitProcessAttrArrays(ProcessAttr *attr);
+void FreeProcessAttrArrays(ProcessAttr *attr);
+int CloneProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src);
+void CopyProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src);
+
 int ProcessManagerInit(uint32_t pageType);
 
 int DestroyProcessManager(void);
@@ -679,6 +705,18 @@ int BuildAllPairPlanInputsForState(struct ProcessManager *manager, PairPlan plan
 int SetRemoteNumaInfo(int srcNid, int destNid, uint64_t size);
 
 struct ProcessManager *GetProcessManager(void);
+
+/* 内核节点空间上限（cap）：初始化链路经 Mems_allowed 打印宽度解析写入后只读，
+ * 缺省 SMAP_MAX_NUMNODES；节点维度一律引用 GetNumaCap()，禁止新增编译期定维。
+ * GetNumaCap() 为 numa_nodes.h 中的 inline 访问器（读 g_numaCap） */
+void SetNumaCap(uint32_t cap);
+
+/* 解析 /proc/self/status 中 Mems_allowed 位图行的打印宽度获取内核编译期上限
+ * MAX_NUMNODES（内核经 %*pb 按 MAX_NUMNODES 零填充输出，宽度即编译期宽度）。
+ * 只取宽度不取值：值是 cpuset 允许集，与上限语义无关；不得 trim 前导零。
+ * 解析失败时 *cap 置为 SMAP_NODE_CAP_LIMIT 供调用方保守回退（安全不拒启） */
+int32_t ParseNodeCapFromLine(const char *line, uint32_t *cap);
+int32_t GetNodeCapFromStatus(uint32_t *cap);
 
 unsigned long GetPidNrPages(pid_t pid);
 

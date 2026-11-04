@@ -9,6 +9,7 @@
 #include <unordered_set>
 #include <vector>
 #include "manage/manage.h"
+#include "manage/node_matrix.h"
 #include "smap_user_log.h"
 #include "strategy/separate_strategy.h"
 #include "strategy/strategy.h"
@@ -153,16 +154,19 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KAbnormal)
     ProcessAttr process;
     struct MigList mlist[MAX_NODES][MAX_NODES];
     process.separateParam.freqWt = 0;
-    process.numaAttr.numaNodes = 0b01100011;
 
     MOCKER(InitSeparateParam).stubs().will(ignoreReturnValue());
     MOCKER(CalcMaxMigrate).stubs().will(ignoreReturnValue());
     MOCKER(ShouldMigrate).stubs().will(returnValue(true));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    process.numaAttr.numaNodes = 0b01100011;
     MOCKER(BuildSelectKMlistAddr).stubs().will(returnValue(-ENOMEM));
     MOCKER(FreeMlist).stubs().will(ignoreReturnValue());
     int ret = SeparateStrategy(&process, mlist);
 
     EXPECT_EQ(-ENOMEM, ret);
+    FreeProcessAttrArrays(&process);
 }
 
 TEST_F(SeparateStrategyTest, TestSeparateStrategy4KNormal)
@@ -170,15 +174,19 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KNormal)
     ProcessAttr process;
     struct MigList mlist[MAX_NODES][MAX_NODES];
     process.separateParam.freqWt = 0;
+    process.numaAttr.numaNodes = 0b01100011;
 
     MOCKER(InitSeparateParam).stubs().will(ignoreReturnValue());
     MOCKER(CalcMaxMigrate).stubs().will(ignoreReturnValue());
     MOCKER(ShouldMigrate).stubs().will(returnValue(true));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     MOCKER(BuildSelectKMlistAddr).stubs().will(returnValue(0));
     MOCKER(FreeMlist).stubs().will(ignoreReturnValue());
     int ret = SeparateStrategy(&process, mlist);
 
     EXPECT_EQ(0, ret);
+    FreeProcessAttrArrays(&process);
 }
 
 void BuildActcData(int nid, const uint16_t data[], int size, ScanAttribute *scanAttribute)
@@ -235,11 +243,12 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuilds2x2NetMigration)
     BuildPairActcData(3, remote3, 2, &process.scanAttr);
     initializeMigList(mlist);
 
-    process.strategyAttr.nrMigratePages[2][0] = 2;
-    process.strategyAttr.nrMigratePages[0][3] = 2;
-    process.strategyAttr.nrMigratePages[2][1] = 1;
-    process.strategyAttr.nrMigratePages[1][3] = 1;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    NM_AT(process.strategyAttr.nrMigrateBackPages, 0, 2) = 2; /* promote: remote 2 -> local 0 */
+    NM_AT(process.strategyAttr.nrMigratePages, 0, 3) = 2;
+    NM_AT(process.strategyAttr.nrMigrateBackPages, 1, 2) = 1;
+    NM_AT(process.strategyAttr.nrMigratePages, 1, 3) = 1;
 
     ASSERT_EQ(0, PairMigrationStrategy(&process, mlist));
     ASSERT_EQ(2U, mlist[2][0].nr);
@@ -259,6 +268,7 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuilds2x2NetMigration)
     for (int nid = 0; nid < 4; nid++) {
         free(process.scanAttr.actcData[nid]);
     }
+    FreeProcessAttrArrays(&process);
 }
 
 TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuildsPairSwapAfterNetMigration)
@@ -270,9 +280,10 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuildsPairSwapAfterNetMigr
     BuildPairActcData(0, local0, 3, &process.scanAttr);
     BuildPairActcData(2, remote2, 3, &process.scanAttr);
     initializeMigList(mlist);
-    process.strategyAttr.nrMigratePages[0][2] = 3;
-    process.strategyAttr.nrMigratePages[2][0] = 2;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    NM_AT(process.strategyAttr.nrMigratePages, 0, 2) = 3;     /* local -> remote */
+    NM_AT(process.strategyAttr.nrMigrateBackPages, 0, 2) = 2; /* remote -> local */
 
     ASSERT_EQ(0, PairMigrationStrategy(&process, mlist));
     ASSERT_EQ(3U, mlist[0][2].nr);
@@ -286,6 +297,7 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuildsPairSwapAfterNetMigr
     FreeMlist(mlist);
     free(process.scanAttr.actcData[0]);
     free(process.scanAttr.actcData[2]);
+    FreeProcessAttrArrays(&process);
 }
 
 TEST_F(SeparateStrategyTest, TestPairMigrationStrategyUbBwSwapStopStripsSwap)
@@ -297,10 +309,11 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyUbBwSwapStopStripsSwap)
     BuildPairActcData(0, local0, 3, &process.scanAttr);
     BuildPairActcData(2, remote2, 3, &process.scanAttr);
     initializeMigList(mlist);
-    process.strategyAttr.nrMigratePages[0][2] = 3; /* local -> remote */
-    process.strategyAttr.nrMigratePages[2][0] = 2; /* remote -> local */
-    process.strategyAttr.ubBwRestrict[2] = UB_BW_SWAP_STOP;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    NM_AT(process.strategyAttr.nrMigratePages, 0, 2) = 3;     /* local -> remote */
+    NM_AT(process.strategyAttr.nrMigrateBackPages, 0, 2) = 2; /* remote -> local */
+    process.strategyAttr.ubBwRestrict[2] = UB_BW_SWAP_STOP;
 
     ASSERT_EQ(0, PairMigrationStrategy(&process, mlist));
 
@@ -314,6 +327,7 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyUbBwSwapStopStripsSwap)
     FreeMlist(mlist);
     free(process.scanAttr.actcData[0]);
     free(process.scanAttr.actcData[2]);
+    FreeProcessAttrArrays(&process);
 }
 
 TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteSkipsBothDirections)
@@ -323,9 +337,10 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteSkipsBothDir
     const uint16_t remote2[] = {5};
     BuildPairActcData(2, remote2, 1, &process.scanAttr);
     initializeMigList(mlist);
-    process.strategyAttr.nrMigratePages[0][2] = 1;
-    process.strategyAttr.nrMigratePages[2][0] = 1;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    NM_AT(process.strategyAttr.nrMigratePages, 0, 2) = 1;
+    NM_AT(process.strategyAttr.nrMigrateBackPages, 0, 2) = 1;
     EnvAtomicSet(&g_forbiddenNodes[2], 1);
 
     int ret = PairMigrationStrategy(&process, mlist);
@@ -336,6 +351,7 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteSkipsBothDir
 
     FreeMlist(mlist);
     free(process.scanAttr.actcData[2]);
+    FreeProcessAttrArrays(&process);
 }
 
 extern "C" uint64_t GetNrFreePagesByNode(int nid);
@@ -350,8 +366,10 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasic)
     int nodeL0 = 0;
     int nodeR5 = 5;
 
-    process.strategyAttr.nrMigratePages[nodeL0][nodeR5] = 0;
-    process.strategyAttr.nrMigratePages[nodeR5][nodeL0] = 0;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    NM_AT(process.strategyAttr.nrMigratePages, nodeL0, nodeR5) = 0;
+    NM_AT(process.strategyAttr.nrMigrateBackPages, nodeL0, nodeR5) = 0;
 
     uint16_t nodeL0Data[] = {0, 2, 3, 0, 8, 1, 4, 0, 0, 0};
     uint16_t nodeR5Data[] = {0, 0, 1, 2, 3, 7, 6, 5, 4, 8};
@@ -360,11 +378,11 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasic)
     BuildActcData(nodeR5, nodeR5Data, sizeof(nodeR5Data) / sizeof(nodeR5Data[0]), &process.scanAttr);
 
     MOCKER(GetNrFreePagesByNode).stubs().will(returnValue(10));
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
 
     int ret = SeparateStrategy(&process, mlist);
 
     EXPECT_EQ(0, ret);
+    FreeProcessAttrArrays(&process);
 }
 
 TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasicDemote)
@@ -378,8 +396,10 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasicDemote)
     int nodeL0 = 0;
     int nodeR5 = 5;
 
-    process.strategyAttr.nrMigratePages[nodeL0][nodeR5] = 2;
-    process.strategyAttr.nrMigratePages[nodeR5][nodeL0] = 0;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    NM_AT(process.strategyAttr.nrMigratePages, nodeL0, nodeR5) = 2;
+    NM_AT(process.strategyAttr.nrMigrateBackPages, nodeL0, nodeR5) = 0;
 
     uint16_t nodeL0Data[] = {0, 2, 3, 0, 8, 1, 4, 0, 0, 0};
     uint16_t nodeR5Data[] = {0, 0, 1, 2, 3, 7, 6, 5, 4, 8};
@@ -388,11 +408,11 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasicDemote)
     BuildActcData(nodeR5, nodeR5Data, sizeof(nodeR5Data) / sizeof(nodeR5Data[0]), &process.scanAttr);
 
     MOCKER(GetNrFreePagesByNode).stubs().will(returnValue(10));
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
 
     int ret = SeparateStrategy(&process, mlist);
 
     EXPECT_EQ(0, ret);
+    FreeProcessAttrArrays(&process);
 }
 
 TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasicPromote)
@@ -406,8 +426,10 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasicPromote)
     int nodeL0 = 0;
     int nodeR5 = 5;
 
-    process.strategyAttr.nrMigratePages[nodeL0][nodeR5] = 0;
-    process.strategyAttr.nrMigratePages[nodeR5][nodeL0] = 2;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    NM_AT(process.strategyAttr.nrMigratePages, nodeL0, nodeR5) = 0;
+    NM_AT(process.strategyAttr.nrMigrateBackPages, nodeL0, nodeR5) = 2;
 
     uint16_t nodeL0Data[] = {0, 2, 3, 0, 8, 1, 4, 0, 0, 0};
     uint16_t nodeR5Data[] = {0, 0, 1, 2, 3, 7, 6, 5, 4, 8};
@@ -416,11 +438,11 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasicPromote)
     BuildActcData(nodeR5, nodeR5Data, sizeof(nodeR5Data) / sizeof(nodeR5Data[0]), &process.scanAttr);
 
     MOCKER(GetNrFreePagesByNode).stubs().will(returnValue(10));
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
 
     int ret = SeparateStrategy(&process, mlist);
 
     EXPECT_EQ(0, ret);
+    FreeProcessAttrArrays(&process);
 }
 
 TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapMultiNode)
@@ -435,10 +457,12 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapMultiNode)
     int nodeL1 = 1;
     int nodeR5 = 5;
 
-    process.strategyAttr.nrMigratePages[nodeL0][nodeR5] = 0;
-    process.strategyAttr.nrMigratePages[nodeR5][nodeL0] = 2;
-    process.strategyAttr.nrMigratePages[nodeL1][nodeR5] = 0;
-    process.strategyAttr.nrMigratePages[nodeR5][nodeL1] = 8;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    NM_AT(process.strategyAttr.nrMigratePages, nodeL0, nodeR5) = 0;
+    NM_AT(process.strategyAttr.nrMigrateBackPages, nodeL0, nodeR5) = 2;
+    NM_AT(process.strategyAttr.nrMigratePages, nodeL1, nodeR5) = 0;
+    NM_AT(process.strategyAttr.nrMigrateBackPages, nodeL1, nodeR5) = 8;
 
     uint16_t nodeL0Data[] = {0, 2, 3, 0, 8, 1, 4, 0, 0, 0};
     uint16_t nodeL1Data[] = {0, 0, 4, 6, 8, 0, 0, 0, 0, 0};
@@ -449,7 +473,6 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapMultiNode)
     BuildActcData(nodeR5, nodeR5Data, sizeof(nodeR5Data) / sizeof(nodeR5Data[0]), &process.scanAttr);
 
     MOCKER(GetNrFreePagesByNode).stubs().will(returnValue(20));
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
 
     int ret = SeparateStrategy(&process, mlist);
 
@@ -458,6 +481,7 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapMultiNode)
     EXPECT_EQ(2, mlist[5][0].nr);
     EXPECT_EQ(0, mlist[1][5].nr);
     EXPECT_EQ(8, mlist[5][1].nr);
+    FreeProcessAttrArrays(&process);
 }
 
 TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapLimitByFreePage)
@@ -472,10 +496,12 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapLimitByFreePage)
     int nodeL1 = 1;
     int nodeR5 = 5;
 
-    process.strategyAttr.nrMigratePages[nodeL0][nodeR5] = 0;
-    process.strategyAttr.nrMigratePages[nodeR5][nodeL0] = 0;
-    process.strategyAttr.nrMigratePages[nodeL1][nodeR5] = 0;
-    process.strategyAttr.nrMigratePages[nodeR5][nodeL1] = 0;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    NM_AT(process.strategyAttr.nrMigratePages, nodeL0, nodeR5) = 0;
+    NM_AT(process.strategyAttr.nrMigrateBackPages, nodeL0, nodeR5) = 0;
+    NM_AT(process.strategyAttr.nrMigratePages, nodeL1, nodeR5) = 0;
+    NM_AT(process.strategyAttr.nrMigrateBackPages, nodeL1, nodeR5) = 0;
 
     uint16_t nodeL0Data[] = {0, 2, 3, 0, 8, 1, 4, 0, 0, 0};
     uint16_t nodeL1Data[] = {0, 0, 4, 6, 8, 0, 0, 0, 0, 0};
@@ -486,11 +512,11 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapLimitByFreePage)
     BuildActcData(nodeR5, nodeR5Data, sizeof(nodeR5Data) / sizeof(nodeR5Data[0]), &process.scanAttr);
 
     MOCKER(GetNrFreePagesByNode).stubs().will(returnValue(6));
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
 
     int ret = SeparateStrategy(&process, mlist);
 
     EXPECT_EQ(0, ret);
+    FreeProcessAttrArrays(&process);
 }
 
 extern "C" void CalculateMigInfo(ProcessAttr *process, RemoteMigInfo remoteMigInfo[REMOTE_NUMA_NUM],

@@ -27,6 +27,7 @@
 #include "smap_env.h"
 #include "smap_user_log.h"
 #include "manage/manage.h"
+#include "manage/node_matrix.h"
 #include "manage/manage_internal.h"
 #include "manage/oom_migrate.h"
 #include "manage/device.h"
@@ -2695,7 +2696,7 @@ static int GetAttrNidInitRatio(pid_t pid, int nid)
         return -EINVAL;
     }
     int l1node = GetAttrL1(attr);
-    int curRatio = attr->strategyAttr.initRemoteMemRatio[l1node][nid - nrLocalNuma];
+    int curRatio = NM_AT(attr->strategyAttr.initRemoteMemRatio, l1node, nid - nrLocalNuma);
     PutProcessAttr(attr);
     return curRatio;
 }
@@ -2957,7 +2958,7 @@ static int AssignOldProcessPayload(struct OldProcessPayload *result, ProcessAttr
     l2Index = l2Node - nrLocalNuma;
     len = sizeof(result->l1Node) / sizeof(result->l1Node[0]);
     result->pid = attr->pid;
-    result->ratio = target ? target->ratio : attr->strategyAttr.initRemoteMemRatio[l1Node][l2Index];
+    result->ratio = target ? target->ratio : NM_AT(attr->strategyAttr.initRemoteMemRatio, l1Node, l2Index);
     result->scanType = attr->scanType;
     result->type = attr->type;
     result->state = attr->state;

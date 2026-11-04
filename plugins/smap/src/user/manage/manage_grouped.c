@@ -221,11 +221,17 @@ int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigration
         SMAP_LOGGER_ERROR("Alloc memory for grouped process failed.");
         return -ENOMEM;
     }
+    ret = InitProcessAttrArrays(attr);
+    if (ret) {
+        free(attr);
+        return ret;
+    }
     InitProcessMigrationTargetState(attr);
     attr->numaAttr.numaNodes = nodeBitmap;
     ret = VMPreprocess(pid, attr);
     if (ret) {
         SMAP_LOGGER_ERROR("Preprocess grouped VM process %d failed: %d.", pid, ret);
+        FreeProcessAttrArrays(attr);
         free(attr);
         return ret;
     }
