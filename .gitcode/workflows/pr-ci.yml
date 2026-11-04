@@ -62,6 +62,11 @@ stages:
                 rdma-core-devel \
                 libvirt-devel
 
+              if ! command -v python >/dev/null 2>&1; then
+                sudo ln -s "$(command -v python3)" /usr/bin/python
+              fi
+              python --version
+              python3 --version
               clang-format --version
 
           - name: Prepare clang-format check
@@ -306,8 +311,7 @@ stages:
                 dos2unix \
                 libboundscheck \
                 libvirt-devel \
-                gmock-devel \
-                lcov
+                gmock-devel
 
               for tool in gcc g++ make cmake unzip wget perl dos2unix; do
                 if ! command -v "${tool}" >/dev/null 2>&1; then
