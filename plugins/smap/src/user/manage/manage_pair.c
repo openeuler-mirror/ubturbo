@@ -32,9 +32,10 @@
 #include "strategy/strategy.h"
 #include "strategy/migration.h"
 #include "manage.h"
+#include "node_matrix.h"
 #include "manage_internal.h"
 
-static uint32_t BuildPairCapacityLocalMask(const ProcessAttr *attr, int remoteIndex)
+static uint32_t BuildPairCapacityLocalMask(const ProcessAttr *attr, int remoteNid)
 {
     uint32_t capacityLocalMask = 0;
     uint32_t managedLocalMask = attr->managedLocalState.managedLocalMask;
@@ -42,55 +43,55 @@ static uint32_t BuildPairCapacityLocalMask(const ProcessAttr *attr, int remoteIn
     int nrLocalNuma = GetNrLocalNuma();
 
     EnvMutexLock(&numaInfo->lock);
-    for (int local = 0; local < nrLocalNuma && local < LOCAL_NUMA_NUM; local++) {
-        if (numaInfo->privateSize[local][remoteIndex] > 0) {
+    for (int local = 0; local < nrLocalNuma; local++) {
+        if (NM_AT(numaInfo->privateSize, local, remoteNid) > 0) {
             AddL1(&capacityLocalMask, local);
         }
     }
-    if (numaInfo->sharedSize[remoteIndex] > 0) {
+    if (numaInfo->sharedSize[remoteNid] > 0) {
         capacityLocalMask |= managedLocalMask;
     }
     EnvMutexUnlock(&numaInfo->lock);
     return capacityLocalMask;
 }
 
-static void DistributePairAccount(ProcessAttr *attr, int remoteIndex, uint32_t localMask,
-                                  const uint32_t weights[LOCAL_NUMA_NUM], uint64_t weightTotal,
+static void DistributePairAccount(ProcessAttr *attr, int remoteNid, uint32_t localMask,
+                                  const uint32_t weights[SMAP_MAX_NUMNODES], uint64_t weightTotal,
                                   uint32_t actualRemotePages)
 {
     StrategyAttribute *sa = &attr->strategyAttr;
     int nrLocalNuma = GetNrLocalNuma();
     uint64_t allocated = 0;
 
-    for (int local = 0; local < nrLocalNuma && local < LOCAL_NUMA_NUM; local++) {
-        sa->remoteNrPagesAfterMigrate[local][remoteIndex] = 0;
+    for (int local = 0; local < nrLocalNuma; local++) {
+        NM_AT(sa->remoteNrPagesAfterMigrate, local, remoteNid) = 0;
         if (!InL1(localMask, local)) {
             continue;
         }
         uint32_t pages = (uint64_t)actualRemotePages * weights[local] / weightTotal;
-        sa->remoteNrPagesAfterMigrate[local][remoteIndex] = pages;
+        NM_AT(sa->remoteNrPagesAfterMigrate, local, remoteNid) = pages;
         allocated += pages;
     }
 
     uint32_t remainder = actualRemotePages - allocated;
-    for (int local = 0; local < nrLocalNuma && local < LOCAL_NUMA_NUM && remainder > 0; local++) {
+    for (int local = 0; local < nrLocalNuma && remainder > 0; local++) {
         if (!InL1(localMask, local) || weights[local] == 0) {
             continue;
         }
-        sa->remoteNrPagesAfterMigrate[local][remoteIndex]++;
+        NM_AT(sa->remoteNrPagesAfterMigrate, local, remoteNid)++;
         remainder--;
     }
 }
 
-static void RebuildPairAccount(ProcessAttr *attr, int remoteIndex, uint32_t actualRemotePages)
+static void RebuildPairAccount(ProcessAttr *attr, int remoteNid, uint32_t actualRemotePages)
 {
     uint32_t allLocalMask = BuildAllLocalNumaMask();
     uint32_t managedLocalMask = attr->managedLocalState.managedLocalMask & allLocalMask;
-    uint32_t capacityLocalMask = BuildPairCapacityLocalMask(attr, remoteIndex);
+    uint32_t capacityLocalMask = BuildPairCapacityLocalMask(attr, remoteNid);
     /* 优先选择有容量的 local pair，避免向无容量 pair 分摊账本。 */
     uint32_t rebuildLocalMask = managedLocalMask & capacityLocalMask;
     if (rebuildLocalMask == 0) {
-        rebuildLocalMask = managedLocalMask & attr->managedLocalState.accountLocalMask[remoteIndex];
+        rebuildLocalMask = managedLocalMask & attr->managedLocalState.accountLocalMask[remoteNid];
     }
     if (rebuildLocalMask == 0) {
         rebuildLocalMask = managedLocalMask;
@@ -99,14 +100,14 @@ static void RebuildPairAccount(ProcessAttr *attr, int remoteIndex, uint32_t actu
         rebuildLocalMask = allLocalMask;
         SMAP_LOGGER_WARNING("Pid %d remote %d has %u resident pages but no managed local; "
                             "rebuilding account on all online local nodes.",
-                            attr->pid, remoteIndex + GetNrLocalNuma(), actualRemotePages);
+                            attr->pid, remoteNid, actualRemotePages);
     }
 
-    uint32_t weights[LOCAL_NUMA_NUM] = { 0 };
+    uint32_t weights[SMAP_MAX_NUMNODES] = { 0 };
     uint64_t weightTotal = 0;
     int localCount = 0;
     int nrLocalNuma = GetNrLocalNuma();
-    for (int local = 0; local < nrLocalNuma && local < LOCAL_NUMA_NUM; local++) {
+    for (int local = 0; local < nrLocalNuma; local++) {
         if (!InL1(rebuildLocalMask, local)) {
             continue;
         }
@@ -116,7 +117,7 @@ static void RebuildPairAccount(ProcessAttr *attr, int remoteIndex, uint32_t actu
     }
 
     if (weightTotal == 0) {
-        for (int local = 0; local < nrLocalNuma && local < LOCAL_NUMA_NUM; local++) {
+        for (int local = 0; local < nrLocalNuma; local++) {
             if (InL1(rebuildLocalMask, local)) {
                 weights[local] = 1;
             }
@@ -124,7 +125,7 @@ static void RebuildPairAccount(ProcessAttr *attr, int remoteIndex, uint32_t actu
         weightTotal = localCount;
     }
 
-    DistributePairAccount(attr, remoteIndex, rebuildLocalMask, weights, weightTotal, actualRemotePages);
+    DistributePairAccount(attr, remoteNid, rebuildLocalMask, weights, weightTotal, actualRemotePages);
 }
 
 /* Reconcile the PID's pair account with its latest page snapshot. */
@@ -136,49 +137,42 @@ void CalibratePairAccount(ProcessAttr *attr)
 
     StrategyAttribute *sa = &attr->strategyAttr;
     int nrLocalNuma = GetNrLocalNuma();
-    if (nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM) {
+    if (nrLocalNuma <= 0 || nrLocalNuma > SMAP_MAX_NUMNODES) {
         SMAP_LOGGER_ERROR("Cannot calibrate pid %d Pair account with %d local NUMA nodes.", attr->pid, nrLocalNuma);
         return;
     }
 
-    for (int remoteIndex = 0; remoteIndex < REMOTE_NUMA_NUM; remoteIndex++) {
-        int remoteNid = nrLocalNuma + remoteIndex;
-        if (remoteNid >= MAX_NODES) {
-            break;
-        }
-
+    int cap = (int)GetNumaCap();
+    for (int remoteNid = nrLocalNuma; remoteNid < cap; remoteNid++) {
         uint64_t accountTotal = 0;
         uint32_t accountLocalMask = 0;
-        uint32_t weights[LOCAL_NUMA_NUM] = { 0 };
+        uint32_t weights[SMAP_MAX_NUMNODES] = { 0 };
         for (int local = 0; local < nrLocalNuma; local++) {
-            uint32_t pages = sa->remoteNrPagesAfterMigrate[local][remoteIndex];
+            uint32_t pages = NM_AT(sa->remoteNrPagesAfterMigrate, local, remoteNid);
             weights[local] = pages;
             accountTotal += pages;
             if (pages > 0) {
                 AddL1(&accountLocalMask, local);
             }
         }
-        for (int local = nrLocalNuma; local < LOCAL_NUMA_NUM; local++) {
-            sa->remoteNrPagesAfterMigrate[local][remoteIndex] = 0;
-        }
 
         uint32_t actualRemotePages = attr->walkPage.nrPages[remoteNid];
         if (accountTotal != actualRemotePages) {
             if (actualRemotePages == 0) {
                 for (int local = 0; local < nrLocalNuma; local++) {
-                    sa->remoteNrPagesAfterMigrate[local][remoteIndex] = 0;
+                    NM_AT(sa->remoteNrPagesAfterMigrate, local, remoteNid) = 0;
                 }
             } else if (accountTotal > 0) {
-                DistributePairAccount(attr, remoteIndex, accountLocalMask, weights, accountTotal, actualRemotePages);
+                DistributePairAccount(attr, remoteNid, accountLocalMask, weights, accountTotal, actualRemotePages);
             } else {
-                RebuildPairAccount(attr, remoteIndex, actualRemotePages);
+                RebuildPairAccount(attr, remoteNid, actualRemotePages);
             }
             SMAP_LOGGER_INFO("Calibrated pid %d remote %d Pair account from %llu to %u pages.", attr->pid, remoteNid,
                              accountTotal, actualRemotePages);
         }
 
-        attr->managedLocalState.accountLocalMask[remoteIndex] = BuildAccountLocalMask(attr, remoteIndex);
-        attr->managedLocalState.managedLocalMask |= attr->managedLocalState.accountLocalMask[remoteIndex];
+        attr->managedLocalState.accountLocalMask[remoteNid] = BuildAccountLocalMask(attr, remoteNid);
+        attr->managedLocalState.managedLocalMask |= attr->managedLocalState.accountLocalMask[remoteNid];
     }
     attr->managedLocalState.managedLocalMask &= BuildAllLocalNumaMask();
 }
@@ -215,27 +209,26 @@ static void DistributePairRequestPages(uint64_t pages, const uint64_t weights[],
 
 static int ValidatePairRequestInput(const ProcessAttr *attr, const PairRequestContext *context)
 {
-    if (!attr || !context || context->nrLocalNuma <= 0 || context->nrLocalNuma > LOCAL_NUMA_NUM ||
-        context->pageSizeKB == 0 || context->nrLocalNuma + REMOTE_NUMA_NUM > MAX_NODES) {
+    if (!attr || !context || context->nrLocalNuma <= 0 || context->nrLocalNuma > SMAP_MAX_NUMNODES ||
+        context->pageSizeKB == 0) {
         return -EINVAL;
     }
 
     const ProcessTargetConfig *config = &attr->targetConfig;
-    if (config->count > REMOTE_NUMA_NUM ||
+    if (config->count > SMAP_MAX_NUMNODES ||
         (config->migrateMode != MIG_RATIO_MODE && config->migrateMode != MIG_MEMSIZE_MODE) ||
         config->sourceLocalNid < NUMA_NO_NODE || config->sourceLocalNid >= context->nrLocalNuma) {
         return -EINVAL;
     }
 
-    bool remoteSeen[REMOTE_NUMA_NUM] = { false };
+    bool remoteSeen[SMAP_MAX_NUMNODES] = { false };
     uint64_t totalRatio = 0;
     for (uint32_t i = 0; i < config->count; i++) {
-        int remoteIndex;
-        if (RemoteNidToIndex(config->targets[i].remoteNid, context->nrLocalNuma, &remoteIndex) ||
-            remoteSeen[remoteIndex]) {
+        int remoteNid = config->targets[i].remoteNid;
+        if (remoteNid < context->nrLocalNuma || remoteNid >= SMAP_MAX_NUMNODES || remoteSeen[remoteNid]) {
             return -EINVAL;
         }
-        remoteSeen[remoteIndex] = true;
+        remoteSeen[remoteNid] = true;
 
         if (config->migrateMode == MIG_RATIO_MODE) {
             if (config->targets[i].ratio > HUNDRED) {
@@ -269,8 +262,10 @@ static uint64_t BuildManagedTotalPages(const ProcessAttr *attr, int nrLocalNuma)
         uint64_t whiteNum = attr->scanAttr.actCount[local].whiteNum;
         managedTotalPages += attr->walkPage.nrPages[local] > whiteNum ? attr->walkPage.nrPages[local] - whiteNum : 0;
     }
-    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
-        managedTotalPages += attr->walkPage.nrPages[nrLocalNuma + remote];
+    /* 远端 nid 为绝对值，仅遍历 [nrLocalNuma, GetNumaCap()) 有效区间 */
+    int cap = (int)GetNumaCap();
+    for (int nid = nrLocalNuma; nid < cap; nid++) {
+        managedTotalPages += attr->walkPage.nrPages[nid];
     }
     return managedTotalPages;
 }
@@ -281,13 +276,15 @@ static void BuildRequestedRemotePages(const ProcessAttr *attr, const PairRequest
     const ProcessTargetConfig *config = &attr->targetConfig;
 
     for (uint32_t i = 0; i < config->count; i++) {
-        int remoteIndex;
-        (void)RemoteNidToIndex(config->targets[i].remoteNid, context->nrLocalNuma, &remoteIndex);
+        int remoteNid = config->targets[i].remoteNid;
+        if (remoteNid < context->nrLocalNuma || remoteNid >= SMAP_MAX_NUMNODES) {
+            continue;
+        }
         if (config->migrateMode == MIG_RATIO_MODE) {
-            summary->requestedRemotePages[remoteIndex] =
+            summary->requestedRemotePages[remoteNid] =
                 PairRequestMulDiv(summary->managedTotalPages, config->targets[i].ratio, HUNDRED);
         } else {
-            summary->requestedRemotePages[remoteIndex] = config->targets[i].memSizeKB / context->pageSizeKB;
+            summary->requestedRemotePages[remoteNid] = config->targets[i].memSizeKB / context->pageSizeKB;
         }
     }
 }
@@ -295,29 +292,30 @@ static void BuildRequestedRemotePages(const ProcessAttr *attr, const PairRequest
 static void BuildEffectiveRemotePages(const ProcessAttr *attr, const PairRequestContext *context,
                                       PairRequestSummary *summary)
 {
-    uint64_t remainingDemand[REMOTE_NUMA_NUM] = { 0 };
+    uint64_t remainingDemand[SMAP_MAX_NUMNODES] = { 0 };
     uint64_t baselineTotal = 0;
     uint64_t demandTotal = 0;
 
-    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
-        int remoteNid = context->nrLocalNuma + remote;
+    /* remoteNid 为绝对 nid，仅遍历远端空间 [nrLocalNuma, SMAP_MAX_NUMNODES) */
+    int cap = (int)GetNumaCap();
+    for (int remoteNid = context->nrLocalNuma; remoteNid < cap; remoteNid++) {
         uint64_t actualPages = attr->walkPage.nrPages[remoteNid];
-        uint64_t requestedPages = summary->requestedRemotePages[remote];
+        uint64_t requestedPages = summary->requestedRemotePages[remoteNid];
         uint64_t baseline = MIN(actualPages, requestedPages);
 
-        summary->effectiveRemotePages[remote] = baseline;
-        remainingDemand[remote] = requestedPages - baseline;
+        summary->effectiveRemotePages[remoteNid] = baseline;
+        remainingDemand[remoteNid] = requestedPages - baseline;
         baselineTotal += baseline;
-        demandTotal += remainingDemand[remote];
+        demandTotal += remainingDemand[remoteNid];
     }
 
     uint64_t availablePages = summary->managedTotalPages > baselineTotal ? summary->managedTotalPages - baselineTotal :
                                                                            0;
     uint64_t pagesToAllocate = MIN(availablePages, demandTotal);
-    uint64_t allocation[REMOTE_NUMA_NUM] = { 0 };
-    DistributePairRequestPages(pagesToAllocate, remainingDemand, REMOTE_NUMA_NUM, allocation);
-    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
-        summary->effectiveRemotePages[remote] += allocation[remote];
+    uint64_t allocation[SMAP_MAX_NUMNODES] = { 0 };
+    DistributePairRequestPages(pagesToAllocate, remainingDemand, SMAP_MAX_NUMNODES, allocation);
+    for (int remoteNid = context->nrLocalNuma; remoteNid < cap; remoteNid++) {
+        summary->effectiveRemotePages[remoteNid] += allocation[remoteNid];
     }
 }
 
@@ -329,50 +327,51 @@ static uint32_t BuildEligiblePairMask(const ProcessAttr *attr, const PairRequest
 }
 
 static void PreservePairAccounts(const ProcessAttr *attr, const PairRequestContext *context,
-                                 const PairRequestSummary *summary,
-                                 uint64_t pairRequests[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM])
+                                 const PairRequestSummary *summary, uint64_t *pairRequests)
 {
-    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+    int cap = (int)GetNumaCap();
+    for (int remote = context->nrLocalNuma; remote < cap; remote++) {
         uint64_t accountTotal = 0;
-        uint64_t accounts[LOCAL_NUMA_NUM] = { 0 };
+        uint64_t accounts[SMAP_MAX_NUMNODES] = { 0 };
         uint32_t eligibleMask = BuildEligiblePairMask(attr, context, remote);
         for (int local = 0; local < context->nrLocalNuma; local++) {
             if (!InL1(eligibleMask, local)) {
                 continue;
             }
-            accounts[local] = attr->strategyAttr.remoteNrPagesAfterMigrate[local][remote];
+            accounts[local] = NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, local, remote);
             accountTotal += accounts[local];
         }
 
         uint64_t target = summary->effectiveRemotePages[remote];
         if (accountTotal <= target) {
             for (int local = 0; local < context->nrLocalNuma; local++) {
-                pairRequests[local][remote] = accounts[local];
+                NM_AT(pairRequests, local, remote) = accounts[local];
             }
             continue;
         }
 
-        uint64_t allocation[LOCAL_NUMA_NUM] = { 0 };
+        uint64_t allocation[SMAP_MAX_NUMNODES] = { 0 };
         DistributePairRequestPages(target, accounts, context->nrLocalNuma, allocation);
         for (int local = 0; local < context->nrLocalNuma; local++) {
-            pairRequests[local][remote] = allocation[local];
+            NM_AT(pairRequests, local, remote) = allocation[local];
         }
     }
 }
 
-static void BuildLocalRemainingPages(const ProcessAttr *attr, const PairRequestContext *context,
-                                     uint64_t pairRequests[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                     uint64_t remainingPages[LOCAL_NUMA_NUM])
+static void BuildLocalRemainingPages(const ProcessAttr *attr, const PairRequestContext *context, uint64_t *pairRequests,
+                                     uint64_t remainingPages[SMAP_MAX_NUMNODES])
 {
+    /* cap 提前求值：避免每个本地节点重复调用 GetNumaCap() */
+    int cap = (int)GetNumaCap();
     for (int local = 0; local < context->nrLocalNuma; local++) {
         uint64_t whiteNum = attr->scanAttr.actCount[local].whiteNum;
         uint64_t allocatablePages =
             attr->walkPage.nrPages[local] > whiteNum ? attr->walkPage.nrPages[local] - whiteNum : 0;
         uint64_t requestedPages = 0;
 
-        for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
-            allocatablePages += attr->strategyAttr.remoteNrPagesAfterMigrate[local][remote];
-            requestedPages += pairRequests[local][remote];
+        for (int remote = context->nrLocalNuma; remote < cap; remote++) {
+            allocatablePages += NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, local, remote);
+            requestedPages += NM_AT(pairRequests, local, remote);
         }
         remainingPages[local] = allocatablePages > requestedPages ? allocatablePages - requestedPages : 0;
     }
@@ -389,21 +388,21 @@ static uint32_t BuildActivePairMask(const ProcessAttr *attr, const PairRequestCo
 }
 
 static void AllocateRemotePairRequest(const ProcessAttr *attr, const PairRequestContext *context, int remote,
-                                      uint64_t requestedPages, uint64_t pairRequests[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                      uint64_t remainingPages[LOCAL_NUMA_NUM])
+                                      uint64_t requestedPages, uint64_t *pairRequests,
+                                      uint64_t remainingPages[SMAP_MAX_NUMNODES])
 {
     uint64_t currentPages = 0;
-    uint64_t weights[LOCAL_NUMA_NUM] = { 0 };
+    uint64_t weights[SMAP_MAX_NUMNODES] = { 0 };
     uint32_t activeMask = BuildActivePairMask(attr, context, remote);
 
     for (int local = 0; local < context->nrLocalNuma; local++) {
-        currentPages += pairRequests[local][remote];
+        currentPages += NM_AT(pairRequests, local, remote);
         if (!InL1(activeMask, local) || attr->walkPage.nrPages[local] == 0 ||
-            pairRequests[local][remote] >= UINT32_MAX) {
+            NM_AT(pairRequests, local, remote) >= UINT32_MAX) {
             continue;
         }
 
-        uint64_t pairRoom = UINT32_MAX - pairRequests[local][remote];
+        uint64_t pairRoom = UINT32_MAX - NM_AT(pairRequests, local, remote);
         weights[local] = MIN(remainingPages[local], pairRoom);
     }
 
@@ -411,10 +410,10 @@ static void AllocateRemotePairRequest(const ProcessAttr *attr, const PairRequest
         return;
     }
 
-    uint64_t allocation[LOCAL_NUMA_NUM] = { 0 };
+    uint64_t allocation[SMAP_MAX_NUMNODES] = { 0 };
     DistributePairRequestPages(requestedPages - currentPages, weights, context->nrLocalNuma, allocation);
     for (int local = 0; local < context->nrLocalNuma; local++) {
-        pairRequests[local][remote] += allocation[local];
+        NM_AT(pairRequests, local, remote) += allocation[local];
         remainingPages[local] -= allocation[local];
     }
 }
@@ -422,8 +421,8 @@ static void AllocateRemotePairRequest(const ProcessAttr *attr, const PairRequest
 enum {
     PAIR_FLOW_SOURCE = 0,
     PAIR_FLOW_LOCAL_BASE = 1,
-    PAIR_FLOW_REMOTE_BASE = PAIR_FLOW_LOCAL_BASE + LOCAL_NUMA_NUM,
-    PAIR_FLOW_SINK = PAIR_FLOW_REMOTE_BASE + REMOTE_NUMA_NUM,
+    PAIR_FLOW_REMOTE_BASE = PAIR_FLOW_LOCAL_BASE + SMAP_MAX_NUMNODES,
+    PAIR_FLOW_SINK = PAIR_FLOW_REMOTE_BASE + SMAP_MAX_NUMNODES,
     PAIR_FLOW_NODE_COUNT,
 };
 
@@ -473,33 +472,40 @@ static void CompletePairRequestFlow(uint64_t residual[PAIR_FLOW_NODE_COUNT][PAIR
 }
 
 static int CompletePairRequestAllocation(const ProcessAttr *attr, const PairRequestContext *context,
-                                         const PairRequestSummary *summary,
-                                         uint64_t baseline[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                         uint64_t pairRequests[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                         uint64_t remainingPages[LOCAL_NUMA_NUM])
+                                         const PairRequestSummary *summary, uint64_t *baseline, uint64_t *pairRequests,
+                                         uint64_t remainingPages[SMAP_MAX_NUMNODES])
 {
-    uint64_t residual[PAIR_FLOW_NODE_COUNT][PAIR_FLOW_NODE_COUNT] = { 0 };
-    uint64_t remoteFlow[REMOTE_NUMA_NUM] = { 0 };
+    uint64_t remoteFlow[SMAP_MAX_NUMNODES] = { 0 };
+    /* [514][514] 残差表 ~2.1MB，超出栈预算，必须堆分配，calloc 天然零初始化 */
+    uint64_t(*residual)[PAIR_FLOW_NODE_COUNT] = calloc(PAIR_FLOW_NODE_COUNT, sizeof(*residual));
+    if (residual == NULL) {
+        SMAP_LOGGER_ERROR("Alloc pair request residual table failed, no memory.");
+        return -ENOMEM;
+    }
 
+    /* cap 提前求值：避免每个本地节点重复调用 GetNumaCap() */
+    int cap = (int)GetNumaCap();
     for (int local = 0; local < context->nrLocalNuma; local++) {
         uint64_t localFlow = 0;
         int localNode = PAIR_FLOW_LOCAL_BASE + local;
-        for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
-            if (pairRequests[local][remote] < baseline[local][remote]) {
+        for (int remote = context->nrLocalNuma; remote < cap; remote++) {
+            if (NM_AT(pairRequests, local, remote) < NM_AT(baseline, local, remote)) {
+                free(residual);
                 return -ERANGE;
             }
-            uint64_t flow = pairRequests[local][remote] - baseline[local][remote];
+            uint64_t flow = NM_AT(pairRequests, local, remote) - NM_AT(baseline, local, remote);
             uint32_t activeMask = BuildActivePairMask(attr, context, remote);
             bool active = InL1(activeMask, local) && attr->walkPage.nrPages[local] > 0 &&
-                          baseline[local][remote] < UINT32_MAX;
+                          NM_AT(baseline, local, remote) < UINT32_MAX;
             if (flow > 0 && !active) {
+                free(residual);
                 return -ERANGE;
             }
             if (!active) {
                 continue;
             }
             int remoteNode = PAIR_FLOW_REMOTE_BASE + remote;
-            residual[localNode][remoteNode] = UINT32_MAX - pairRequests[local][remote];
+            residual[localNode][remoteNode] = UINT32_MAX - NM_AT(pairRequests, local, remote);
             residual[remoteNode][localNode] = flow;
             localFlow += flow;
             remoteFlow[remote] += flow;
@@ -508,12 +514,13 @@ static int CompletePairRequestAllocation(const ProcessAttr *attr, const PairRequ
         residual[localNode][PAIR_FLOW_SOURCE] = localFlow;
     }
 
-    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+    for (int remote = context->nrLocalNuma; remote < cap; remote++) {
         uint64_t currentPages = 0;
         for (int local = 0; local < context->nrLocalNuma; local++) {
-            currentPages += pairRequests[local][remote];
+            currentPages += NM_AT(pairRequests, local, remote);
         }
         if (currentPages > summary->effectiveRemotePages[remote]) {
+            free(residual);
             return -ERANGE;
         }
         int remoteNode = PAIR_FLOW_REMOTE_BASE + remote;
@@ -525,25 +532,22 @@ static int CompletePairRequestAllocation(const ProcessAttr *attr, const PairRequ
 
     for (int local = 0; local < context->nrLocalNuma; local++) {
         int localNode = PAIR_FLOW_LOCAL_BASE + local;
-        for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+        for (int remote = context->nrLocalNuma; remote < cap; remote++) {
             int remoteNode = PAIR_FLOW_REMOTE_BASE + remote;
-            pairRequests[local][remote] = baseline[local][remote] + residual[remoteNode][localNode];
+            NM_AT(pairRequests, local, remote) = NM_AT(baseline, local, remote) + residual[remoteNode][localNode];
         }
     }
+    free(residual);
     return 0;
 }
 
-/*
- * Assign an aggregate request to currently eligible Pairs from one calibrated
- * page/account snapshot. Unassignable demand remains explicit in summary.
- * This function performs no I/O, locking, or global capacity consumption.
- */
 /* 为 per-pid 流水补齐 PairRequestContext 的容量 mask（与 build 全局路径一致） */
 void BuildPairCapacityLocalMasks(struct ProcessManager *manager, const ProcessAttr *attr, PairRequestContext *context)
 {
-    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+    int cap = (int)GetNumaCap();
+    for (int remote = manager->nrLocalNuma; remote < cap; remote++) {
         for (int local = 0; local < manager->nrLocalNuma; local++) {
-            if (manager->remoteNumaInfo.privateSize[local][remote] > 0) {
+            if (NM_AT(manager->remoteNumaInfo.privateSize, local, remote) > 0) {
                 AddL1(&context->capacityLocalMask[remote], local);
             }
         }
@@ -557,6 +561,11 @@ void BuildPairCapacityLocalMasks(struct ProcessManager *manager, const ProcessAt
     }
 }
 
+/*
+ * Assign an aggregate request to currently eligible Pairs from one calibrated
+ * page/account snapshot. Unassignable demand remains explicit in summary.
+ * This function performs no I/O, locking, or global capacity consumption.
+ */
 int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext *context, PairTarget targets[],
                               size_t targetCap, size_t *targetCnt, PairRequestSummary *summary)
 {
@@ -569,72 +578,108 @@ int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext 
     if (ret) {
         return ret;
     }
-    PairRequestSummary result = { 0 };
-    result.managedTotalPages = BuildManagedTotalPages(attr, context->nrLocalNuma);
-    BuildRequestedRemotePages(attr, context, &result);
-    BuildEffectiveRemotePages(attr, context, &result);
 
-    uint64_t pairRequests[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    PreservePairAccounts(attr, context, &result, pairRequests);
-    uint64_t baseline[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    ret = memcpy_s(baseline, sizeof(baseline), pairRequests, sizeof(pairRequests));
+    /* 汇总结构含 [SMAP_MAX_NUMNODES] 定维成员，超出栈预算，堆分配 */
+    PairRequestSummary *result = calloc(1, sizeof(*result));
+    if (result == NULL) {
+        SMAP_LOGGER_ERROR("Alloc pair request summary failed, no memory.");
+        return -ENOMEM;
+    }
+    result->managedTotalPages = BuildManagedTotalPages(attr, context->nrLocalNuma);
+    BuildRequestedRemotePages(attr, context, result);
+    BuildEffectiveRemotePages(attr, context, result);
+
+    /* 请求/基线表按 SMAP_MAX_NUMNODES 行 × cap 列扁平分配（列跨度 = cap），calloc 天然零初始化 */
+    uint64_t *pairRequests = calloc(NM_COUNT(SMAP_MAX_NUMNODES), sizeof(*pairRequests));
+    if (pairRequests == NULL) {
+        SMAP_LOGGER_ERROR("Alloc pair request table failed, no memory.");
+        free(result);
+        return -ENOMEM;
+    }
+    PreservePairAccounts(attr, context, result, pairRequests);
+    uint64_t *baseline = calloc(NM_COUNT(SMAP_MAX_NUMNODES), sizeof(*baseline));
+    if (baseline == NULL) {
+        SMAP_LOGGER_ERROR("Alloc pair baseline table failed, no memory.");
+        free(result);
+        free(pairRequests);
+        return -ENOMEM;
+    }
+    ret = memcpy_s(baseline, NM_COUNT(SMAP_MAX_NUMNODES) * sizeof(*baseline), pairRequests,
+                   NM_COUNT(SMAP_MAX_NUMNODES) * sizeof(*pairRequests));
     if (ret != EOK) {
+        free(baseline);
+        free(pairRequests);
+        free(result);
         return -ret;
     }
 
-    uint64_t remainingPages[LOCAL_NUMA_NUM] = { 0 };
+    uint64_t remainingPages[SMAP_MAX_NUMNODES] = { 0 };
     BuildLocalRemainingPages(attr, context, pairRequests, remainingPages);
-    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
-        AllocateRemotePairRequest(attr, context, remote, result.effectiveRemotePages[remote], pairRequests,
+    int cap = (int)GetNumaCap();
+    for (int remote = context->nrLocalNuma; remote < cap; remote++) {
+        AllocateRemotePairRequest(attr, context, remote, result->effectiveRemotePages[remote], pairRequests,
                                   remainingPages);
     }
-    ret = CompletePairRequestAllocation(attr, context, &result, baseline, pairRequests, remainingPages);
+    ret = CompletePairRequestAllocation(attr, context, result, baseline, pairRequests, remainingPages);
     if (ret) {
+        free(baseline);
+        free(pairRequests);
+        free(result);
         return ret;
     }
-    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+    for (int remote = context->nrLocalNuma; remote < cap; remote++) {
         uint64_t assignedPages = 0;
         for (int local = 0; local < context->nrLocalNuma; local++) {
-            assignedPages += pairRequests[local][remote];
+            assignedPages += NM_AT(pairRequests, local, remote);
         }
-        if (assignedPages > result.effectiveRemotePages[remote]) {
+        if (assignedPages > result->effectiveRemotePages[remote]) {
+            free(baseline);
+            free(pairRequests);
+            free(result);
             return -ERANGE;
         }
-        result.unassignedRequestedPages[remote] = result.effectiveRemotePages[remote] - assignedPages;
+        result->unassignedRequestedPages[remote] = result->effectiveRemotePages[remote] - assignedPages;
     }
 
     size_t requiredCount = 0;
     for (int local = 0; local < context->nrLocalNuma; local++) {
-        for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
-            uint32_t account = attr->strategyAttr.remoteNrPagesAfterMigrate[local][remote];
-            if (account > 0 || pairRequests[local][remote] > 0) {
+        for (int remote = context->nrLocalNuma; remote < cap; remote++) {
+            uint32_t account = NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, local, remote);
+            if (account > 0 || NM_AT(pairRequests, local, remote) > 0) {
                 requiredCount++;
             }
         }
     }
     if (requiredCount > targetCap) {
+        free(baseline);
+        free(pairRequests);
+        free(result);
         return -ENOSPC;
     }
 
     size_t count = 0;
     for (int local = 0; local < context->nrLocalNuma; local++) {
-        for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
-            uint32_t account = attr->strategyAttr.remoteNrPagesAfterMigrate[local][remote];
-            if (account == 0 && pairRequests[local][remote] == 0) {
+        /* remoteNid 为绝对 nid，远端区间从 nrLocalNuma 起；[0, nrLocalNuma) 的账本与请求恒为 0 */
+        for (int remoteNid = context->nrLocalNuma; remoteNid < cap; remoteNid++) {
+            uint32_t account = NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, local, remoteNid);
+            if (account == 0 && NM_AT(pairRequests, local, remoteNid) == 0) {
                 continue;
             }
             targets[count++] = (PairTarget){
                 .pid = attr->pid,
                 .localNid = local,
-                .remoteNid = context->nrLocalNuma + remote,
-                .requestedPages = (uint32_t)pairRequests[local][remote],
+                .remoteNid = remoteNid,
+                .requestedPages = (uint32_t)NM_AT(pairRequests, local, remoteNid),
                 .targetPages = 0,
             };
         }
     }
 
-    *summary = result;
+    *summary = *result;
     *targetCnt = count;
+    free(baseline);
+    free(pairRequests);
+    free(result);
     return 0;
 }
 
@@ -762,68 +807,73 @@ static int RemoteCapacityToPages(uint64_t sizeMB, uint64_t pageSize, uint64_t *p
     return 0;
 }
 
-static int BuildPairCapacitySnapshot(const struct ProcessManager *manager,
-                                     uint64_t privatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                     uint64_t sharedPages[REMOTE_NUMA_NUM], uint64_t totalPages[REMOTE_NUMA_NUM])
+static int BuildPairCapacitySnapshot(const struct ProcessManager *manager, uint64_t *privatePages,
+                                     uint64_t sharedPages[SMAP_MAX_NUMNODES], uint64_t totalPages[SMAP_MAX_NUMNODES])
 {
     uint64_t pageSize = manager->tracking.pageSize;
     if (pageSize == 0 || pageSize % KIB != 0) {
         return -EINVAL;
     }
 
-    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
-        int ret = RemoteCapacityToPages(manager->remoteNumaInfo.sharedSize[remote], pageSize, &sharedPages[remote]);
+    int cap = (int)GetNumaCap();
+    for (int remoteNid = manager->nrLocalNuma; remoteNid < cap; remoteNid++) {
+        int ret =
+            RemoteCapacityToPages(manager->remoteNumaInfo.sharedSize[remoteNid], pageSize, &sharedPages[remoteNid]);
         if (ret) {
             return ret;
         }
-        totalPages[remote] = sharedPages[remote];
+        totalPages[remoteNid] = sharedPages[remoteNid];
         for (int local = 0; local < manager->nrLocalNuma; local++) {
-            ret = RemoteCapacityToPages(manager->remoteNumaInfo.privateSize[local][remote], pageSize,
-                                        &privatePages[local][remote]);
+            ret = RemoteCapacityToPages(NM_AT(manager->remoteNumaInfo.privateSize, local, remoteNid), pageSize,
+                                        &NM_AT(privatePages, local, remoteNid));
             if (ret) {
                 return ret;
             }
-            if (privatePages[local][remote] > UINT64_MAX - totalPages[remote]) {
+            if (NM_AT(privatePages, local, remoteNid) > UINT64_MAX - totalPages[remoteNid]) {
                 return -EOVERFLOW;
             }
-            totalPages[remote] += privatePages[local][remote];
+            totalPages[remoteNid] += NM_AT(privatePages, local, remoteNid);
         }
     }
     return 0;
 }
 
-static void BuildPairRequestContext(const struct ProcessManager *manager,
-                                    const uint64_t privatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                    const uint64_t sharedPages[REMOTE_NUMA_NUM], const ProcessAttr *attr,
+static void BuildPairRequestContext(const struct ProcessManager *manager, const uint64_t *privatePages,
+                                    const uint64_t sharedPages[SMAP_MAX_NUMNODES], const ProcessAttr *attr,
                                     PairRequestContext *context)
 {
     context->nrLocalNuma = manager->nrLocalNuma;
     context->pageSizeKB = manager->tracking.pageSize / KIB;
-    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
+    int cap = (int)GetNumaCap();
+    for (int remoteNid = manager->nrLocalNuma; remoteNid < cap; remoteNid++) {
         for (int local = 0; local < manager->nrLocalNuma; local++) {
-            if (privatePages[local][remote] > 0) {
-                AddL1(&context->capacityLocalMask[remote], local);
+            if (NM_AT(privatePages, local, remoteNid) > 0) {
+                AddL1(&context->capacityLocalMask[remoteNid], local);
             }
         }
-        if (sharedPages[remote] > 0) {
-            context->capacityLocalMask[remote] |= attr->managedLocalState.managedLocalMask;
+        if (sharedPages[remoteNid] > 0) {
+            context->capacityLocalMask[remoteNid] |= attr->managedLocalState.managedLocalMask;
         }
         if (attr->ignoreRemoteCapacity) {
             /* Sync migration can assign its target from every managed local NUMA. */
-            context->capacityLocalMask[remote] |= attr->managedLocalState.managedLocalMask;
+            context->capacityLocalMask[remoteNid] |= attr->managedLocalState.managedLocalMask;
         }
     }
 }
 
-static int CollectAllPairRequests(const struct ProcessManager *manager,
-                                  const uint64_t privatePages[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                  const uint64_t sharedPages[REMOTE_NUMA_NUM], PairArbitrationEntry entries[],
+static int CollectAllPairRequests(const struct ProcessManager *manager, const uint64_t *privatePages,
+                                  const uint64_t sharedPages[SMAP_MAX_NUMNODES], PairArbitrationEntry entries[],
                                   size_t entryCap, size_t *entryCount, bool migrateOnly, struct PidSlot *all[],
                                   size_t *allCnt)
 {
     size_t count = 0;
     size_t n = PidSlotCollectRefs((struct ProcessManager *)manager, all, MAX_PID_SLOTS);
     *allCnt = n;
+    /* [256][256] 目标表太大（~数 MB），必须堆分配，循环内按迭代清零 */
+    PairTarget *processTargets = calloc(SMAP_MAX_NUMNODES * SMAP_MAX_NUMNODES, sizeof(*processTargets));
+    if (!processTargets) {
+        return -ENOMEM;
+    }
     for (size_t k = 0; k < n; k++) {
         ProcessAttr *attr = all[k]->attr;
         if (attr->scanType != NORMAL_SCAN || attr->groupPolicy.enabled ||
@@ -833,25 +883,34 @@ static int CollectAllPairRequests(const struct ProcessManager *manager,
 
         PairRequestContext context = { 0 };
         BuildPairRequestContext(manager, privatePages, sharedPages, attr, &context);
-        PairTarget processTargets[LOCAL_NUMA_NUM * REMOTE_NUMA_NUM] = { 0 };
-        PairRequestSummary summary = { 0 };
+        /* 汇总结构含 [SMAP_MAX_NUMNODES] 定维成员，超出栈预算，堆分配，按迭代释放 */
+        PairRequestSummary *summary = calloc(1, sizeof(*summary));
+        if (!summary) {
+            free(processTargets);
+            return -ENOMEM;
+        }
         size_t processTargetCount = 0;
-        int ret = BuildPairRequestedTargets(attr, &context, processTargets, LOCAL_NUMA_NUM * REMOTE_NUMA_NUM,
-                                            &processTargetCount, &summary);
+        size_t targetsBytes = SMAP_MAX_NUMNODES * SMAP_MAX_NUMNODES * sizeof(*processTargets);
+        (void)memset_s(processTargets, targetsBytes, 0, targetsBytes);
+        int ret = BuildPairRequestedTargets(attr, &context, processTargets, SMAP_MAX_NUMNODES * SMAP_MAX_NUMNODES,
+                                            &processTargetCount, summary);
         if (ret) {
             SMAP_LOGGER_ERROR("Build pid %d Pair requests failed: %d.", attr->pid, ret);
+            free(summary);
+            free(processTargets);
             return ret;
         }
+        free(summary);
         if (processTargetCount > entryCap - count) {
+            free(processTargets);
             return -ENOSPC;
         }
 
         for (size_t i = 0; i < processTargetCount; i++) {
-            int remoteIndex = processTargets[i].remoteNid - manager->nrLocalNuma;
             entries[count].target = processTargets[i];
             entries[count].process = attr;
-            entries[count].actualPages =
-                attr->strategyAttr.remoteNrPagesAfterMigrate[processTargets[i].localNid][remoteIndex];
+            entries[count].actualPages = NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, processTargets[i].localNid,
+                                               processTargets[i].remoteNid);
             count++;
         }
     }
@@ -860,12 +919,12 @@ static int CollectAllPairRequests(const struct ProcessManager *manager,
         qsort(entries, count, sizeof(entries[0]), ComparePairArbitrationEntry);
     }
     *entryCount = count;
+    free(processTargets);
     return 0;
 }
 
 static void ArbitrateAllPairCapacity(PairArbitrationEntry entries[], size_t entryCount, int nrLocalNuma,
-                                     const uint64_t privateCapacity[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                     const uint64_t sharedCapacity[REMOTE_NUMA_NUM])
+                                     const uint64_t *privateCapacity, const uint64_t sharedCapacity[SMAP_MAX_NUMNODES])
 {
     for (size_t i = 0; i < entryCount; i++) {
         if (entries[i].process->ignoreRemoteCapacity) {
@@ -874,17 +933,18 @@ static void ArbitrateAllPairCapacity(PairArbitrationEntry entries[], size_t entr
         }
     }
 
-    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
-        int remoteNid = nrLocalNuma + remote;
+    /* remoteNid 为绝对 nid；容量数组（BuildPairCapacitySnapshot）第二维同为绝对 nid */
+    int cap = (int)GetNumaCap();
+    for (int remoteNid = nrLocalNuma; remoteNid < cap; remoteNid++) {
         for (int local = 0; local < nrLocalNuma; local++) {
-            uint64_t remaining = privateCapacity[local][remote];
+            uint64_t remaining = NM_AT(privateCapacity, local, remoteNid);
             uint64_t used =
                 AllocatePairCapacityPhase(entries, entryCount, local, remoteNid, remaining, PAIR_PRIVATE_BASELINE);
             remaining -= used;
             (void)AllocatePairCapacityPhase(entries, entryCount, local, remoteNid, remaining, PAIR_PRIVATE_REMAINDER);
         }
 
-        uint64_t remaining = sharedCapacity[remote];
+        uint64_t remaining = sharedCapacity[remoteNid];
         uint64_t used = AllocatePairCapacityPhase(entries, entryCount, -1, remoteNid, remaining, PAIR_SHARED_BASELINE);
         remaining -= used;
         (void)AllocatePairCapacityPhase(entries, entryCount, -1, remoteNid, remaining, PAIR_SHARED_REMAINDER);
@@ -892,45 +952,51 @@ static void ArbitrateAllPairCapacity(PairArbitrationEntry entries[], size_t entr
 }
 
 static void PublishPairCapacityResult(struct ProcessManager *manager, PairArbitrationEntry entries[], size_t entryCount,
-                                      const uint64_t privateCapacity[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                      const uint64_t totalCapacity[REMOTE_NUMA_NUM])
+                                      const uint64_t *privateCapacity, const uint64_t totalCapacity[SMAP_MAX_NUMNODES])
 {
-    uint64_t privateUsed[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    uint64_t totalUsed[REMOTE_NUMA_NUM] = { 0 };
+    /* 第一维按 nrLocalNuma 分配（行跨度 = cap），避免大栈数组 */
+    uint64_t *privateUsed = calloc(NM_COUNT(manager->nrLocalNuma), sizeof(*privateUsed));
+    uint64_t totalUsed[SMAP_MAX_NUMNODES] = { 0 };
+    if (!privateUsed) {
+        SMAP_LOGGER_ERROR("Alloc private used table failed, skip publish.");
+        return;
+    }
 
     for (size_t i = 0; i < entryCount; i++) {
-        int remote = entries[i].target.remoteNid - manager->nrLocalNuma;
+        int remoteNid = entries[i].target.remoteNid;
         int local = entries[i].target.localNid;
         entries[i].target.targetPages = entries[i].privatePages + entries[i].sharedPages;
         /*
          * RemoteNumaUsedInfo is consumed by migrate-back readiness checks, so
          * it must describe current residency rather than the clipped target.
          */
-        privateUsed[local][remote] += entries[i].actualPages;
-        totalUsed[remote] += entries[i].actualPages;
+        NM_AT(privateUsed, local, remoteNid) += entries[i].actualPages;
+        totalUsed[remoteNid] += entries[i].actualPages;
     }
 
-    for (int remote = 0; remote < REMOTE_NUMA_NUM; remote++) {
-        struct RemoteNumaUsedInfo *usedInfo = &manager->remoteNumaInfo.usedInfo[remote];
-        usedInfo->size = totalCapacity[remote];
-        usedInfo->used = totalUsed[remote];
+    int cap = (int)GetNumaCap();
+    for (int remoteNid = manager->nrLocalNuma; remoteNid < cap; remoteNid++) {
+        struct RemoteNumaUsedInfo *usedInfo = &manager->remoteNumaInfo.usedInfo[remoteNid];
+        usedInfo->size = totalCapacity[remoteNid];
+        usedInfo->used = totalUsed[remoteNid];
         usedInfo->ifUsedFreshed = true;
-        for (int local = 0; local < LOCAL_NUMA_NUM; local++) {
-            struct RemoteNumaUsedInfo *privateInfo = &manager->remoteNumaInfo.privateUsedInfo[local][remote];
-            privateInfo->size = privateCapacity[local][remote];
-            privateInfo->used = privateUsed[local][remote];
+        /* privateUsedInfo 第一维仅分配 nrLocalNuma 行 */
+        for (int local = 0; local < manager->nrLocalNuma; local++) {
+            struct RemoteNumaUsedInfo *privateInfo = &NM_AT(manager->remoteNumaInfo.privateUsedInfo, local, remoteNid);
+            privateInfo->size = NM_AT(privateCapacity, local, remoteNid);
+            privateInfo->used = NM_AT(privateUsed, local, remoteNid);
             privateInfo->ifUsedFreshed = true;
         }
     }
+    free(privateUsed);
 }
 
 static int BuildPairArbitrationSnapshotLocked(struct ProcessManager *manager, PairArbitrationEntry entries[],
-                                              size_t entryCap, size_t *entryCount,
-                                              uint64_t privateCapacity[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM],
-                                              uint64_t totalCapacity[REMOTE_NUMA_NUM], bool migrateOnly,
+                                              size_t entryCap, size_t *entryCount, uint64_t *privateCapacity,
+                                              uint64_t totalCapacity[SMAP_MAX_NUMNODES], bool migrateOnly,
                                               struct PidSlot *all[], size_t *allCnt)
 {
-    uint64_t sharedCapacity[REMOTE_NUMA_NUM] = { 0 };
+    uint64_t sharedCapacity[SMAP_MAX_NUMNODES] = { 0 };
     int ret = BuildPairCapacitySnapshot(manager, privateCapacity, sharedCapacity, totalCapacity);
     if (ret) {
         return ret;
@@ -950,7 +1016,7 @@ static int BuildPairArbitrationSnapshotLocked(struct ProcessManager *manager, Pa
  */
 int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], size_t targetCap, size_t *targetCnt)
 {
-    if (!manager || !targets || !targetCnt || manager->nrLocalNuma == 0 || manager->nrLocalNuma > LOCAL_NUMA_NUM ||
+    if (!manager || !targets || !targetCnt || manager->nrLocalNuma == 0 || manager->nrLocalNuma > SMAP_MAX_NUMNODES ||
         targetCap > MAX_PAIR_TARGET_COUNT || targetCap > SIZE_MAX / sizeof(PairArbitrationEntry)) {
         return -EINVAL;
     }
@@ -963,8 +1029,13 @@ int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], si
 
     int ret;
     size_t entryCount = 0;
-    uint64_t privateCapacity[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    uint64_t totalCapacity[REMOTE_NUMA_NUM] = { 0 };
+    /* 第一维按 nrLocalNuma 分配（行跨度 = cap），避免大栈数组 */
+    uint64_t *privateCapacity = calloc(NM_COUNT(manager->nrLocalNuma), sizeof(*privateCapacity));
+    uint64_t totalCapacity[SMAP_MAX_NUMNODES] = { 0 };
+    if (!privateCapacity) {
+        free(entries);
+        return -ENOMEM;
+    }
 
     struct PidSlot *all[MAX_PID_SLOTS];
     size_t allCnt = 0;
@@ -981,6 +1052,7 @@ int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], si
     EnvMutexUnlock(&manager->remoteNumaInfo.lock);
     PidSlotReleaseRefs(all, allCnt);
     free(entries);
+    free(privateCapacity);
     return ret;
 }
 
@@ -994,7 +1066,7 @@ int BuildAllPairPlanInputsForState(struct ProcessManager *manager, PairPlan plan
                                    bool migrateOnly)
 {
     if (!manager || !plans || !planCnt || !pidBudgets || !pidBudgetCnt || manager->nrLocalNuma == 0 ||
-        manager->nrLocalNuma > LOCAL_NUMA_NUM || planCap > MAX_PAIR_TARGET_COUNT ||
+        manager->nrLocalNuma > SMAP_MAX_NUMNODES || planCap > MAX_PAIR_TARGET_COUNT ||
         planCap > SIZE_MAX / sizeof(PairArbitrationEntry)) {
         return -EINVAL;
     }
@@ -1009,8 +1081,12 @@ int BuildAllPairPlanInputsForState(struct ProcessManager *manager, PairPlan plan
     int ret;
     size_t entryCount = 0;
     size_t budgetCount = 0;
-    uint64_t privateCapacity[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM] = { 0 };
-    uint64_t totalCapacity[REMOTE_NUMA_NUM] = { 0 };
+    uint64_t *privateCapacity = calloc(NM_COUNT(manager->nrLocalNuma), sizeof(*privateCapacity));
+    uint64_t totalCapacity[SMAP_MAX_NUMNODES] = { 0 };
+    if (!privateCapacity) {
+        free(entries);
+        return -ENOMEM;
+    }
 
     struct PidSlot *all[MAX_PID_SLOTS];
     size_t allCnt = 0;
@@ -1031,12 +1107,10 @@ int BuildAllPairPlanInputsForState(struct ProcessManager *manager, PairPlan plan
         PublishPairCapacityResult(manager, entries, entryCount, privateCapacity, totalCapacity);
         size_t budgetIndex = 0;
         for (size_t i = 0; i < entryCount; i++) {
-            int remoteIndex = entries[i].target.remoteNid - manager->nrLocalNuma;
             plans[i] = (PairPlan){
                 .pid = entries[i].target.pid,
                 .localNid = entries[i].target.localNid,
                 .remoteNid = entries[i].target.remoteNid,
-                .remoteIndex = remoteIndex,
                 .targetPages = entries[i].target.targetPages,
                 .actualPages = entries[i].actualPages,
             };
@@ -1057,6 +1131,7 @@ int BuildAllPairPlanInputsForState(struct ProcessManager *manager, PairPlan plan
     EnvMutexUnlock(&manager->remoteNumaInfo.lock);
     PidSlotReleaseRefs(all, allCnt);
     free(entries);
+    free(privateCapacity);
     return ret;
 }
 

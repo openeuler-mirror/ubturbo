@@ -193,12 +193,12 @@ static void WriteNumaConfig(char *base)
         for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
             payload->local = i;
             payload->remote = j + nrLocalNuma;
-            payload->size = numaInfo->privateSize[i][j];
+            payload->size = NM_AT(numaInfo->privateSize, i, j + nrLocalNuma);
             payload++;
         }
     }
     for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
-        payload->size = numaInfo->sharedSize[i];
+        payload->size = numaInfo->sharedSize[i + nrLocalNuma];
         payload++;
     }
 }
@@ -344,24 +344,26 @@ static int RecoverNumaConfig(char *numaBase)
     payload = (struct NumaPayload *)JumpToNumaPayload(numaBase);
     for (int i = 0; i < GetNrLocalNuma(); i++) {
         for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
+            int remoteNid = j + GetNrLocalNuma();
             // only called during initialization, no need to lock
-            numaInfo->privateSize[i][j] = payload->size;
-            numaInfo->privateUsedInfo[i][j].size = MBToPage(payload->size);
+            NM_AT(numaInfo->privateSize, i, remoteNid) = payload->size;
+            NM_AT(numaInfo->privateUsedInfo, i, remoteNid).size = MBToPage(payload->size);
             SMAP_LOGGER_INFO("Numa privateSize[%d][%d] %u.", i, j, payload->size);
             payload++;
         }
     }
     for (int i = 0; i < REMOTE_NUMA_NUM; i++) {
-        numaInfo->sharedSize[i] = payload->size;
+        numaInfo->sharedSize[i + GetNrLocalNuma()] = payload->size;
         SMAP_LOGGER_INFO("Numa sharedSize[%d] %u.", i, payload->size);
         payload++;
     }
     for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-        numaInfo->usedInfo[j].size = MBToPage(numaInfo->sharedSize[j]);
+        int remoteNid = j + GetNrLocalNuma();
+        numaInfo->usedInfo[remoteNid].size = MBToPage(numaInfo->sharedSize[remoteNid]);
         for (int i = 0; i < GetNrLocalNuma(); i++) {
-            numaInfo->usedInfo[j].size += MBToPage(numaInfo->privateSize[i][j]);
+            numaInfo->usedInfo[remoteNid].size += MBToPage(NM_AT(numaInfo->privateSize, i, remoteNid));
         }
-        SMAP_LOGGER_INFO("Numa usedInfo[%d] %u.", j, numaInfo->usedInfo[j].size);
+        SMAP_LOGGER_INFO("Numa usedInfo[%d] %u.", j, numaInfo->usedInfo[remoteNid].size);
     }
     SMAP_LOGGER_DEBUG("Exit RecoverNumaConfig.");
     return 0;
@@ -403,11 +405,10 @@ static int RestoreProcessTargetConfig(ProcessTargetConfig *config, uint8_t migra
     config->sourceLocalNid = srcNid;
     uint64_t totalRatio = 0;
     uint64_t pageSizeKB = GetPageSize() / KIB;
-    bool remoteSeen[REMOTE_NUMA_NUM] = { false };
+    bool remoteSeen[SMAP_MAX_NUMNODES] = { false };
     for (int i = 0; i < count; i++) {
-        int remoteIndex;
         const struct PersistRemoteTarget *target = &targets[i];
-        bool valid = RemoteNidToIndex(target->nid, GetNrLocalNuma(), &remoteIndex) == 0 && !remoteSeen[remoteIndex];
+        bool valid = IsRemoteNidValid(target->nid) && !remoteSeen[target->nid];
         if (valid && migrateMode == MIG_RATIO_MODE) {
             valid = target->ratio <= HUNDRED && totalRatio + target->ratio <= HUNDRED;
         }
@@ -419,7 +420,7 @@ static int RestoreProcessTargetConfig(ProcessTargetConfig *config, uint8_t migra
             return -EINVAL;
         }
 
-        remoteSeen[remoteIndex] = true;
+        remoteSeen[target->nid] = true;
         config->targets[config->count++] = (ProcessRemoteTarget){
             .remoteNid = target->nid,
             .ratio = target->ratio,
@@ -436,20 +437,22 @@ static void ApplyRecoveredTargetConfig(ProcessAttr *attr, const ProcessTargetCon
     attr->targetConfig = *config;
     attr->migrateMode = config->migrateMode;
     attr->remoteNumaCnt = config->count;
+    /* 本地节点数提到循环外：避免内层循环条件重复调用 GetNrLocalNuma() */
+    int nrLocalNuma = GetNrLocalNuma();
     for (uint32_t i = 0; i < config->count; i++) {
-        int remoteIndex = config->targets[i].remoteNid - GetNrLocalNuma();
-        attr->migrateParam[i].nid = config->targets[i].remoteNid;
+        int remoteNid = config->targets[i].remoteNid;
+        attr->migrateParam[i].nid = remoteNid;
         attr->migrateParam[i].memSize = config->targets[i].memSizeKB;
         bool firstL1 = true;
-        for (int localNid = 0; localNid < GetNrLocalNuma(); localNid++) {
+        for (int localNid = 0; localNid < nrLocalNuma; localNid++) {
             if (!InAttrL1(attr, localNid)) {
                 continue;
             }
-            NM_AT(attr->strategyAttr.initRemoteMemRatio, localNid, remoteIndex) = config->targets[i].ratio;
-            NM_AT(attr->strategyAttr.memSize, localNid, remoteIndex) = firstL1 ? config->targets[i].memSizeKB : 0;
+            NM_AT(attr->strategyAttr.initRemoteMemRatio, localNid, remoteNid) = config->targets[i].ratio;
+            NM_AT(attr->strategyAttr.memSize, localNid, remoteNid) = firstL1 ? config->targets[i].memSizeKB : 0;
             firstL1 = false;
         }
-        AddAttrL2(attr, config->targets[i].remoteNid);
+        AddAttrL2(attr, remoteNid);
         totalRatio += config->targets[i].ratio;
     }
     attr->initLocalMemRatio = config->migrateMode == MIG_RATIO_MODE ? HUNDRED - totalRatio : HUNDRED;
@@ -634,18 +637,17 @@ static int WriteTargetConfigToPayload(struct PersistRemoteTarget payloadTargets[
     *payloadMode = (uint8_t)config->migrateMode;
     uint64_t totalRatio = 0;
     uint64_t pageSizeKB = GetPageSize() / KIB;
-    bool remoteSeen[REMOTE_NUMA_NUM] = { false };
+    bool remoteSeen[SMAP_MAX_NUMNODES] = { false };
     for (uint32_t i = 0; i < config->count; i++) {
-        int remoteIndex;
         const ProcessRemoteTarget *target = &config->targets[i];
-        if (RemoteNidToIndex(target->remoteNid, GetNrLocalNuma(), &remoteIndex) || remoteSeen[remoteIndex] ||
+        if (!IsRemoteNidValid(target->remoteNid) || remoteSeen[target->remoteNid] ||
             (config->migrateMode == MIG_RATIO_MODE &&
              (target->ratio > HUNDRED || totalRatio + target->ratio > HUNDRED)) ||
             (config->migrateMode == MIG_MEMSIZE_MODE &&
              (pageSizeKB == 0 || target->memSizeKB % pageSizeKB != 0 || target->memSizeKB / pageSizeKB > UINT32_MAX))) {
             return -EINVAL;
         }
-        remoteSeen[remoteIndex] = true;
+        remoteSeen[target->remoteNid] = true;
         totalRatio += target->ratio;
         payloadTargets[i] = (struct PersistRemoteTarget){
             .nid = target->remoteNid,

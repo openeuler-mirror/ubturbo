@@ -302,7 +302,6 @@ typedef struct {
     pid_t pid;
     int localNid;
     int remoteNid;
-    int remoteIndex;
     uint32_t targetPages;
     uint32_t actualPages;
     uint32_t demotePages;
@@ -329,6 +328,15 @@ typedef struct {
     /*
      * Pair-level compatibility fields generated from ProcessTargetConfig.
      * They are runtime state, not the source of the user-requested target.
+     *
+     * 下标约定：第一维为本地 nid（[0, nrLocalNuma)）；第二维统一为远端绝对 nid
+     * （[nrLocalNuma, SMAP_MAX_NUMNODES)）。迁移量按方向拆为两个矩阵：
+     * nrMigratePages[l][r] 为 demote+swap（l→r）迁移量；nrMigrateBackPages[l][r]
+     * 为 promote+swap（r→l）迁移量；两矩阵第一维均按 nrLocalNuma 分配。
+     *
+     * 存储：以下二维数组为行主序扁平存储（T *），行跨度 = 运行期 cap（列向内存
+     * 随 cap 收敛），一律经 node_matrix.h 的 NM_AT/NM_ROW 宏访问；分配尺寸为
+     * nrLocalNuma × GetNumaCap()。
      */
     double *initRemoteMemRatio;
     uint64_t *memSize;
@@ -336,15 +344,9 @@ typedef struct {
     uint32_t nrPagesPerLocalNuma[SMAP_NODE_CAP_LIMIT]; // 根据账本计算的，各本地numa可支配的内存
     double *l2RemoteMemRatio;
     double *l3RemoteMemRatio;
-    /*
-     * 迁移量按方向拆为两个矩阵：nrMigratePages[l][r] 为 demote+swap（l→r）迁移量；
-     * nrMigrateBackPages[l][r] 为 promote+swap（r→l）迁移量。两矩阵均为行主序扁平
-     * 存储（T *），第一维为本地 nid（[0, nrLocalNuma)），第二维为远端绝对 nid，
-     * 分配尺寸 = nrLocalNuma × GetNumaCap()，经 NM_AT/NM_ROW 宏访问。
-     */
     uint32_t *nrMigratePages; // 水线场景：消减后的迁移量（demote 方向）；密度场景：接口设置的比例
     uint32_t *nrMigrateBackPages; // 水线场景：消减后的迁移量（promote 方向）
-    uint32_t remoteNrPagesAfterMigrate[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM]; // 迁移后记录账本
+    uint32_t *remoteNrPagesAfterMigrate; // 迁移后记录账本
     MigrateDirection dir[SMAP_NODE_CAP_LIMIT]; // 算法决策各numa的迁出的方向 demote/promote/swap
     UbBwRestrictType ubBwRestrict[SMAP_NODE_CAP_LIMIT]; // 各NUMA的UB带宽限制策略
     SeparateParam separateParam;
@@ -520,14 +522,16 @@ struct RemoteNumaUsedInfo {
 
 struct RemoteNumaInfo {
     EnvMutex lock;
-    uint64_t privateSize[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
-    uint64_t sharedSize[REMOTE_NUMA_NUM];
-    struct RemoteNumaUsedInfo usedInfo[REMOTE_NUMA_NUM];
-    struct RemoteNumaUsedInfo privateUsedInfo[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
-    /* 事件驱动流水的在途预扣账本（页，per local→remote 对）：规划时预扣、
+    /* privateSize/privateUsedInfo/privateInFlight：第一维为本地 nid（[0, nrLocalNuma)），
+     * 第二维为远端绝对 nid。行主序扁平存储（T *），行跨度 = 运行期 cap，经 NM_AT/NM_ROW 宏访问 */
+    uint64_t *privateSize;
+    uint64_t sharedSize[SMAP_NODE_CAP_LIMIT];
+    struct RemoteNumaUsedInfo usedInfo[SMAP_NODE_CAP_LIMIT];
+    struct RemoteNumaUsedInfo *privateUsedInfo;
+    /* 事件驱动流水的在途预扣账本（页，per local→远端绝对 nid 对）：规划时预扣、
      * 结算释放；重建函数 Clear/CalRemoteMemUsed 不触碰，由 acquire/settle
      * 成对维护；每远端合计在快照内按列汇总计算 */
-    uint64_t privateInFlight[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];
+    uint64_t *privateInFlight;
 };
 
 struct UbBwMonitor {
@@ -617,7 +621,6 @@ int CopyProcessTargetConfig(ProcessTargetConfig *dest, const ProcessTargetConfig
 bool RemoveProcessRemoteTarget(ProcessTargetConfig *config, int remoteNid);
 int MoveProcessRemoteTarget(ProcessTargetConfig *config, int srcNid, int destNid, uint64_t memSizeKB, int ratio);
 const ProcessRemoteTarget *FindProcessRemoteTarget(const ProcessTargetConfig *config, int remoteNid);
-int RemoteNidToIndex(int remoteNid, int nrLocalNuma, int *remoteIndex);
 void InitProcessMigrationTargetState(ProcessAttr *attr);
 
 /*
@@ -634,6 +637,12 @@ int InitProcessAttrArrays(ProcessAttr *attr);
 void FreeProcessAttrArrays(ProcessAttr *attr);
 int CloneProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src);
 void CopyProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src);
+
+/*
+ * 分配 remoteNumaInfo 的 privateSize/privateUsedInfo/privateInFlight 二维数组
+ * （第一维按 nrLocalNuma）。必须在 InitTrackingDev 探测到 nrLocalNuma 之后调用。
+ */
+int InitRemoteNumaInfoArrays(void);
 
 int ProcessManagerInit(uint32_t pageType);
 

@@ -587,8 +587,8 @@ TEST_F(MigrationTest, TestCalProcessNuma)
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.strategyAttr.nrPagesPerLocalNuma[0] = 100;
-    NM_AT(attr.strategyAttr.allocRemoteNrPages, 0, 0) = 200;
-    NM_AT(attr.strategyAttr.l3RemoteMemRatio, 0, 0) = 50;
+    NM_AT(attr.strategyAttr.allocRemoteNrPages, 0, 4) = 200;
+    NM_AT(attr.strategyAttr.l3RemoteMemRatio, 0, 4) = 50;
 
     CalProcessNuma(&attr.strategyAttr);
     EXPECT_EQ(150, NM_AT(attr.strategyAttr.nrMigrateBackPages, 0, 4));
@@ -636,9 +636,9 @@ TEST_F(MigrationTest, TestNumaSwapMemPool)
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(l2Node));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.numaAttr.numaNodes = 0x11;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 5;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 5;
     attr.walkPage.nrPages[l2Node] = 5;
-    NM_AT(attr.strategyAttr.memSize, 0, 0) = 4096; // 2 hugepage
+    NM_AT(attr.strategyAttr.memSize, 0, 4) = 4096; // 2 hugepage
     g_pageSizeHuge = PAGESIZE_2M;
     g_processManager.tracking.pageSize = g_pageSizeHuge;
     MOCKER(IsHugeMode).stubs().will(returnValue(true));
@@ -648,10 +648,10 @@ TEST_F(MigrationTest, TestNumaSwapMemPool)
     EXPECT_EQ(3, NM_AT(attr.strategyAttr.nrMigrateBackPages, 0, l2Node));
 
     // demote case
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 140;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 140;
     attr.walkPage.nrPages[0] = 200;
     attr.walkPage.nrPages[l2Node] = 140;
-    NM_AT(attr.strategyAttr.memSize, 0, 0) = 307200; // 150 hugepage
+    NM_AT(attr.strategyAttr.memSize, 0, 4) = 307200; // 150 hugepage
     NumaSwapMemPool(&attr);
     EXPECT_EQ(10, NM_AT(attr.strategyAttr.nrMigratePages, 0, l2Node));
     FreeProcessAttrArrays(&attr);
@@ -665,22 +665,20 @@ TEST_F(MigrationTest, TestNumaMigReduceDeal)
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetRunMode).stubs().will(returnValue(0));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
-    NM_AT(attr.strategyAttr.allocRemoteNrPages, 0, 0) = 200;
-    NM_AT(attr.strategyAttr.l3RemoteMemRatio, 0, 0) = 50;
+    NM_AT(attr.strategyAttr.allocRemoteNrPages, 0, 4) = 200;
+    NM_AT(attr.strategyAttr.l3RemoteMemRatio, 0, 4) = 50;
 
     NumaMigReduceDeal(&attr);
     EXPECT_EQ(150, NM_AT(attr.strategyAttr.nrMigrateBackPages, 0, 4));
     FreeProcessAttrArrays(&attr);
 }
 
-static PairPlan MakePairPlan(pid_t pid, int localNid, int remoteNid, int remoteIndex, uint32_t targetPages,
-                             uint32_t actualPages)
+static PairPlan MakePairPlan(pid_t pid, int localNid, int remoteNid, uint32_t targetPages, uint32_t actualPages)
 {
     PairPlan plan = {};
     plan.pid = pid;
     plan.localNid = localNid;
     plan.remoteNid = remoteNid;
-    plan.remoteIndex = remoteIndex;
     plan.targetPages = targetPages;
     plan.actualPages = actualPages;
     return plan;
@@ -734,9 +732,9 @@ TEST_F(MigrationTest, TestCollectNodeFreeSnapshotUsesHugePages)
 TEST_F(MigrationTest, TestBuildPairPlansBuildsOneNetDirection)
 {
     PairPlan inputs[] = {
-        MakePairPlan(300, 0, 2, 0, 40, 40),
-        MakePairPlan(100, 0, 2, 0, 80, 20),
-        MakePairPlan(200, 1, 3, 1, 0, 50),
+        MakePairPlan(300, 0, 2, 40, 40),
+        MakePairPlan(100, 0, 2, 80, 20),
+        MakePairPlan(200, 1, 3, 0, 50),
     };
     PairPidBudget pidBudgets[] = {
         {.pid = 100, .maxMigratePages = 100},
@@ -769,10 +767,10 @@ TEST_F(MigrationTest, TestBuildPairPlansBuildsOneNetDirection)
 TEST_F(MigrationTest, TestBuildPairPlansAppliesFreeBudgetOnlyToPromote)
 {
     PairPlan inputs[] = {
-        MakePairPlan(400, 1, 2, 0, 100, 0),
-        MakePairPlan(300, 0, 2, 0, 100, 0),
-        MakePairPlan(200, 0, 2, 0, 0, 100),
-        MakePairPlan(100, 0, 3, 1, 0, 100),
+        MakePairPlan(400, 1, 2, 100, 0),
+        MakePairPlan(300, 0, 2, 100, 0),
+        MakePairPlan(200, 0, 2, 0, 100),
+        MakePairPlan(100, 0, 3, 0, 100),
     };
     PairPidBudget pidBudgets[] = {
         {.pid = 400, .maxMigratePages = 100},
@@ -805,8 +803,8 @@ TEST_F(MigrationTest, TestBuildPairPlansAppliesFreeBudgetOnlyToPromote)
 TEST_F(MigrationTest, TestBuildPairPlansSharesPidBudgetAcrossPairs)
 {
     PairPlan inputs[] = {
-        MakePairPlan(100, 0, 3, 1, 50, 0),
-        MakePairPlan(100, 0, 2, 0, 50, 0),
+        MakePairPlan(100, 0, 3, 50, 0),
+        MakePairPlan(100, 0, 2, 50, 0),
     };
     PairPidBudget pidBudgets[] = {
         {.pid = 100, .maxMigratePages = 60},
@@ -844,7 +842,7 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansUsesRemainingBidirectionalBudget)
     PidSlotAdd(&manager, &process);
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
-    PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 10);
+    PairPlan plan = MakePairPlan(100, 0, 2, 10, 10);
     PairPlanContext context = {.nrLocalNuma = 2};
     context.freePages[0] = 10;
     context.safetyReservePages[0] = 2;
@@ -879,7 +877,7 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansSkipsNonConfiguredSourceLocal)
     memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &process);
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
-    PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 10);
+    PairPlan plan = MakePairPlan(100, 0, 2, 10, 10);
     PairPlanContext context = {.nrLocalNuma = 2};
     context.freePages[0] = 10;
     PairPidBudget budget = {.pid = 100, .maxMigratePages = 12};
@@ -910,7 +908,7 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansAllowsUnconvergedPair)
     PidSlotAdd(&manager, &process);
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
-    PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 8);
+    PairPlan plan = MakePairPlan(100, 0, 2, 10, 8);
     plan.demotePages = 2;
     PairPlanContext context = {.nrLocalNuma = 2};
     context.freePages[0] = 10;
@@ -944,7 +942,7 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansFillsRemoteHotGuarantee)
     PidSlotAdd(&manager, &process);
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
-    PairPlan plan = MakePairPlan(100, 0, 2, 0, 10, 10);
+    PairPlan plan = MakePairPlan(100, 0, 2, 10, 10);
     PairPlanContext context = {.nrLocalNuma = 2};
     context.freePages[0] = 10;
     context.safetyReservePages[0] = 2;
@@ -978,8 +976,8 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansRejectsAmbiguousSharedRemote)
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
     PairPlan plans[] = {
-        MakePairPlan(100, 0, 2, 0, 4, 4),
-        MakePairPlan(100, 1, 2, 0, 4, 4),
+        MakePairPlan(100, 0, 2, 4, 4),
+        MakePairPlan(100, 1, 2, 4, 4),
     };
     PairPlanContext context = {.nrLocalNuma = 2};
     context.freePages[0] = context.freePages[1] = 100;
@@ -995,7 +993,7 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansRejectsAmbiguousSharedRemote)
 
 TEST_F(MigrationTest, TestBuildPairPlansZeroLocalSafeFreeBlocksPromote)
 {
-    PairPlan input = MakePairPlan(100, 0, 2, 0, 20, 80);
+    PairPlan input = MakePairPlan(100, 0, 2, 20, 80);
     PairPidBudget pidBudget = {.pid = 100, .maxMigratePages = 100};
     PairPlanContext context = {.nrLocalNuma = 2};
     context.freePages[0] = 10;
@@ -1013,8 +1011,8 @@ TEST_F(MigrationTest, TestBuildPairPlansZeroLocalSafeFreeBlocksPromote)
 TEST_F(MigrationTest, TestBuildPairPlansFailureDoesNotPublishPartialState)
 {
     PairPlan inputs[] = {
-        MakePairPlan(100, 0, 2, 0, 50, 0),
-        MakePairPlan(100, 0, 2, 0, 60, 0),
+        MakePairPlan(100, 0, 2, 50, 0),
+        MakePairPlan(100, 0, 2, 60, 0),
     };
     PairPidBudget pidBudget = {.pid = 100, .maxMigratePages = 100};
     PairPlanContext context = {.nrLocalNuma = 2};
@@ -1060,8 +1058,8 @@ TEST_F(MigrationTest, TestApplyPairPlansForStateRebuildsMigratingMatrixOnly)
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
     PairPlan plans[] = {
-        MakePairPlan(100, 0, 2, 0, 80, 20),
-        MakePairPlan(100, 1, 3, 1, 10, 50),
+        MakePairPlan(100, 0, 2, 80, 20),
+        MakePairPlan(100, 1, 3, 10, 50),
     };
     plans[0].demotePages = 60;
     plans[0].swapPages = 5;
@@ -1093,7 +1091,7 @@ TEST_F(MigrationTest, TestApplyPairPlansForStateFailureKeepsOldMatrix)
     NM_AT(process.strategyAttr.nrMigratePages, 0, 2) = 7;
     ASSERT_EQ(0, EnvMutexInit(&manager.threadLock));
 
-    PairPlan plan = MakePairPlan(100, 0, 2, 0, 80, 20);
+    PairPlan plan = MakePairPlan(100, 0, 2, 80, 20);
     plan.demotePages = 60;
     plan.promotePages = 1;
 
@@ -1111,7 +1109,7 @@ static int BuildDisabledPairPlanInput(struct ProcessManager *manager, PairPlan p
     EXPECT_TRUE(migrateOnly);
     EXPECT_GE(planCap, 1U);
     EXPECT_GE(pidBudgetCap, 1U);
-    plans[0] = MakePairPlan(100, 0, 1, 0, 20, 10);
+    plans[0] = MakePairPlan(100, 0, 1, 20, 10);
     pidBudgets[0] = {.pid = 100, .maxMigratePages = 100};
     *planCnt = 1;
     *pidBudgetCnt = 1;
@@ -1161,8 +1159,10 @@ TEST_F(MigrationTest, TestUpdateMigResultLocalToRemote)
     ProcessAttr attr = {};
     attr.next = NULL;
     attr.pid = 123;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.numaAttr.numaNodes = 0b00010001;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
@@ -1181,16 +1181,19 @@ TEST_F(MigrationTest, TestUpdateMigResultLocalToRemote)
     PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
-    EXPECT_EQ(170, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
-    EXPECT_EQ(1U, attr.managedLocalState.accountLocalMask[0]);
+    EXPECT_EQ(170, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4));
+    EXPECT_EQ(1U, attr.managedLocalState.accountLocalMask[4]);
     free(mMsg.migList);
+    FreeProcessAttrArrays(&attr);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultSubtractsIsolatedFailure)
 {
     ProcessAttr attr = {};
     attr.next = NULL;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
@@ -1210,14 +1213,17 @@ TEST_F(MigrationTest, TestUpdateMigResultSubtractsIsolatedFailure)
     PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
-    EXPECT_EQ(150, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ(150, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4));
     free(mMsg.migList);
+    FreeProcessAttrArrays(&attr);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultSettlesPairSwapByEachDirectionSuccess)
 {
     ProcessAttr attr = {};
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 2;
@@ -1240,21 +1246,24 @@ TEST_F(MigrationTest, TestUpdateMigResultSettlesPairSwapByEachDirectionSuccess)
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
 
     UpdateMigResult(&mMsg, &manager);
-    EXPECT_EQ(100U, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ(100U, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4));
 
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
     mMsg.migList[0].failedMigNr = 4;
     mMsg.migList[1].failedMigNr = 1;
     UpdateMigResult(&mMsg, &manager);
-    EXPECT_EQ(103U, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ(103U, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4));
     free(mMsg.migList);
+    FreeProcessAttrArrays(&attr);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultPromoteSubtractsOnlySuccessfulPages)
 {
     ProcessAttr attr = {};
     attr.pid = 123;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[2][1] = 100;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 2, 5) = 100;
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
@@ -1276,14 +1285,17 @@ TEST_F(MigrationTest, TestUpdateMigResultPromoteSubtractsOnlySuccessfulPages)
 
     UpdateMigResult(&mMsg, &manager);
 
-    EXPECT_EQ((uint32_t)50, attr.strategyAttr.remoteNrPagesAfterMigrate[2][1]);
-    EXPECT_EQ(BIT(2), attr.managedLocalState.accountLocalMask[1]);
+    EXPECT_EQ((uint32_t)50, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 2, 5));
+    EXPECT_EQ(BIT(2), attr.managedLocalState.accountLocalMask[5]);
     free(mMsg.migList);
+    FreeProcessAttrArrays(&attr);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultUpdatesExactDemotePair)
 {
     ProcessAttr attr = {};
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
@@ -1303,18 +1315,21 @@ TEST_F(MigrationTest, TestUpdateMigResultUpdatesExactDemotePair)
 
     UpdateMigResult(&mMsg, &manager);
 
-    EXPECT_EQ((uint32_t)10, attr.strategyAttr.remoteNrPagesAfterMigrate[2][1]);
-    EXPECT_EQ((uint32_t)0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
-    EXPECT_EQ(BIT(2), attr.managedLocalState.accountLocalMask[1]);
+    EXPECT_EQ((uint32_t)10, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 2, 5));
+    EXPECT_EQ((uint32_t)0, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 5));
+    EXPECT_EQ(BIT(2), attr.managedLocalState.accountLocalMask[5]);
     free(mMsg.migList);
+    FreeProcessAttrArrays(&attr);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalUnexpectedMigCount)
 {
     ProcessAttr attr = {};
     attr.next = NULL;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.numaAttr.numaNodes = 0b00010001;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
@@ -1333,17 +1348,20 @@ TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalUnexpectedMigCount)
     PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
-    EXPECT_EQ(0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
-    EXPECT_EQ(0U, attr.managedLocalState.accountLocalMask[0]);
+    EXPECT_EQ(0, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4));
+    EXPECT_EQ(0U, attr.managedLocalState.accountLocalMask[4]);
     free(mMsg.migList);
+    FreeProcessAttrArrays(&attr);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalExpectedMigCount)
 {
     ProcessAttr attr = {};
     attr.next = NULL;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.numaAttr.numaNodes = 0b00010001;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
@@ -1362,14 +1380,17 @@ TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalExpectedMigCount)
     PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
-    EXPECT_EQ(30, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ(30, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4));
+    FreeProcessAttrArrays(&attr);
 }
 TEST_F(MigrationTest, TestUpdateMigResultTwo)
 {
     ProcessAttr attr = {};
     attr.next = NULL;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.numaAttr.numaNodes = 0b00010001;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][1] = 0;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 5) = 0;
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
@@ -1388,16 +1409,19 @@ TEST_F(MigrationTest, TestUpdateMigResultTwo)
     PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
-    EXPECT_EQ(60, attr.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
+    EXPECT_EQ(60, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 5));
     free(mMsg.migList);
+    FreeProcessAttrArrays(&attr);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultThree)
 {
     ProcessAttr attr = {};
     attr.next = NULL;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.numaAttr.numaNodes = 0b00010001;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][1] = 0;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 5) = 0;
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
@@ -1416,16 +1440,19 @@ TEST_F(MigrationTest, TestUpdateMigResultThree)
     PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
-    EXPECT_EQ(0, attr.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
+    EXPECT_EQ(0, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 5));
     free(mMsg.migList);
+    FreeProcessAttrArrays(&attr);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultFour)
 {
     ProcessAttr attr = {};
     attr.next = NULL;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.numaAttr.numaNodes = 0b00100001;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 1000;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 1000;
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
@@ -1444,8 +1471,9 @@ TEST_F(MigrationTest, TestUpdateMigResultFour)
     PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
-    EXPECT_EQ(1099, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ(1099, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4));
     free(mMsg.migList);
+    FreeProcessAttrArrays(&attr);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultFive)
@@ -1455,10 +1483,13 @@ TEST_F(MigrationTest, TestUpdateMigResultFive)
     attr.next = &attr2;
     attr.pid = 123;
     attr2.pid = 1234;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.numaAttr.numaNodes = 0b00110001;
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr2));
     attr2.numaAttr.numaNodes = 0b00110001;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
-    attr2.strategyAttr.remoteNrPagesAfterMigrate[0][1] = 100;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
+    NM_AT(attr2.strategyAttr.remoteNrPagesAfterMigrate, 0, 5) = 100;
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 2;
@@ -1487,17 +1518,21 @@ TEST_F(MigrationTest, TestUpdateMigResultFive)
     PidSlotAdd(&g_processManager, &attr);
     PidSlotAdd(&g_processManager, &attr2);
     UpdateMigResult(&mMsg, &manager);
-    EXPECT_EQ(199, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
-    EXPECT_EQ(101, attr2.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
+    EXPECT_EQ(199, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4));
+    EXPECT_EQ(101, NM_AT(attr2.strategyAttr.remoteNrPagesAfterMigrate, 0, 5));
     free(mMsg.migList);
+    FreeProcessAttrArrays(&attr);
+    FreeProcessAttrArrays(&attr2);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultSix)
 {
     ProcessAttr attr = {};
     attr.next = NULL;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.numaAttr.numaNodes = 0b00100001;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 1;
@@ -1516,8 +1551,9 @@ TEST_F(MigrationTest, TestUpdateMigResultSix)
     PidSlotAdd(&manager, &attr);
     MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
     UpdateMigResult(&mMsg, &manager);
-    EXPECT_EQ(30, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
+    EXPECT_EQ(30, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4));
     free(mMsg.migList);
+    FreeProcessAttrArrays(&attr);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultSeven)
@@ -1527,10 +1563,13 @@ TEST_F(MigrationTest, TestUpdateMigResultSeven)
     attr.next = &attr2;
     attr.pid = 123;
     attr2.pid = 1234;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.numaAttr.numaNodes = 0b00110001;
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr2));
     attr2.numaAttr.numaNodes = 0b00110001;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
-    attr2.strategyAttr.remoteNrPagesAfterMigrate[0][1] = 100;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
+    NM_AT(attr2.strategyAttr.remoteNrPagesAfterMigrate, 0, 5) = 100;
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 2;
@@ -1559,9 +1598,11 @@ TEST_F(MigrationTest, TestUpdateMigResultSeven)
     PidSlotAdd(&g_processManager, &attr);
     PidSlotAdd(&g_processManager, &attr2);
     UpdateMigResult(&mMsg, &manager);
-    EXPECT_EQ(1, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
-    EXPECT_EQ(99, attr2.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
+    EXPECT_EQ(1, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4));
+    EXPECT_EQ(99, NM_AT(attr2.strategyAttr.remoteNrPagesAfterMigrate, 0, 5));
     free(mMsg.migList);
+    FreeProcessAttrArrays(&attr);
+    FreeProcessAttrArrays(&attr2);
 }
 
 TEST_F(MigrationTest, TestUpdateMigResultEight)
@@ -1571,10 +1612,13 @@ TEST_F(MigrationTest, TestUpdateMigResultEight)
     attr.next = &attr2;
     attr.pid = 123;
     attr2.pid = 1234;
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.numaAttr.numaNodes = 0b00110001;
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr2));
     attr2.numaAttr.numaNodes = 0b00110001;
-    attr.strategyAttr.remoteNrPagesAfterMigrate[0][0] = 100;
-    attr2.strategyAttr.remoteNrPagesAfterMigrate[0][1] = 100;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
+    NM_AT(attr2.strategyAttr.remoteNrPagesAfterMigrate, 0, 5) = 100;
 
     struct MigrateMsg mMsg = {};
     mMsg.cnt = 2;
@@ -1602,8 +1646,10 @@ TEST_F(MigrationTest, TestUpdateMigResultEight)
     PidSlotAdd(&g_processManager, &attr);
     PidSlotAdd(&g_processManager, &attr2);
     UpdateMigResult(&mMsg, &manager);
-    EXPECT_EQ(199, attr.strategyAttr.remoteNrPagesAfterMigrate[0][0]);
-    EXPECT_EQ(99, attr2.strategyAttr.remoteNrPagesAfterMigrate[0][1]);
+    EXPECT_EQ(199, NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4));
+    EXPECT_EQ(99, NM_AT(attr2.strategyAttr.remoteNrPagesAfterMigrate, 0, 5));
+    FreeProcessAttrArrays(&attr);
+    FreeProcessAttrArrays(&attr2);
 }
 
 extern "C" void MigrationUpdateMigrateModeAndScanCpu(void);

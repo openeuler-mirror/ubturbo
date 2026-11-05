@@ -37,6 +37,9 @@ protected:
     {
         cout << "[Phase TearDown Begin]" << endl;
         GlobalMockObject::verify();
+        /* InitTrackingDev 会按真实 /proc/self/status 的 Mems_allowed 宽度改写
+         * 运行期 cap；用例结束后恢复编译期缺省，避免污染后续用例的矩阵列跨度 */
+        SetNumaCap(SMAP_MAX_NUMNODES);
         cout << "[Phase TearDown End]" << endl;
     }
 };
