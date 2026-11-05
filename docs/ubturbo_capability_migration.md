@@ -122,6 +122,8 @@ graph TD
 | `CAP_DAC_READ_SEARCH` | 绕过 DAC 文件权限校验，读取其他 uid 拥有的 `/proc/<pid>/*`（这些文件通常为 mode `0400`，属主为目标进程 uid） |
 | `CAP_SYS_PTRACE` | 绕过 ptrace 访问校验，读取 `/proc/<pid>/numa_maps`、`smaps`、`maps` 等受 ptrace 保护的敏感信息 |
 
+> [!NOTE] 说明
+> 
 > 目标进程（如 qemu 虚机）与守护进程（ubturbo）属不同 uid，故需这两项能力配合才能读取受保护的 `/proc/<pid>/*`。
 
 ### 2.3 进程内安全模块收敛流程
@@ -180,8 +182,6 @@ const std::vector<std::shared_ptr<TurboModule>> g_modules = {
 | 特权精细化 | 从"完整 root"收敛为"两项只读相关能力"，符合最小权限 |
 | 双重收敛 | systemd 授权 + 进程内 capset 主动收敛，纵深防御 |
 
----
-
 ## 三、相关文件清单
 
 **新增**：
@@ -205,4 +205,4 @@ const std::vector<std::shared_ptr<TurboModule>> g_modules = {
 
 **删除**：
 
-- `build/rpm/cat.sh`
+`build/rpm/cat.sh`

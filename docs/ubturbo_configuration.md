@@ -13,7 +13,9 @@ UBTurbo 配置文件安装在 `/opt/ubturbo/conf/`。框架配置采用一行一
 | `plugin_turbo_ucache.conf`      | `plugin_turbo_ucache` | UCache          |
 | `smap/smap_strategy.conf`       | 不适用                  | SMAP 自有解析器 |
 
-除 SMAP 策略文件的周期读取机制外，不承诺配置热加载。修改后应重启 UBTurbo。
+> [!NOTE] 说明
+> 
+> 除 SMAP 策略文件的周期读取机制外，不承诺配置热加载。修改后应重启 UBTurbo。
 
 ## 主进程
 
