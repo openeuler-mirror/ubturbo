@@ -51,4 +51,8 @@ bool is_access_hugepage(void);
 u64 get_node_page_count(int node);
 void set_node_page_count(int node, u64 page_count);
 void copy_node_page_count(u64 *page_count);
+void set_swap_enable(int enable);
+bool get_swap_enable(void);
+int set_l3_cold_threshold(u32 threshold);
+u32 get_l3_cold_threshold(void);
 #endif /* _SRC_SCAN_MAIN_H */

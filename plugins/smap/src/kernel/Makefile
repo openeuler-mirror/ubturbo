@@ -8,7 +8,7 @@ smap-y += comm/acpi_helper.o comm/acpi_mem.o comm/iomem.o
 smap-y += scan/hist_ops.o scan/hist_tracking.o \
 	scan/accessed_bit.o scan/scan_ioctl.o scan/access_pid.o \
 	scan/access_mmu.o scan/scan_main.o scan/kvm_pgtable.o \
-	scan/access_tracking_wrapper.o scan/ub_hist.o
+	scan/access_tracking_wrapper.o scan/ub_hist.o scan/smap_swap.o
 smap-y += migrate/rmap.o migrate/ksm.o migrate/smap_migrate_wrapper.o \
 	migrate/smap_migrate_pages.o migrate/migrate_task.o migrate/migrate_back_ioctl.o \
 	migrate/migrate_back_debugfs.o migrate/work.o migrate/numa.o \
@@ -20,7 +20,7 @@ smap-y += migrate/ham_migration.o migrate/basic.o \
 	migrate/coherence_maintain.o migrate/ham_tasks_mgr.o
 endif
 
-ccflags-y += -I$(src)/comm -I$(src)/..
+ccflags-y += -I$(src)/comm -I$(src)/.. -I$(src)/scan -I$(src)/migrate
 ifeq ($(KERNEL_VERSION),T1)
 	ccflags-y += -DOS_VENDOR_T1
 else ifeq ($(KERNEL_VERSION),V1)

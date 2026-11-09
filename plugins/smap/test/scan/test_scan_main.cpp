@@ -19,11 +19,11 @@
 #include <linux/vmalloc.h>
 #include <linux/workqueue.h>
 
+#include "access_pid.h"
+#include "accessed_bit.h"
 #include "acpi_mem.h"
 #include "iomem.h"
 #include "scan_ioctl.h"
-#include "access_pid.h"
-#include "accessed_bit.h"
 #include "scan_main.h"
 
 using namespace std;
@@ -201,6 +201,7 @@ TEST_F(AccessTrackingTest, scan_init)
 extern "C" void release_remote_ram(void);
 extern "C" int create_scan_workqueue(void);
 extern "C" void access_print_acpi_mem(void);
+extern "C" int smap_swap_init(void);
 TEST_F(AccessTrackingTest, scan_init_two)
 {
     MOCKER(init_acpi_mem).stubs().will(returnValue(0));
@@ -219,6 +220,7 @@ TEST_F(AccessTrackingTest, scan_init_two)
     MOCKER(scan_ioctl_init).stubs().will(returnValue(0));
     MOCKER(create_scan_workqueue).stubs().will(returnValue(0));
     MOCKER(access_print_acpi_mem).stubs();
+    MOCKER(smap_swap_init).stubs().will(returnValue(0));
     int ret = scan_init();
     EXPECT_EQ(0, ret);
     list_del(&seg->node);

@@ -34,6 +34,8 @@
 #include "hist_ops.h"
 #include "hist_tracking.h"
 #include "scan_main.h"
+#include "smap_page_flags.h"
+#include "smap_swap.h"
 
 #define WORKQ_FILE_PATH_LEN 64
 #define WORKQ_FILE_BUF_LEN 512
@@ -75,6 +77,12 @@ static u64 node_page_count[MAX_NUMNODES];
 static u8 remote_scan_mode = SMAP_REMOTE_SCAN_COMBINED;
 static bool hist_inited;
 static DEFINE_MUTEX(remote_scan_mode_lock);
+
+/* swap 相关配置，由用户态配置文件经 ioctl 下发 */
+/* smap.swap.enable from config; default off: no delivery, no staging, no
+ * swap-out (zero-initialised, and made explicit here by design intent) */
+static bool swap_enable = false;
+static u32 l3_cold_threshold = DEFAULT_L3_COLD_THRESHOLD;
 
 u32 g_pagesize_huge;
 EXPORT_SYMBOL(g_pagesize_huge);
@@ -175,6 +183,51 @@ void copy_node_page_count(u64 *page_count)
 
 	for (node = 0; node < MAX_NUMNODES; node++)
 		page_count[node] = get_node_page_count(node);
+}
+
+void set_swap_enable(int enable)
+{
+	bool on = enable ? true : false;
+	bool old = READ_ONCE(swap_enable) != 0;
+
+	/*
+	 * enable -> on:  staging and swap-out resume per the cold seconds.
+	 * enable -> off: all swap activity stops; purge every pid's staged
+	 * buffer so pinned cold pages go back to the normal lifecycle,
+	 * and pending swap work short-circuits on the disabled flag.
+	 */
+	WRITE_ONCE(swap_enable, enable != 0);
+	if (old == on) {
+		return;
+	}
+	if (!on) {
+		smap_swap_free_all();
+	} else {
+		/* off->on: mid-run enablement gives every tracked VM pid a
+		 * staging buffer (pid-add only allocates when swap was on). */
+		smap_swap_alloc_all();
+	}
+	pr_info("set swap_enable to %d\n", READ_ONCE(swap_enable));
+}
+
+bool get_swap_enable(void)
+{
+	return READ_ONCE(swap_enable);
+}
+
+int set_l3_cold_threshold(u32 threshold)
+{
+	if (threshold < MIN_L3_COLD_THRESHOLD ||
+	    threshold > MAX_L3_COLD_THRESHOLD)
+		return -EINVAL;
+	l3_cold_threshold = threshold;
+	pr_info("set l3_cold_threshold to %u\n", l3_cold_threshold);
+	return 0;
+}
+
+u32 get_l3_cold_threshold(void)
+{
+	return READ_ONCE(l3_cold_threshold);
 }
 
 ktime_t calc_time_us(ktime_t start_time)
@@ -478,6 +531,12 @@ static void access_work_func(struct work_struct *work)
 	ap = delay_work_to_ap(scan_work);
 	slot = ap->slot;
 
+	/* Record the scan-window origin so cold duration can accumulate in
+	 * seconds across the rounds of this cycle (ap_cycle_cold_secs).
+	 */
+	if (ap->type == NORMAL_SCAN && ap->cur_times == 0)
+		ap->cycle_start = ktime_get();
+
 	/* slot may have been removed (access_remove_pid set REMOVING): drop the
 	 * work-ref and signal completion without scanning.
 	 */
@@ -547,6 +606,10 @@ static void access_work_func(struct work_struct *work)
 			WRITE_ONCE(ap->freq_ready, true);
 			wake_up_all(&ap->wq);
 		}
+		/* End of this pid's scan window: staged cold pages (if any)
+		 * are handed to the swap worker exactly once per window.
+		 */
+		smap_swap_notify(ap);
 		complete(&ap->work_done);
 		ap_put_slot(slot);
 	}
@@ -602,11 +665,18 @@ int scan_init(void)
 		goto err_scan_ioctl;
 	}
 
+	ret = smap_swap_init();
+	if (ret) {
+		goto err_swap_wq;
+	}
+
 	access_print_acpi_mem();
 
 	pr_info("scan subsystem initialized successfully\n");
 	return ret;
 
+err_swap_wq:
+	destroy_scan_workqueue();
 err_scan_ioctl:
 	scan_ioctl_exit();
 err_ioctl:
@@ -620,6 +690,7 @@ void scan_exit(void)
 {
 	scan_ioctl_exit();
 	destroy_scan_workqueue();
+	smap_swap_exit();
 	if (hist_inited) {
 		hist_deinit();
 		hist_inited = false;

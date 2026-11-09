@@ -47,7 +47,8 @@ struct smap_swap_buf *smap_swap_buf_create(void);
 void smap_swap_buf_free(struct smap_swap_buf *buf);
 
 /* swap disabled: release every pid's staged buffer (drop staging refs) */
-void smap_swap_purge_all(void);
+void smap_swap_free_all(void);
+void smap_swap_alloc_all(void);
 
 /*
  * hugetlb swap capability: only set by the swap-config ioctl when
