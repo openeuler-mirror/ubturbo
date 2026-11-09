@@ -34,9 +34,9 @@ typedef struct {
     MigrateDirection dir;
 } RemoteMigInfo;
 
-int SeparateStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]);
-int SeparateStrategyMultiNumaVm(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]);
+int SeparateStrategy(ProcessAttr *process, struct MigList *mlist);
+int SeparateStrategyMultiNumaVm(ProcessAttr *process, struct MigList *mlist);
 void FindThreshold(const SelectionMode mode, uint64_t nrMig, const uint32_t *buckets, int *thresholdFreq,
                    uint32_t *takeAtThreshold);
-int PairMigrationStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES]);
+int PairMigrationStrategy(ProcessAttr *process, struct MigList *mlist);
 #endif /* __SEPARATE_STRATEGY_H__ */

@@ -98,9 +98,9 @@ uint64_t GetNrFreeHugePagesByNode(int nid)
     return nr;
 }
 
-int RunStrategy(ProcessAttr *process, struct MigList mlist[MAX_NODES][MAX_NODES], size_t mlistSize)
+int RunStrategy(ProcessAttr *process, struct MigList *mlist, size_t mlistSize)
 {
-    if (mlistSize < MAX_NODES) {
+    if (mlistSize < (size_t)GetNumaCap()) {
         SMAP_LOGGER_ERROR("Miglist size is small, size:%zu.", mlistSize);
         return -EINVAL;
     }

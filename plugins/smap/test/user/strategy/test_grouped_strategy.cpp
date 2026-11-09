@@ -7,8 +7,9 @@
 #include "mockcpp/mokc.h"
 
 #include "manage/manage.h"
-#include "strategy/grouped_strategy.h"
+#include "manage/node_matrix.h"
 #include "strategy/strategy.h"
+#include "strategy/grouped_strategy.h"
 #include "strategy/strategy_config.h"
 
 class GroupedStrategyTest : public ::testing::Test {
@@ -19,21 +20,30 @@ protected:
     }
 };
 
-static void FreeMigList(struct MigList mlist[MAX_NODES][MAX_NODES])
+/* cap=1024 时 mlist 全矩阵约 50MB，超出栈预算；gtest 用例串行执行，共用 BSS 数组 */
+static struct MigList g_testMlist[SMAP_MAX_NUMNODES][SMAP_MAX_NUMNODES];
+
+static struct MigList *TestMlist(void)
 {
-    for (int i = 0; i < MAX_NODES; i++) {
-        for (int j = 0; j < MAX_NODES; j++) {
-            free(mlist[i][j].addr);
-            mlist[i][j].addr = nullptr;
+    (void)memset(g_testMlist, 0, sizeof(g_testMlist));
+    return &g_testMlist[0][0];
+}
+
+static void FreeMigList(struct MigList *mlist)
+{
+    for (int i = 0; i < SMAP_MAX_NUMNODES; i++) {
+        for (int j = 0; j < SMAP_MAX_NUMNODES; j++) {
+            free(NM_AT(mlist, i, j).addr);
+            NM_AT(mlist, i, j).addr = nullptr;
         }
     }
 }
 
-static void ExpectMigListEmpty(struct MigList mlist[MAX_NODES][MAX_NODES])
+static void ExpectMigListEmpty(struct MigList *mlist)
 {
-    for (int i = 0; i < MAX_NODES; i++) {
-        for (int j = 0; j < MAX_NODES; j++) {
-            EXPECT_EQ(0, mlist[i][j].nr);
+    for (int i = 0; i < SMAP_MAX_NUMNODES; i++) {
+        for (int j = 0; j < SMAP_MAX_NUMNODES; j++) {
+            EXPECT_EQ(0, NM_AT(mlist, i, j).nr);
         }
     }
 }
@@ -41,7 +51,7 @@ static void ExpectMigListEmpty(struct MigList mlist[MAX_NODES][MAX_NODES])
 TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsDemoteByLocalLimitAndQuota)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData localPages[3] = {};
 
     process.pid = 100;
@@ -72,7 +82,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsDemoteByLocalLimitAndQuota)
 TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsPromoteByLocalDeficit)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData localPages[1] = {};
     ActcData remotePages[2] = {};
 
@@ -106,7 +116,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsPromoteByLocalDeficit)
 TEST_F(GroupedStrategyTest, TestGroupedStrategySyncRemoteUsedPagesWithoutPromote)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData localPages[1] = {};
     ActcData remotePages[2] = {};
 
@@ -140,7 +150,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySyncRemoteUsedPagesWithoutPromote
 TEST_F(GroupedStrategyTest, TestGroupedStrategySyncRemoteUsedPagesAllowsOverQuotaWithoutPromote)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData remotePages[3] = {};
 
     process.pid = 114;
@@ -171,7 +181,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySyncRemoteUsedPagesAllowsOverQuot
 TEST_F(GroupedStrategyTest, TestGroupedStrategySyncSharedTargetUsedPagesByQuotaWithoutPromote)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData remotePages[4] = {};
 
     process.pid = 115;
@@ -210,7 +220,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySyncSharedTargetUsedPagesByQuotaW
 TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsPromoteWhenAnyLocalBelowReserve)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData local0[1] = {};
     ActcData local1[3] = {};
     ActcData remotePages[2] = {};
@@ -248,7 +258,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsPromoteWhenAnyLocalBelowRese
 TEST_F(GroupedStrategyTest, TestGroupedStrategyLocalDeficitSkipsSingleDirectionMigration)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData local0[1] = {};
     ActcData local1[3] = {};
 
@@ -283,7 +293,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategyLocalDeficitSkipsSingleDirectionM
 TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsDemoteFromLocalAboveReserve)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData local0[1] = {};
     ActcData local1[3] = {};
 
@@ -319,7 +329,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsDemoteFromLocalAboveReserve)
 TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsPromoteForLargerLocalDeficit)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData remotePages[2] = {};
 
     process.pid = 109;
@@ -351,7 +361,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsPromoteForLargerLocalDeficit
 TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsPromoteGroupDeficitOrdering)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData remote4[1] = {};
     ActcData remote5[1] = {};
 
@@ -417,7 +427,7 @@ TEST_F(GroupedStrategyTest, TestUpdateGroupedMigrationResult)
 TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsLocalRebalanceAfterPromote)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData local0[4] = {};
     ActcData local1[1] = {};
     ActcData remotePages[1] = {};
@@ -458,7 +468,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySkipsLocalRebalanceAfterPromote)
 TEST_F(GroupedStrategyTest, TestGroupedStrategySwapAfterStableRounds)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData localPages[2] = {};
     ActcData remotePages[2] = {};
 
@@ -489,8 +499,8 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapAfterStableRounds)
     MOCKER(GetGroupSwapLocalWatermarkRatioConfig).stubs().will(returnValue((uint32_t)100));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[0][4].nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).nr);
 
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
     MOCKER(GetGroupSwapRatioConfig).stubs().will(returnValue((uint32_t)5));
@@ -498,14 +508,14 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapAfterStableRounds)
     MOCKER(GetGroupSwapMinFreqGainConfig).stubs().will(returnValue((uint32_t)0));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[0][4].nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).nr);
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(1, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[4][0].addr[0]);
-    EXPECT_EQ(1, mlist[0][4].nr);
-    EXPECT_EQ(0, mlist[0][4].addr[0]);
+    EXPECT_EQ(1, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).addr[0]);
+    EXPECT_EQ(1, NM_AT(mlist, 0, 4).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).addr[0]);
 
     FreeMigList(mlist);
 }
@@ -513,7 +523,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapAfterStableRounds)
 TEST_F(GroupedStrategyTest, TestGroupedStrategySwapUsesLocalWatermarkRatio)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData localPages[95] = {};
     ActcData remotePages[1] = {};
 
@@ -544,8 +554,8 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapUsesLocalWatermarkRatio)
     MOCKER(GetGroupSwapLocalWatermarkRatioConfig).stubs().will(returnValue((uint32_t)95));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[0][4].nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).nr);
 
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)10));
     MOCKER(GetGroupSwapRatioConfig).stubs().will(returnValue((uint32_t)5));
@@ -553,14 +563,14 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapUsesLocalWatermarkRatio)
     MOCKER(GetGroupSwapMinFreqGainConfig).stubs().will(returnValue((uint32_t)0));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[0][4].nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).nr);
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(1, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[4][0].addr[0]);
-    EXPECT_EQ(1, mlist[0][4].nr);
-    EXPECT_EQ(0, mlist[0][4].addr[0]);
+    EXPECT_EQ(1, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).addr[0]);
+    EXPECT_EQ(1, NM_AT(mlist, 0, 4).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).addr[0]);
 
     FreeMigList(mlist);
 }
@@ -568,7 +578,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapUsesLocalWatermarkRatio)
 TEST_F(GroupedStrategyTest, TestGroupedStrategySwapWaitsForStableTotalPages)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData localPages[2] = {};
     ActcData remotePages[2] = {};
 
@@ -603,23 +613,23 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapWaitsForStableTotalPages)
     MOCKER(GetGroupSwapMinFreqGainConfig).stubs().will(returnValue((uint32_t)0));
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[0][4].nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).nr);
 
     process.scanAttr.actcLen[4] = 2;
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[0][4].nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).nr);
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[0][4].nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).nr);
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(1, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[4][0].addr[0]);
-    EXPECT_EQ(1, mlist[0][4].nr);
-    EXPECT_EQ(0, mlist[0][4].addr[0]);
+    EXPECT_EQ(1, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).addr[0]);
+    EXPECT_EQ(1, NM_AT(mlist, 0, 4).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).addr[0]);
 
     FreeMigList(mlist);
 }
@@ -627,7 +637,7 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapWaitsForStableTotalPages)
 TEST_F(GroupedStrategyTest, TestGroupedStrategySwapBelowLocalWatermarkRatio)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData localPages[94] = {};
     ActcData remotePages[1] = {};
 
@@ -653,14 +663,14 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapBelowLocalWatermarkRatio)
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[0][4].nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).nr);
 }
 
 TEST_F(GroupedStrategyTest, TestGroupedStrategySwapDisabled)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData localPages[1] = {};
     ActcData remotePages[1] = {};
 
@@ -687,14 +697,14 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapDisabled)
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[0][4].nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).nr);
 }
 
 TEST_F(GroupedStrategyTest, TestGroupedStrategySwapFrozen)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData localPages[1] = {};
     ActcData remotePages[1] = {};
 
@@ -720,14 +730,14 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapFrozen)
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[0][4].nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).nr);
 }
 
 TEST_F(GroupedStrategyTest, TestGroupedStrategySwapSkipsSharedTarget)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData localPages0[1] = {};
     ActcData localPages1[1] = {};
     ActcData remotePages[1] = {};
@@ -763,14 +773,14 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapSkipsSharedTarget)
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[0][4].nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).nr);
 }
 
 TEST_F(GroupedStrategyTest, TestGroupedStrategySwapRequiresHotColdGap)
 {
     ProcessAttr process = {};
-    struct MigList mlist[MAX_NODES][MAX_NODES] = {};
+    struct MigList *mlist = TestMlist();
     ActcData localPages[1] = {};
     ActcData remotePages[1] = {};
 
@@ -804,6 +814,6 @@ TEST_F(GroupedStrategyTest, TestGroupedStrategySwapRequiresHotColdGap)
 
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
     EXPECT_EQ(0, GroupedMigrationStrategy(&process, mlist));
-    EXPECT_EQ(0, mlist[4][0].nr);
-    EXPECT_EQ(0, mlist[0][4].nr);
+    EXPECT_EQ(0, NM_AT(mlist, 4, 0).nr);
+    EXPECT_EQ(0, NM_AT(mlist, 0, 4).nr);
 }

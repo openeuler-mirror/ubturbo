@@ -659,27 +659,29 @@ int BuildAllPairPlans(struct ProcessManager *manager, PairPlan plans[], size_t p
     return ret;
 }
 
-static void FreeMigList(struct MigList mList[MAX_NODES][MAX_NODES])
+static void FreeMigList(struct MigList *mList)
 {
-    for (int from = 0; from < MAX_NODES; from++) {
-        for (int to = 0; to < MAX_NODES; to++) {
-            if (mList[from][to].addr) {
-                free(mList[from][to].addr);
-                mList[from][to].addr = NULL;
+    int cap = (int)GetNumaCap();
+    for (int from = 0; from < cap; from++) {
+        for (int to = 0; to < cap; to++) {
+            if (NM_AT(mList, from, to).addr) {
+                free(NM_AT(mList, from, to).addr);
+                NM_AT(mList, from, to).addr = NULL;
             }
         }
     }
 }
 
-static void StrategyInitMigList(struct MigList mList[MAX_NODES][MAX_NODES], int pid)
+static void StrategyInitMigList(struct MigList *mList, int pid)
 {
-    for (int from = 0; from < MAX_NODES; from++) {
-        for (int to = 0; to < MAX_NODES; to++) {
-            mList[from][to].nr = 0;
-            mList[from][to].pid = pid;
-            mList[from][to].from = from;
-            mList[from][to].to = to;
-            mList[from][to].addr = NULL;
+    int cap = (int)GetNumaCap();
+    for (int from = 0; from < cap; from++) {
+        for (int to = 0; to < cap; to++) {
+            NM_AT(mList, from, to).nr = 0;
+            NM_AT(mList, from, to).pid = pid;
+            NM_AT(mList, from, to).from = from;
+            NM_AT(mList, from, to).to = to;
+            NM_AT(mList, from, to).addr = NULL;
         }
     }
 }
@@ -690,6 +692,7 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
     if (ret) {
         return ret;
     }
+    int cap = (int)GetNumaCap();
     uint32_t nodes = process->numaAttr.numaNodes;
     int offset = LOCAL_NUMA_BITS - GetNrLocalNuma();
     for (int i = LOCAL_NUMA_BITS; i < MAX_NODES; i++) {
@@ -710,12 +713,18 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
         SMAP_LOGGER_ERROR("migratePage is null.");
         return -EINVAL;
     }
-    struct MigList migList[MAX_NODES][MAX_NODES];
+    struct MigList *migList = NULL;
+    /* 扁平 cap × cap 矩阵（列跨度 = cap），cap=256 时由 50MB 降至 ~3MB */
+    migList = calloc(NM_COUNT(cap), sizeof(struct MigList));
+    if (!migList) {
+        return -ENOMEM;
+    }
     StrategyInitMigList(migList, process->pid);
-    ret = RunStrategy(process, migList, MAX_NODES);
+    ret = RunStrategy(process, migList, (size_t)cap);
     if (ret) {
         SMAP_LOGGER_ERROR("Run strategy for pid %d failed: %d.", process->pid, ret);
         FreeMigList(migList);
+        free(migList);
         return ret;
     }
 
@@ -726,8 +735,8 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
        first-active scan co-schedules migrate-back into L with migrate-out
        from L, avoiding a local node being filled without being freed. */
     for (int L = 0; L < nrLocalNuma; L++) {
-        for (int R = nrLocalNuma; R < nrLocalNuma + REMOTE_NUMA_NUM; R++) {
-            struct MigList *cells[2] = { &migList[R][L], &migList[L][R] }; /* back into L, out from L */
+        for (int R = nrLocalNuma; R < cap; R++) {
+            struct MigList *cells[2] = { &NM_AT(migList, R, L), &NM_AT(migList, L, R) }; /* back into L, out from L */
             for (int c = 0; c < 2; c++) {
                 if (!cells[c]->nr) {
                     continue;
@@ -736,6 +745,7 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
                 if (ret == -ENOSPC) {
                     SMAP_LOGGER_WARNING("Pid %d migration list is deferred by kernel entry limit.", process->pid);
                     FreeMigList(migList);
+                    free(migList);
                     *migratePage += nrMigTotal;
                     return 0;
                 }
@@ -743,6 +753,7 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
                     SMAP_LOGGER_ERROR("Pid %d AddMigList %d %d failed: %d.", process->pid, cells[c]->from, cells[c]->to,
                                       ret);
                     FreeMigList(migList);
+                    free(migList);
                     return ret;
                 }
                 nrMigTotal += cells[c]->nr;
@@ -751,6 +762,7 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
         }
     }
     FreeMigList(migList);
+    free(migList);
     *migratePage = *migratePage + nrMigTotal;
     SMAP_LOGGER_DEBUG("Pid %d migList len %llu.", process->pid, nrMigTotal);
     return 0;
