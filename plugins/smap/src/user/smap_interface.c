@@ -142,13 +142,16 @@ static bool IsPageTypeConsistent(int pageType)
 }
 
 /*
- * 本期不支持 4K 虚机与 2M 普通进程：pid 身份须与全局页大小匹配（VM 仅 2M / PROCESS 仅 4K）。
+ * 2M 模式仅支持虚机；4K 模式支持普通进程与虚机（4K 虚机已支持）。2M 普通进程本期仍不支持。
  * IsPidUsingHugePages != IsHugeMode 只拦页大小不匹配，拦不住「页大小匹配但身份与页大小组合本期不支持」，
  * 故补此身份-模式一致性校验。
  */
 static bool IsPidTypeCompatibleWithMode(int pidType)
 {
-    return IsHugeMode() ? (pidType == VM_TYPE) : (pidType == PROCESS_TYPE);
+    if (pidType == VM_TYPE) {
+        return true;
+    }
+    return !IsHugeMode() && pidType == PROCESS_TYPE;
 }
 
 static bool IsLocalNidValid(int nid)
@@ -485,7 +488,7 @@ static int CheckMigrateOutMsg(struct MigrateOutMsg *msg, int pageType)
         }
         if (!IsPidTypeCompatibleWithMode(pidType)) {
             SMAP_LOGGER_ERROR("migrate out pid %d type %d not allowed in current page mode "
-                              "(4K VM and 2M process unsupported).",
+                              "(2M process unsupported).",
                               msg->payload[i].pid, pidType);
             return -EINVAL;
         }
@@ -2151,8 +2154,14 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
         }
         if (scanType != STATISTIC_SCAN && !IsPidTypeCompatibleWithMode(pidTypeDetected)) {
             SMAP_LOGGER_ERROR("pid %d type %d not allowed in current page mode "
-                              "(4K VM and 2M process unsupported).",
+                              "(2M process unsupported).",
                               pidArr[i], pidTypeDetected);
+            free(payload);
+            PutProcessAttr(attr);
+            return -EINVAL;
+        }
+        if (scanType == STATISTIC_SCAN && pidTypeDetected == VM_TYPE && !IsHugeMode()) {
+            SMAP_LOGGER_ERROR("pid %d type %d 4K vm statistic scan unsupported.", pidArr[i], pidTypeDetected);
             free(payload);
             PutProcessAttr(attr);
             return -EINVAL;
@@ -2177,8 +2186,9 @@ int ubturbo_smap_process_tracking_add(pid_t *pidArr, uint32_t *scanTime, uint32_
         SMAP_LOGGER_ERROR("Smap isn't running, add process tracking failed.");
         return -EPERM;
     }
-    if (!IsHugeMode() && scanType != STATISTIC_SCAN) {
-        SMAP_LOGGER_ERROR("Smap Add Process Tracking non-statistic scan requires huge mode, scanType %d.", scanType);
+    /* HAM 扫描依赖硬件访问监控，仅适用于 2M 虚机；4K 模式不支持。 */
+    if (!IsHugeMode() && scanType == HAM_SCAN) {
+        SMAP_LOGGER_ERROR("Smap Add Process Tracking HAM scan requires huge mode, scanType %d.", scanType);
         return -EINVAL;
     }
     ret = CheckAddProcessTrackingMsg(pidArr, scanTime, duration, len, scanType);

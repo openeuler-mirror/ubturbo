@@ -57,6 +57,11 @@ unsigned long page_to_pfn(struct page *page)
 	return 0;
 }
 
+phys_addr_t page_to_phys(struct page *page)
+{
+	return 0;
+}
+
 bool PageAnon(struct page *page)
 {
         return true;

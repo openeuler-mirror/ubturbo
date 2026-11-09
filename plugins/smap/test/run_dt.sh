@@ -41,7 +41,7 @@ replace_string() {
             return 0
         fi
     fi
-    
+
     sed -i "s/\b$search_string\b/$replace_string/g" "$filename"
 }
 
@@ -146,13 +146,13 @@ then
     git apply mockcpp_support_arm64.patch
 fi
 cd $CURRENT_PATH/build
- 
+
 N_CPUS=$(grep processor /proc/cpuinfo | wc -l)
 echo "$N_CPUS processors detected."
- 
+
 CMAKE_CMD="cmake -DCMAKE_BUILD_TYPE=Debug $CURRENT_PATH"
 BUILD_CMD="make -j $((N_CPUS-2))"
- 
+
 echo $CMAKE_CMD
 $CMAKE_CMD || {
     echo "Failed to configure smap_dt build!"

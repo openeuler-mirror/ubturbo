@@ -36,17 +36,21 @@ inline bool operator==(const pagemap_entry_t &a, const pagemap_entry_t &b)
 class AccessMMUTest : public ::testing::Test {
 protected:
     int saved_nr_local_numa;
+    u32 saved_g_pagesize_huge;
     void SetUp() override
     {
         cout << "[Phase SetUp Begin]" << endl;
         saved_nr_local_numa = nr_local_numa;
         nr_local_numa = 4;
+        saved_g_pagesize_huge = g_pagesize_huge;
+        g_pagesize_huge = PMD_SIZE;
         cout << "[Phase SetUp End]" << endl;
     }
     void TearDown() override
     {
         cout << "[Phase TearDown Begin]" << endl;
         nr_local_numa = saved_nr_local_numa;
+        g_pagesize_huge = saved_g_pagesize_huge;
         GlobalMockObject::verify();
         cout << "[Phase TearDown End]" << endl;
     }
@@ -59,111 +63,161 @@ TEST_F(AccessMMUTest, MakePME)
     EXPECT_EQ(1, entry.pme);
 }
 
-extern "C" int calc_paddr_acidx(u64 paddr, struct access_pid *ap, int *nid, u64 *index);
-extern "C" bool is_paddr_local(u64 pa);
-extern "C" int remote_ram_snapshot_paddr_acidx(const struct remote_ram_snapshot *snapshot, u64 pa, int *nid,
-                                                  u64 *index, int page_size);
-TEST_F(AccessMMUTest, CalcPaddrACidx)
-{
-    MOCKER(is_access_hugepage).stubs().will(returnValue(true));
-    MOCKER(is_paddr_local).stubs().will(returnValue(false));
-    MOCKER(remote_ram_snapshot_paddr_acidx).stubs().will(returnValue(0));
-
-    struct access_pid ap = {};
-    int nid = 0;
-    u64 index = 1;
-    calc_paddr_acidx((u64)0x00005000, &ap, &nid, &index);
-    EXPECT_EQ(0, nid);
-    EXPECT_EQ(1, index);
-}
-
-extern "C" int calc_paddr_acidx_acpi(u64 paddr, int *nid, u64 *index, int page_size);
-TEST_F(AccessMMUTest, CalcPaddrACidxTwo)
-{
-    int nid;
-    u64 index;
-    MOCKER(is_access_hugepage).stubs().will(returnValue(true));
-    MOCKER(is_paddr_local).stubs().will(returnValue(true));
-    MOCKER(calc_paddr_acidx_acpi).stubs().will(returnValue(0));
-
-    nid = 0;
-    index = 1;
-    struct access_pid ap = {};
-    int ret = calc_paddr_acidx((u64)0x00005000, &ap, &nid, &index);
-    EXPECT_EQ(0, ret);
-}
-
-static int fake_calc_paddr_acidx(u64 paddr, struct access_pid *ap, int *nid, u64 *index)
-{
-    *nid = 0;
-    *index = 1;
-    return 0;
-}
-
 extern "C" bool pfn_valid(unsigned long pfn);
 extern "C" struct page *pfn_to_online_page(unsigned long pfn);
 extern "C" int PageHuge(struct page *page);
 extern "C" bool PageAnon(struct page *page);
 
-extern "C" int add_to_bm_page(u64 paddr, struct access_pid *ap);
-TEST_F(AccessMMUTest, AddToBMPage)
+extern "C" int add_to_bm_page(u64 paddr, struct page *page, struct access_pid *ap);
+TEST_F(AccessMMUTest, AddToBMPageLocalNuma)
 {
-    MOCKER(calc_paddr_acidx).stubs().will(invoke(fake_calc_paddr_acidx));
+    u64 acidx = 1;
+    MOCKER(is_access_hugepage).stubs().will(returnValue(false));
+    MOCKER(page_to_nid).stubs().will(returnValue(0)); // nid=0, local NUMA
+    MOCKER(calc_paddr_acidx_acpi_known_nid)
+        .stubs()
+        .with(any(), any(), outBoundP(&acidx, sizeof(acidx)), any())
+        .will(returnValue(0));
 
     int ret = 0;
     struct access_pid ap = {};
     ap.bm_len[0] = 2;
     ap.paddr_bm[0] = (unsigned long *)malloc(sizeof(unsigned long) * 2);
+    struct page page = {};
 
-    /* set_non_anon_bm removed; no longer needed in add_to_bm_page path */
-    ret = add_to_bm_page((u64)0x00005000, &ap);
+    ret = add_to_bm_page((u64)0x00005000, &page, &ap);
     EXPECT_EQ(0, ret);
 
     free(ap.paddr_bm[0]);
 }
 
-TEST_F(AccessMMUTest, AddToBMPageTwo)
+TEST_F(AccessMMUTest, AddToBMPageRemoteNuma)
 {
+    u64 acidx = 1;
+    MOCKER(is_access_hugepage).stubs().will(returnValue(false));
+    MOCKER(page_to_nid).stubs().will(returnValue(4)); // nid=4, remote NUMA
+    MOCKER(remote_ram_snapshot_paddr_acidx_known_nid)
+        .stubs()
+        .with(any(), any(), any(), outBoundP(&acidx, sizeof(acidx)), any())
+        .will(returnValue(0));
+
     int ret = 0;
     struct access_pid ap = {};
+    ap.bm_len[4] = 2;
+    ap.paddr_bm[4] = (unsigned long *)malloc(sizeof(unsigned long) * 2);
+    struct page page = {};
 
-    MOCKER(calc_paddr_acidx).stubs().will(returnValue(1));
-    ret = add_to_bm_page((u64)0x00005000, &ap);
+    ret = add_to_bm_page((u64)0x00005000, &page, &ap);
+    EXPECT_EQ(0, ret);
+
+    free(ap.paddr_bm[4]);
+}
+
+TEST_F(AccessMMUTest, AddToBMPageCalcFail)
+{
+    MOCKER(is_access_hugepage).stubs().will(returnValue(false));
+    MOCKER(page_to_nid).stubs().will(returnValue(0));
+    MOCKER(calc_paddr_acidx_acpi_known_nid).stubs().will(returnValue(1));
+
+    int ret = 0;
+    struct access_pid ap = {};
+    struct page page = {};
+    ret = add_to_bm_page((u64)0x00005000, &page, &ap);
     EXPECT_EQ(1, ret);
-
-    free(ap.paddr_bm[L1]);
 }
 
 extern "C" void set_pa_prior(struct access_pid *ap, u64 vaddr);
-extern "C" int add_to_bm_hugepage(u64 vaddr, u64 paddr, struct access_pid *ap);
-TEST_F(AccessMMUTest, AddToBmHugepage)
+
+TEST_F(AccessMMUTest, AddToBMPageNumaNoNode)
 {
-    MOCKER(calc_paddr_acidx).stubs().will(invoke(fake_calc_paddr_acidx));
+    MOCKER(is_access_hugepage).stubs().will(returnValue(false));
+    MOCKER(page_to_nid).stubs().will(returnValue(NUMA_NO_NODE));
+
+    struct access_pid ap = {};
+    struct page page = {};
+    int ret = add_to_bm_page((u64)0x00005000, &page, &ap);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
+extern "C" int add_to_bm_hugepage(u64 vaddr, struct page *page, struct access_pid *ap);
+extern "C" int page_to_nid(const struct page *page);
+extern "C" int calc_paddr_acidx_acpi_known_nid(u64 paddr, int nid, u64 *index, int page_size);
+extern "C" int remote_ram_snapshot_paddr_acidx_known_nid(const struct remote_ram_snapshot *snapshot, u64 pa,
+                                                         int nid, u64 *index, int page_size);
+
+TEST_F(AccessMMUTest, AddToBmHugepageLocalNuma)
+{
+    u64 acidx = 1;
+    MOCKER(is_access_hugepage).stubs().will(returnValue(true));
+    MOCKER(page_to_nid).stubs().will(returnValue(0)); // nid=0, local NUMA
+    MOCKER(calc_paddr_acidx_acpi_known_nid)
+        .stubs()
+        .with(any(), any(), outBoundP(&acidx, sizeof(acidx)), any())
+        .will(returnValue(0));
 
     int ret = 0;
     struct access_pid ap = {};
     ap.bm_len[0] = 2;
-    /* paddr_bm 必须清零：计数路径依赖 bit 初值为 0 */
     ap.paddr_bm[0] = (unsigned long *)calloc(2, sizeof(unsigned long));
-    ret = add_to_bm_hugepage((u64)0x00005000, 0, &ap);
+    struct page page = {};
+
+    ret = add_to_bm_hugepage((u64)0x00005000, &page, &ap);
     EXPECT_EQ(0, ret);
     EXPECT_EQ((size_t)1, ap.page_num[0]);
 
-    ret = add_to_bm_hugepage((u64)0x00005000, 0, &ap);
+    ret = add_to_bm_hugepage((u64)0x00005000, &page, &ap);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ((size_t)1, ap.page_num[0]); /* same PA counted once */
+    EXPECT_EQ((size_t)1, ap.page_num[0]); // same PA counted once
 }
 
-TEST_F(AccessMMUTest, AddToBmHugepageTwo)
+TEST_F(AccessMMUTest, AddToBmHugepageRemoteNuma)
 {
+    u64 acidx = 1;
+    MOCKER(is_access_hugepage).stubs().will(returnValue(true));
+    MOCKER(page_to_nid).stubs().will(returnValue(4)); // nid=4, remote NUMA (>= nr_local_numa=4)
+    MOCKER(remote_ram_snapshot_paddr_acidx_known_nid)
+        .stubs()
+        .with(any(), any(), any(), outBoundP(&acidx, sizeof(acidx)), any())
+        .will(returnValue(0));
+
+    int ret = 0;
+    struct access_pid ap = {};
+    ap.bm_len[4] = 2;
+    ap.paddr_bm[4] = (unsigned long *)calloc(2, sizeof(unsigned long));
+    struct page page = {};
+
+    ret = add_to_bm_hugepage((u64)0x00005000, &page, &ap);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ((size_t)1, ap.page_num[4]);
+    free(ap.paddr_bm[4]);
+}
+
+TEST_F(AccessMMUTest, AddToBmHugepageCalcFail)
+{
+    MOCKER(is_access_hugepage).stubs().will(returnValue(true));
+    MOCKER(page_to_nid).stubs().will(returnValue(0));
+    MOCKER(calc_paddr_acidx_acpi_known_nid).stubs().will(returnValue(-1));
+
     int ret = 0;
     struct access_pid ap = {};
     ap.bm_len[L1] = 2;
     ap.paddr_bm[L1] = (unsigned long *)malloc(sizeof(unsigned long) * 2);
+    struct page page = {};
 
-    MOCKER(calc_paddr_acidx).stubs().will(returnValue(1));
-    ret = add_to_bm_hugepage((u64)0x00005000, 0, &ap);
-    EXPECT_EQ(1, ret);
+    ret = add_to_bm_hugepage((u64)0x00005000, &page, &ap);
+    EXPECT_EQ(-1, ret);
+    free(ap.paddr_bm[L1]);
+}
+
+TEST_F(AccessMMUTest, AddToBmHugepageNumaNoNode)
+{
+    MOCKER(is_access_hugepage).stubs().will(returnValue(true));
+    MOCKER(page_to_nid).stubs().will(returnValue(NUMA_NO_NODE));
+
+    struct access_pid ap = {};
+    struct page page = {};
+    int ret = add_to_bm_hugepage((u64)0x00005000, &page, &ap);
+    EXPECT_EQ(-EINVAL, ret);
 }
 
 extern "C" int calc_vaddr_acidx(u64 vaddr, struct vm_mapping_info *info, u64 *acidx);
@@ -243,7 +297,7 @@ TEST_F(AccessMMUTest, HugePageReadyForMigrate)
 }
 
 extern "C" int add_to_bm(unsigned long vaddr, pagemap_entry_t *pme, struct pagemapread *pm);
-extern "C" void add_to_bm_huge(u64 vaddr, u64 paddr, struct access_pid *ap);
+extern "C" void add_to_bm_huge(u64 vaddr, struct page *page, struct access_pid *ap);
 TEST_F(AccessMMUTest, AddToBM)
 {
     MOCKER(is_access_hugepage).stubs().will(returnValue(true));

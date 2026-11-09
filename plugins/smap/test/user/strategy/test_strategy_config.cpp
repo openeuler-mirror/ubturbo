@@ -938,3 +938,111 @@ TEST_F(PeriodConfigTest, ConfigMigratePeriodTest)
     EXPECT_EQ(0, ret);
     EXPECT_EQ(1234, g_tmpStrategyConfig.migratePeriod);
 }
+
+extern "C" bool GetSwapEnableConfig(void);
+TEST_F(PeriodConfigTest, GetSwapEnableConfigTest)
+{
+    g_strategyConfig.swapEnable = true;
+    bool ret = GetSwapEnableConfig();
+    EXPECT_EQ(true, ret);
+    g_strategyConfig.swapEnable = false;
+    ret = GetSwapEnableConfig();
+    EXPECT_EQ(false, ret);
+}
+
+extern "C" uint32_t GetL3ColdThresholdConfig(void);
+TEST_F(PeriodConfigTest, GetL3ColdThresholdConfigTest)
+{
+    g_strategyConfig.l3ColdThreshold = 30;
+    uint32_t ret = GetL3ColdThresholdConfig();
+    EXPECT_EQ(30, ret);
+    g_strategyConfig.l3ColdThreshold = 62;
+    ret = GetL3ColdThresholdConfig();
+    EXPECT_EQ(62, ret);
+}
+
+extern "C" int32_t ConfigSwapEnable(char *substr, char *value);
+TEST_F(PeriodConfigTest, ConfigSwapEnableValidTrue)
+{
+    char *substr = "smap.swap.enable";
+    char *value = "true";
+    g_tmpStrategyConfig.swapEnable = false;
+    int32_t ret = ConfigSwapEnable(substr, value);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(true, g_tmpStrategyConfig.swapEnable);
+    g_tmpStrategyConfig.swapEnable = false;
+}
+
+TEST_F(PeriodConfigTest, ConfigSwapEnableValidFalse)
+{
+    char *substr = "smap.swap.enable";
+    char *value = "false";
+    g_tmpStrategyConfig.swapEnable = true;
+    int32_t ret = ConfigSwapEnable(substr, value);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(false, g_tmpStrategyConfig.swapEnable);
+}
+
+TEST_F(PeriodConfigTest, ConfigSwapEnableInvalid)
+{
+    char *substr = "smap.swap.enable";
+    char *value = "invalid";
+    int32_t ret = ConfigSwapEnable(substr, value);
+    EXPECT_EQ(RETURN_ERROR, ret);
+}
+
+extern "C" int32_t ConfigL3ColdThreshold(char *substr, char *value);
+TEST_F(PeriodConfigTest, ConfigL3ColdThresholdValid)
+{
+    char *substr = "smap.l3.cold.threshold";
+    char *value = "30";
+    g_tmpStrategyConfig.l3ColdThreshold = 0;
+    int32_t ret = ConfigL3ColdThreshold(substr, value);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(30, g_tmpStrategyConfig.l3ColdThreshold);
+}
+
+TEST_F(PeriodConfigTest, ConfigL3ColdThresholdMinBoundary)
+{
+    char *substr = "smap.l3.cold.threshold";
+    char *value = "1";
+    g_tmpStrategyConfig.l3ColdThreshold = 0;
+    int32_t ret = ConfigL3ColdThreshold(substr, value);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, g_tmpStrategyConfig.l3ColdThreshold);
+}
+
+TEST_F(PeriodConfigTest, ConfigL3ColdThresholdMaxBoundary)
+{
+    char *substr = "smap.l3.cold.threshold";
+    char *value = "62";
+    g_tmpStrategyConfig.l3ColdThreshold = 0;
+    int32_t ret = ConfigL3ColdThreshold(substr, value);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(62, g_tmpStrategyConfig.l3ColdThreshold);
+}
+
+TEST_F(PeriodConfigTest, ConfigL3ColdThresholdBelowMin)
+{
+    char *substr = "smap.l3.cold.threshold";
+    char *value = "0";
+    int32_t ret = ConfigL3ColdThreshold(substr, value);
+    EXPECT_EQ(RETURN_ERROR, ret);
+}
+
+TEST_F(PeriodConfigTest, ConfigL3ColdThresholdAboveMax)
+{
+    char *substr = "smap.l3.cold.threshold";
+    char *value = "63";
+    int32_t ret = ConfigL3ColdThreshold(substr, value);
+    EXPECT_EQ(RETURN_ERROR, ret);
+}
+
+TEST_F(PeriodConfigTest, ConfigL3ColdThresholdReadFail)
+{
+    char *substr = "smap.l3.cold.threshold";
+    char *value = "abc";
+    MOCKER(ConfigReadValueToInt).stubs().will(returnValue(-1));
+    int32_t ret = ConfigL3ColdThreshold(substr, value);
+    EXPECT_EQ(RETURN_ERROR, ret);
+}

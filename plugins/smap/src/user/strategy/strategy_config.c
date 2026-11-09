@@ -67,6 +67,10 @@
 #define DEFAULT_REMOTE_SCAN_MODE 1 /* soft+hard */
 #define MIN_REMOTE_SCAN_MODE 0
 
+#define MAX_L3_COLD_THRESHOLD 62
+#define DEFAULT_L3_COLD_THRESHOLD 30
+#define MIN_L3_COLD_THRESHOLD 1
+
 #define RADIX_10 10UL
 
 #define SYS_CPU_POSSIBLE "/sys/devices/system/cpu/possible"
@@ -276,6 +280,67 @@ bool GetRemoteScanModeChanged(void)
 void SetRemoteScanModeChanged(bool val)
 {
     g_strategyConfig.remoteScanModeChanged = val;
+}
+
+bool GetSwapEnableConfig(void)
+{
+    return g_strategyConfig.swapEnable;
+}
+
+uint32_t GetL3ColdThresholdConfig(void)
+{
+    return g_strategyConfig.l3ColdThreshold;
+}
+
+bool GetSwapEnableChanged(void)
+{
+    return g_strategyConfig.swapEnableChanged;
+}
+
+void SetSwapEnableChanged(bool val)
+{
+    g_strategyConfig.swapEnableChanged = val;
+}
+
+bool GetL3ColdThresholdChanged(void)
+{
+    return g_strategyConfig.l3ColdThresholdChanged;
+}
+
+void SetL3ColdThresholdChanged(bool val)
+{
+    g_strategyConfig.l3ColdThresholdChanged = val;
+}
+
+/*
+ * Kernel hugetlb-swap support is a property of the running kernel; it shows
+ * up as a HugePages_Swap row in /proc/meminfo. Probed once at init time so
+ * the swap-config ioctl delivers the capability to the kernel.
+ */
+#define MEMINFO_PATH "/proc/meminfo"
+static bool DetectHugetlbSwapSupport(void)
+{
+    FILE *fp = fopen(MEMINFO_PATH, "r");
+    char line[256];
+    bool supported = false;
+
+    if (fp == NULL) {
+        SMAP_LOGGER_WARNING("Read %s failed, hugetlb swap disabled.", MEMINFO_PATH);
+        return false;
+    }
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        if (strncmp(line, "HugePages_Swap", strlen("HugePages_Swap")) == 0) {
+            supported = true;
+            break;
+        }
+    }
+    (void)fclose(fp);
+    return supported;
+}
+
+bool GetHugetlbSwapSupported(void)
+{
+    return g_strategyConfig.hugetlbSwapSupported;
 }
 
 static int32_t ConfigReadValueToInt(char *pvalue, uint32_t *resultvalue)
@@ -611,6 +676,36 @@ static int32_t ConfigRemoteScanMode(char *substr, char *value)
     return RETURN_OK;
 }
 
+static int32_t ConfigSwapEnable(char *substr, char *value)
+{
+    SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
+    if (strcmp(value, "true") == 0) {
+        g_tmpStrategyConfig.swapEnable = true;
+    } else if (strcmp(value, "false") == 0) {
+        g_tmpStrategyConfig.swapEnable = false;
+    } else {
+        SMAP_LOGGER_ERROR("Config swap enable(%s) invalid, need true or false, key:%s.", value, substr);
+        return RETURN_ERROR;
+    }
+    return RETURN_OK;
+}
+
+static int32_t ConfigL3ColdThreshold(char *substr, char *value)
+{
+    SMAP_LOGGER_DEBUG("Read config key:%s, value:%s.", substr, value);
+    uint32_t v;
+    int32_t ret = ConfigReadValueToInt(value, &v);
+    if (ret != RETURN_OK) {
+        SMAP_LOGGER_ERROR("Config l3 cold threshold read failed, key:%s.", substr);
+        return ret;
+    }
+    if (ValidateIntRange(v, MIN_L3_COLD_THRESHOLD, MAX_L3_COLD_THRESHOLD, substr) != RETURN_OK) {
+        return RETURN_ERROR; /* bad key keeps current value, not written to tmp */
+    }
+    g_tmpStrategyConfig.l3ColdThreshold = v;
+    return RETURN_OK;
+}
+
 static StrategyConfigReadElem g_strategyConfigRead[] = {
     { "smap.scan.period", false, ConfigScanPeriod },
     { "smap.migrate.period", false, ConfigMigratePeriod },
@@ -629,7 +724,10 @@ static StrategyConfigReadElem g_strategyConfigRead[] = {
     { "smap.ub.bw.threshold", false, ConfigUbBwThreshold },
     { "smap.scan.cpu", false, ConfigScanCpu },
     { "smap.remote.scan.mode", false, ConfigRemoteScanMode },
+    { "smap.swap.enable", false, ConfigSwapEnable },
+    { "smap.l3.cold.threshold", false, ConfigL3ColdThreshold },
 };
+
 static void ConfigReadTrim(char *str)
 {
     size_t len = strlen(str);
@@ -817,6 +915,8 @@ static void InitStrategyConfig(void)
     g_strategyConfig.ubBwThreshold = DEFAULT_UB_BW_THRESHOLD;
     g_strategyConfig.remoteScanMode = DEFAULT_REMOTE_SCAN_MODE;
     g_strategyConfig.scanCpuConfigured = false;
+    g_strategyConfig.l3ColdThreshold = DEFAULT_L3_COLD_THRESHOLD;
+    g_strategyConfig.hugetlbSwapSupported = DetectHugetlbSwapSupport();
 }
 
 /* apply table defaults at load time so early consumers (SmapStartULog) read
@@ -908,6 +1008,26 @@ static void UpdateRemoteScanMode(void)
     }
 }
 
+static void UpdateSwapConfig(void)
+{
+    if (g_strategyConfig.swapEnable != g_tmpStrategyConfig.swapEnable) {
+        bool oldSwapEnable = g_strategyConfig.swapEnable;
+        g_strategyConfig.swapEnable = g_tmpStrategyConfig.swapEnable;
+        g_strategyConfig.swapEnableChanged = true;
+        g_tmpStrategyConfig.swapEnableChanged = true; /* keep flag through whole-struct assign, same as above */
+        SMAP_LOGGER_INFO("Update swap enable from %d to %d.", oldSwapEnable, g_strategyConfig.swapEnable);
+    }
+
+    if (g_strategyConfig.l3ColdThreshold != g_tmpStrategyConfig.l3ColdThreshold) {
+        uint32_t oldL3ColdThreshold = g_strategyConfig.l3ColdThreshold;
+        g_strategyConfig.l3ColdThreshold = g_tmpStrategyConfig.l3ColdThreshold;
+        g_strategyConfig.l3ColdThresholdChanged = true;
+        g_tmpStrategyConfig.l3ColdThresholdChanged = true; /* keep flag through whole-struct assign, same as above */
+        SMAP_LOGGER_INFO("Update l3 cold threshold from %u to %u.", oldL3ColdThreshold,
+                         g_strategyConfig.l3ColdThreshold);
+    }
+}
+
 static bool UpdateStrategyConfigChanged(void)
 {
     if (!g_tmpStrategyConfig.fileConfSwitch) {
@@ -967,6 +1087,7 @@ void StrategyConfigRead(void)
 
     UpdateMigrateModeAndScanCpu();
     UpdateRemoteScanMode();
+    UpdateSwapConfig();
     if (UpdateStrategyConfigChanged()) {
         g_strategyConfig = g_tmpStrategyConfig;
     }

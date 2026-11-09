@@ -76,8 +76,7 @@ unsigned long get_pfnblock_flags_mask(const struct page *page,
 	return __get_pfnblock_flags_mask(page, pfn, mask);
 }
 
-static pte_t *smap__pte_offset_map(pmd_t *pmd, unsigned long addr,
-				   pmd_t *pmdvalp)
+pte_t *smap__pte_offset_map(pmd_t *pmd, unsigned long addr, pmd_t *pmdvalp)
 {
 	unsigned long irqflags;
 	pmd_t pmdval;

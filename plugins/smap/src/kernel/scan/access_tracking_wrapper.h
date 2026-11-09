@@ -47,5 +47,12 @@ static inline pte_t *smap_pte_offset_map_lock(struct mm_struct *mm, pmd_t *pmd,
 	return pte;
 }
 
+/*
+ * Fork copy of the un-exported kernel __pte_offset_map() (mm/
+ * pgtable-generic.c), smap-prefixed per the module symbol-conflict rule.
+ * hva_to_hpa_4k() calls this instead of the mm.h inline pte_offset_map(),
+ * which expands to __pte_offset_map() and cannot be linked by modules.
+ */
+pte_t *smap__pte_offset_map(pmd_t *pmd, unsigned long addr, pmd_t *pmdvalp);
 pte_t smap_huge_ptep_get(pte_t *ptep);
 #endif /* !_ACCESS_TRACKING_WRAPPER_H */
