@@ -252,6 +252,34 @@ TEST_F(AccessIomemTest, CalcPaddrAcidxIomemTest)
     list_del(&seg.node);
 }
 
+extern "C" int calc_paddr_nid_iomem(u64 pa, int *nid, int page_size);
+TEST_F(AccessIomemTest, CalcPaddrNidIomemTest)
+{
+    u64 pa = 2;
+    int nid = NUMA_NO_NODE;
+    int pagesize = 4096;
+
+    int ret = calc_paddr_nid_iomem(pa, &nid, pagesize);
+    EXPECT_EQ(-ERANGE, ret);
+
+    struct ram_segment seg = {
+        .numa_node = 1,
+        .start = 0x0,
+        .end = 0xfffff,
+    };
+    list_add(&seg.node, &remote_ram_list);
+    pa = 0x1000;
+    ret = calc_paddr_nid_iomem(pa, &nid, pagesize);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, nid);
+
+    /* nid 越界时返回 -ERANGE */
+    seg.numa_node = MAX_NUMNODES;
+    ret = calc_paddr_nid_iomem(pa, &nid, pagesize);
+    EXPECT_EQ(-ERANGE, ret);
+    list_del(&seg.node);
+}
+
 static struct ram_segment g_snapshot_added_segment;
 static struct remote_ram_snapshot g_snapshot_buffer;
 

@@ -54,8 +54,9 @@ void CalcActcStats(ProcessAttr *attr)
 {
     uint16_t remoteHotThreshold = GetRemoteHotThreshold();
     int nrLocalNuma = GetNrLocalNuma();
+    int cap = (int)GetNumaCap();
 
-    for (int nid = 0; nid < MAX_NODES; nid++) {
+    for (int nid = 0; nid < cap; nid++) {
         uint64_t actcLen = attr->scanAttr.actcLen[nid];
         ActcData *actc = attr->scanAttr.actcData[nid];
         ActCount *count = &attr->scanAttr.actCount[nid];
@@ -157,10 +158,11 @@ static void MergeAccPriorToFreq(ActcData *actc, size_t actcLen)
 void DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf)
 {
     /* 释放上一次的连续缓冲区（按actcData释放，第一个非空即缓冲区起始） */
-    ResetActcData(attr->scanAttr.actcData, MAX_NODES);
+    ResetActcData(attr->scanAttr.actcData, (int)GetNumaCap());
 
     size_t actc_offset = 0;
-    for (int nid = 0; nid < MAX_NODES; nid++) {
+    int cap = (int)GetNumaCap();
+    for (int nid = 0; nid < cap; nid++) {
         attr->scanAttr.actcLen[nid] = pmb->nrPages[nid];
         if (pmb->nrPages[nid] == 0) {
             continue;
@@ -201,7 +203,8 @@ static int ReadPidActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
         return -ENODEV;
     }
 
-    for (int nid = 0; nid < MAX_NODES; nid++) {
+    int cap = (int)GetNumaCap();
+    for (int nid = 0; nid < cap; nid++) {
         total_actc += pmb->nrPages[nid];
     }
 
@@ -285,23 +288,55 @@ int BuildPidData(ProcessAttr *attr)
     if (ret) {
         return ret;
     }
-    /* Combine observed local pages with configured remote targets in user space. */
-    uint32_t numaNodes = 0;
+    /* nrPages 定宽同上，全量拷贝（cap 之外槽位内核写 0） */
+    SetPidNrPages(attr, pmb.nrPages, SMAP_MAX_NUMNODES);
+    /*
+     * 本地位直接由回读的各节点页数构造（nrPages[nid] != 0 即置位），
+     * 如实反映本轮实际内存分布；远端位以接口配置的迁移目标
+     * （targetConfig）为准，不随内核观测波动。
+     */
+    NumaBitmap numaNodes = { 0 };
     int nrLocalNuma = GetProcessManager()->nrLocalNuma;
+    if (!NumaBitmapAlloc(&numaNodes)) {
+        SMAP_LOGGER_ERROR("Alloc numaNodes for pid %d failed.", attr->pid);
+        return -ENOMEM;
+    }
     for (int nid = 0; nid < nrLocalNuma; nid++) {
         if (pmb.nrPages[nid] != 0) {
-            AddL1(&numaNodes, nid);
+            NumaBitmapSet(&numaNodes, nid);
         }
     }
     for (uint32_t i = 0; i < attr->targetConfig.count; i++) {
         AddL2ByNid(&numaNodes, attr->targetConfig.targets[i].remoteNid);
     }
-    if ((numaNodes & BuildAllLocalNumaMask()) == 0) {
-        numaNodes |= attr->numaAttr.numaNodes & BuildAllLocalNumaMask();
+    /*
+     * 本地位为空有两种情况：首个 walk 尚未完成（全零快照），或
+     * 进程页已全部迁到远端。两种情况都保留现有本地位（纳管预置
+     * 的观测过渡值/迁移前的分布），保证 GetAttrL1 始终返回合法
+     * L1；待进程重新产生本地页后自然收敛到实际分布。
+     */
+    if ((NumaGetL1Count(&numaNodes, nrLocalNuma)) == 0) {
+        for (int nid = 0; nid < nrLocalNuma; nid++) {
+            if (NumaBitmapTest(&attr->numaAttr.numaNodes, nid)) {
+                NumaBitmapSet(&numaNodes, nid);
+            }
+        }
     }
-    attr->numaAttr.numaNodes = numaNodes;
-    SMAP_LOGGER_INFO("Pid %d, numaNodes %#x, nrLocalNuma %u.", attr->pid, numaNodes, nrLocalNuma);
-    SetPidNrPages(attr, pmb.nrPages, MAX_NODES);
+    /*
+     * 原位覆写 attr 现有位图，避免在扫描热路径上释放读侧（查询/序列化
+     * 线程）正引用的 bits；仅在属性未绑定或字数不一致时才替换句柄。
+     */
+    NumaBitmap *attrNodes = &attr->numaAttr.numaNodes;
+    if (attrNodes->bits != NULL && attrNodes->nWords == numaNodes.nWords) {
+        size_t bytes = (size_t)numaNodes.nWords * sizeof(unsigned long);
+        (void)memcpy_s(attrNodes->bits, bytes, numaNodes.bits, bytes);
+        NumaBitmapFree(&numaNodes);
+    } else {
+        NumaBitmapFree(attrNodes);
+        *attrNodes = numaNodes;
+    }
+    SMAP_LOGGER_INFO("Pid %d, numaNodes nWords %u, nrLocalNuma %u.", attr->pid, attr->numaAttr.numaNodes.nWords,
+                     GetProcessManager()->nrLocalNuma);
     ret = FillPidData(attr, &pmb);
     if (ret) {
         return ret;

@@ -303,11 +303,10 @@ static void UpdateMemRatio(ProcessAttr *process)
         return;
     }
 
-    NM_AT(process->strategyAttr.l3RemoteMemRatio, l1Node, l2Node - nrLocalNuma) =
+    NM_AT(process->strategyAttr.l3RemoteMemRatio, l1Node, l2Node) =
         HUNDRED - (double)p->nrL1Planed * HUNDRED / (p->nrPages + LITTLE_NUM);
     SMAP_LOGGER_INFO("Adjust l3RemoteMemRatio to %.2lf for pid %d who need %u pages.",
-                     NM_AT(process->strategyAttr.l3RemoteMemRatio, l1Node, l2Node - nrLocalNuma), process->pid,
-                     p->nrL1Guarantee);
+                     NM_AT(process->strategyAttr.l3RemoteMemRatio, l1Node, l2Node), process->pid, p->nrL1Guarantee);
 }
 
 static inline void ClearList(int arr[], int len)
@@ -472,8 +471,8 @@ void ConfigMultiVmRatio(struct ProcessManager *manager)
         SceneInfo *info = &current->sceneInfo;
         PageInfo *p = &info->pageInfo[info->pageInfoIndex];
         int l1Node = GetAttrL1(current);
-        int l2Node = GetAttrL2(current) - manager->nrLocalNuma;
-        if (l1Node >= 0 && l2Node >= 0) {
+        int l2Node = GetAttrL2(current);
+        if (l1Node >= 0 && l2Node >= manager->nrLocalNuma) {
             int localPages =
                 p->nrPages * (HUNDRED - NM_AT(current->strategyAttr.l2RemoteMemRatio, l1Node, l2Node)) / HUNDRED;
             surpluses[i] = localPages - p->nrL1Guarantee;
@@ -529,8 +528,13 @@ static void ConfigMultiVmRatioInGroups(struct ProcessManager *manager)
 {
     int maxL1node = 0, maxL2node = 0;
     GetMaxNuma(manager, &maxL1node, &maxL2node);
-    int processed[(maxL1node + 1)][(maxL2node + 1)];
-    ClearList((int *)processed, (maxL1node + 1) * (maxL2node + 1));
+    /* VLA 尺寸随 L2 绝对 nid 语义最大可达 8*256*4=8KB，改堆分配 */
+    int l2Span = maxL2node + 1;
+    int *processed = calloc((maxL1node + 1) * l2Span, sizeof(int));
+    if (!processed) {
+        SMAP_LOGGER_ERROR("alloc processed table failed.");
+        return;
+    }
     struct PidSlot *all[MAX_PID_SLOTS];
     size_t n = PidSlotCollectRefs(manager, all, MAX_PID_SLOTS);
     for (size_t a = 0; a < n; a++) {
@@ -551,11 +555,11 @@ static void ConfigMultiVmRatioInGroups(struct ProcessManager *manager)
             l2 > maxL2node) { // 越界防护，processed 数组下标必须落在 [0, max] 区间
             continue;
         }
-        if (processed[l1][l2]) { // 如果这个近端-远端组处理过了则跳过
+        if (processed[l1 * l2Span + l2]) { // 如果这个近端-远端组处理过了则跳过
             continue;
         }
         int nrObjects = 0;
-        processed[l1][l2] = true;
+        processed[l1 * l2Span + l2] = true;
         for (size_t b = 0; b < n; b++) {
             ProcessAttr *tmp = all[b]->attr;
             if (tmp->scanType != NORMAL_SCAN) {
@@ -574,6 +578,7 @@ static void ConfigMultiVmRatioInGroups(struct ProcessManager *manager)
         }
     }
     PidSlotReleaseRefs(all, n);
+    free(processed);
 }
 
 static void SkipMultiProcessRatio(struct ProcessManager *manager)

@@ -13,6 +13,7 @@
 
 #include <sys/ioctl.h>
 #include <linux/types.h>
+#include <stddef.h>
 
 #include "common.h"
 #include "manage.h"
@@ -20,19 +21,39 @@
 #define ACCESS_DEVICE "/dev/smap_scan_dev"
 #define MAX_NR_PID MAX_NR_MIGOUT
 
+/*
+ * 调用方视图：numaNodes 为变长位图句柄（长度由运行期 cap 折算），
+ * 线格式序列化在 AccessIoctlAddPid 内部完成。
+ */
 struct AccessAddPidPayload {
     pid_t pid;
-    uint32_t numaNodes;
     uint32_t scanTime;
+    NumaBitmap numaNodes;
     uint32_t duration;
     ScanType type;
     uint32_t nTimes;
     PidType pidType; /* per-pid 身份：VM_TYPE/PROCESS_TYPE，与全局 pageType 解耦，镜像内核 access_pid.pid_type */
 };
 
+/*
+ * 线格式（user → kernel）：定长头 + 尾部柔性位图，与内核 struct access_add_pid_payload
+ * 逐字节同构。numaNodes 字数由调用侧运行期 cap 决定，不再按 SMAP_MAX_NUMNODES 定长。
+ */
+struct AccessAddPidWirePayload {
+    pid_t pid;
+    uint32_t scanTime;
+    uint32_t nrWords; // 尾部 numaNodes 字数
+    uint32_t duration;
+    ScanType type;
+    uint32_t nTimes;
+    PidType pidType;
+    unsigned long numaNodes[]; // 柔性数组，长度 nrWords
+};
+
 struct AccessAddPidMsg {
     int count;
-    struct AccessAddPidPayload *payload;
+    uint32_t stride; // 单条 wire 记录字节数 = offsetof(numaNodes) + nrWords * sizeof(unsigned long)
+    struct AccessAddPidWirePayload *payload;
 };
 
 struct AccessRemovePidPayload {
@@ -46,8 +67,8 @@ struct AccessRemovePidMsg {
 
 struct AccessPidFreq {
     pid_t pid;
-    size_t len[MAX_NODES];
-    actc_t *freq[MAX_NODES];
+    size_t len[SMAP_MAX_NUMNODES];
+    actc_t *freq[SMAP_MAX_NUMNODES];
 };
 
 struct TrakingInfoPayload {

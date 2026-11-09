@@ -12,6 +12,16 @@
 #include "smap_inner_interface.h"
 #include "smap_log_core.h"
 
+static inline NumaBitmap BmFromWord(unsigned long w)
+{
+    NumaBitmap bm = {};
+    (void)NumaBitmapAlloc(&bm);
+    if (bm.bits != NULL) {
+        bm.bits[0] = w;
+    }
+    return bm;
+}
+
 const double TEST_DEFAULT_LOCAL_MEM_RATIO = 75.0;
 
 using namespace std;
@@ -77,15 +87,16 @@ TEST_F(InnerInterfaceTest, TestSmapQueryVmMemRatio)
     struct VmRatioMsg msg;
     struct ProcessManager *manager = GetProcessManager();
     ProcessAttr current;
-    current.numaAttr.numaNodes = 0b00010001;
     current.next = nullptr;
     current.type = VM_TYPE;
     current.pid = 1;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&current));
-    NM_AT(current.strategyAttr.l3RemoteMemRatio, 0, 0) = TEST_DEFAULT_LOCAL_MEM_RATIO;
-    memset(&manager->slots, 0, sizeof(manager->slots));
-    PidSlotAdd(manager, &current);
+    /* 0b00010001 = bits 0,4；InitProcessAttrArrays 会重新分配并清零，须在其后设置 */
+    NumaBitmapSet(&current.numaAttr.numaNodes, 0);
+    NumaBitmapSet(&current.numaAttr.numaNodes, 4);
+    NM_AT(current.strategyAttr.l3RemoteMemRatio, 0, 4) = TEST_DEFAULT_LOCAL_MEM_RATIO;
+    memset(&manager->slots, 0, sizeof(manager->slots)); PidSlotAdd(manager, &current);
     ret = SmapQueryVmMemRatio(&msg);
     EXPECT_EQ(1, msg.vr[0].pid);
     EXPECT_EQ(HUNDRED - TEST_DEFAULT_LOCAL_MEM_RATIO, msg.vr[0].ratio);

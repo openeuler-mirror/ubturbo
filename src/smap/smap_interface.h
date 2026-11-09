@@ -18,7 +18,7 @@ extern "C" {
 #endif
 
 #define MAX_NR_MIGRATE_ESCAPE 300
-#define REMOTE_NUMA_NUM 18
+#define SMAP_MAX_NUMNODES 1024
 #define MAX_NR_MIGOUT 40
 #define MAX_NR_MIGBACK 50
 #define MAX_NR_MIGNUMA 50
@@ -27,7 +27,7 @@ extern "C" {
 #define MAX_NR_GROUPED_MIGOUT MAX_NR_MIGOUT
 #define MAX_MIGRATION_GROUP_NUM 8
 #define MAX_GROUP_LOCAL_NUMA 8
-#define MAX_GROUP_REMOTE_NUMA REMOTE_NUMA_NUM
+#define MAX_GROUP_REMOTE_NUMA 18
 #define ADAPT_ALLOC_PERIOD 1000
 #define SCAN_MIGRATE_PERIOD LIGHT_STABLE_MIGRATE_CYCLE
 #define USER_DEFAULT_MIGRATE_OUT_RATIO 25
@@ -37,7 +37,6 @@ extern "C" {
 #define MAX_SCAN_TIME 200
 #define MIN_SCAN_TIME 5
 #define DEFAULT_L2_NODE (-1)
-#define REMOTE_NUMA_BITS 18
 #define MAX_4K_PROCESSES_CNT 300
 #define MAX_FREQ_QUERY_NUM (256 * 1024 * 40)
 
@@ -65,7 +64,7 @@ struct MigrateOutPayload {
     int srcNid; // 是否指定迁出源节点（-1表示不指定）
     pid_t pid;
     int count;
-    struct MigrateOutPayloadInner inner[REMOTE_NUMA_NUM];
+    struct MigrateOutPayloadInner inner[SMAP_MAX_NUMNODES];
 };
 
 struct MigrateOutMsg {
@@ -111,7 +110,7 @@ struct MigrateBackMsg {
 struct RemovePayload {
     pid_t pid;
     int count;
-    int nid[REMOTE_NUMA_NUM];
+    int nid[SMAP_MAX_NUMNODES];
 };
 
 struct RemoveMsg {

@@ -25,8 +25,10 @@ struct remote_ram_range {
 
 struct remote_ram_snapshot {
 	u32 nr_ranges;
-	u64 page_count_4k[SMAP_MAX_NUMNODES];
-	u64 page_count_2m[SMAP_MAX_NUMNODES];
+	/* 内核内部 per-node 定维：使用内核编译期 MAX_NUMNODES，与 ABI 定宽
+	 * SMAP_MAX_NUMNODES 解耦（见 access_pid.h 同名约定） */
+	u64 page_count_4k[MAX_NUMNODES];
+	u64 page_count_2m[MAX_NUMNODES];
 	struct remote_ram_range ranges[];
 };
 
@@ -43,6 +45,7 @@ int refresh_remote_ram(void);
 int get_numa_by_pfn(unsigned long pfn);
 u64 get_node_page_cnt_iomem(int nid, int page_size);
 int calc_paddr_acidx_iomem(u64 pa, int *nid, u64 *index, int page_size);
+int calc_paddr_nid_iomem(u64 pa, int *nid, int page_size);
 int calc_paddr_acidx_iomem_known_nid(u64 pa, int nid, u64 *index,
 				     int page_size);
 int calc_acidx_paddr_iomem(int nid, u64 acidx, u64 *paddr, int page_size);

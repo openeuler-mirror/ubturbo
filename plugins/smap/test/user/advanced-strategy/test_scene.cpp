@@ -13,6 +13,16 @@
 
 using namespace std;
 
+static inline NumaBitmap BmFromWord(unsigned long w)
+{
+    NumaBitmap bm = {};
+    (void)NumaBitmapAlloc(&bm);
+    if (bm.bits != NULL) {
+        bm.bits[0] = w;
+    }
+    return bm;
+}
+
 class SceneTest : public ::testing::Test {
 protected:
     void SetUp() override
@@ -204,7 +214,7 @@ extern "C" void CalcMemInfo(ProcessAttr *process);
 TEST_F(SceneTest, TestCalcMemInfo)
 {
     ProcessAttr process = {};
-    process.numaAttr.numaNodes = 0b00010001;
+    process.numaAttr.numaNodes = BmFromWord(0b00010001);
     process.sceneInfo.pageInfoIndex = 0;
 
     process.sceneInfo.pageInfo[0].nrL1Page = 3;
@@ -308,14 +318,14 @@ TEST_F(SceneTest, TestUpdateMemRatio)
 {
     ProcessAttr process;
     double ret = 70;
-    process.numaAttr.numaNodes = 0b00010001;
     process.sceneInfo.pageInfoIndex = 0;
     process.sceneInfo.pageInfo[0].nrL1Planed = 30;
     process.sceneInfo.pageInfo[0].nrPages = 100;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    process.numaAttr.numaNodes = BmFromWord(0b00010001);
     UpdateMemRatio(&process);
-    EXPECT_NEAR(ret, NM_AT(process.strategyAttr.l3RemoteMemRatio, 0, 0), 0.001);
+    EXPECT_NEAR(ret, NM_AT(process.strategyAttr.l3RemoteMemRatio, 0, 4), 0.001);
     FreeProcessAttrArrays(&process);
 }
 
@@ -481,9 +491,8 @@ TEST_F(SceneTest, TestConfigMultiVmRatio)
     ConfigMultiVmRatio(&manager);
 
     manager.nr[VM_TYPE] = 1;
-    ProcessAttr current;
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &current);
+    ProcessAttr current = {};
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &current);
     current.next = NULL;
     MOCKER(IsReadyForAdapt).stubs().will(returnValue(true));
     current.sceneInfo.pageInfoIndex = 0;
@@ -502,11 +511,9 @@ extern "C" void GetMaxNuma(struct ProcessManager *manager, int *maxL1node, int *
 TEST_F(SceneTest, TestGetMaxNuma)
 {
     ProcessAttr attr = {};
-    attr.numaAttr.numaNodes = 0b10011001;
-    struct ProcessManager manager;
-    memset(&manager, 0, sizeof(manager));
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &attr);
+    attr.numaAttr.numaNodes = BmFromWord(0b10011001);
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &attr);
     int maxL1node = 0;
     int maxL2node = 0;
 
@@ -522,10 +529,10 @@ TEST_F(SceneTest, TestConfigMultiVmRatioInGroups)
     struct ProcessManager *manager = GetProcessManager();
     ProcessAttr current;
     current.next = nullptr;
-    current.numaAttr.numaNodes = 31;
-    memset(&manager->slots, 0, sizeof(manager->slots));
-    PidSlotAdd(manager, &current);
+    memset(&manager->slots, 0, sizeof(manager->slots)); PidSlotAdd(manager, &current);
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&current));
+    current.numaAttr.numaNodes = BmFromWord(31);
     MOCKER(ConfigMultiVmRatio).stubs();
     ConfigMultiVmRatioInGroups(manager);
     EXPECT_EQ(false, current.adaptMem.enableAdaptMem);
@@ -538,9 +545,8 @@ TEST_F(SceneTest, TestConfigMultiVmRatioInGroupsTwo)
     ProcessAttr current;
     current.next = nullptr;
     current.scanType = NORMAL_SCAN;
-    current.numaAttr.numaNodes = 0b00010001;
-    memset(&manager->slots, 0, sizeof(manager->slots));
-    PidSlotAdd(manager, &current);
+    current.numaAttr.numaNodes = BmFromWord(0b00010001);
+    memset(&manager->slots, 0, sizeof(manager->slots)); PidSlotAdd(manager, &current);
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(ConfigMultiVmRatio).stubs();
     EXPECT_EQ(false, current.adaptMem.enableAdaptMem);

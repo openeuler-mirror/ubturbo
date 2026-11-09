@@ -22,12 +22,18 @@
 #define MAX_MIGRATION_GROUP_NUM 8
 #endif
 #ifndef MAX_GROUP_LOCAL_NUMA
-#define MAX_GROUP_LOCAL_NUMA LOCAL_NUMA_NUM
+#define MAX_GROUP_LOCAL_NUMA 8
 #endif
 #ifndef MAX_GROUP_REMOTE_NUMA
-#define MAX_GROUP_REMOTE_NUMA REMOTE_NUMA_NUM
+#define MAX_GROUP_REMOTE_NUMA 18
 #endif
-#define MAX_PAIR_TARGET_COUNT (MAX_4K_PROCESSES_CNT * LOCAL_NUMA_NUM * REMOTE_NUMA_NUM)
+/*
+ * Pair plan space is capped by the grouped client configuration (8 × 18 = 144
+ * pairs per process × MAX_4K processes).  This is a compilation cap for the
+ * calloc'd plan array; the actual number of active pairs at runtime is bounded
+ * by nrLocalNuma × g_nrRemote.
+ */
+#define MAX_PAIR_TARGET_COUNT (MAX_4K_PROCESSES_CNT * MAX_GROUP_LOCAL_NUMA * MAX_GROUP_REMOTE_NUMA)
 #define MAX_RES_LEN 4
 #define PAGE_SHIFT 12
 #define PAGE_SIZE (1UL << PAGE_SHIFT)
@@ -185,7 +191,7 @@ typedef struct {
 typedef struct {
     /* Runtime-only grouped policy staged while the active policy is migrating. */
     bool valid;
-    uint32_t nodeBitmap;
+    NumaBitmap nodeBitmap;
     GroupMigrationPolicy policy;
 } PendingGroupMigrationPolicy;
 
@@ -228,7 +234,7 @@ typedef struct {
 
 typedef struct {
     uint32_t cpuMask[SMAP_NODE_CAP_LIMIT]; // CPU绑定情况
-    uint32_t numaNodes; // numa bitmap: 0-unused, 1-used
+    NumaBitmap numaNodes; // numa bitmap: 0-unused, 1-used
 } NumaAttribute;
 
 /*
@@ -358,7 +364,7 @@ typedef struct {
     uint64_t actcLen[SMAP_NODE_CAP_LIMIT];
     ActcData *actcData[SMAP_NODE_CAP_LIMIT]; // actc数据，按nid偏移指向同一连续缓冲区，第一个非空即缓冲区起始
     ActCount actCount[SMAP_NODE_CAP_LIMIT]; // 统计数据
-    uint32_t selectedBuckets[MAX_NODES][FREQ_BUCKETS_SIZE]; // 已选频次为freq的页面数
+    uint32_t (*selectedBuckets)[FREQ_BUCKETS_SIZE]; // 已选频次为freq的页面数
 } ScanAttribute;
 
 typedef struct {
@@ -588,8 +594,8 @@ struct ProcessManager {
 
 struct ProcessMemBitmap {
     pid_t pid;
-    size_t nrPages[MAX_NODES];
-}; /* 同时作为SMAP_ACCESS_WALK_PAGEMAP的传输结构，须与内核struct smap_pid_page_num布局对齐 */
+    size_t nrPages[SMAP_MAX_NUMNODES];
+}; /* 同时作为SMAP_ACCESS_WALK_PAGEMAP的传输结构，按 ABI 定宽 SMAP_MAX_NUMNODES 与内核布局对齐 */
 
 typedef struct {
     pid_t pid;
@@ -602,7 +608,7 @@ typedef struct {
         int ratio;
         uint64_t memSize;
         MigrateMode migrateMode;
-    } numaParam[REMOTE_NUMA_NUM];
+    } numaParam[SMAP_MAX_NUMNODES];
     bool targetConfigValid;
     bool ignoreRemoteCapacity;
     ProcessTargetConfig targetConfig;
@@ -625,8 +631,9 @@ void InitProcessMigrationTargetState(ProcessAttr *attr);
 
 /*
  * ProcessAttr 内嵌二维指针成员的生命周期管理：
- * - InitProcessAttrArrays: 在 ProcessAttr 创建后分配 strategyAttr 的 [local][remote] 数组
- *   （第一维按 nrLocalNuma 分配，列向按运行期 GetNumaCap() 收敛）
+ * - InitProcessAttrArrays: 在 ProcessAttr 创建后分配 strategyAttr/scanAttr 二维数组
+ *   （strategyAttr 的 [local][remote] 数组第一维按 nrLocalNuma 分配；scanAttr 的
+ *   selectedBuckets 以绝对 nid 为下标，第一维按 SMAP_MAX_NUMNODES 分配）
  * - FreeProcessAttrArrays: 释放上述数组（幂等，重复调用安全）
  * - CloneProcessAttrArrays: 浅拷贝出的 ProcessAttr 共享源数组指针，调用本函数
  *   替换为独立深拷贝，避免候选配置写入污染 active 状态；失败时回收已克隆数组
@@ -639,8 +646,8 @@ int CloneProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src);
 void CopyProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src);
 
 /*
- * 分配 remoteNumaInfo 的 privateSize/privateUsedInfo/privateInFlight 二维数组
- * （第一维按 nrLocalNuma）。必须在 InitTrackingDev 探测到 nrLocalNuma 之后调用。
+ * 分配 remoteNumaInfo 的 privateSize/privateUsedInfo 二维数组（第一维按
+ * nrLocalNuma）。必须在 InitTrackingDev 探测到 nrLocalNuma 之后调用。
  */
 int InitRemoteNumaInfoArrays(void);
 
@@ -670,7 +677,7 @@ int ReadCmdlineByPid(pid_t pid, char *buf, int len);
 
 int VMPreprocess(pid_t pid, ProcessAttr *attr);
 
-int SetProcessLocalNuma(pid_t pid, uint32_t *nodeBitmap, bool hugeFlag);
+int SetProcessLocalNuma(pid_t pid, NumaBitmap *nodeBitmap, bool hugeFlag);
 int SetLocalNumaByCpu(pid_t pid, uint32_t *nodeBitmap);
 
 int PrepareProcessManageCandidate(ProcessParam *param, PidType type, ProcessManageCandidate *candidate);
@@ -680,8 +687,8 @@ int ProcessAddManage(ProcessParam *param);
 int UpdateManagedProcessTrackingMode(ProcessAttr *attr, ScanType scanType, uint32_t scanTime, uint32_t duration);
 int ConfigureMigrationTargets(ProcessAttr *attr, const ProcessTargetConfig *config);
 int ApplyPendingMigrationTargets(ProcessAttr *attr);
-int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
-int ProcessSetPendingGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
+int ProcessAddGroupedManage(pid_t pid, const NumaBitmap *nodeBitmap, const GroupMigrationPolicy *policy);
+int ProcessSetPendingGroupedManage(pid_t pid, const NumaBitmap *nodeBitmap, const GroupMigrationPolicy *policy);
 int ApplyPendingGroupedPolicy(ProcessAttr *attr);
 
 void CheckAndRemoveInvalidProcess(void);
@@ -764,7 +771,7 @@ static inline ProcessAttr *PidSlotAttr(struct PidSlot *s)
 
 static inline bool IsNodeInvalid(int nid)
 {
-    return nid < 0 || nid >= MAX_NODES;
+    return nid < 0 || nid >= (int)GetNumaCap();
 }
 
 static inline bool IsDestNodeInvalid(int nid)
@@ -850,10 +857,10 @@ int ChangePidRemoteByPid(struct MigPidRemoteNumaIoctlMsg *msg);
 
 bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid);
 FILE *OpenNumaMaps(pid_t pid);
-int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[MAX_NODES], bool onlyHuge);
+int GetPidNumaPagesFromNumaMaps(pid_t pid, uint64_t numaPages[SMAP_MAX_NUMNODES], bool onlyHuge);
 /* 返回 1 表示使用大页，0 表示未使用大页，-ESRCH 表示进程不存在（numa_maps 打开为 ENOENT/ESRCH，或读取结束时已无法再次打开） */
 int IsPidUsingHugePages(pid_t pid);
-int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[MAX_NODES]);
+int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[SMAP_MAX_NUMNODES]);
 
 void UpdateRemoteNumaCriticalErr(void);
 bool IsRemoteNumaCriticalErr(int nid);
@@ -911,17 +918,18 @@ static inline int GetCurrentMaxNrPid(void)
 /* L1 numaNodes helper functions */
 static inline int GetAttrL1(ProcessAttr *attr)
 {
-    return GetL1(attr->numaAttr.numaNodes);
+    return NumaGetFirstL1(&attr->numaAttr.numaNodes, GetNrLocalNuma());
 }
 
 static inline bool EqualToAttrL1(ProcessAttr *attr, int nid)
 {
-    return EqualToL1(attr->numaAttr.numaNodes, nid);
+    int nrLocal = GetNrLocalNuma();
+    return NumaInL1(&attr->numaAttr.numaNodes, nid, nrLocal) && NumaGetL1Count(&attr->numaAttr.numaNodes, nrLocal) == 1;
 }
 
 static inline bool InAttrL1(ProcessAttr *attr, int nid)
 {
-    return InL1(attr->numaAttr.numaNodes, nid);
+    return NumaInL1(&attr->numaAttr.numaNodes, nid, GetNrLocalNuma());
 }
 
 static inline bool NotInAttrL1(ProcessAttr *attr, int nid)
@@ -950,38 +958,35 @@ static inline ActcData *GetL1ActcData(ProcessAttr *attr)
 /* L2 numaNodes helper functions */
 static inline int GetAttrL2(ProcessAttr *attr)
 {
-    int offset = LOCAL_NUMA_BITS - GetNrLocalNuma();
-    return GetL2(attr->numaAttr.numaNodes) - offset;
+    return NumaGetFirstL2(&attr->numaAttr.numaNodes, GetNrLocalNuma());
 }
 
 static inline void SetAttrL2(ProcessAttr *attr, int nid)
 {
-    int offset = LOCAL_NUMA_BITS - GetNrLocalNuma();
-    SetL2(&attr->numaAttr.numaNodes, nid + offset);
+    NumaClearL2(&attr->numaAttr.numaNodes, GetNrLocalNuma());
+    NumaBitmapSet(&attr->numaAttr.numaNodes, nid);
 }
 
 static inline void AddAttrL2(ProcessAttr *attr, int nid)
 {
-    int offset = LOCAL_NUMA_BITS - GetNrLocalNuma();
-    AddL2(&attr->numaAttr.numaNodes, nid + offset);
+    NumaBitmapSet(&attr->numaAttr.numaNodes, nid);
 }
 
-static inline void SetL2ByNid(uint32_t *nodes, int nid)
+static inline void SetL2ByNid(NumaBitmap *nodes, int nid)
 {
-    int offset = LOCAL_NUMA_BITS - GetNrLocalNuma();
-    SetL2(nodes, nid + offset);
+    NumaClearL2(nodes, GetNrLocalNuma());
+    NumaBitmapSet(nodes, nid);
 }
 
-static inline void AddL2ByNid(uint32_t *nodes, int nid)
+static inline void AddL2ByNid(NumaBitmap *nodes, int nid)
 {
-    int offset = LOCAL_NUMA_BITS - GetNrLocalNuma();
-    AddL2(nodes, nid + offset);
+    NumaBitmapSet(nodes, nid);
 }
 
 static inline bool EqualToAttrL2(ProcessAttr *attr, int nid)
 {
-    int offset = LOCAL_NUMA_BITS - GetNrLocalNuma();
-    return EqualToL2(attr->numaAttr.numaNodes, nid + offset);
+    int nrLocal = GetNrLocalNuma();
+    return NumaInL2(&attr->numaAttr.numaNodes, nid, nrLocal) && NumaGetL2Count(&attr->numaAttr.numaNodes, nrLocal) == 1;
 }
 
 static inline bool NotEqualToAttrL2(ProcessAttr *attr, int nid)
@@ -991,8 +996,7 @@ static inline bool NotEqualToAttrL2(ProcessAttr *attr, int nid)
 
 static inline bool InAttrL2(ProcessAttr *attr, int nid)
 {
-    int offset = LOCAL_NUMA_BITS - GetNrLocalNuma();
-    return InL2(attr->numaAttr.numaNodes, nid + offset);
+    return NumaInL2(&attr->numaAttr.numaNodes, nid, GetNrLocalNuma());
 }
 
 static inline bool NotInAttrL2(ProcessAttr *attr, int nid)
@@ -1026,7 +1030,8 @@ static inline bool IsNumaMapLineHuge(char *line)
 
 static inline bool IsMultiNumaVm(ProcessAttr *process)
 {
-    return process->type == VM_TYPE && (process->remoteNumaCnt > 1 || GetL1Count(process->numaAttr.numaNodes) > 1);
+    return process->type == VM_TYPE &&
+           (process->remoteNumaCnt > 1 || NumaGetL1Count(&process->numaAttr.numaNodes, GetNrLocalNuma()) > 1);
 }
 
 bool IsMemoryLow(pid_t pid);

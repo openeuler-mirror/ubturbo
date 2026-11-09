@@ -23,15 +23,20 @@
 /*
  * Layout of config is as follows:
  * | VER | HEADER_LEN | TOTAL_LEN | = 2B + 2B + 4B
- * | NUMA_PAYLOAD_LEN | NUMA_PAYLOAD | = 4B + 4B * nrLocalNuma * REMOTE_NUMA_NUM
- * | PROCESS_PAYLOAD_LEN | PROCESS_PAYLOAD | = 4B + CONFIG_PROC_SIZE * N
+ * | NUMA_PAYLOAD_LEN | NUMA_PAYLOAD | = 4B + 4B * nrLocalNuma * SMAP_MAX_NUMNODES
+ * | PROCESS_PAYLOAD_LEN | PROCESS_PAYLOAD | = 4B + Σ V3 记录字节数
+ *
+ * V2 起进程记录为定长；V3 起改为「定长头 + 尾部柔性区」，节点位图不再按
+ * 编译期 NUMA_NODES_BIT_WORDS 定宽，字数由写入侧运行期 cap 折算。
  */
 #define SMAP_CONFIG_VER_V1 1
-#define SMAP_CONFIG_VER SMAP_CONFIG_VER_V1
+#define SMAP_CONFIG_VER_V2 2
+#define SMAP_CONFIG_VER_V3 3
+#define SMAP_CONFIG_VER SMAP_CONFIG_VER_V3
 #define CONFIG_HEADER_LEN sizeof(struct SmapConfigHeader)
 #define PAYLOAD_HEADER_LEN sizeof(struct PayloadHeader)
 #define CONFIG_NUMA_LEN sizeof(struct NumaPayload)
-#define CONFIG_PROC_LEN sizeof(struct ProcessPayload)
+#define CONFIG_PROC_HEADER_LEN sizeof(struct ProcessPayloadHeader)
 
 struct SmapConfigHeader {
     uint8_t ver;
@@ -69,7 +74,29 @@ struct PersistRemoteTarget {
     uint64_t memSize;
 };
 
-/* V1 persist format.  migrateParam records every active Pair target. */
+/*
+ * V3 记录定长头（32B，8 字节对齐）。尾部柔性区依次为：
+ *   unsigned long numaNodes[nrWords]                          // 变长节点位图
+ *   struct PersistRemoteTarget migrateParam[count]            // 活跃 Pair 目标
+ * 单条记录字节数 = CONFIG_PROC_HEADER_LEN + nrWords * 8 + count * sizeof(struct PersistRemoteTarget)。
+ */
+struct ProcessPayloadHeader {
+    pid_t pid;
+    uint8_t scanType;
+    uint8_t type;
+    uint8_t state;
+    uint8_t migrateMode;
+    int srcNid; // 迁出源本地 NUMA，NUMA_NO_NODE 表示未指定
+    uint32_t scanTime;
+    uint32_t duration;
+    uint32_t nrWords; // 尾部 numaNodes 字数（按写入侧运行期 cap 折算）
+    int count; // 尾部 migrateParam 条数
+    uint8_t ignoreRemoteCapacity; // sync 旁路容量标记
+    /* 对齐填充：定长头保持 8 字节对齐，尾部柔性区（unsigned long 位图）起始地址仍 8 字节对齐 */
+    uint8_t reserved[3];
+};
+
+/* 进程内构建载荷（含变长位图句柄）；序列化后落盘为 V3 记录 */
 struct ProcessPayload {
     pid_t pid;
     uint8_t scanType;
@@ -77,11 +104,11 @@ struct ProcessPayload {
     uint8_t state;
     uint8_t migrateMode;
     int srcNid;
-    uint32_t numaNodes;
     uint32_t scanTime;
     uint32_t duration;
+    NumaBitmap numaNodes;
     int count;
-    struct PersistRemoteTarget migrateParam[REMOTE_NUMA_NUM];
+    struct PersistRemoteTarget migrateParam[SMAP_MAX_NUMNODES];
     uint8_t ignoreRemoteCapacity; /* 新增：sync 旁路容量标记 */
 };
 

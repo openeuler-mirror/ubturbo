@@ -25,6 +25,16 @@ extern "C" uint32_t g_pageSizeHuge;
 #include "strategy/strategy.h"
 #include "strategy/strategy_config.h"
 
+static inline NumaBitmap BmFromWord(unsigned long w)
+{
+    NumaBitmap bm = {};
+    (void)NumaBitmapAlloc(&bm);
+    if (bm.bits != NULL) {
+        bm.bits[0] = w;
+    }
+    return bm;
+}
+
 using namespace std;
 
 /* cap=1024 时 mlist 全矩阵约 50MB，超出栈预算；gtest 用例串行执行，共用 BSS 数组 */
@@ -257,7 +267,7 @@ TEST_F(MigrationTest, TestBuildMigrationMsgRunStrategyFail)
     int nid = 4;
     uint64_t pages;
     ProcessAttr process = {};
-    process.numaAttr.numaNodes = 0b00010001;
+    process.numaAttr.numaNodes = BmFromWord(0b00010001);
     ActcData actc = {};
     process.scanAttr.actcData[0] = &actc;
     struct MigrateMsg mMsg;
@@ -277,7 +287,7 @@ TEST_F(MigrationTest, TestBuildMigrationMsgNullPtrOfMigratePage)
     int nid = 4;
     uint64_t pages;
     ProcessAttr process = {};
-    process.numaAttr.numaNodes = 0b00010001;
+    process.numaAttr.numaNodes = BmFromWord(0b00010001);
     ActcData actc = {};
     process.scanAttr.actcData[0] = &actc;
     struct MigrateMsg mMsg;
@@ -305,7 +315,9 @@ TEST_F(MigrationTest, TestBuildMigrationMsgNoPage)
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&process));
-    process.numaAttr.numaNodes = 0b00010001;
+    /* 0b00010001 = bits 0,4；InitProcessAttrArrays 会重新分配并清零，须在其后设置 */
+    NumaBitmapSet(&process.numaAttr.numaNodes, 0);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 4);
 
     MOCKER(AddMigListCapped).stubs().will(returnValue(0));
     ret = BuildMigrationMsg(&process, &mMsg, &pages);
@@ -319,7 +331,7 @@ TEST_F(MigrationTest, TestIsPidAnyRemoteNodeForbiddenTrueWhenRemoteForbidden)
 {
     ProcessAttr attr = {};
     g_processManager.nrLocalNuma = 4;
-    attr.numaAttr.numaNodes = 0b00010001; // local nid0 + remote nid4
+    attr.numaAttr.numaNodes = BmFromWord(0b00010001); // local nid0 + remote nid4
     EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_MIGBACK_BUSY);
     EXPECT_TRUE(IsPidAnyRemoteNodeForbidden(&attr));
     EnvAtomicSet(&g_forbiddenNodes[4], 0);
@@ -329,7 +341,7 @@ TEST_F(MigrationTest, TestIsPidAnyRemoteNodeForbiddenFalseWhenNotForbidden)
 {
     ProcessAttr attr = {};
     g_processManager.nrLocalNuma = 4;
-    attr.numaAttr.numaNodes = 0b00010001; // local nid0 + remote nid4
+    attr.numaAttr.numaNodes = BmFromWord(0b00010001); // local nid0 + remote nid4
     EnvAtomicSet(&g_forbiddenNodes[4], 0);
     EXPECT_FALSE(IsPidAnyRemoteNodeForbidden(&attr));
 }
@@ -338,7 +350,7 @@ TEST_F(MigrationTest, TestIsPidAnyRemoteNodeForbiddenFalseWhenPidNotOnForbiddenN
 {
     ProcessAttr attr = {};
     g_processManager.nrLocalNuma = 4;
-    attr.numaAttr.numaNodes = 0b00000001; // only local nid0, no remote node managed
+    attr.numaAttr.numaNodes = BmFromWord(0b00000001); // only local nid0, no remote node managed
     EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_MIGBACK_BUSY);
     EXPECT_FALSE(IsPidAnyRemoteNodeForbidden(&attr));
     EnvAtomicSet(&g_forbiddenNodes[4], 0);
@@ -350,7 +362,7 @@ TEST_F(MigrationTest, TestBuildMigrationMsgAllowsNormalPromoteFromForbiddenNode)
     int nid = 4;
     uint64_t pages = 0;
     ProcessAttr process = {};
-    process.numaAttr.numaNodes = 0b00010001;
+    process.numaAttr.numaNodes = BmFromWord(0b00010001);
     struct MigrateMsg mMsg;
     ActcData actc = {};
     process.scanAttr.actcData[0] = &actc;
@@ -425,7 +437,7 @@ TEST_F(MigrationTest, TestBuildMigrationMsgSuccess)
     ASSERT_EQ(0, InitProcessAttrArrays(&process));
     process.pid = 1234;
     NM_AT(process.strategyAttr.nrMigratePages, 0, 0) = 100;
-    process.numaAttr.numaNodes = 0b00010001;
+    process.numaAttr.numaNodes = BmFromWord(0b00010001);
     struct MigrateMsg mMsg = {};
     ActcData actc = {};
     process.scanAttr.actcData[0] = &actc;
@@ -651,7 +663,9 @@ TEST_F(MigrationTest, TestNumaSwapMemPool)
     ProcessAttr attr = {};
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(l2Node));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
-    attr.numaAttr.numaNodes = 0x11;
+    /* 0x11 = bits 0,4；InitProcessAttrArrays 会重新分配并清零，须在其后设置 */
+    NumaBitmapSet(&attr.numaAttr.numaNodes, 0);
+    NumaBitmapSet(&attr.numaAttr.numaNodes, 4);
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 5;
     attr.walkPage.nrPages[l2Node] = 5;
     NM_AT(attr.strategyAttr.memSize, 0, 4) = 4096; // 2 hugepage
@@ -1176,7 +1190,7 @@ TEST_F(MigrationTest, TestUpdateMigResultLocalToRemote)
     attr.pid = 123;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
-    attr.numaAttr.numaNodes = 0b00010001;
+    attr.numaAttr.numaNodes = BmFromWord(0b00010001);
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
 
     struct MigrateMsg mMsg = {};
@@ -1343,7 +1357,7 @@ TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalUnexpectedMigCount)
     attr.next = NULL;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
-    attr.numaAttr.numaNodes = 0b00010001;
+    attr.numaAttr.numaNodes = BmFromWord(0b00010001);
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
 
     struct MigrateMsg mMsg = {};
@@ -1375,7 +1389,7 @@ TEST_F(MigrationTest, TestUpdateMigResultRemoteToLocalExpectedMigCount)
     attr.next = NULL;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
-    attr.numaAttr.numaNodes = 0b00010001;
+    attr.numaAttr.numaNodes = BmFromWord(0b00010001);
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
 
     struct MigrateMsg mMsg = {};
@@ -1404,7 +1418,7 @@ TEST_F(MigrationTest, TestUpdateMigResultTwo)
     attr.next = NULL;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
-    attr.numaAttr.numaNodes = 0b00010001;
+    attr.numaAttr.numaNodes = BmFromWord(0b00010001);
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 5) = 0;
 
     struct MigrateMsg mMsg = {};
@@ -1435,7 +1449,7 @@ TEST_F(MigrationTest, TestUpdateMigResultThree)
     attr.next = NULL;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
-    attr.numaAttr.numaNodes = 0b00010001;
+    attr.numaAttr.numaNodes = BmFromWord(0b00010001);
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 5) = 0;
 
     struct MigrateMsg mMsg = {};
@@ -1466,7 +1480,7 @@ TEST_F(MigrationTest, TestUpdateMigResultFour)
     attr.next = NULL;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
-    attr.numaAttr.numaNodes = 0b00100001;
+    attr.numaAttr.numaNodes = BmFromWord(0b00100001);
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 1000;
 
     struct MigrateMsg mMsg = {};
@@ -1500,9 +1514,9 @@ TEST_F(MigrationTest, TestUpdateMigResultFive)
     attr2.pid = 1234;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
-    attr.numaAttr.numaNodes = 0b00110001;
+    attr.numaAttr.numaNodes = BmFromWord(0b00110001);
     ASSERT_EQ(0, InitProcessAttrArrays(&attr2));
-    attr2.numaAttr.numaNodes = 0b00110001;
+    attr2.numaAttr.numaNodes = BmFromWord(0b00110001);
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
     NM_AT(attr2.strategyAttr.remoteNrPagesAfterMigrate, 0, 5) = 100;
 
@@ -1546,7 +1560,7 @@ TEST_F(MigrationTest, TestUpdateMigResultSix)
     attr.next = NULL;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
-    attr.numaAttr.numaNodes = 0b00100001;
+    attr.numaAttr.numaNodes = BmFromWord(0b00100001);
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
 
     struct MigrateMsg mMsg = {};
@@ -1580,9 +1594,9 @@ TEST_F(MigrationTest, TestUpdateMigResultSeven)
     attr2.pid = 1234;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
-    attr.numaAttr.numaNodes = 0b00110001;
+    attr.numaAttr.numaNodes = BmFromWord(0b00110001);
     ASSERT_EQ(0, InitProcessAttrArrays(&attr2));
-    attr2.numaAttr.numaNodes = 0b00110001;
+    attr2.numaAttr.numaNodes = BmFromWord(0b00110001);
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
     NM_AT(attr2.strategyAttr.remoteNrPagesAfterMigrate, 0, 5) = 100;
 
@@ -1629,9 +1643,9 @@ TEST_F(MigrationTest, TestUpdateMigResultEight)
     attr2.pid = 1234;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
-    attr.numaAttr.numaNodes = 0b00110001;
+    attr.numaAttr.numaNodes = BmFromWord(0b00110001);
     ASSERT_EQ(0, InitProcessAttrArrays(&attr2));
-    attr2.numaAttr.numaNodes = 0b00110001;
+    attr2.numaAttr.numaNodes = BmFromWord(0b00110001);
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 4) = 100;
     NM_AT(attr2.strategyAttr.remoteNrPagesAfterMigrate, 0, 5) = 100;
 
@@ -1842,7 +1856,7 @@ TEST_F(MigrationTest, TestBuildMigrationMsgL2NodeCriticalErr)
     int ret;
     uint64_t pages;
     ProcessAttr process = {};
-    process.numaAttr.numaNodes = 0b00010001;
+    process.numaAttr.numaNodes = BmFromWord(0b00010001);
     struct MigrateMsg mMsg;
     ActcData actc = {};
     process.scanAttr.actcData[0] = &actc;
@@ -1863,7 +1877,7 @@ TEST_F(MigrationTest, TestBuildMigrationMsgL2NodeNotCriticalNotForbidden)
     int ret;
     uint64_t pages;
     ProcessAttr process = {};
-    process.numaAttr.numaNodes = 0b00010001;
+    process.numaAttr.numaNodes = BmFromWord(0b00010001);
     struct MigrateMsg mMsg;
     ActcData actc = {};
     process.scanAttr.actcData[0] = &actc;

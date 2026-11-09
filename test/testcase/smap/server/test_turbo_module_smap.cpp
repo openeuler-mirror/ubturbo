@@ -963,11 +963,11 @@ TEST_F(TestTurboModuleSmap, SmapQueryRemoteNumaFreqHandlerLenZero)
 
 TEST_F(TestTurboModuleSmap, SmapQueryRemoteNumaFreqHandlerLenTooLarge)
 {
-    // 服务端应拒绝超过客户端 SDK 上限(REMOTE_NUMA_BITS)的len，防止VLA栈溢出
+    // 服务端应拒绝超过客户端 SDK 上限(SMAP_MAX_NUMNODES)的len，防止VLA栈溢出
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
     uint16_t numa[2] = {0, 1};
-    uint16_t length = REMOTE_NUMA_BITS + 1;
+    uint16_t length = SMAP_MAX_NUMNODES + 1;
 
     StubSmapPtr();
     SmapQueryRemoteNumaFreqCodec codec;

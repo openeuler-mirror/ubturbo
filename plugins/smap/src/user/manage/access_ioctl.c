@@ -27,10 +27,18 @@ int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
         SMAP_LOGGER_ERROR("AccessIoctlAddPid: invalid len %d.", len);
         return -EINVAL;
     }
-    struct AccessAddPidMsg accessMsg = { .count = len };
-    accessMsg.payload = malloc(len * sizeof(struct AccessAddPidPayload));
+    uint32_t nrWords = NumaWordsForCap();
+    if (nrWords == 0) {
+        SMAP_LOGGER_ERROR("AccessIoctlAddPid: invalid nrWords 0.");
+        return -EINVAL;
+    }
+    /* 定长头 + 尾部柔性位图：单条记录字节数由调用侧运行期 cap 决定 */
+    uint32_t stride =
+        (uint32_t)(offsetof(struct AccessAddPidWirePayload, numaNodes) + (size_t)nrWords * sizeof(unsigned long));
+    struct AccessAddPidMsg accessMsg = { .count = len, .stride = stride };
+    accessMsg.payload = calloc((size_t)len, stride);
     if (accessMsg.payload == NULL) {
-        SMAP_LOGGER_ERROR("AccessIoctlAddPid: malloc failed.");
+        SMAP_LOGGER_ERROR("AccessIoctlAddPid: calloc failed.");
         return -ENOMEM;
     }
     struct ProcessManager *manager = GetProcessManager();
@@ -38,28 +46,41 @@ int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
     migrationPeriod = manager->migPeriod;
 
     for (int i = 0; i < len; i++) {
-        accessMsg.payload[i].pid = payload[i].pid;
-        accessMsg.payload[i].numaNodes = payload[i].numaNodes;
-        accessMsg.payload[i].scanTime = payload[i].scanTime;
-        accessMsg.payload[i].duration = payload[i].duration;
+        struct AccessAddPidWirePayload *wire =
+            (struct AccessAddPidWirePayload *)((char *)accessMsg.payload + (size_t)i * stride);
+        wire->pid = payload[i].pid;
+        wire->scanTime = payload[i].scanTime;
+        wire->nrWords = nrWords;
+        wire->duration = payload[i].duration;
+        wire->type = payload[i].type;
+        wire->pidType = payload[i].pidType;
         if (payload[i].type == NORMAL_SCAN) {
             ProcessAttr *attr = GetProcessAttr(payload[i].pid);
-            GetProcessPeriods(attr, &accessMsg.payload[i].scanTime, &accessMsg.payload[i].duration);
+            GetProcessPeriods(attr, &wire->scanTime, &wire->duration);
             PutProcessAttr(attr);
         }
-        if (accessMsg.payload[i].scanTime == 0) {
+        if (wire->scanTime == 0) {
+            SMAP_LOGGER_ERROR("AccessIoctlAddPid: invalid payload[%d].scanTime %u.", i, payload[i].scanTime);
             free(accessMsg.payload);
             return -EINVAL;
         }
         if (payload[i].type == STATISTIC_SCAN) {
-            accessMsg.payload[i].nTimes = payload[i].duration * MS_PER_SEC / payload[i].scanTime;
+            wire->nTimes = wire->duration * MS_PER_SEC / wire->scanTime;
         } else if (payload[i].type == NORMAL_SCAN) {
-            accessMsg.payload[i].nTimes = accessMsg.payload[i].duration / accessMsg.payload[i].scanTime;
+            wire->nTimes = wire->duration / wire->scanTime;
         } else {
-            accessMsg.payload[i].nTimes = migrationPeriod / payload[i].scanTime;
+            wire->nTimes = migrationPeriod / wire->scanTime;
         }
-        accessMsg.payload[i].type = payload[i].type;
-        accessMsg.payload[i].pidType = payload[i].pidType;
+        /* 尾部柔性位图：按两端较小字数拷贝，缺省为零填充 */
+        if (payload[i].numaNodes.bits != NULL && payload[i].numaNodes.nWords > 0) {
+            uint32_t n = payload[i].numaNodes.nWords < nrWords ? payload[i].numaNodes.nWords : nrWords;
+            if (memcpy_s(wire->numaNodes, (size_t)nrWords * sizeof(unsigned long), payload[i].numaNodes.bits,
+                         (size_t)n * sizeof(unsigned long)) != EOK) {
+                SMAP_LOGGER_ERROR("AccessIoctlAddPid: copy numaNodes failed.");
+                free(accessMsg.payload);
+                return -EINVAL;
+            }
+        }
     }
     int ret = ioctl(manager->fds.access, SMAP_ACCESS_ADD_PID, &accessMsg);
     free(accessMsg.payload);

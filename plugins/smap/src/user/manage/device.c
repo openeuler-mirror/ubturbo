@@ -93,7 +93,7 @@ static bool IsLocalNuma(unsigned long nid)
     char path[SYS_NODE_REMOTE_LEN] = { 0 };
 #undef SYS_NODE_REMOTE_LEN
 
-    if (nid >= LOCAL_NUMA_NUM) {
+    if (nid >= SMAP_MAX_NUMNODES) {
         return false;
     }
 
@@ -134,18 +134,12 @@ static int GetNrLocalNumaFromKernel(struct ProcessManager *manager)
         SMAP_LOGGER_ERROR("failed to get nr_local_numa from kernel: %d, errno: %d", ret, errno);
         return ret;
     }
-    if (nrLocalNuma <= 0 || nrLocalNuma > LOCAL_NUMA_NUM) {
+    if (nrLocalNuma <= 0 || nrLocalNuma > SMAP_MAX_NUMNODES) {
         SMAP_LOGGER_ERROR("get nr_local_numa invalid :%d", nrLocalNuma);
         return -EINVAL;
     }
     manager->nrLocalNuma = nrLocalNuma;
     SMAP_LOGGER_INFO("get nr_local_numa %d from kernel successfully", manager->nrLocalNuma);
-    /* nrLocalNuma 探测完成后分配远端账本二维数组（第一维按 nrLocalNuma） */
-    int initRet = InitRemoteNumaInfoArrays();
-    if (initRet) {
-        SMAP_LOGGER_ERROR("init remote numa arrays failed: %d", initRet);
-        return initRet;
-    }
     return 0;
 }
 

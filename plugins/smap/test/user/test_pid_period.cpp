@@ -42,8 +42,15 @@ int CaptureIoctl(int, unsigned long cmd, void *arg)
         return -1;
     }
     auto *msg = static_cast<AccessAddPidMsg *>(arg);
-    for (int i = 0; i < msg->count && i < 2; i++)
-        captured[i] = msg->payload[i];
+    for (int i = 0; i < msg->count && i < 2; i++) {
+        auto *wire = reinterpret_cast<AccessAddPidWirePayload *>(
+            reinterpret_cast<char *>(msg->payload) + static_cast<size_t>(i) * msg->stride);
+        captured[i].pid = wire->pid;
+        captured[i].scanTime = wire->scanTime;
+        captured[i].duration = wire->duration;
+        captured[i].type = wire->type;
+        captured[i].nTimes = wire->nTimes;
+    }
     return 0;
 }
 } // namespace

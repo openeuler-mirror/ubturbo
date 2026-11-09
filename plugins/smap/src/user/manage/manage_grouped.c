@@ -34,7 +34,8 @@
 #include "manage.h"
 #include "manage_internal.h"
 
-void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy)
+void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, const NumaBitmap *nodeBitmap,
+                             const GroupMigrationPolicy *policy)
 {
     attr->pid = pid;
     attr->scanTime = SCAN_TIME_2M;
@@ -42,10 +43,10 @@ void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeBitmap, 
     attr->scanType = NORMAL_SCAN;
     attr->type = VM_TYPE;
     attr->migrateMode = MIG_MEMSIZE_MODE;
-    attr->remoteNumaCnt = GetL2Count(nodeBitmap);
+    attr->remoteNumaCnt = NumaGetL2Count(nodeBitmap, GetNrLocalNuma());
     attr->enableSwap = true;
     attr->initLocalMemRatio = HUNDRED;
-    attr->numaAttr.numaNodes = nodeBitmap;
+    (void)NumaBitmapCopy(&attr->numaAttr.numaNodes, nodeBitmap);
     attr->groupPolicy = *policy;
     attr->groupSwapLastTotalPages = 0;
     attr->groupSwapStableTotalRounds = 0;
@@ -167,10 +168,12 @@ static int InitGroupedTargetUsedPages(pid_t pid, GroupMigrationPolicy *policy, i
     return 0;
 }
 
-int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[MAX_NODES])
+int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t numaPages[SMAP_MAX_NUMNODES])
 {
     int nrLocalNuma = GetNrLocalNuma();
-    for (int nid = nrLocalNuma; nid < MAX_NODES; nid++) {
+    int nid;
+    for_each_remote_nid(nid)
+    {
         if (numaPages[nid] == 0) {
             continue;
         }
@@ -182,7 +185,7 @@ int InitGroupedUsedPages(pid_t pid, GroupMigrationPolicy *policy, const uint64_t
     return 0;
 }
 
-int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy)
+int ProcessAddGroupedManage(pid_t pid, const NumaBitmap *nodeBitmap, const GroupMigrationPolicy *policy)
 {
     int ret;
     int pidType = DetectPidType(pid);
@@ -227,7 +230,7 @@ int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigration
         return ret;
     }
     InitProcessMigrationTargetState(attr);
-    attr->numaAttr.numaNodes = nodeBitmap;
+    (void)NumaBitmapCopy(&attr->numaAttr.numaNodes, nodeBitmap);
     ret = VMPreprocess(pid, attr);
     if (ret) {
         SMAP_LOGGER_ERROR("Preprocess grouped VM process %d failed: %d.", pid, ret);
@@ -246,7 +249,7 @@ int ProcessAddGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigration
     return 0;
 }
 
-int ProcessSetPendingGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy)
+int ProcessSetPendingGroupedManage(pid_t pid, const NumaBitmap *nodeBitmap, const GroupMigrationPolicy *policy)
 {
     if (!policy || !policy->enabled) {
         SMAP_LOGGER_ERROR("pending grouped policy of pid %d is invalid.", pid);
@@ -262,7 +265,7 @@ int ProcessSetPendingGroupedManage(pid_t pid, uint32_t nodeBitmap, const GroupMi
 
     /* Only an already-managed grouped PID in PROC_MIGRATE can defer refresh. */
     current->pendingGroupPolicy.valid = true;
-    current->pendingGroupPolicy.nodeBitmap = nodeBitmap;
+    (void)NumaBitmapCopy(&current->pendingGroupPolicy.nodeBitmap, nodeBitmap);
     current->pendingGroupPolicy.policy = *policy;
     SMAP_LOGGER_INFO("Save pending grouped policy for pid %d, group count %d.", pid, policy->groupCount);
     PutProcessAttr(current);
@@ -276,8 +279,9 @@ int ApplyPendingGroupedPolicy(ProcessAttr *attr)
     }
 
     GroupMigrationPolicy policy = attr->pendingGroupPolicy.policy;
-    uint32_t nodeBitmap = attr->pendingGroupPolicy.nodeBitmap;
-    uint64_t numaPages[MAX_NODES] = { 0 };
+    /* 直接引用 pending 位图句柄：仅作只读序列化与拷贝源，不接管所有权 */
+    const NumaBitmap *nodeBitmap = &attr->pendingGroupPolicy.nodeBitmap;
+    uint64_t numaPages[SMAP_MAX_NUMNODES] = { 0 };
 
     /* Apply is atomic at manager level: initialize the new policy first. */
     ResetGroupedPolicyRuntime(&policy);
@@ -299,7 +303,7 @@ int ApplyPendingGroupedPolicy(ProcessAttr *attr)
         .type = NORMAL_SCAN,
         .pid = attr->pid,
         .scanTime = SCAN_TIME_2M,
-        .numaNodes = nodeBitmap,
+        .numaNodes = attr->pendingGroupPolicy.nodeBitmap,
         .pidType = attr->type,
     };
     ret = AccessIoctlAddPid(1, &payload);

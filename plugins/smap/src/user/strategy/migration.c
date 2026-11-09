@@ -692,14 +692,12 @@ static int BuildMigrationMsg(ProcessAttr *process, struct MigrateMsg *mMsg, uint
     if (ret) {
         return ret;
     }
+    int nrLocal = GetNrLocalNuma();
     int cap = (int)GetNumaCap();
-    uint32_t nodes = process->numaAttr.numaNodes;
-    int offset = LOCAL_NUMA_BITS - GetNrLocalNuma();
-    for (int i = LOCAL_NUMA_BITS; i < MAX_NODES; i++) {
-        if (!(nodes & (1U << i))) {
+    for (int nid = nrLocal; nid < cap; nid++) {
+        if (!NumaBitmapTest(&process->numaAttr.numaNodes, nid)) {
             continue;
         }
-        int nid = i - offset;
         if (IsNodeForbidden(nid) && process->groupPolicy.enabled) {
             SMAP_LOGGER_INFO("L2 node%d is forbiddened, pid %d stops migrate out.", nid, process->pid);
             return -EPERM;

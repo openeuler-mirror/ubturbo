@@ -10,13 +10,20 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
-#include "advanced-strategy/scene.h"
+#include "securec.h"
 #include "manage/manage.h"
 #include "manage/node_matrix.h"
+#include "advanced-strategy/scene.h"
 #include "manage/smap_config.h"
-#include "securec.h"
 
 using namespace std;
+
+// Test-only compat: old compile-time NUMA constants (8 local + 18 remote)
+#define OLD_REMOTE_NUMA_NUM 18
+#define OLD_REMOTE_NUMA_BITS 18
+#define OLD_LOCAL_NUMA_NUM 8
+#define OLD_LOCAL_NUMA_BITS 8
+#define OLD_MAX_NODES (OLD_LOCAL_NUMA_NUM + OLD_REMOTE_NUMA_NUM)
 
 static ProcessAttr *PmHeadAttr(struct ProcessManager *pm)
 {
@@ -42,6 +49,37 @@ static ProcessAttr *PmNthAttr(struct ProcessManager *pm, int n)
     return nullptr;
 }
 
+/* 按运行期 cap 构造一条 V3 序列化记录（定长头 + 变长位图 + 目标数组），返回记录字节数 */
+static size_t BuildV3Record(char *buf, pid_t pid, uint8_t scanType, uint8_t type, uint8_t state,
+                            uint8_t migrateMode, uint32_t scanTime, const int *bits, int nrBits,
+                            const struct PersistRemoteTarget *targets, int nrTargets)
+{
+    uint32_t nrWords = NumaWordsForCap();
+    struct ProcessPayloadHeader *h = reinterpret_cast<struct ProcessPayloadHeader *>(buf);
+    h->pid = pid;
+    h->scanType = scanType;
+    h->type = type;
+    h->state = state;
+    h->migrateMode = migrateMode;
+    h->srcNid = NUMA_NO_NODE;
+    h->scanTime = scanTime;
+    h->duration = 0;
+    h->nrWords = nrWords;
+    h->count = nrTargets;
+    h->ignoreRemoteCapacity = 0;
+
+    unsigned long *wordBuf = reinterpret_cast<unsigned long *>(buf + CONFIG_PROC_HEADER_LEN);
+    for (int i = 0; i < nrBits; i++) {
+        wordBuf[NID_WORD(bits[i])] |= NID_MASK(bits[i]);
+    }
+    struct PersistRemoteTarget *t = reinterpret_cast<struct PersistRemoteTarget *>(wordBuf + nrWords);
+    for (int i = 0; i < nrTargets; i++) {
+        t[i] = targets[i];
+    }
+    return CONFIG_PROC_HEADER_LEN + (size_t)nrWords * sizeof(unsigned long) +
+           (size_t)nrTargets * sizeof(struct PersistRemoteTarget);
+}
+
 class SmapConfigTest : public ::testing::Test {
 protected:
     void SetUp() override
@@ -63,7 +101,7 @@ TEST_F(SmapConfigTest, TestCalcNumaPayloadNum)
     int ret;
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
     ret = CalcNumaPayloadNum();
-    EXPECT_EQ(2 * REMOTE_NUMA_NUM + REMOTE_NUMA_NUM, ret);
+    EXPECT_EQ(2 * SMAP_MAX_NUMNODES + SMAP_MAX_NUMNODES, ret);
 }
 
 extern "C" size_t CalcNumaPayloadLen(void);
@@ -86,17 +124,17 @@ TEST_F(SmapConfigTest, TestCalcNumaConfigLen)
     EXPECT_EQ(len + PAYLOAD_HEADER_LEN, ret);
 }
 
-extern "C" size_t CalcProcessConfigLen(int nrProcess);
+extern "C" size_t CalcProcessConfigLen(size_t payloadBytes);
 TEST_F(SmapConfigTest, TestCalcProcessConfigLen)
 {
-    int ret;
-    int nrProcess = 4;
+    size_t ret;
+    size_t payloadBytes = 64;
 
     ret = CalcProcessConfigLen(0);
     EXPECT_EQ(PAYLOAD_HEADER_LEN, ret);
 
-    ret = CalcProcessConfigLen(nrProcess);
-    EXPECT_EQ(PAYLOAD_HEADER_LEN + (nrProcess * CONFIG_PROC_LEN), ret);
+    ret = CalcProcessConfigLen(payloadBytes);
+    EXPECT_EQ(PAYLOAD_HEADER_LEN + payloadBytes, ret);
 }
 
 extern "C" size_t GetProcessConfigLen(struct PayloadHeader *header);
@@ -314,15 +352,16 @@ TEST_F(SmapConfigTest, TestWriteNumaConfig)
     int ret;
     int nrLocal = 4;
     struct PayloadHeader header;
-    struct ProcessManager manager;
-    memset(&manager, 0, sizeof(manager));
-    manager.remoteNumaInfo.privateSize = (uint64_t *)calloc(NM_COUNT(nrLocal), sizeof(uint64_t));
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    manager.remoteNumaInfo.privateSize =
+        (uint64_t *)calloc(NM_COUNT(nrLocal), sizeof(uint64_t));
     manager.remoteNumaInfo.privateUsedInfo =
         (struct RemoteNumaUsedInfo *)calloc(NM_COUNT(nrLocal), sizeof(struct RemoteNumaUsedInfo));
     ASSERT_NE(nullptr, manager.remoteNumaInfo.privateSize);
     ASSERT_NE(nullptr, manager.remoteNumaInfo.privateUsedInfo);
-    NM_AT(manager.remoteNumaInfo.privateSize, 0, nrLocal) = 128;
-    struct NumaPayload *payload = (struct NumaPayload *)calloc((nrLocal + 1) * REMOTE_NUMA_NUM, sizeof(*payload));
+    NM_AT(manager.remoteNumaInfo.privateSize, 0, 0) = 128;
+    struct NumaPayload *payload =
+        (struct NumaPayload *)calloc((nrLocal + 1) * SMAP_MAX_NUMNODES, sizeof(*payload));
 
     ASSERT_NE(nullptr, payload);
 
@@ -526,16 +565,18 @@ TEST_F(SmapConfigTest, TestRecoverNumaConfig)
     int remote1 = 5;
     int remote2 = 7;
     char numaBase;
-    struct ProcessManager manager;
-    memset(&manager, 0, sizeof(manager));
-    manager.remoteNumaInfo.privateSize = (uint64_t *)calloc(NM_COUNT(nrLocal), sizeof(uint64_t));
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    manager.remoteNumaInfo.privateSize =
+        (uint64_t *)calloc(NM_COUNT(nrLocal), sizeof(uint64_t));
     manager.remoteNumaInfo.privateUsedInfo =
         (struct RemoteNumaUsedInfo *)calloc(NM_COUNT(nrLocal), sizeof(struct RemoteNumaUsedInfo));
     ASSERT_NE(nullptr, manager.remoteNumaInfo.privateSize);
     ASSERT_NE(nullptr, manager.remoteNumaInfo.privateUsedInfo);
-    struct NumaPayload *payload = (struct NumaPayload *)calloc((nrLocal + 1) * REMOTE_NUMA_NUM, sizeof(*payload));
-    payload[local1 * REMOTE_NUMA_NUM + remote1 - nrLocal].size = 1024; // local1-remote1 has 1024MB
-    payload[local2 * REMOTE_NUMA_NUM + remote2 - nrLocal].size = 512;  // local2-remote2 has 512MB
+    struct NumaPayload *payload =
+        (struct NumaPayload *)calloc((nrLocal + 1) * SMAP_MAX_NUMNODES, sizeof(*payload));
+    ASSERT_NE(nullptr, payload);
+    payload[local1 * SMAP_MAX_NUMNODES + remote1].size = 1024; // local1-remote1 has 1024MB
+    payload[local2 * SMAP_MAX_NUMNODES + remote2].size = 512; // local2-remote2 has 512MB
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(nrLocal));
@@ -564,16 +605,16 @@ TEST_F(SmapConfigTest, TestWriteOneNumaConfig)
     struct NumaPayload np = {.local = localNid, .remote = remoteNid, .size = size};
     struct NumaPayload *payload;
 
-    payload = (struct NumaPayload *)calloc((nrLocal + 1) * REMOTE_NUMA_NUM, sizeof(*payload));
+    payload = (struct NumaPayload *)calloc((nrLocal + 1) * SMAP_MAX_NUMNODES, sizeof(*payload));
     ASSERT_NE(nullptr, payload);
     for (int i = 0; i < nrLocal; i++) {
-        for (int j = 0; j < REMOTE_NUMA_NUM; j++) {
-            payload[i * REMOTE_NUMA_NUM + j].local = i;
-            payload[i * REMOTE_NUMA_NUM + j].remote = j;
-            payload[i * REMOTE_NUMA_NUM + j].size = 0;
+        for (int j = 0; j < SMAP_MAX_NUMNODES; j++) {
+            payload[i * SMAP_MAX_NUMNODES + j].local = i;
+            payload[i * SMAP_MAX_NUMNODES + j].remote = j;
+            payload[i * SMAP_MAX_NUMNODES + j].size = 0;
         }
     }
-    index = localNid * REMOTE_NUMA_NUM + remoteNid - nrLocal;
+    index = localNid * SMAP_MAX_NUMNODES + remoteNid;
     ASSERT_EQ(0, payload[index].size);
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(nrLocal));
@@ -584,24 +625,28 @@ TEST_F(SmapConfigTest, TestWriteOneNumaConfig)
     free(payload);
 }
 
-extern "C" int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayload *payload);
+extern "C" int AssignProcessAttr(ProcessAttr *attr, const struct ProcessPayloadHeader *header,
+                                 const NumaBitmap *numaNodes, const struct PersistRemoteTarget *targets);
 TEST_F(SmapConfigTest, TestAssignProcessAttr)
 {
     ProcessAttr attr;
-    struct ProcessPayload payload = {
-        .pid = 1025,
-        .scanType = NORMAL_SCAN,
-        .type = VM_TYPE,
-        .state = PROC_MOVE,
-        .migrateMode = MIG_RATIO_MODE,
-        .srcNid = NUMA_NO_NODE,
-        .numaNodes = 0x11,
-        .scanTime = 200,
-        .duration = 1,
-        .count = 1,
-    };
-    payload.migrateParam[0].nid = 4;
-    payload.migrateParam[0].ratio = 50;
+    struct ProcessPayloadHeader header = {};
+    header.pid = 1025;
+    header.scanType = NORMAL_SCAN;
+    header.type = VM_TYPE;
+    header.state = PROC_MOVE;
+    header.migrateMode = MIG_RATIO_MODE;
+    header.srcNid = NUMA_NO_NODE;
+    header.scanTime = 200;
+    header.duration = 0;
+    header.nrWords = NumaWordsForCap();
+    header.count = 1;
+    struct PersistRemoteTarget targets[1] = {{ .nid = 4, .ratio = 50, .memSize = 0 }};
+    NumaBitmap bm = {};
+    ASSERT_TRUE(NumaBitmapAlloc(&bm));
+    NumaBitmapSet(&bm, 0);
+    NumaBitmapSet(&bm, 4);
+
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     memset(&attr, 0, sizeof(ProcessAttr));
     ASSERT_EQ(attr.pid, 0);
@@ -610,77 +655,97 @@ TEST_F(SmapConfigTest, TestAssignProcessAttr)
     ASSERT_EQ(attr.state, 0);
     ASSERT_EQ(attr.scanType, 0);
     ASSERT_EQ(attr.scanTime, 0);
-    ASSERT_EQ(attr.numaAttr.numaNodes, 0);
     ASSERT_EQ(attr.isFirstScan, false);
     ASSERT_EQ(attr.enableSwap, false);
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
-    EXPECT_EQ(0, AssignProcessAttr(&attr, &payload));
-    EXPECT_EQ(attr.pid, payload.pid);
-    EXPECT_EQ(attr.initLocalMemRatio, payload.migrateParam[0].ratio);
-    EXPECT_EQ(attr.type, payload.type);
-    EXPECT_EQ(attr.state, payload.state);
-    EXPECT_EQ(attr.scanType, payload.scanType);
-    EXPECT_EQ(attr.scanTime, payload.scanTime);
-    ASSERT_EQ(attr.numaAttr.numaNodes, payload.numaNodes);
+    EXPECT_EQ(0, AssignProcessAttr(&attr, &header, &bm, targets));
+    EXPECT_EQ(attr.pid, header.pid);
+    EXPECT_EQ(attr.initLocalMemRatio, targets[0].ratio);
+    EXPECT_EQ(attr.type, header.type);
+    EXPECT_EQ(attr.state, header.state);
+    EXPECT_EQ(attr.scanType, header.scanType);
+    EXPECT_EQ(attr.scanTime, header.scanTime);
+    EXPECT_TRUE(NumaBitmapTest(&attr.numaAttr.numaNodes, 0));
+    EXPECT_TRUE(NumaBitmapTest(&attr.numaAttr.numaNodes, 4));
+    EXPECT_EQ(attr.numaAttr.numaNodes.nWords, NumaWordsForCap());
     EXPECT_EQ(NUMA_NO_NODE, attr.targetConfig.sourceLocalNid);
     EXPECT_EQ(attr.isFirstScan, true);
     EXPECT_EQ(attr.enableSwap, true);
     FreeProcessAttrArrays(&attr);
+    NumaBitmapFree(&bm);
 }
 
 TEST_F(SmapConfigTest, TestAssignProcessAttrRestoresIgnoreRemoteCapacity)
 {
     ProcessAttr attr;
-    struct ProcessPayload payload = {0};
-    payload.pid = 1025;
-    payload.scanType = NORMAL_SCAN;
-    payload.type = PROCESS_TYPE;
-    payload.state = PROC_IDLE;
-    payload.migrateMode = MIG_RATIO_MODE;
-    payload.count = 0;
-    payload.ignoreRemoteCapacity = 1;
+    struct ProcessPayloadHeader header = {};
+    header.pid = 1025;
+    header.scanType = NORMAL_SCAN;
+    header.type = PROCESS_TYPE;
+    header.state = PROC_IDLE;
+    header.migrateMode = MIG_RATIO_MODE;
+    header.nrWords = NumaWordsForCap();
+    header.count = 0;
+    header.ignoreRemoteCapacity = 1;
+    struct PersistRemoteTarget targets[1] = {};
+    NumaBitmap bm = {};
+    ASSERT_TRUE(NumaBitmapAlloc(&bm));
 
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     memset(&attr, 0, sizeof(ProcessAttr));
-    EXPECT_EQ(0, AssignProcessAttr(&attr, &payload));
+    EXPECT_EQ(0, AssignProcessAttr(&attr, &header, &bm, targets));
     EXPECT_TRUE(attr.ignoreRemoteCapacity);
+    NumaBitmapFree(&attr.numaAttr.numaNodes);
+    NumaBitmapFree(&bm);
 }
 
 TEST_F(SmapConfigTest, TestAssignProcessAttrIgnoreRemoteCapacityDefault)
 {
     ProcessAttr attr;
-    struct ProcessPayload payload = {0};
-    payload.pid = 1025;
-    payload.scanType = NORMAL_SCAN;
-    payload.type = PROCESS_TYPE;
-    payload.state = PROC_IDLE;
-    payload.migrateMode = MIG_RATIO_MODE;
-    payload.count = 0;
-    payload.ignoreRemoteCapacity = 0;
+    struct ProcessPayloadHeader header = {};
+    header.pid = 1025;
+    header.scanType = NORMAL_SCAN;
+    header.type = PROCESS_TYPE;
+    header.state = PROC_IDLE;
+    header.migrateMode = MIG_RATIO_MODE;
+    header.nrWords = NumaWordsForCap();
+    header.count = 0;
+    header.ignoreRemoteCapacity = 0;
+    struct PersistRemoteTarget targets[1] = {};
+    NumaBitmap bm = {};
+    ASSERT_TRUE(NumaBitmapAlloc(&bm));
 
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     memset(&attr, 0, sizeof(ProcessAttr));
-    EXPECT_EQ(0, AssignProcessAttr(&attr, &payload));
+    EXPECT_EQ(0, AssignProcessAttr(&attr, &header, &bm, targets));
     EXPECT_FALSE(attr.ignoreRemoteCapacity);
+    NumaBitmapFree(&attr.numaAttr.numaNodes);
+    NumaBitmapFree(&bm);
 }
 
 extern "C" size_t CalcNumaConfigLen(void);
 extern "C" bool IsProcessConfigValid(char *processBase, size_t totalLen);
 TEST_F(SmapConfigTest, TestIsProcessConfigValid)
 {
-    bool ret;
-    int nrProcess = 2;
-    size_t totalLen;
     size_t numaConfigLen = 10;
-    struct PayloadHeader header = {0};
-
-    header.len = (uint32_t)nrProcess * CONFIG_PROC_LEN;
-    totalLen = (size_t)header.len + PAYLOAD_HEADER_LEN + CONFIG_HEADER_LEN + numaConfigLen;
     MOCKER(CalcNumaConfigLen).stubs().will(returnValue(numaConfigLen));
-    ret = IsProcessConfigValid((char *)&header, totalLen);
-    EXPECT_TRUE(ret);
 
-    header.len--;
-    ret = IsProcessConfigValid((char *)&header, totalLen);
-    EXPECT_FALSE(ret);
+    uint32_t nrWords = NumaWordsForCap();
+    size_t stride = CONFIG_PROC_HEADER_LEN + (size_t)nrWords * sizeof(unsigned long);
+    char *buf = (char *)calloc(1, PAYLOAD_HEADER_LEN + stride);
+    ASSERT_NE(nullptr, buf);
+    struct PayloadHeader *header = (struct PayloadHeader *)buf;
+    header->len = (uint32_t)stride;
+    struct ProcessPayloadHeader *ph = (struct ProcessPayloadHeader *)(buf + PAYLOAD_HEADER_LEN);
+    ph->nrWords = nrWords;
+    ph->count = 0;
+
+    size_t totalLen = (size_t)header->len + PAYLOAD_HEADER_LEN + CONFIG_HEADER_LEN + numaConfigLen;
+    EXPECT_TRUE(IsProcessConfigValid(buf, totalLen));
+
+    header->len--;
+    EXPECT_FALSE(IsProcessConfigValid(buf, totalLen));
+    free(buf);
 }
 
 extern "C" bool HasProcessConfig(size_t totalLen);
@@ -706,42 +771,30 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfig)
     int ret;
     int nrProcess = 2;
     ProcessAttr *attr;
-    struct PayloadHeader header = {.len = nrProcess * CONFIG_PROC_LEN};
-    struct ProcessManager manager;
-    memset(&manager, 0, sizeof(manager));
-    struct ProcessPayload payload[2] = {};
-    payload[0] = {.pid = 1025,
-                  .scanType = NORMAL_SCAN,
-                  .type = PROCESS_TYPE,
-                  .state = PROC_IDLE,
-                  .migrateMode = MIG_RATIO_MODE,
-                  .srcNid = NUMA_NO_NODE,
-                  .numaNodes = 0x11,
-                  .scanTime = 200,
-                  .count = 1,
-                  .migrateParam = {{.nid = 4, .ratio = 25}}};
-    payload[1] = {.pid = 1026,
-                  .scanType = NORMAL_SCAN,
-                  .type = PROCESS_TYPE,
-                  .state = PROC_IDLE,
-                  .migrateMode = MIG_RATIO_MODE,
-                  .srcNid = NUMA_NO_NODE,
-                  .numaNodes = 0x21,
-                  .scanTime = 200,
-                  .count = 1,
-                  .migrateParam = {{.nid = 5, .ratio = 15}}};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+
+    struct PersistRemoteTarget t0[1] = {{ .nid = 4, .ratio = 25, .memSize = 0 }};
+    struct PersistRemoteTarget t1[1] = {{ .nid = 5, .ratio = 15, .memSize = 0 }};
+    const int bits0[] = {0, 4};
+    const int bits1[] = {0, 5};
+    alignas(8) char buf[1024] = {};
+    size_t off = BuildV3Record(buf, 1025, NORMAL_SCAN, PROCESS_TYPE, PROC_IDLE, MIG_RATIO_MODE, 200, bits0, 2,
+                               t0, 1);
+    off += BuildV3Record(buf + off, 1026, NORMAL_SCAN, PROCESS_TYPE, PROC_IDLE, MIG_RATIO_MODE, 200, bits1, 2,
+                         t1, 1);
+    struct PayloadHeader header = {.len = (uint32_t)off};
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
-    MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
+    MOCKER(JumpToProcessPayload).stubs().will(returnValue(static_cast<char *>(buf)));
     MOCKER(InitProcessMigrationTargetState).expects(exactly(nrProcess));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)false));
     ret = RecoverProcessConfig((char *)&header);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(nrProcess, manager.nr[PROCESS_TYPE]);
-    EXPECT_EQ(payload[0].pid, PmHeadAttr(&manager)->pid);
-    EXPECT_EQ(payload[1].pid, PmNthAttr(&manager, 1)->pid);
+    EXPECT_EQ(1025, PmHeadAttr(&manager)->pid);
+    EXPECT_EQ(1026, PmNthAttr(&manager, 1)->pid);
 
     attr = PmHeadAttr(&manager);
     while (attr) {
@@ -754,23 +807,17 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfig)
 TEST_F(SmapConfigTest, TestRecoverProcessConfigTwo)
 {
     int ret;
-    int nrProcess = 1;
-    struct PayloadHeader header = {.len = nrProcess * CONFIG_PROC_LEN};
-    struct ProcessManager manager;
-    memset(&manager, 0, sizeof(manager));
-    struct ProcessPayload payload[] = {{.pid = 1025,
-                                        .scanType = NORMAL_SCAN,
-                                        .type = PROCESS_TYPE,
-                                        .state = PROC_IDLE,
-                                        .migrateMode = MIG_RATIO_MODE,
-                                        .srcNid = NUMA_NO_NODE,
-                                        .numaNodes = 0x11,
-                                        .scanTime = 200,
-                                        .count = 1,
-                                        .migrateParam = {{.nid = 4, .ratio = 25}}}};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct PersistRemoteTarget t0[1] = {{ .nid = 4, .ratio = 25, .memSize = 0 }};
+    const int bits0[] = {0, 4};
+    alignas(8) char buf[512] = {};
+    size_t off = BuildV3Record(buf, 1025, NORMAL_SCAN, PROCESS_TYPE, PROC_IDLE, MIG_RATIO_MODE, 200, bits0, 2,
+                               t0, 1);
+    struct PayloadHeader header = {.len = (uint32_t)off};
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    MOCKER(JumpToProcessPayload).stubs().will(returnValue(static_cast<char *>(buf)));
     MOCKER(calloc).stubs().will(returnValue(static_cast<void *>(nullptr)));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)false));
@@ -783,23 +830,17 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigPidNotExist)
 {
     /* 进程已退出（-ESRCH）时同样跳过恢复，不进入纳管流程 */
     int ret;
-    int nrProcess = 1;
-    struct PayloadHeader header = {.len = nrProcess * CONFIG_PROC_LEN};
-    struct ProcessManager manager;
-    memset(&manager, 0, sizeof(manager));
-    struct ProcessPayload payload[] = {{.pid = 1025,
-                                        .scanType = NORMAL_SCAN,
-                                        .type = PROCESS_TYPE,
-                                        .state = PROC_IDLE,
-                                        .migrateMode = MIG_RATIO_MODE,
-                                        .numaNodes = 0x11,
-                                        .scanTime = 200,
-                                        .count = 1,
-                                        .migrateParam = {{.nid = 4, .ratio = 25}}}};
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    struct PersistRemoteTarget t0[1] = {{ .nid = 4, .ratio = 25, .memSize = 0 }};
+    const int bits[] = {0, 4};
+    alignas(8) char buf[512] = {};
+    size_t off = BuildV3Record(buf, 1025, NORMAL_SCAN, PROCESS_TYPE, PROC_IDLE, MIG_RATIO_MODE, 200, bits, 2,
+                               t0, 1);
+    struct PayloadHeader header = {.len = (uint32_t)off};
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
-    MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)payload));
+    MOCKER(JumpToProcessPayload).stubs().will(returnValue(static_cast<char *>(buf)));
     MOCKER(InitProcessMigrationTargetState).expects(never());
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(IsPidUsingHugePages).stubs().will(returnValue(-ESRCH));
@@ -810,26 +851,22 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigPidNotExist)
 
 TEST_F(SmapConfigTest, TestRecoverProcessConfigRestoresPairMultiRemoteTarget)
 {
-    struct PayloadHeader header = {.len = CONFIG_PROC_LEN};
-    struct ProcessManager manager;
-    memset(&manager, 0, sizeof(manager));
-    struct ProcessPayload payload = {
-        .pid = 1234,
-        .scanType = NORMAL_SCAN,
-        .type = PROCESS_TYPE,
-        .state = PROC_IDLE,
-        .migrateMode = MIG_MEMSIZE_MODE,
-        .srcNid = 2,
-        .numaNodes = 0x57,
-        .scanTime = 200,
-        .count = 2,
-        .migrateParam = {{.nid = 4, .memSize = 2048}, {.nid = 6, .memSize = 4096}},
-    };
+    struct ProcessManager manager; memset(&manager, 0, sizeof(manager));
+    /* 0x53 = bits 0,1,4,6 */
+    struct PersistRemoteTarget t0[2] = {{ .nid = 4, .ratio = 0, .memSize = 2048 },
+                                        { .nid = 6, .ratio = 0, .memSize = 4096 }};
+    const int bits[] = {0, 1, 4, 6};
+    alignas(8) char buf[512] = {};
+    size_t off = BuildV3Record(buf, 1234, NORMAL_SCAN, PROCESS_TYPE, PROC_IDLE, MIG_MEMSIZE_MODE, 200, bits, 4,
+                               t0, 2);
+    /* 记录迁出源本地 NUMA，校验恢复后 sourceLocalNid 生效 */
+    reinterpret_cast<struct ProcessPayloadHeader *>(buf)->srcNid = 2;
+    struct PayloadHeader header = {.len = (uint32_t)off};
 
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     MOCKER(GetPageSize).stubs().will(returnValue(static_cast<uint32_t>(PAGESIZE_4K)));
-    MOCKER(JumpToProcessPayload).stubs().will(returnValue((char *)&payload));
+    MOCKER(JumpToProcessPayload).stubs().will(returnValue(static_cast<char *>(buf)));
     MOCKER(IsHugeMode).stubs().will(returnValue(false));
     MOCKER(IsPidUsingHugePages).stubs().will(returnValue((int)false));
 
@@ -838,7 +875,10 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigRestoresPairMultiRemoteTarget)
     EXPECT_EQ(2U, PmHeadAttr(&manager)->targetConfig.count);
     EXPECT_EQ(MIG_MEMSIZE_MODE, PmHeadAttr(&manager)->targetConfig.migrateMode);
     EXPECT_EQ(2, PmHeadAttr(&manager)->targetConfig.sourceLocalNid);
-    EXPECT_EQ(0x57U, PmHeadAttr(&manager)->numaAttr.numaNodes);
+    EXPECT_TRUE(NumaBitmapTest(&PmHeadAttr(&manager)->numaAttr.numaNodes, 0));
+    EXPECT_TRUE(NumaBitmapTest(&PmHeadAttr(&manager)->numaAttr.numaNodes, 1));
+    EXPECT_TRUE(NumaBitmapTest(&PmHeadAttr(&manager)->numaAttr.numaNodes, 4));
+    EXPECT_TRUE(NumaBitmapTest(&PmHeadAttr(&manager)->numaAttr.numaNodes, 6));
     EXPECT_EQ(4, PmHeadAttr(&manager)->targetConfig.targets[0].remoteNid);
     EXPECT_EQ(2048U, PmHeadAttr(&manager)->targetConfig.targets[0].memSizeKB);
     EXPECT_EQ(6, PmHeadAttr(&manager)->targetConfig.targets[1].remoteNid);
@@ -850,26 +890,58 @@ TEST_F(SmapConfigTest, TestRecoverProcessConfigRestoresPairMultiRemoteTarget)
     PidSlotRemove(&manager, (attr)->pid);
 }
 
-extern "C" int WriteProcessConfig(char *processBase, struct ProcessPayload *p, int nrPayload);
+extern "C" int WriteProcessConfig(char *processBase, const struct ProcessPayload *p, int nrPayload);
 TEST_F(SmapConfigTest, TestWriteProcessConfig)
 {
     int ret;
     int nrProcess = 2;
-    struct PayloadHeader header;
-    struct ProcessPayload np[] = {{1025, 25, NORMAL_SCAN, VM_TYPE, {1}, {5}, 200},
-                                  {1026, 15, NORMAL_SCAN, VM_TYPE, {2}, {6}, 200}};
-    struct ProcessPayload *payload;
+    struct PayloadHeader header = {};
+    struct ProcessPayload np[2] = {};
+    ASSERT_TRUE(NumaBitmapAlloc(&np[0].numaNodes));
+    ASSERT_TRUE(NumaBitmapAlloc(&np[1].numaNodes));
+    np[0].pid = 1025;
+    np[0].scanType = 25;
+    np[0].type = NORMAL_SCAN;
+    np[0].state = VM_TYPE;
+    np[0].migrateMode = 1;
+    NumaBitmapSet(&np[0].numaNodes, 0);
+    NumaBitmapSet(&np[0].numaNodes, 2);
+    np[0].scanTime = 200;
+    np[1].pid = 1026;
+    np[1].scanType = 15;
+    np[1].type = NORMAL_SCAN;
+    np[1].state = VM_TYPE;
+    np[1].migrateMode = 2;
+    NumaBitmapSet(&np[1].numaNodes, 1);
+    NumaBitmapSet(&np[1].numaNodes, 2);
+    np[1].scanTime = 200;
 
-    payload = (struct ProcessPayload *)calloc(nrProcess, sizeof(*payload));
+    uint32_t nrWords = NumaWordsForCap();
+    size_t stride = CONFIG_PROC_HEADER_LEN + (size_t)nrWords * sizeof(unsigned long);
+    char *payload = (char *)calloc(nrProcess, stride);
     ASSERT_NE(nullptr, payload);
 
-    MOCKER(JumpToProcessPayload).stubs().will(returnValue(reinterpret_cast<char *>(payload)));
+    MOCKER(JumpToProcessPayload).stubs().will(returnValue(payload));
     ret = WriteProcessConfig((char *)&header, np, nrProcess);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(payload[0].pid, np[0].pid);
-    EXPECT_EQ(payload[1].pid, np[1].pid);
+    EXPECT_EQ((uint32_t)(nrProcess * stride), header.len);
+
+    struct ProcessPayloadHeader *h0 = (struct ProcessPayloadHeader *)payload;
+    EXPECT_EQ(np[0].pid, h0->pid);
+    EXPECT_EQ(nrWords, h0->nrWords);
+    unsigned long *w0 = (unsigned long *)(payload + CONFIG_PROC_HEADER_LEN);
+    EXPECT_TRUE((w0[0] & NID_MASK(0)) != 0);
+    EXPECT_TRUE((w0[0] & NID_MASK(2)) != 0);
+    struct ProcessPayloadHeader *h1 = (struct ProcessPayloadHeader *)(payload + stride);
+    EXPECT_EQ(np[1].pid, h1->pid);
+    EXPECT_EQ(nrWords, h1->nrWords);
+    unsigned long *w1 = (unsigned long *)(payload + stride + CONFIG_PROC_HEADER_LEN);
+    EXPECT_TRUE((w1[0] & NID_MASK(1)) != 0);
+    EXPECT_TRUE((w1[0] & NID_MASK(2)) != 0);
 
     free(payload);
+    NumaBitmapFree(&np[0].numaNodes);
+    NumaBitmapFree(&np[1].numaNodes);
 }
 
 extern "C" int BuildAllProcessPayload(struct ProcessPayload **payload, int *len);
@@ -902,7 +974,10 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
     attr1->scanTime = 200;
     attr1->scanType = NORMAL_SCAN;
     attr1->targetConfig.sourceLocalNid = NUMA_NO_NODE;
-    attr1->numaAttr.numaNodes = 0x22;
+    ASSERT_TRUE(NumaBitmapAlloc(&attr1->numaAttr.numaNodes));
+    /* 0x22 = bits 1,5 */
+    NumaBitmapSet(&attr1->numaAttr.numaNodes, 1);
+    NumaBitmapSet(&attr1->numaAttr.numaNodes, 5);
     attr2->type = VM_TYPE;
     attr2->pid = 1026;
     attr2->initLocalMemRatio = 15;
@@ -910,7 +985,10 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
     attr2->scanTime = 200;
     attr2->scanType = NORMAL_SCAN;
     attr2->targetConfig.sourceLocalNid = NUMA_NO_NODE;
-    attr2->numaAttr.numaNodes = 0x44;
+    ASSERT_TRUE(NumaBitmapAlloc(&attr2->numaAttr.numaNodes));
+    /* 0x44 = bits 2,6 */
+    NumaBitmapSet(&attr2->numaAttr.numaNodes, 2);
+    NumaBitmapSet(&attr2->numaAttr.numaNodes, 6);
 
     PidSlotAdd(&manager, attr1);
     PidSlotAdd(&manager, attr2);
@@ -922,6 +1000,10 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
     EXPECT_NE(nullptr, payload);
     EXPECT_EQ(attr1->pid, payload[0].pid);
     EXPECT_EQ(attr2->pid, payload[1].pid);
+    EXPECT_TRUE(NumaBitmapTest(&payload[0].numaNodes, 1));
+    EXPECT_TRUE(NumaBitmapTest(&payload[0].numaNodes, 5));
+    EXPECT_TRUE(NumaBitmapTest(&payload[1].numaNodes, 2));
+    EXPECT_TRUE(NumaBitmapTest(&payload[1].numaNodes, 6));
 
     attr = PmHeadAttr(&manager);
     while (attr) {
@@ -929,6 +1011,9 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayload)
         attr = PmHeadAttr(&manager);
     }
     ASSERT_EQ(nullptr, PmHeadAttr(&manager));
+    for (int i = 0; i < len; i++) {
+        NumaBitmapFree(&payload[i].numaNodes);
+    }
     free(payload);
 }
 
@@ -960,7 +1045,10 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
     attr1->scanTime = 2000;
     attr1->scanType = NORMAL_SCAN;
     attr1->targetConfig.sourceLocalNid = NUMA_NO_NODE;
-    attr1->numaAttr.numaNodes = 0x22;
+    ASSERT_TRUE(NumaBitmapAlloc(&attr1->numaAttr.numaNodes));
+    /* 0x22 = bits 1,5 */
+    NumaBitmapSet(&attr1->numaAttr.numaNodes, 1);
+    NumaBitmapSet(&attr1->numaAttr.numaNodes, 5);
     attr2->type = VM_TYPE;
     attr2->pid = 1235;
     attr2->initLocalMemRatio = 40;
@@ -968,7 +1056,10 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
     attr2->scanTime = 3000;
     attr2->scanType = HAM_SCAN;
     attr2->targetConfig.sourceLocalNid = NUMA_NO_NODE;
-    attr2->numaAttr.numaNodes = 0x44;
+    ASSERT_TRUE(NumaBitmapAlloc(&attr2->numaAttr.numaNodes));
+    /* 0x44 = bits 2,6 */
+    NumaBitmapSet(&attr2->numaAttr.numaNodes, 2);
+    NumaBitmapSet(&attr2->numaAttr.numaNodes, 6);
 
     PidSlotAdd(&manager, attr1);
     PidSlotAdd(&manager, attr2);
@@ -980,6 +1071,10 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
     EXPECT_NE(nullptr, payload);
     EXPECT_EQ(attr1->pid, payload[0].pid);
     EXPECT_EQ(attr2->pid, payload[1].pid);
+    EXPECT_TRUE(NumaBitmapTest(&payload[0].numaNodes, 1));
+    EXPECT_TRUE(NumaBitmapTest(&payload[0].numaNodes, 5));
+    EXPECT_TRUE(NumaBitmapTest(&payload[1].numaNodes, 2));
+    EXPECT_TRUE(NumaBitmapTest(&payload[1].numaNodes, 6));
 
     attr = PmHeadAttr(&manager);
     while (attr) {
@@ -987,6 +1082,9 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadTwo)
         attr = PmHeadAttr(&manager);
     }
     ASSERT_EQ(nullptr, PmHeadAttr(&manager));
+    for (int i = 0; i < len; i++) {
+        NumaBitmapFree(&payload[i].numaNodes);
+    }
     free(payload);
 }
 
@@ -1001,7 +1099,12 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffe
     attr.pid = 1234;
     attr.scanType = NORMAL_SCAN;
     attr.state = PROC_MIGRATE;
-    attr.numaAttr.numaNodes = 0x53;
+    ASSERT_TRUE(NumaBitmapAlloc(&attr.numaAttr.numaNodes));
+    /* 0x53 = bits 0,1,4,6 */
+    NumaBitmapSet(&attr.numaAttr.numaNodes, 0);
+    NumaBitmapSet(&attr.numaAttr.numaNodes, 1);
+    NumaBitmapSet(&attr.numaAttr.numaNodes, 4);
+    NumaBitmapSet(&attr.numaAttr.numaNodes, 6);
     attr.targetConfig.migrateMode = MIG_MEMSIZE_MODE;
     attr.targetConfig.sourceLocalNid = 0;
     attr.targetConfig.count = 2;
@@ -1024,13 +1127,15 @@ TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsPendingPairTargetAsEffe
     EXPECT_EQ(1, len);
     EXPECT_EQ(PROC_IDLE, payload[0].state);
     /* numaAttr.numaNodes is user-synthesized; persisted value is the last read-back result. */
-    EXPECT_EQ(0x53U, payload[0].numaNodes);
+    EXPECT_EQ(0x53UL, payload[0].numaNodes.bits[0]);
     EXPECT_EQ(MIG_MEMSIZE_MODE, payload[0].migrateMode);
     EXPECT_EQ(2, payload[0].srcNid);
     EXPECT_EQ(1, payload[0].count);
     EXPECT_EQ(8, payload[0].migrateParam[0].nid);
     EXPECT_EQ(8192U, payload[0].migrateParam[0].memSize);
+    NumaBitmapFree(&payload[0].numaNodes);
     free(payload);
+    NumaBitmapFree(&attr.numaAttr.numaNodes);
 }
 
 TEST_F(SmapConfigTest, TestBuildAllProcessPayloadPersistsIgnoreRemoteCapacity)
@@ -1097,7 +1202,7 @@ TEST_F(SmapConfigTest, TestMapAndWriteProcessConfig)
     char addr;
     char processBase;
     size_t mapLen;
-    struct ProcessPayload payload;
+    struct ProcessPayload payload = {};
 
     MOCKER(MapConfig).stubs().will(returnValue(static_cast<char *>(nullptr)));
     ret = MapAndWriteProcessConfig(fd, mapLen, &payload, nrPayload);
@@ -1128,7 +1233,7 @@ TEST_F(SmapConfigTest, TestMapAndWriteProcessConfigZeroPayload)
     char addr;
     char processBase;
     size_t mapLen;
-    struct ProcessPayload payload;
+    struct ProcessPayload payload = {};
 
     MOCKER(MapConfig).stubs().will(returnValue(&addr));
     MOCKER(JumpToProcessConfig).stubs().will(returnValue(&processBase));
@@ -1491,7 +1596,7 @@ TEST_F(SmapConfigTest, TestSyncOneNumaConfigInvalidRemote)
     ret = SyncOneNumaConfig(local, remote, size);
     EXPECT_EQ(-EINVAL, ret);
 
-    remote = nrLocal + REMOTE_NUMA_NUM;
+    remote = SMAP_MAX_NUMNODES;
     ret = SyncOneNumaConfig(local, remote, size);
     EXPECT_EQ(-EINVAL, ret);
 }

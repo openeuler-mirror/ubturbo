@@ -35,7 +35,7 @@ extern uint8_t g_criticalErrNodes[SMAP_NODE_CAP_LIMIT];
 typedef struct {
     uint32_t affinityLocalMask;
     uint32_t residentLocalMask;
-    uint64_t numaPages[MAX_NODES];
+    uint64_t numaPages[SMAP_MAX_NUMNODES];
     bool affinityValid;
     bool affinitySampled;
     bool residentValid;
@@ -53,7 +53,8 @@ int DetectPidType(pid_t pid);
 int RefreshManagedLocalState(ProcessAttr *attr, bool fullReplacement);
 int ConfigureMigrationTargetsWithCapacityPolicy(ProcessAttr *attr, const ProcessTargetConfig *config,
                                                 bool ignoreRemoteCapacity, bool skipRemoteResidencyCheck);
-int GetProcessNumaMapsObservation(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask, uint64_t numaPages[MAX_NODES]);
+int GetProcessNumaMapsObservation(pid_t pid, bool hugeFlag, uint32_t *residentLocalMask,
+                                  uint64_t numaPages[SMAP_MAX_NUMNODES]);
 int CollectProcessCandidateObservation(pid_t pid, bool hugeFlag, ManagedLocalObservation *observation);
 int ApplyManagedLocalObservation(ProcessAttr *attr, const ManagedLocalObservation *observation, bool fullReplacement);
 
@@ -93,7 +94,8 @@ int RefreshManagedLocalStatePeriodic(ProcessAttr *attr);
 
 /* ========== manage_grouped.c 导出给其他文件的内部函数 ========== */
 
-void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, uint32_t nodeBitmap, const GroupMigrationPolicy *policy);
+void SetGroupedProcessConfig(ProcessAttr *attr, pid_t pid, const NumaBitmap *nodeBitmap,
+                             const GroupMigrationPolicy *policy);
 
 /* ========== manage_pair.c 导出给其他文件的内部函数 ========== */
 

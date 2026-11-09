@@ -18,6 +18,16 @@
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
 
+static inline NumaBitmap BmFromWord(unsigned long w)
+{
+    NumaBitmap bm = {};
+    (void)NumaBitmapAlloc(&bm);
+    if (bm.bits != NULL) {
+        bm.bits[0] = w;
+    }
+    return bm;
+}
+
 // Test-only compat: old compile-time NUMA constants (8 local + 18 remote)
 #define OLD_REMOTE_NUMA_NUM 18
 #define OLD_REMOTE_NUMA_BITS 18
@@ -124,7 +134,7 @@ TEST_F(SeparateStrategyTest, TestPeriodConfig)
 TEST_F(SeparateStrategyTest, TestShouldMigrate)
 {
     ProcessAttr process = {};
-    process.numaAttr.numaNodes = 0b10011001;
+    process.numaAttr.numaNodes = BmFromWord(0b10011001);
     process.separateParam.maxMigrate = 0;
     bool ret = ShouldMigrate(&process);
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
@@ -176,7 +186,11 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KAbnormal)
     MOCKER(ShouldMigrate).stubs().will(returnValue(true));
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&process));
-    process.numaAttr.numaNodes = 0b01100011;
+    /* 0b01100011 = bits 0,1,5,6；InitProcessAttrArrays 会重新分配并清零，须在其后设置 */
+    NumaBitmapSet(&process.numaAttr.numaNodes, 0);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 1);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 5);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 6);
     MOCKER(BuildSelectKMlistAddr).stubs().will(returnValue(-ENOMEM));
     MOCKER(FreeMlist).stubs().will(ignoreReturnValue());
     /* SeparateStrategy 按 for_each_remote_nid 遍历远端，需注册位图中的 L2 节点 5/6 */
@@ -195,7 +209,6 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KNormal)
     ProcessAttr process;
     struct MigList *mlist = TestMlist();
     process.separateParam.freqWt = 0;
-    process.numaAttr.numaNodes = 0b01100011;
 
     MOCKER(InitSeparateParam).stubs().will(ignoreReturnValue());
     MOCKER(CalcMaxMigrate).stubs().will(ignoreReturnValue());
@@ -394,7 +407,6 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasic)
     ProcessAttr process = {};
     struct MigList *mlist = TestMlist();
     initializeMigList(mlist);
-    process.numaAttr.numaNodes = 0b00100001;
     process.walkPage.nrPage = 10;
     process.separateParam.freqWt = 0;
     int nodeL0 = 0;
@@ -402,6 +414,9 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasic)
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    /* 0b00100001 = bits 0,5；InitProcessAttrArrays 会重新分配并清零，须在其后设置 */
+    NumaBitmapSet(&process.numaAttr.numaNodes, 0);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 5);
     NM_AT(process.strategyAttr.nrMigratePages, nodeL0, nodeR5) = 0;
     NM_AT(process.strategyAttr.nrMigrateBackPages, nodeL0, nodeR5) = 0;
 
@@ -424,7 +439,6 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasicDemote)
     ProcessAttr process = {};
     struct MigList *mlist = TestMlist();
     initializeMigList(mlist);
-    process.numaAttr.numaNodes = 0b00100001;
     process.walkPage.nrPage = 10;
     process.separateParam.freqWt = 0;
     int nodeL0 = 0;
@@ -432,6 +446,9 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasicDemote)
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    /* 0b00100001 = bits 0,5；InitProcessAttrArrays 会重新分配并清零，须在其后设置 */
+    NumaBitmapSet(&process.numaAttr.numaNodes, 0);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 5);
     NM_AT(process.strategyAttr.nrMigratePages, nodeL0, nodeR5) = 2;
     NM_AT(process.strategyAttr.nrMigrateBackPages, nodeL0, nodeR5) = 0;
 
@@ -454,7 +471,6 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasicPromote)
     ProcessAttr process = {};
     struct MigList *mlist = TestMlist();
     initializeMigList(mlist);
-    process.numaAttr.numaNodes = 0b00100001;
     process.walkPage.nrPage = 10;
     process.separateParam.freqWt = 0;
     int nodeL0 = 0;
@@ -462,6 +478,9 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapBasicPromote)
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    /* 0b00100001 = bits 0,5；InitProcessAttrArrays 会重新分配并清零，须在其后设置 */
+    NumaBitmapSet(&process.numaAttr.numaNodes, 0);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 5);
     NM_AT(process.strategyAttr.nrMigratePages, nodeL0, nodeR5) = 0;
     NM_AT(process.strategyAttr.nrMigrateBackPages, nodeL0, nodeR5) = 2;
 
@@ -484,7 +503,6 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapMultiNode)
     ProcessAttr process = {};
     struct MigList *mlist = TestMlist();
     initializeMigList(mlist);
-    process.numaAttr.numaNodes = 0b00100011;
     process.walkPage.nrPage = 10;
     process.separateParam.freqWt = 0;
     int nodeL0 = 0;
@@ -493,6 +511,10 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapMultiNode)
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    /* 0b00100011 = bits 0,1,5；InitProcessAttrArrays 会重新分配并清零，须在其后设置 */
+    NumaBitmapSet(&process.numaAttr.numaNodes, 0);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 1);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 5);
     NM_AT(process.strategyAttr.nrMigratePages, nodeL0, nodeR5) = 0;
     NM_AT(process.strategyAttr.nrMigrateBackPages, nodeL0, nodeR5) = 2;
     NM_AT(process.strategyAttr.nrMigratePages, nodeL1, nodeR5) = 0;
@@ -528,7 +550,6 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapLimitByFreePage)
     ProcessAttr process = {};
     struct MigList *mlist = TestMlist();
     initializeMigList(mlist);
-    process.numaAttr.numaNodes = 0b00100011;
     process.walkPage.nrPage = 10;
     process.separateParam.freqWt = 0;
     int nodeL0 = 0;
@@ -537,6 +558,10 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapLimitByFreePage)
 
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    /* 0b00100011 = bits 0,1,5；InitProcessAttrArrays 会重新分配并清零，须在其后设置 */
+    NumaBitmapSet(&process.numaAttr.numaNodes, 0);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 1);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 5);
     NM_AT(process.strategyAttr.nrMigratePages, nodeL0, nodeR5) = 0;
     NM_AT(process.strategyAttr.nrMigrateBackPages, nodeL0, nodeR5) = 0;
     NM_AT(process.strategyAttr.nrMigratePages, nodeL1, nodeR5) = 0;
@@ -887,14 +912,14 @@ TEST_F(SeparateStrategyTest, TestBuildSwapMigLists)
     uint64_t *migAddrArray[SMAP_MAX_NUMNODES] = { NULL };
     int nrLocalNuma = 4;
 
-    process.numaAttr.numaNodes = 0b0000001;
+    process.numaAttr.numaNodes = BmFromWord(0b0000001);
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)1));
     MOCKER(BuildMigListForDirection).stubs().will(returnValue(-ENOMEM));
     int ret = BuildSwapMigLists(&process, mlist, nrMig, migAddrArray, nrLocalNuma);
     EXPECT_EQ(-ENOMEM, ret);
 
     GlobalMockObject::verify();
-    process.numaAttr.numaNodes = 0b0100001;
+    process.numaAttr.numaNodes = BmFromWord(0b0100001);
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)1));
     MOCKER(BuildMigListForDirection).stubs().will(returnValue(0)).then(returnValue(-MULTI_NUMA_VM_OOM));
     ret = BuildSwapMigLists(&process, mlist, nrMig, migAddrArray, nrLocalNuma);
@@ -988,7 +1013,7 @@ TEST_F(SeparateStrategyTest, TestCalcMultiNumaVmSwapNumByFreq)
         levelActcData[i] = (LevelActcData *)calloc(1, sizeof(LevelActcData));
     }
 
-    process.numaAttr.numaNodes = 0b1000001;
+    process.numaAttr.numaNodes = BmFromWord(0b1000001);
     MOCKER(GetNrFreeHugePagesByNode).stubs().will(returnValue((uint64_t)1));
     MOCKER(CalMultiNumaVmLowMigrateNum).stubs().will(returnValue((uint64_t)1));
     uint64_t ret = CalcMultiNumaVmSwapNumByFreq(&process, levelActcData, levelActcLen);

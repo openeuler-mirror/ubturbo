@@ -45,7 +45,7 @@ static uint32_t BuildPairCapacityLocalMask(const ProcessAttr *attr, int remoteNi
     EnvMutexLock(&numaInfo->lock);
     for (int local = 0; local < nrLocalNuma; local++) {
         if (NM_AT(numaInfo->privateSize, local, remoteNid) > 0) {
-            AddL1(&capacityLocalMask, local);
+            capacityLocalMask |= (1U << local);
         }
     }
     if (numaInfo->sharedSize[remoteNid] > 0) {
@@ -65,7 +65,7 @@ static void DistributePairAccount(ProcessAttr *attr, int remoteNid, uint32_t loc
 
     for (int local = 0; local < nrLocalNuma; local++) {
         NM_AT(sa->remoteNrPagesAfterMigrate, local, remoteNid) = 0;
-        if (!InL1(localMask, local)) {
+        if (!((localMask) & (1U << (local)))) {
             continue;
         }
         uint32_t pages = (uint64_t)actualRemotePages * weights[local] / weightTotal;
@@ -75,7 +75,7 @@ static void DistributePairAccount(ProcessAttr *attr, int remoteNid, uint32_t loc
 
     uint32_t remainder = actualRemotePages - allocated;
     for (int local = 0; local < nrLocalNuma && remainder > 0; local++) {
-        if (!InL1(localMask, local) || weights[local] == 0) {
+        if (!((localMask) & (1U << (local))) || weights[local] == 0) {
             continue;
         }
         NM_AT(sa->remoteNrPagesAfterMigrate, local, remoteNid)++;
@@ -108,7 +108,7 @@ static void RebuildPairAccount(ProcessAttr *attr, int remoteNid, uint32_t actual
     int localCount = 0;
     int nrLocalNuma = GetNrLocalNuma();
     for (int local = 0; local < nrLocalNuma; local++) {
-        if (!InL1(rebuildLocalMask, local)) {
+        if (!((rebuildLocalMask) & (1U << (local)))) {
             continue;
         }
         weights[local] = attr->walkPage.nrPages[local];
@@ -118,7 +118,7 @@ static void RebuildPairAccount(ProcessAttr *attr, int remoteNid, uint32_t actual
 
     if (weightTotal == 0) {
         for (int local = 0; local < nrLocalNuma; local++) {
-            if (InL1(rebuildLocalMask, local)) {
+            if ((rebuildLocalMask) & (1U << (local))) {
                 weights[local] = 1;
             }
         }
@@ -152,7 +152,7 @@ void CalibratePairAccount(ProcessAttr *attr)
             weights[local] = pages;
             accountTotal += pages;
             if (pages > 0) {
-                AddL1(&accountLocalMask, local);
+                accountLocalMask |= (1U << local);
             }
         }
 
@@ -256,7 +256,7 @@ static uint64_t BuildManagedTotalPages(const ProcessAttr *attr, int nrLocalNuma)
     uint32_t managedLocalMask = attr->managedLocalState.managedLocalMask;
 
     for (int local = 0; local < nrLocalNuma; local++) {
-        if (!InL1(managedLocalMask, local)) {
+        if (!((managedLocalMask) & (1U << (local)))) {
             continue;
         }
         uint64_t whiteNum = attr->scanAttr.actCount[local].whiteNum;
@@ -335,7 +335,7 @@ static void PreservePairAccounts(const ProcessAttr *attr, const PairRequestConte
         uint64_t accounts[SMAP_MAX_NUMNODES] = { 0 };
         uint32_t eligibleMask = BuildEligiblePairMask(attr, context, remote);
         for (int local = 0; local < context->nrLocalNuma; local++) {
-            if (!InL1(eligibleMask, local)) {
+            if (!((eligibleMask) & (1U << (local)))) {
                 continue;
             }
             accounts[local] = NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, local, remote);
@@ -397,7 +397,7 @@ static void AllocateRemotePairRequest(const ProcessAttr *attr, const PairRequest
 
     for (int local = 0; local < context->nrLocalNuma; local++) {
         currentPages += NM_AT(pairRequests, local, remote);
-        if (!InL1(activeMask, local) || attr->walkPage.nrPages[local] == 0 ||
+        if (!((activeMask) & (1U << (local))) || attr->walkPage.nrPages[local] == 0 ||
             NM_AT(pairRequests, local, remote) >= UINT32_MAX) {
             continue;
         }
@@ -495,7 +495,7 @@ static int CompletePairRequestAllocation(const ProcessAttr *attr, const PairRequ
             }
             uint64_t flow = NM_AT(pairRequests, local, remote) - NM_AT(baseline, local, remote);
             uint32_t activeMask = BuildActivePairMask(attr, context, remote);
-            bool active = InL1(activeMask, local) && attr->walkPage.nrPages[local] > 0 &&
+            bool active = ((activeMask) & (1U << (local))) && attr->walkPage.nrPages[local] > 0 &&
                           NM_AT(baseline, local, remote) < UINT32_MAX;
             if (flow > 0 && !active) {
                 free(residual);
@@ -548,7 +548,7 @@ void BuildPairCapacityLocalMasks(struct ProcessManager *manager, const ProcessAt
     for (int remote = manager->nrLocalNuma; remote < cap; remote++) {
         for (int local = 0; local < manager->nrLocalNuma; local++) {
             if (NM_AT(manager->remoteNumaInfo.privateSize, local, remote) > 0) {
-                AddL1(&context->capacityLocalMask[remote], local);
+                context->capacityLocalMask[remote] |= (1U << local);
             }
         }
         if (manager->remoteNumaInfo.sharedSize[remote] > 0) {
@@ -848,7 +848,7 @@ static void BuildPairRequestContext(const struct ProcessManager *manager, const 
     for (int remoteNid = manager->nrLocalNuma; remoteNid < cap; remoteNid++) {
         for (int local = 0; local < manager->nrLocalNuma; local++) {
             if (NM_AT(privatePages, local, remoteNid) > 0) {
-                AddL1(&context->capacityLocalMask[remoteNid], local);
+                context->capacityLocalMask[remoteNid] |= (1U << local);
             }
         }
         if (sharedPages[remoteNid] > 0) {
