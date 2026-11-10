@@ -187,8 +187,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pageType);
 
 * SMAP初始化后才能调用。
 * pageType需要和当前场景匹配。
-* HCCS代际远端NUMA最大值为21。
-* UB代际远端NUMA最大值为21。
+* 远端NUMA nid为全局绝对节点号，合法范围为 `[本地NUMA数量, 运行期节点上限)`，上限默认 256、最大 1024。
 * 远端NUMA被禁用时无法配置迁出（调用SmapMigrateBack接口时会默认禁用远端NUMA）。
 * 如果已配置某虚机的远端NUMA，后续配置不能改变虚机的远端NUMA，只能通过SmapMigratePidRemoteNuma接口改变远端NUMA。
 * 配置pid内存迁出后，由SMAP线程异步迁移，在迁移周期到来时才会执行迁移操作。
@@ -321,7 +320,7 @@ struct GroupedMigrateOutMsg {
 * SMAP初始化后才能调用。
 * 仅支持2M huge page虚机，不支持4K进程或普通进程。
 * pageType需要和当前场景匹配。
-* UB代际远端NUMA最大值为21。
+* 远端NUMA nid为全局绝对节点号，合法范围为 `[本地NUMA数量, 运行期节点上限)`，上限默认 256、最大 1024。
 * 远端NUMA被禁用时无法配置为grouped target（调用ubturbo_smap_migrate_back接口时会默认禁用远端NUMA）。
 * 同一次调用内不能传入重复PID。
 * group policy不能和普通ubturbo_smap_migrate_out policy混用；已按普通迁出接口管理的PID，不能再配置grouped policy。
@@ -430,8 +429,7 @@ int ubturbo_smap_remote_numa_info_set(struct SetRemoteNumaInfoMsg *msg);
 ### 约束 CONSTRAINTS
 
 * SMAP初始化后才能调用。
-* HCCS代际远端NUMA最大值为21。
-* UB代际远端NUMA最大值为21。
+* 远端NUMA nid为全局绝对节点号，合法范围为 `[本地NUMA数量, 运行期节点上限)`，上限默认 256、最大 1024。
 * 如果已配置某虚机的远端NUMA，后续配置不能改变虚机的远端NUMA，只能通过SmapMigratePidRemoteNuma接口改变远端NUMA。
 * 当配置的pid可迁出的量大于借用内存量时，SMAP不会使用完所有的借用量，每个本地NUMA对应的远端借用都有MIN[借用量的5%，200MB]的量不会使用，这是为了迁移内存时能申请到新的内存页面。例如：numa0 numa1分别借用了2G和6G共8G，numa0借的2G的预留按5%来算是100M，numa1借的6G的预留是200M，合计一共300M。
 * 此接口仅在水线场景中生效，且水线场景调用SmapMigrateOut接口前需通过此接口设置远端NUMA使用量才能迁出pid的内存。
@@ -659,7 +657,7 @@ int ubturbo_smap_node_enable(struct EnableNodeMsg *msg);
 | --- | --- | --- |
 | msg | IN | 配置参数。 |
 | msg.enable | IN | 0：停用，1：启用。 |
-| msg.nid | IN | 远端NUMA。 |
+| msg.nid | IN | 远端NUMA节点号（全局绝对 nid），取值范围为 `[本地NUMA数量, 运行期节点上限)`；上限由内核节点空间宽度决定，默认 256（`CONFIG_NODES_SHIFT=8`），最大 1024（`SMAP_MAX_NUMNODES`）。 |
 
 ### 返回值 RETURN VALUE
 
@@ -670,11 +668,13 @@ int ubturbo_smap_node_enable(struct EnableNodeMsg *msg);
 | Error | Description |
 | --- | --- |
 | -EPERM | SMAP未初始化 |
-| -EINVAL | 参数错误 |
+| -EINVAL | 参数错误，如 nid 不在 `[本地NUMA数量, 运行期节点上限)` 内 |
+| -EAGAIN | 该节点正处于迁移回退中（迁回任务未结束），暂不能启用，需等待迁回任务完成后重试 |
 
 ### 约束 CONSTRAINTS
 
 * SMAP初始化后才能调用。
+* `msg.nid` 必须是运行期节点空间内的远端节点：下限为本地NUMA数量，上限为 SMAP 初始化时由内核节点空间（`Mems_allowed` 打印宽度）解析得到的节点上限，该上限为 2 的幂，默认 256，最大 1024；超出范围、指向本地NUMA 或为负值均返回 `-EINVAL`。
 * 此接口与SmapMigrateBack接口配合使用，目的是在SmapMigrateBack接口调用后，恢复对应远端NUMA的冷热流动。
 
 ### 附注 NOTES
@@ -1587,7 +1587,8 @@ int ubturbo_smap_run_mode_set(int runMode);
 ```
 
 `SetRemoteNumaInfoMsg.size` 表示可使用容量，单位为 MiB。`srcNid=-1` 表示该远端目标可供每个本地
-NUMA 使用。容量、拓扑和开关由可信资源管理器维护。
+NUMA 使用。上述接口中的远端 nid 均为全局绝对节点号，合法范围为 `[本地NUMA数量, 运行期节点上限)`，
+上限默认 256、最大 1024，由可信资源管理器维护容量、拓扑和开关。
 
 ### 进程跟踪
 
@@ -1647,6 +1648,7 @@ int ubturbo_smap_pid_remote_numa_migrate(struct MigrateEscapeMsg *msg);
 | `MAX_WAIT_TIME` | 180000 ms | 同步等待上限常量 |
 | `MIN_SCAN_TIME` | 50 ms | 扫描间隔下限常量 |
 | `MAX_SCAN_TIME` | 2000 ms | 扫描间隔上限常量 |
+| `SMAP_MAX_NUMNODES` | 1024 | 节点空间绝对上限，即远端 nid 的最大值（运行期上限默认为 256） |
 
 其他数组上限由 `smap_env.h` 与 `smap_config.h` 提供，应使用宏而不是在调用方复制数字。
 

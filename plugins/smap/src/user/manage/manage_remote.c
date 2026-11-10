@@ -419,7 +419,7 @@ int SetSingleRemoteNumaConfig(ProcessAttr *attr, ProcessParam *param, int nrLoca
     int remoteNid = param->numaParam[0].nid;
 
     /* Validate remote NUMA node */
-    if (remoteNid < nrLocalNuma || remoteNid >= SMAP_MAX_NUMNODES) {
+    if (!IsRemoteNidValid(remoteNid)) {
         SMAP_LOGGER_WARNING("Invalid remote numa %d for pid %d, nrLocalNuma: %d.", remoteNid, attr->pid, nrLocalNuma);
         return -EINVAL;
     }
@@ -1503,18 +1503,16 @@ int IsRemoteNumaMoveAllowed(int nid)
 
 static bool IsRemoteTargetMigOutDone(ProcessAttr *attr, int remoteNid, uint64_t targetPages)
 {
-    if (remoteNid < 0 || remoteNid >= SMAP_MAX_NUMNODES) {
+    if (!IsRemoteNidValid(remoteNid)) {
         SMAP_LOGGER_ERROR("Invalid remote node %d of pid %d.", remoteNid, attr->pid);
         return false;
     }
 
     uint64_t accountedPages = 0;
-    if (remoteNid >= 0 && remoteNid < SMAP_MAX_NUMNODES) {
-        /* remoteNrPagesAfterMigrate 第一维仅分配 nrLocalNuma 行 */
-        int nrLocalNuma = GetNrLocalNuma();
-        for (int local = 0; local < nrLocalNuma; local++) {
-            accountedPages += NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, local, remoteNid);
-        }
+    /* remoteNrPagesAfterMigrate 第一维仅分配 nrLocalNuma 行 */
+    int nrLocalNuma = GetNrLocalNuma();
+    for (int local = 0; local < nrLocalNuma; local++) {
+        accountedPages += NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, local, remoteNid);
     }
     uint64_t remotePages = attr->walkPage.nrPages[remoteNid];
     SMAP_LOGGER_INFO("Pid: %d, remote node: %d, target pages: %llu, accounted pages: %llu, current remote pages: %llu.",
@@ -1574,7 +1572,7 @@ bool MigOutIsDone(ProcessAttr *attr, bool *isMultiNumaPid)
         ret = true;
     } else {
         int l2Node = GetAttrL2(attr);
-        if (l2Node < GetProcessManager()->nrLocalNuma || l2Node >= SMAP_MAX_NUMNODES) {
+        if (!IsRemoteNidValid(l2Node)) {
             SMAP_LOGGER_ERROR("Invalid l2Node %d of pid %d.", l2Node, pid);
             return false;
         }
@@ -1630,7 +1628,7 @@ static int SetPayloadValue(struct AccessAddPidPayload *payload, struct MigPidRem
         l2node = msg->payloads[i].srcNid;
         /* l1node 未命中返回 NUMA_NO_NODE；l2node 为外部输入的绝对 nid，
          * 均须校验后才能作为 initRemoteMemRatio/memSize 的下标 */
-        if (l1node < 0 || l1node >= nrLocalNuma || l2node < nrLocalNuma || l2node >= SMAP_MAX_NUMNODES) {
+        if (l1node < 0 || l1node >= nrLocalNuma || !IsRemoteNidValid(l2node)) {
             SMAP_LOGGER_ERROR("Pid %d invalid l1node %d or srcNid %d.", attr->pid, l1node, l2node);
             PutProcessAttr(attr);
             continue;
