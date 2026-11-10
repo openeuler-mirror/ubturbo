@@ -15,6 +15,7 @@
 #include "acpi_mem.h"
 #include "check.h"
 #include "iomem.h"
+#include "smap_page_flags.h"
 #include "scan_main.h"
 
 #define PM_PRESENT BIT_ULL(63)
@@ -142,8 +143,8 @@ TEST_F(AccessMMUTest, AddToBMPageNumaNoNode)
 extern "C" int add_to_bm_hugepage(u64 vaddr, struct page *page, struct access_pid *ap);
 extern "C" int page_to_nid(const struct page *page);
 extern "C" int calc_paddr_acidx_acpi_known_nid(u64 paddr, int nid, u64 *index, int page_size);
-extern "C" int remote_ram_snapshot_paddr_acidx_known_nid(const struct remote_ram_snapshot *snapshot, u64 pa,
-                                                         int nid, u64 *index, int page_size);
+extern "C" int remote_ram_snapshot_paddr_acidx_known_nid(const struct remote_ram_snapshot *snapshot, u64 pa, int nid,
+                                                         u64 *index, int page_size);
 
 TEST_F(AccessMMUTest, AddToBmHugepageLocalNuma)
 {
@@ -482,4 +483,91 @@ TEST_F(AccessMMUTest, PosToAddrWithEmptyVmaTree)
 
     pos_to_addr(&mm, 0x1, &vaddr);
     EXPECT_EQ(0UL, vaddr);
+}
+
+// ========== DT supplement: cold period accumulates once per window ==========
+
+extern "C" bool get_swap_enable(void);
+extern "C" void set_swap_enable(int enable);
+extern "C" u32 get_l3_cold_threshold(void);
+extern "C" int set_l3_cold_threshold(u32 threshold);
+
+TEST_F(AccessMMUTest, AddToBMPageColdPeriodOncePerWindow)
+{
+    u64 acidx = 1;
+    MOCKER(is_access_hugepage).stubs().will(returnValue(false));
+    MOCKER(page_to_nid).stubs().will(returnValue(0));
+    MOCKER(calc_paddr_acidx_acpi_known_nid)
+        .stubs()
+        .with(any(), any(), outBoundP(&acidx, sizeof(acidx)), any())
+        .will(returnValue(0));
+
+    struct access_pid ap = {};
+    ap.bm_len[0] = 2;
+    ap.paddr_bm[0] = (unsigned long *)calloc(2, sizeof(unsigned long));
+    ap.type = NORMAL_SCAN;
+    ap.ntimes = 1; // the only round of this window -> last scanning
+    ap.pid = 123;
+    struct page page = {};
+
+    bool old_swap = get_swap_enable();
+    u32 old_thr = get_l3_cold_threshold();
+    set_swap_enable(true);
+    // keep the threshold above the cycle seconds so smap_swap_stage() is
+    // never reached and the staging side effects stay out of this test
+    set_l3_cold_threshold(DEFAULT_L3_COLD_THRESHOLD);
+
+    int ret = add_to_bm_page((u64)0x00005000, &page, &ap);
+    EXPECT_EQ(0, ret);
+    u32 period = (page.flags >> SMAP_COLD_PERIOD_SHIFT) & SMAP_COLD_PERIOD_MASK;
+    EXPECT_EQ(1, period); // window seconds (cycle_start unrecorded -> 1)
+
+    ret = add_to_bm_page((u64)0x00005000, &page, &ap);
+    EXPECT_EQ(0, ret);
+    period = (page.flags >> SMAP_COLD_PERIOD_SHIFT) & SMAP_COLD_PERIOD_MASK;
+    // same PA already counted this window: no second accumulation no
+    // matter how many VAs map it
+    EXPECT_EQ(1, period);
+    EXPECT_EQ((size_t)1, ap.page_num[0]);
+
+    set_l3_cold_threshold(old_thr);
+    set_swap_enable(old_swap);
+    free(ap.paddr_bm[0]);
+}
+
+TEST_F(AccessMMUTest, AddToBMPageHotPageResetsOncePerWindow)
+{
+    u64 acidx = 1;
+    MOCKER(is_access_hugepage).stubs().will(returnValue(false));
+    MOCKER(page_to_nid).stubs().will(returnValue(0));
+    MOCKER(calc_paddr_acidx_acpi_known_nid)
+        .stubs()
+        .with(any(), any(), outBoundP(&acidx, sizeof(acidx)), any())
+        .will(returnValue(0));
+
+    struct access_pid ap = {};
+    ap.bm_len[0] = 2;
+    ap.paddr_bm[0] = (unsigned long *)calloc(2, sizeof(unsigned long));
+    ap.type = NORMAL_SCAN;
+    ap.ntimes = 1;
+    struct page page = {};
+
+    bool old_swap = get_swap_enable();
+    set_swap_enable(true);
+    // pre-arm a cold duration, then turn the page hot BEFORE the first
+    // hit of the window so add_to_bm_page() takes the reset branch
+    smap_page_cold_period_add(&page, 10);
+    (void)smap_page_freq_inc(&page);
+
+    int ret = add_to_bm_page((u64)0x00005000, &page, &ap);
+    EXPECT_EQ(0, ret);
+
+    ret = add_to_bm_page((u64)0x00005000, &page, &ap);
+    EXPECT_EQ(0, ret);
+    u32 period = (page.flags >> SMAP_COLD_PERIOD_SHIFT) & SMAP_COLD_PERIOD_MASK;
+    EXPECT_EQ(0, period);
+    EXPECT_EQ((size_t)1, ap.page_num[0]);
+
+    set_swap_enable(old_swap);
+    free(ap.paddr_bm[0]);
 }

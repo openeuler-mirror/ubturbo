@@ -8,9 +8,14 @@
 
 #define TOTAL_SWAP_PAGES (1 << 20) /* 4096 pages, enough for DT build */
 
-static inline long get_nr_swap_pages(void)
-{
-	return TOTAL_SWAP_PAGES;
+/* DT: extern so tests can stub it with MOCKER (negative/zero swapspace
+ * behaviors); the DT definition lives in depends/mm/stub.c */
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern long get_nr_swap_pages(void);
+#ifdef __cplusplus
 }
+#endif
 
 #endif /* _LINUX_SWAP_H */

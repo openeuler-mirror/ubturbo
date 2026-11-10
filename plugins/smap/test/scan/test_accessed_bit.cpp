@@ -1213,6 +1213,30 @@ TEST_F(AccessedBitTest, HvaToHpa4kSuccess)
     EXPECT_EQ(0, ret);
 }
 
+TEST_F(AccessedBitTest, HvaToHpa4kNoOnlinePage)
+{
+    struct mm_struct mm;
+    struct kvm kvm = {
+        .mm = &mm,
+    };
+    struct access_pid ap = {
+        .pid = 1,
+        .type = NORMAL_SCAN,
+    };
+    pte_t pte = {
+        .pte = 0x1000, // present
+    };
+    pte_t *ptep = &pte;
+
+    MOCKER(smap_pte_offset).stubs().will(returnValue(ptep));
+    MOCKER(pfn_to_online_page).stubs().will(returnValue((struct page *)nullptr));
+
+    // offline (invalid) pf must not be silently treated as scanned page:
+    // consistent -EINVAL with hva_to_hpa_hugetlb
+    int ret = hva_to_hpa_4k(&kvm, 0x1000, &ap, true);
+    EXPECT_EQ(-EINVAL, ret);
+}
+
 // ========== DT supplement: fill_pte_va ==========
 
 extern "C" int fill_pte_va(pte_t *pte, unsigned long addr, unsigned long next, struct mm_walk *walk);

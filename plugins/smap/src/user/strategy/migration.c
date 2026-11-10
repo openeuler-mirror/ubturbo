@@ -1621,6 +1621,20 @@ static void MigrationUpdateMigrateModeAndScanCpu(void)
         IoctlSetRemoteScanMode(GetRemoteScanModeConfig());
         SetRemoteScanModeChanged(false);
     }
+
+    /* user space only reads the config file and pushes values down: one
+     * ioctl carries enable + threshold (+ hugetlb capability), delivered
+     * unconditionally - switching off must reach the kernel too, so
+     * set_swap_enable(0) purges the staged cold pages. swap_enable only
+     * resets when the kernel module is unloaded, so a stale on-kernel
+     * switch can never be assumed off. */
+    if (GetSwapEnableChanged() || GetL3ColdThresholdChanged()) {
+        IoctlSetSwapConfig(GetSwapEnableConfig(), GetL3ColdThresholdConfig(), GetHugetlbSwapSupported());
+        SMAP_LOGGER_INFO("Start update swap config: enable=%d, l3ColdThreshold=%u, hugetlbSwap=%d.",
+                         GetSwapEnableConfig(), GetL3ColdThresholdConfig(), GetHugetlbSwapSupported());
+        SetSwapEnableChanged(false);
+        SetL3ColdThresholdChanged(false);
+    }
 }
 /* 每个扫描完成事件触发一次 PID 迁移流水；daemon 负责周期维护。 */
 

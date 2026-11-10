@@ -34,7 +34,18 @@
 
 static bool smap_swap_has_room(void)
 {
-	return (u64)get_nr_swap_pages() * PAGE_SIZE > SMAP_SWAP_HEADROOM_BYTES;
+	/* nr_swap_pages is a signed total of free swap entries; it goes
+	 * negative on swap exhaustion or while slots are being reserved.
+	 * Guard the sign before widening to u64: a negative count would
+	 * wrap into an astronomically large byte count and the headroom
+	 * guard would pass exactly when the system has run out of swap.
+	 */
+	long nr = get_nr_swap_pages();
+
+	if (nr <= 0) {
+		return false;
+	}
+	return (u64)nr * PAGE_SIZE > SMAP_SWAP_HEADROOM_BYTES;
 }
 
 /* Release every staged folio (drop the staging references) and empty the
@@ -244,7 +255,7 @@ void smap_swap_notify(struct access_pid *ap)
 	spin_lock(&buf->lock);
 	has_pages = buf->cnt > 0;
 	spin_unlock(&buf->lock);
-	pr_info("notify pid %d has_pages %d\n", ap->pid, has_pages);
+	pr_debug("notify pid %d has_pages %d\n", ap->pid, has_pages);
 	if (!has_pages)
 		return;
 

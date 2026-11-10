@@ -1838,6 +1838,13 @@ static void MigrateAndCpuConfig(void)
         IoctlSetScanCpuRange(GetScanCpuMinConfig(), GetScanCpuMaxConfig());
     }
     IoctlSetRemoteScanMode(GetRemoteScanModeConfig());
+    /* deliver the swap switch unconditionally: one ioctl carries enable +
+     * threshold (+ hugetlb capability) both to switch on and to switch
+     * off. set_swap_enable(0) purges the staged cold pages, and the
+     * kernel swap_enable only resets on modprobe -r smap - stopping the
+     * user-space daemon leaves it running - so a stale on-kernel switch
+     * can never be assumed off. */
+    IoctlSetSwapConfig(GetSwapEnableConfig(), GetL3ColdThresholdConfig(), GetHugetlbSwapSupported());
 }
 
 int ubturbo_smap_start(uint32_t pageType, Logfunc extlog)
@@ -2317,6 +2324,12 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
             PutProcessAttr(attr);
             ret = -EINVAL;
             goto out_free;
+        }
+        if (scanType == STATISTIC_SCAN && pidTypeDetected == VM_TYPE && !IsHugeMode()) {
+            SMAP_LOGGER_ERROR("pid %d type %d 4K vm statistic scan unsupported.", pidArr[i], pidTypeDetected);
+            free(payload);
+            PutProcessAttr(attr);
+            return -EINVAL;
         }
         if (scanType == STATISTIC_SCAN && pidTypeDetected == VM_TYPE && !IsHugeMode()) {
             SMAP_LOGGER_ERROR("pid %d type %d 4K vm statistic scan unsupported.", pidArr[i], pidTypeDetected);

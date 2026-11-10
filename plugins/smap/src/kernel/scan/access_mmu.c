@@ -57,6 +57,8 @@ int add_to_bm_page(u64 paddr, struct page *page, struct access_pid *ap)
 {
 	int nid, ret;
 	u64 acidx;
+	u8 freq;
+	bool first_hit;
 	int page_size = is_access_hugepage() ? g_pagesize_huge : PAGE_SIZE;
 
 	nid = page_to_nid(page);
@@ -76,8 +78,50 @@ int add_to_bm_page(u64 paddr, struct page *page, struct access_pid *ap)
 	if (BIT_WORD(acidx) >= ap->bm_len[nid])
 		return -ERANGE;
 
-	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly */
-	if (!_test_bit(acidx, ap->paddr_bm[nid])) {
+	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly:
+	 * the bitmap is window-scoped (wiped and reallocated by
+	 * access_walk_pagemap_prepare() at the start of the final round), so
+	 * "not yet present" is the per-window first-hit marker. Cold
+	 * accounting below must honor it: cold duration accumulates in
+	 * seconds, once per scan cycle, on the final round (see
+	 * ap_cycle_cold_secs); hot pages reset it. Without the dedup a page
+	 * hit by N VAs would accumulate N cold seconds per scan cycle
+	 * instead of one and reach smap.l3.cold.threshold N times faster.
+	 * Gated by smap.swap.enable: with the switch off no swap activity
+	 * happens at all (counting, staging, swap-out). VM anon base pages
+	 * whose accumulated cold time reaches the configured swap period
+	 * are staged for kernel swap-out. A page cannot be staged twice:
+	 * staging requires mapcount==1 (one virtual address per pid) and
+	 * each pid owns its own buffer; a stage failure leaves the page
+	 * flags untouched, so the page keeps its accumulated duration and
+	 * is probed again next window.
+	 */
+	first_hit = !_test_bit(acidx, ap->paddr_bm[nid]);
+
+	freq = smap_page_freq_get(page);
+	if (first_hit && get_swap_enable() &&
+	    access_pid_cur_last_scanning(ap)) {
+		if (freq == 0) {
+			u8 period = smap_page_cold_period_add(
+				page, ap_cycle_cold_secs(ap));
+
+			if (ap->pid_type == SMAP_PID_VM &&
+			    period >= get_l3_cold_threshold()) {
+				if (smap_swap_stage(ap, page))
+					return 0;
+			}
+			/* Staged pages belong to the swap worker now: the
+			 * early return keeps them out of the migration
+			 * candidacy bitmap entirely; a failed stage (buffer
+			 * full / capability off) falls through to the bitmap
+			 * with no page-flags compensation needed.
+			 */
+		} else {
+			smap_page_cold_periods_reset(page);
+		}
+	}
+
+	if (first_hit) {
 		__set_bit(acidx, ap->paddr_bm[nid]);
 		ap->page_num[nid]++;
 	}
@@ -145,6 +189,8 @@ int add_to_bm_hugepage(u64 vaddr, struct page *page, struct access_pid *ap)
 	int nid, ret;
 	u64 acidx;
 	u64 paddr;
+	u8 freq;
+	bool first_hit;
 	int page_size = is_access_hugepage() ? g_pagesize_huge : PAGE_SIZE;
 
 	paddr = page_to_phys(page);
@@ -166,8 +212,45 @@ int add_to_bm_hugepage(u64 vaddr, struct page *page, struct access_pid *ap)
 		return -ERANGE;
 	}
 
-	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly */
-	if (!test_bit(acidx, ap->paddr_bm[nid])) {
+	/* Multiple VAs may be mapped to the same PA. So run test_bit firstly.
+	 * The bitmap is window-scoped, so "not yet present" is the per-window
+	 * first-hit marker: run cold accounting below once per PA per window
+	 * (same rationale as add_to_bm_page()). */
+	first_hit = !test_bit(acidx, ap->paddr_bm[nid]);
+
+	freq = smap_page_freq_get(page);
+	/*
+	 * Cold duration accumulates in seconds, once per scan cycle, on the
+	 * final round of the window. Gated by smap.swap.enable: with the
+	 * switch off none of the swap-related accounting runs.
+	 *
+	 * hugetlb capability gate is explicit here (hugetlb_swap_enabled,
+	 * probed from /proc/meminfo HugePages_Swap and delivered by the swap
+	 * config ioctl): if the running kernel cannot swap hugetlb folios,
+	 * 2M pages fall straight back to the migration bitmap and smap_swap
+	 * staging is never attempted. smap_swap_stage() re-checks the
+	 * capability defensively.
+	 */
+	if (first_hit && get_swap_enable() && smap_swap_hugetlb_enabled() &&
+	    access_pid_cur_last_scanning(ap)) {
+		if (freq == 0) {
+			u8 period = smap_page_cold_period_add(
+				page, ap_cycle_cold_secs(ap));
+
+			/* staged pages belong to the swap worker: the early
+			 * return keeps them out of the migration candidacy
+			 * bitmap; a failed stage needs no page-flags
+			 * compensation */
+			if (period >= get_l3_cold_threshold()) {
+				if (smap_swap_stage(ap, page))
+					return 0;
+			}
+		} else {
+			smap_page_cold_periods_reset(page);
+		}
+	}
+
+	if (first_hit) {
 		set_bit(acidx, ap->paddr_bm[nid]);
 		ap->page_num[nid]++;
 	}
