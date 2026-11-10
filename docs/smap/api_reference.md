@@ -187,8 +187,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pageType);
 
 * SMAP初始化后才能调用。
 * pageType需要和当前场景匹配。
-* HCCS代际远端NUMA最大值为21。
-* UB代际远端NUMA最大值为21。
+* 远端NUMA nid为全局绝对节点号，合法范围为 `[本地NUMA数量, 运行期节点上限)`，上限默认 256、最大 1024。
 * 远端NUMA被禁用时无法配置迁出（调用SmapMigrateBack接口时会默认禁用远端NUMA）。
 * 如果已配置某虚机的远端NUMA，后续配置不能改变虚机的远端NUMA，只能通过SmapMigratePidRemoteNuma接口改变远端NUMA。
 * 配置pid内存迁出后，由SMAP线程异步迁移，在迁移周期到来时才会执行迁移操作。
@@ -321,7 +320,7 @@ struct GroupedMigrateOutMsg {
 * SMAP初始化后才能调用。
 * 仅支持2M huge page虚机，不支持4K进程或普通进程。
 * pageType需要和当前场景匹配。
-* UB代际远端NUMA最大值为21。
+* 远端NUMA nid为全局绝对节点号，合法范围为 `[本地NUMA数量, 运行期节点上限)`，上限默认 256、最大 1024。
 * 远端NUMA被禁用时无法配置为grouped target（调用ubturbo_smap_migrate_back接口时会默认禁用远端NUMA）。
 * 同一次调用内不能传入重复PID。
 * group policy不能和普通ubturbo_smap_migrate_out policy混用；已按普通迁出接口管理的PID，不能再配置grouped policy。
@@ -430,8 +429,7 @@ int ubturbo_smap_remote_numa_info_set(struct SetRemoteNumaInfoMsg *msg);
 ### 约束 CONSTRAINTS
 
 * SMAP初始化后才能调用。
-* HCCS代际远端NUMA最大值为21。
-* UB代际远端NUMA最大值为21。
+* 远端NUMA nid为全局绝对节点号，合法范围为 `[本地NUMA数量, 运行期节点上限)`，上限默认 256、最大 1024。
 * 如果已配置某虚机的远端NUMA，后续配置不能改变虚机的远端NUMA，只能通过SmapMigratePidRemoteNuma接口改变远端NUMA。
 * 当配置的pid可迁出的量大于借用内存量时，SMAP不会使用完所有的借用量，每个本地NUMA对应的远端借用都有MIN[借用量的5%，200MB]的量不会使用，这是为了迁移内存时能申请到新的内存页面。例如：numa0 numa1分别借用了2G和6G共8G，numa0借的2G的预留按5%来算是100M，numa1借的6G的预留是200M，合计一共300M。
 * 此接口仅在水线场景中生效，且水线场景调用SmapMigrateOut接口前需通过此接口设置远端NUMA使用量才能迁出pid的内存。
