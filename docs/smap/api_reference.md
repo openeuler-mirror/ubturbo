@@ -659,7 +659,7 @@ int ubturbo_smap_node_enable(struct EnableNodeMsg *msg);
 | --- | --- | --- |
 | msg | IN | 配置参数。 |
 | msg.enable | IN | 0：停用，1：启用。 |
-| msg.nid | IN | 远端NUMA。 |
+| msg.nid | IN | 远端NUMA节点号（全局绝对 nid），取值范围为 `[本地NUMA数量, 运行期节点上限)`。 |
 
 ### 返回值 RETURN VALUE
 
@@ -670,11 +670,13 @@ int ubturbo_smap_node_enable(struct EnableNodeMsg *msg);
 | Error | Description |
 | --- | --- |
 | -EPERM | SMAP未初始化 |
-| -EINVAL | 参数错误 |
+| -EINVAL | 参数错误，如 nid 不在 `[本地NUMA数量, 运行期节点上限)` 内 |
+| -EAGAIN | 该节点正处于迁移回退中（迁回任务未结束），暂不能启用，需等待迁回任务完成后重试 |
 
 ### 约束 CONSTRAINTS
 
 * SMAP初始化后才能调用。
+* `msg.nid` 必须是运行期节点空间内的远端节点：下限为本地NUMA数量，上限为 SMAP 初始化时由内核节点空间（`Mems_allowed` 打印宽度）解析得到的节点上限；超出范围、指向本地NUMA 或为负值均返回 `-EINVAL`。
 * 此接口与SmapMigrateBack接口配合使用，目的是在SmapMigrateBack接口调用后，恢复对应远端NUMA的冷热流动。
 
 ### 附注 NOTES
@@ -1587,7 +1589,8 @@ int ubturbo_smap_run_mode_set(int runMode);
 ```
 
 `SetRemoteNumaInfoMsg.size` 表示可使用容量，单位为 MiB。`srcNid=-1` 表示该远端目标可供每个本地
-NUMA 使用。容量、拓扑和开关由可信资源管理器维护。
+NUMA 使用。上述接口中的远端 nid 均为全局绝对节点号，合法范围为 `[本地NUMA数量, 运行期节点上限)`，
+由可信资源管理器维护容量、拓扑和开关。
 
 ### 进程跟踪
 

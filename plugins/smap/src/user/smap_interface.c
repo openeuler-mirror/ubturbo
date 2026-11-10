@@ -1609,7 +1609,6 @@ void SmapAutoRemoveRemoteEmptyProcessesWithFreshData(void)
 
 int ubturbo_smap_node_enable(struct EnableNodeMsg *msg)
 {
-    struct ProcessManager *pm = GetProcessManager();
     SMAP_LOGGER_INFO("Receive ubturbo_smap_node_enable msg.");
     if (!ubturbo_smap_is_running()) {
         SMAP_LOGGER_ERROR("Smap already stopped, ubturbo_smap_node_enable failed.");
@@ -1619,7 +1618,7 @@ int ubturbo_smap_node_enable(struct EnableNodeMsg *msg)
         SMAP_LOGGER_ERROR("Smap enable node msg is null.");
         return -EINVAL;
     }
-    if (msg->nid < pm->nrLocalNuma || msg->nid >= SMAP_MAX_NUMNODES) {
+    if (!IsRemoteNidValid(msg->nid)) {
         SMAP_LOGGER_ERROR("Smap enable node nid %d is invalid.", msg->nid);
         return -EINVAL;
     }
