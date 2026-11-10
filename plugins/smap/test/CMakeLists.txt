@@ -92,6 +92,8 @@ list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/migrate/ham_tasks_mgr.c)
 
 # access_mmu
 list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/scan/access_mmu.c)
+# smap swap staging / swap-out worker
+list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/scan/smap_swap.c)
 # scan ioctl
 list(APPEND TEST_SRC ${SMAP_SRC}/src/kernel/scan/scan_ioctl.c)
 # scan

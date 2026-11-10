@@ -5,6 +5,7 @@
 
 #include <linux/nodemask.h>
 #include <linux/kprobes.h>
+#include <linux/swap.h>
 
 #include "smap_migrate_wrapper.h"
 
@@ -19,6 +20,25 @@ int (*fp_migrate_pages)(struct list_head *from, new_folio_t get_new_folio,
 void (*fp_putback_movable_pages)(struct list_head *l) = NULL;
 bool (*fp_isolate_folio_to_list)(struct folio *folio,
 				 struct list_head *list) = NULL;
+
+/*
+ * Cold-page swap-out worker accessors. On openEuler reclaim_pages() is
+ * EXPORT_SYMBOL_GPL and referenced directly; on COS/veLinux/V1/T1 it joins
+ * the kprobe-resolved pointers with a NULL-guard (feature self-disable).
+ */
+bool smap_swap_symbols_ready(void)
+{
+	if (!fp_isolate_folio_to_list)
+		return false;
+	return true;
+}
+
+bool smap_swap_isolate_folio_to_list(struct folio *folio,
+				     struct list_head *list)
+{
+	return fp_isolate_folio_to_list ? fp_isolate_folio_to_list(folio, list)
+					: false;
+}
 
 void lookup_kallsyms_lookup_name(void)
 {
@@ -51,6 +71,12 @@ int smap_process_symbols(void)
 	fp_isolate_folio_to_list =
 		(bool (*)(struct folio *folio, struct list_head *list))
 			fp_kallsyms_lookup_name("isolate_folio_to_list");
+	/* The swap-out worker needs vmscan's isolate helper (not exported).
+	 * reclaim_pages() is EXPORT_SYMBOL_GPL on openEuler and referenced
+	 * directly there; non-openEuler kernels no longer resolve it via
+	 * kprobe, so smap_swap_symbols_ready() self-disables swap-out on
+	 * them (COS/veLinux/V1/T1).
+	 */
 	// clang-format on
 	if (!(fp_migrate_pages && fp_putback_movable_pages &&
 	      fp_isolate_folio_to_list))

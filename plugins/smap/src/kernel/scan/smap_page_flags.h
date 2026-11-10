@@ -41,7 +41,13 @@
  *            (all-1s 0x1F = invalid marker: page free resets the whole
  *            LAST_CPUPID field to all-1s, the same write the freq sentinel
  *            relies on)
- * bit[14..19] unused        6 bits
+ * bit[14..19] cold period   6 bits, L3 cold duration in SECONDS (one add per
+ *            scan cycle, value ceil-rounded), 0..MAX_L3_COLD_THRESHOLD.
+ *            all-1s 0x3F = invalid marker (page free resets the whole
+ *            LAST_CPUPID field to all-1s, the same write the freq sentinel
+ *            relies on): smap_page_cold_period_add() restarts from a fresh
+ *            value when it reads the marker, so a freed-then-reused page
+ *            starts counting over.
  *
  * Sentinel bit=1 means the freq counter is stale (e.g. page freed,
  * kernel wrote all-1s in LAST_CPUPID). get() returns 0; inc() resets
@@ -71,6 +77,14 @@ static inline bool smap_page_freq_try_get(struct page *page)
 #define SMAP_FREQ_SENT_BIT (1UL << SMAP_FREQ_SENT_SHIFT)
 #define SMAP_FREQ_FIELD_MASK (SMAP_FREQ_VAL_MASK << SMAP_FREQ_VAL_SHIFT)
 #define SMAP_FREQ_MAX ((1UL << SMAP_FREQ_VAL_WIDTH) - 1)
+#define SMAP_COLD_PERIOD_WIDTH 6
+#define SMAP_COLD_PERIOD_MASK ((1UL << SMAP_COLD_PERIOD_WIDTH) - 1)
+#define SMAP_COLD_PERIOD_SHIFT (SMAP_ACC_CNT_SHIFT + SMAP_ACC_CNT_WIDTH)
+#define SMAP_COLD_FIELD_MASK (SMAP_COLD_PERIOD_MASK << SMAP_COLD_PERIOD_SHIFT)
+
+#define MIN_L3_COLD_THRESHOLD 1UL
+#define MAX_L3_COLD_THRESHOLD (SMAP_COLD_PERIOD_MASK - 1)
+#define DEFAULT_L3_COLD_THRESHOLD 30
 
 /* Read current freq value; returns 0 when sentinel is set. */
 static inline u8 smap_page_freq_get(struct page *page)
@@ -347,6 +361,43 @@ static inline void migrate_folio_actc(struct folio *folio_from,
 		nv |= (unsigned long)acc << SMAP_ACC_CNT_SHIFT;
 	} while (unlikely(cmpxchg(&page->flags, old, nv) != old));
 	folio_put(page_folio(page));
+}
+
+/* Clear cold-period to 0. */
+static inline void smap_page_cold_periods_reset(struct page *page)
+{
+	unsigned long old, nv;
+
+	do {
+		old = READ_ONCE(page->flags);
+		nv = old & ~SMAP_COLD_FIELD_MASK;
+	} while (unlikely(cmpxchg(&page->flags, old, nv) != old));
+}
+
+/* Saturates at MAX_L3_COLD_THRESHOLD. */
+static inline u8 smap_page_cold_period_add(struct page *page, unsigned long val)
+{
+	unsigned long old, nv;
+	unsigned long period;
+
+	if (val > MAX_L3_COLD_THRESHOLD)
+		val = MAX_L3_COLD_THRESHOLD;
+
+	do {
+		old = READ_ONCE(page->flags);
+		period = (old >> SMAP_COLD_PERIOD_SHIFT) &
+			 SMAP_COLD_PERIOD_MASK;
+		if (period == SMAP_COLD_PERIOD_MASK)
+			period = val;
+		else if (period + val > MAX_L3_COLD_THRESHOLD)
+			period = MAX_L3_COLD_THRESHOLD;
+		else
+			period += val;
+		nv = old & ~SMAP_COLD_FIELD_MASK;
+		nv |= period << SMAP_COLD_PERIOD_SHIFT;
+	} while (unlikely(cmpxchg(&page->flags, old, nv) != old));
+
+	return (u8)period;
 }
 
 /* ---- Page classification helpers ---- */

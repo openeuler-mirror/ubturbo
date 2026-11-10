@@ -28,6 +28,16 @@
 #define pr_cont(fmt, ...)       printk(KERN_CONT fmt, ##__VA_ARGS__)
 #define pr_info(fmt, ...)       printk(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_notice(fmt, ...)     printk(KERN_NOTICE pr_fmt(fmt), ##__VA_ARGS__)
+
+static int ratelimit_state_active(void)
+{
+    return 0;
+}
+#define pr_debug_ratelimited(fmt, ...)                                   \
+    do {                                                                  \
+        if (ratelimit_state_active())                                     \
+            pr_debug(fmt, ##__VA_ARGS__);                                 \
+    } while (0)
 #define pr_warn(fmt, ...)       printk(KERN_WARNING pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_err(fmt, ...)        printk(KERN_ERR pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_crit(fmt, ...)       printk(KERN_CRIT pr_fmt(fmt), ##__VA_ARGS__)

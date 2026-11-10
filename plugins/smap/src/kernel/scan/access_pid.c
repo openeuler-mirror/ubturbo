@@ -14,6 +14,7 @@
 #include <linux/pid.h>
 #include <linux/namei.h>
 #include <linux/sizes.h>
+#include <linux/workqueue.h>
 
 #include "check.h"
 #include "accessed_bit.h"
@@ -247,6 +248,13 @@ void destroy_access_pid(struct access_pid *elem)
 	if (!elem) {
 		return;
 	}
+	/* pending/running swap activity must not touch freed memory */
+	if (cancel_work_sync(&elem->swap_work) && elem->slot) {
+		/* a cancelled pending swap work drops its orphaned work-ref */
+		ap_put_slot(elem->slot);
+	}
+	smap_swap_buf_free(elem->swap_buf);
+	elem->swap_buf = NULL;
 	if (elem->proc_root)
 		proc_remove(elem->proc_root);
 	for (i = 0; i < MAX_NUMNODES; i++) {
@@ -421,7 +429,7 @@ static int init_vm_mapping_info(pid_t pid, struct vm_mapping_info *info)
 
 	ret = scan_kvm_gfn(kvm, info);
 	if (ret) {
-		pr_err("failed to scan kvm of pid %d\n", pid);
+		pr_err("failed to scan kvm of pid %d, ret %d\n", pid, ret);
 	}
 	post_scan_kvm_gfn(kvm, srcu_idx);
 	fput(filp);
@@ -756,6 +764,7 @@ int init_access_pid(struct access_add_pid_payload *payload,
 	ap->type = payload->type;
 	init_completion(&ap->work_done);
 	init_waitqueue_head(&ap->wq);
+	INIT_WORK(&ap->swap_work, smap_swap_work_fn);
 	for (int i = 0; i < MAX_NUMNODES; i++) {
 		ap->scan_count[i] = 0;
 		ap->page_num[i] = 0;
@@ -785,6 +794,27 @@ int init_access_pid(struct access_add_pid_payload *payload,
 		remote_ram_snapshot_free(ap->remote_snapshot);
 		kfree(ap);
 		return ret;
+	}
+	/*
+	 * Only VM pids control a staged cold-page buffer for the kernel
+	 * swap-out worker; all other pid types must not stage.
+	 */
+	if (ap->pid_type == SMAP_PID_VM && get_swap_enable()) {
+		/* Only VM pids with swap enabled control a staged cold-page
+		 * buffer; with smap.swap.enable off no staging runs, so the
+		 * buffer would be dead weight. Pids added before enabling
+		 * swap simply stage nothing until re-added. */
+		ap->swap_buf = smap_swap_buf_create();
+		if (!ap->swap_buf) {
+			/* clean_last_ap_data() also vfree()s ap->info.priors,
+			 * plus the paddr_bm bitmaps that
+			 * access_walk_pagemap_prepare() allocated just above.
+			 */
+			clean_last_ap_data(ap);
+			remote_ram_snapshot_free(ap->remote_snapshot);
+			kfree(ap);
+			return -ENOMEM;
+		}
 	}
 	ret = create_procfs(ap);
 	if (ret) {

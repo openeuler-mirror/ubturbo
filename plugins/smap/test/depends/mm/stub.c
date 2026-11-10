@@ -66,3 +66,11 @@ bool PageAnon(struct page *page)
 {
         return true;
 }
+
+/* vmscan reclaim_pages() is EXPORT_SYMBOL_GPL in the kernel; the DT build
+ * replaces the whole vmscan with stubs, so provide a no-op reclaim.
+ */
+unsigned long reclaim_pages(struct list_head *folio_list, bool ignore_references)
+{
+	return 0;
+}

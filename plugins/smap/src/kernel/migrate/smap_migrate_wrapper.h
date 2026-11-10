@@ -131,6 +131,20 @@ extern void (*fp_putback_movable_pages)(struct list_head *l);
 extern bool (*fp_isolate_folio_to_list)(struct folio *folio,
 					struct list_head *list);
 
+/*
+ * Cold-page swap-out worker symbol accessors (one interface).
+ *
+ * - openEuler OLK-6.6 (KERNEL_OPENEULER): the worker calls vmscan's
+ *   reclaim_pages() directly (EXPORT_SYMBOL_GPL) and resolves only the
+ *   non-exported isolate_folio_to_list() through the kprobe pointer
+ *   above.
+ * - Other kernels (COS, veLinux, V1, T1): reclaim_pages() is no longer
+ *   resolved via kprobe and is compiled out of the worker; smap_swap_stage()
+ *   refuses to stage there, so swap-out stays disabled on them.
+ */
+bool smap_swap_symbols_ready(void);
+bool smap_swap_isolate_folio_to_list(struct folio *folio,
+				     struct list_head *list);
 int smap_process_symbols(void);
 struct folio *smap_alloc_huge_page_node(struct folio *folio, int nid,
 					bool is_mig_back);

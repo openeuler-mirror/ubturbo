@@ -60,6 +60,20 @@ static inline void folio_set_young(struct folio *folio)
 {
 }
 
+static inline bool folio_test_lru(struct folio *folio)
+{
+    return false;
+}
+
+static inline void folio_clear_referenced(struct folio *folio)
+{
+}
+
+static inline bool folio_test_unevictable(struct folio *folio)
+{
+    return false;
+}
+
 #define PF_POISONED_CHECK(page) ({ page; })
 
 #ifdef __cplusplus

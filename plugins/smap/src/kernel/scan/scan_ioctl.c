@@ -16,8 +16,9 @@
 #include "iomem.h"
 #include "check.h"
 #include "scan_main.h"
-#include "access_pid.h"
+#include "smap_swap.h"
 #include "scan_ioctl.h"
+#include "access_pid.h"
 #include "hist_ops.h"
 #include "hist_tracking.h"
 
@@ -451,6 +452,32 @@ static long ioctl_tracking_scan_mode(unsigned long arg)
 	return set_remote_scan_mode((u8)arg);
 }
 
+static long ioctl_set_swap_config(void __user *argp)
+{
+	struct smap_swap_cfg cfg;
+	int ret;
+
+	if (!argp || copy_from_user(&cfg, argp, sizeof(cfg)))
+		return -EFAULT;
+
+	/*
+	 * Threshold and the hugetlb-swap capability come with the switch:
+	 * switch-on delivers both atomically; switch-off only stops the
+	 * swap activity (set_swap_enable purges all staged buffers) and no
+	 * threshold update is needed.
+	 */
+	if (cfg.enable) {
+		ret = set_l3_cold_threshold(cfg.l3_cold_threshold);
+		if (ret)
+			return ret;
+	}
+	smap_swap_set_hugetlb(cfg.hugetlb_swap != 0);
+	set_swap_enable((int)cfg.enable);
+	pr_info("swap config applied: enable=%u threshold=%u hugetlb=%d\n",
+		cfg.enable, cfg.l3_cold_threshold, smap_swap_hugetlb_enabled());
+	return 0;
+}
+
 static long ioctl_tracking_ub_watch(void __user *argp)
 {
 	struct ub_flux_mb_statistic *result;
@@ -525,6 +552,8 @@ static long smap_scan_ioctl(struct file *file, unsigned int cmd,
 		return ioctl_set_scan_cpu(argp);
 	case SMAP_IOCTL_TRACKING_CMD:
 		return ioctl_tracking_restart_pid(arg);
+	case SMAP_IOCTL_SWAP_CONFIG_CMD:
+		return ioctl_set_swap_config(argp);
 	default:
 		rc = -ENOTTY;
 	}

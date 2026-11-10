@@ -148,6 +148,21 @@ struct ub_watch_config {
 
 #define SMAP_IOCTL_SCAN_MODE_SET_CMD _IOW(SMAP_ACCESS_MAGIC, 13, unsigned long)
 
+/*
+ * Single-ioctl swap configuration: user space reads smap_strategy.conf
+ * (plus /proc/meminfo hugetlb-swap capability) and delivers both values
+ * in one command; the kernel applies them atomically.
+ * Keep this layout aligned with user-space struct SmapSwapCfg.
+ */
+struct smap_swap_cfg {
+	u32 enable; /* start/stop the swap activity */
+	u32 l3_cold_threshold; /* cold waiting period, in seconds */
+	u32 hugetlb_swap; /* kernel supports hugetlb page swap out */
+};
+
+#define SMAP_IOCTL_SWAP_CONFIG_CMD \
+	_IOW(SMAP_ACCESS_MAGIC, 16, struct smap_swap_cfg)
+
 void scan_ioctl_exit(void);
 int scan_ioctl_init(void);
 

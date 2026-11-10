@@ -11,6 +11,7 @@
 #include <linux/refcount.h>
 #include <linux/mutex.h>
 #include <linux/wait.h>
+#include <linux/ktime.h>
 
 #include "check.h"
 #include "scan_ioctl.h"
@@ -18,6 +19,7 @@
 #include "drv_common.h"
 #include "kernel_common.h"
 #include "smap_page_flags.h"
+#include "smap_swap.h"
 
 #define MAX_PATH_LENGTH 64
 #define AP_PROCFS_DIR_LEN 32
@@ -96,9 +98,16 @@ struct access_pid {
 	wait_queue_head_t wq;
 	bool freq_ready; /* window data ready for user-space consumption */
 	struct remote_ram_snapshot *remote_snapshot;
-	/* 内核内部 per-node 定维：使用内核编译期 MAX_NUMNODES（随目标内核自适应），
-	 * 与 ABI 定宽 SMAP_MAX_NUMNODES 解耦；readback 流写出时对 [MAX_NUMNODES,
-	 * SMAP_MAX_NUMNODES) 槽位补 0（见 scan_ioctl.c write_bitmap_nrpage） */
+	/* ---- cold-page swap-out staging (VM pids only) ----
+	 * Cold pages parked with a reference and drained to the swap device
+	 * by swap_work on the dedicated swap workqueue.
+	 */
+	struct smap_swap_buf *swap_buf;
+	struct work_struct swap_work;
+	/* Start of the current scan window: origin of the cold duration in
+	 * seconds accumulated into SMAP_COLD_PERIOD.
+	 */
+	ktime_t cycle_start;
 	u32 scan_count[MAX_NUMNODES];
 	size_t page_num[MAX_NUMNODES];
 	size_t bm_len[MAX_NUMNODES];
@@ -172,6 +181,23 @@ static inline bool access_pid_is_scanning(pid_t pid)
 static inline bool access_pid_cur_last_scanning(struct access_pid *ap)
 {
 	return ap->type == NORMAL_SCAN && ap->cur_times + 1 >= ap->ntimes;
+}
+
+/*
+ * Seconds elapsed since the start of the current scan window (ceil-rounded):
+ * the per-cycle increment written into the SMAP_COLD_PERIOD field, so cold
+ * time accumulates in seconds. Defaults to 1 when the window origin is not
+ * recorded yet.
+ */
+static inline u8 ap_cycle_cold_secs(struct access_pid *ap)
+{
+	u64 ms, secs;
+
+	if (!ap->cycle_start)
+		return 1;
+	ms = ktime_to_ms(ktime_sub(ktime_get(), ap->cycle_start));
+	secs = (ms + 999) / 1000; /* ceil to seconds */
+	return (u8)max_t(u64, 1, min_t(u64, secs, MAX_L3_COLD_THRESHOLD));
 }
 
 /*
