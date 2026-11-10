@@ -592,9 +592,18 @@ TEST_F(KvmPgTableTest, Stage2TrySetPteNonSharedPath)
 
 extern "C" int smap_stage2_range_walker(const struct kvm_pgtable_visit_ctx *ctx, enum kvm_pgtable_walk_flags visit);
 
-static void stub_on_pte_young(u64 gpa, bool is_young, bool pte_valid, void *arg) {}
+static int stub_hole_cb_called;
+static int stub_pte_young_cb_called;
 
-static void stub_on_hole(u64 gpa_start, u64 gpa_end, void *arg) {}
+static void stub_on_pte_young(u64 gpa, bool is_young, bool pte_valid, void *arg)
+{
+    stub_pte_young_cb_called++;
+}
+
+static void stub_on_hole(u64 gpa_start, u64 gpa_end, void *arg)
+{
+    stub_hole_cb_called++;
+}
 
 TEST_F(KvmPgTableTest, RangeWalkerHoleLevel)
 {
@@ -740,6 +749,68 @@ TEST_F(KvmPgTableTest, RangeWalkerLeafYoungPteValidSetPteFail)
 
     int ret = smap_stage2_range_walker(&ctx, KVM_PGTABLE_WALK_LEAF);
     EXPECT_EQ(0, ret);
+}
+
+TEST_F(KvmPgTableTest, RangeWalker4KPageHoleLevel2)
+{
+    /* stride=1 (4K), level_offset=0, level < KVM_PGTABLE_MAX_LEVELS-0-1=3 => hole callback */
+    kvm_pte_t ptep_val = 0;
+    struct kvm_pgtable_visit_ctx ctx = {
+        .ptep = &ptep_val,
+        .old = 0,
+        .addr = 0x1000,
+        .level = 2,
+        .flags = KVM_PGTABLE_WALK_LEAF,
+    };
+
+    struct smap_stage2_range_mkold_data data = {
+        .stride = 1,
+        .on_pte_young = stub_on_pte_young,
+        .on_hole = stub_on_hole,
+    };
+    ctx.arg = &data;
+
+    struct kvm_pgtable_mm_ops mm_ops = {};
+    ctx.mm_ops = &mm_ops;
+
+    stub_hole_cb_called = 0;
+    stub_pte_young_cb_called = 0;
+
+    int ret = smap_stage2_range_walker(&ctx, KVM_PGTABLE_WALK_LEAF);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1, stub_hole_cb_called);
+    EXPECT_EQ(0, stub_pte_young_cb_called);
+}
+
+TEST_F(KvmPgTableTest, RangeWalker4KPageLeafLevel3)
+{
+    /* stride=1 (4K), level_offset=0, level >= KVM_PGTABLE_MAX_LEVELS-0-1=3 => leaf processing */
+    kvm_pte_t ptep_val = 0;
+    struct kvm_pgtable_visit_ctx ctx = {
+        .ptep = &ptep_val,
+        .old = 0,
+        .addr = 0x1000,
+        .level = 3,
+        .flags = KVM_PGTABLE_WALK_LEAF,
+    };
+
+    struct smap_stage2_range_mkold_data data = {
+        .stride = 1,
+        .on_pte_young = stub_on_pte_young,
+        .on_hole = stub_on_hole,
+    };
+    ctx.arg = &data;
+
+    struct kvm_pgtable_mm_ops mm_ops = {};
+    ctx.mm_ops = &mm_ops;
+
+    stub_hole_cb_called = 0;
+    stub_pte_young_cb_called = 0;
+
+    int ret = smap_stage2_range_walker(&ctx, KVM_PGTABLE_WALK_LEAF);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(0, stub_hole_cb_called);
+    EXPECT_EQ(1, stub_pte_young_cb_called);
 }
 
 extern "C" int smap_kvm_pgtable_stage2_mkold_range(struct kvm_pgtable *pgt, u64 addr, u64 size,

@@ -54,6 +54,11 @@ typedef struct {
     uint32_t remoteScanMode;
     bool remoteScanModeChanged;
     bool scanCpuConfigured;
+    bool swapEnable;
+    uint32_t l3ColdThreshold;
+    bool swapEnableChanged;
+    bool l3ColdThresholdChanged;
+    bool hugetlbSwapSupported;
 } StrategyConfig;
 
 uint32_t GetScanPeriodConfig(void);
@@ -104,6 +109,20 @@ uint32_t GetRemoteScanModeConfig(void);
 bool GetRemoteScanModeChanged(void);
 
 void SetRemoteScanModeChanged(bool val);
+
+bool GetSwapEnableConfig(void);
+
+uint32_t GetL3ColdThresholdConfig(void);
+
+bool GetSwapEnableChanged(void);
+
+void SetSwapEnableChanged(bool val);
+
+bool GetL3ColdThresholdChanged(void);
+
+void SetL3ColdThresholdChanged(bool val);
+
+bool GetHugetlbSwapSupported(void);
 
 /* Read strategy config. Path is fixed in the impl (/opt/ubturbo/conf/smap/smap_strategy.conf).
  * Periodic calls support config hot-reload. */

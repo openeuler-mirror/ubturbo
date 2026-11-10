@@ -29,6 +29,7 @@
 #include <linux/pagewalk.h>
 #include <linux/swapops.h>
 
+#include "kernel_common.h"
 #include "access_tracking_wrapper.h"
 #include "access_pid.h"
 #include "access_mmu.h"
@@ -468,6 +469,7 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 	pte_t *ptep;
 	pte_t pte;
 	phys_addr_t paddr;
+	struct page *page;
 
 	if (!kvm)
 		return -EINVAL;
@@ -495,14 +497,81 @@ static int hva_to_hpa_hugetlb(struct kvm *kvm, u64 host_va,
 	}
 
 	paddr = PFN_PHYS(pte_pfn(pte));
-	if (is_young) {
-		struct page *page = pfn_to_online_page(pte_pfn(pte));
-
+	page = pfn_to_online_page(pte_pfn(pte));
+	if (!page)
+		return -EINVAL;
+	if (is_young)
 		actc_data_add_fast(paddr, page, ap, g_pagesize_huge);
-	}
 
 	if (access_pid_cur_last_scanning(ap))
-		add_to_bm_huge(host_va, paddr, ap);
+		add_to_bm_huge(host_va, page, ap);
+
+	return 0;
+}
+
+static pte_t *smap_pte_offset(struct mm_struct *mm, unsigned long addr)
+{
+	pgd_t *pgd;
+	p4d_t *p4d;
+	pud_t *pud;
+	pmd_t *pmd;
+	pte_t *pte;
+
+	pgd = pgd_offset(mm, addr);
+	if (!pgd_present(READ_ONCE(*pgd)))
+		return NULL;
+
+	p4d = p4d_offset(pgd, addr);
+	if (!p4d_present(READ_ONCE(*p4d)))
+		return NULL;
+
+	pud = pud_offset(p4d, addr);
+	if (!pud_present(READ_ONCE(*pud)))
+		return NULL;
+
+	pmd = pmd_offset(pud, addr);
+	if (!pmd_present(READ_ONCE(*pmd)))
+		return NULL;
+
+	pte = smap__pte_offset_map(pmd, addr, NULL);
+	return pte;
+}
+
+static int hva_to_hpa_4k(struct kvm *kvm, u64 host_va, struct access_pid *ap,
+			 bool is_young)
+{
+	pte_t *ptep;
+	pte_t pte;
+	phys_addr_t paddr;
+	struct page *page;
+
+	if (!kvm)
+		return -EINVAL;
+
+	ptep = smap_pte_offset(kvm->mm, host_va);
+	if (!ptep) {
+		return -EFAULT;
+	}
+
+	pte = ptep_get(ptep);
+	if (!pte_present(pte)) {
+		pr_debug("unable to get PTE\n");
+		pte_unmap(ptep);
+		return -EINVAL;
+	}
+
+	paddr = __pte_to_phys(pte);
+	pte_unmap(ptep);
+
+	page = pfn_to_online_page(pte_pfn(pte));
+	if (!page)
+		return 0;
+
+	if (is_young)
+		actc_data_add_fast(paddr, page, ap, PAGE_SIZE);
+
+	if (access_pid_cur_last_scanning(ap))
+		add_to_bm_page(paddr, page, ap);
 
 	return 0;
 }
@@ -616,12 +685,25 @@ static int hva_to_hpa(struct kvm *kvm, u64 host_va, struct access_pid *ap,
 		return -EFAULT;
 	}
 
+	/* The dispatch tracks the VMA backend: a hugetlbfs-backed mapping
+	 * follows the hugetlb path, a pte-mapped one is skipped in 2M
+	 * scans (pre-4K filter semantics) and scanned per-page in 4K.
+	 */
 	if (is_vm_hugetlb_page(vma)) {
 		if (ap->type == HAM_SCAN) {
 			hva_to_hpa_ham(kvm, host_va, ap->pid);
 		} else {
 			ret = hva_to_hpa_hugetlb(kvm, host_va, ap, is_young);
 		}
+	} else {
+		/* 2M scan over a non-hugetlb backend: skipped, keeping the
+		 * pre-4K hugepage-only filter semantics for compat VMs */
+		if (is_access_hugepage()) {
+			pr_debug("pid %d: 2M scan skipped on non-hugetlb vma\n",
+				 ap->pid);
+			return 0;
+		}
+		ret = hva_to_hpa_4k(kvm, host_va, ap, is_young);
 	}
 	return ret;
 }
@@ -762,8 +844,6 @@ static void smap_on_pte_young_cb(u64 gpa, bool is_young, bool pte_valid,
 		return;
 
 	hva = gfn_to_hva_memslot(ctx->memslot, gpa_to_gfn(gpa));
-	if (!get_vma_if_huge_page(ctx->kvm, hva))
-		return;
 	set_young = is_young && pte_valid;
 	if (set_young || access_pid_cur_last_scanning(ap))
 		(void)hva_to_hpa(ctx->kvm, hva, ap, set_young);
@@ -825,6 +905,17 @@ static int scan_kvm_memslots(struct kvm *kvm, struct access_pid *ap,
 	slots = kvm_memslots(kvm);
 	if (!slots)
 		return -EINVAL;
+
+	/* 4K granularity pairs the sampling buffer size with the 2M scan
+	 * unit and collect_statistic_vaddr() still assumes hugetlb VMAs on
+	 * the kvm path; reject the combination until both are redesigned.
+	 */
+	if (ap->type == STATISTIC_SCAN && page_size == PAGE_SIZE) {
+		pr_warn_ratelimited(
+			"pid %d: statistic scan unsupported in 4K mode\n",
+			ap->pid);
+		return -EOPNOTSUPP;
+	}
 
 	if (ap->type == STATISTIC_SCAN) {
 		nr_pages = 0;
@@ -1338,7 +1429,7 @@ static void release_resources(struct file *filp, struct task_struct *task,
 		put_pid(pid);
 }
 
-static int scan_forward_2M(struct access_pid *ap, int page_size)
+static int scan_forward_vm(struct access_pid *ap, int page_size)
 {
 	int srcu_idx;
 	struct file *filp;
@@ -1745,11 +1836,7 @@ static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 
 int scan_accessed_bit_forward_vm(struct access_pid *ap, int page_size)
 {
-	if (page_size == g_pagesize_huge) {
-		return scan_forward_2M(ap, page_size);
-	} else {
-		return -EINVAL;
-	}
+	return scan_forward_vm(ap, page_size);
 }
 
 int scan_accessed_bit_forward_mm(struct access_pid *ap, int page_size)

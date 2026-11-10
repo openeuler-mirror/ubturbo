@@ -378,11 +378,12 @@ static int smap_stage2_range_walker(const struct kvm_pgtable_visit_ctx *ctx,
 	struct kvm_pgtable_mm_ops *mm_ops = ctx->mm_ops;
 	bool pte_valid;
 	bool is_young;
+	int level_offset = data->stride == 1 ? 0 : 1;
 
 #ifdef OS_VENDOR_V1
-	if (ctx->level < KVM_PGTABLE_LAST_LEVEL - 1) {
+	if (ctx->level < KVM_PGTABLE_LAST_LEVEL - level_offset) {
 #else
-	if (ctx->level < KVM_PGTABLE_MAX_LEVELS - 2) {
+	if (ctx->level < KVM_PGTABLE_MAX_LEVELS - level_offset - 1) {
 #endif
 		u64 hole_end = ctx->addr + kvm_granule_size(ctx->level);
 		data->on_hole(ctx->addr, hole_end, data);
@@ -417,9 +418,7 @@ int smap_kvm_pgtable_stage2_mkold_range(
 	struct kvm_pgtable *pgt, u64 addr, u64 size,
 	struct smap_stage2_range_mkold_data *data)
 {
-	data->attr_set = 0;
-	data->attr_clr = KVM_PTE_LEAF_ATTR_LO_S2_AF &
-			 (KVM_PTE_LEAF_ATTR_LO | KVM_PTE_LEAF_ATTR_HI);
+	int ret;
 	struct kvm_pgtable_walker walker = {
 		.cb = smap_stage2_range_walker,
 		.arg = data,
@@ -427,7 +426,11 @@ int smap_kvm_pgtable_stage2_mkold_range(
 			 KVM_PGTABLE_WALK_SHARED | KVM_PGTABLE_WALK_LEAF,
 	};
 
-	int ret = kvm_pgtable_walk(pgt, addr, size, &walker);
+	data->attr_set = 0;
+	data->attr_clr = KVM_PTE_LEAF_ATTR_LO_S2_AF &
+			 (KVM_PTE_LEAF_ATTR_LO | KVM_PTE_LEAF_ATTR_HI);
+
+	ret = kvm_pgtable_walk(pgt, addr, size, &walker);
 	if (!ret)
 		dsb(ishst);
 	return ret;

@@ -40,11 +40,13 @@ static inline int page_mapcount(struct page *page)
 #define NODES_MASK		((1UL << NODES_WIDTH) - 1)
 
 pte_t *drivers__pte_offset_map(pmd_t *pmd, unsigned long addr, pmd_t *pmdvalp_);
+pte_t *pte_offset_map(pmd_t *pmd, unsigned long addr);
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 int page_to_nid(const struct page *page);
+phys_addr_t page_to_phys(struct page *page);
 bool pfn_valid(unsigned long pfn);
 struct page *pfn_to_online_page(unsigned long pfn);
 void mmput(struct mm_struct *);
