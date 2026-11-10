@@ -16,6 +16,7 @@
 #include <linux/pid.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/swap.h>
 #include <linux/vmalloc.h>
 #include <linux/workqueue.h>
 
@@ -236,6 +237,23 @@ TEST_F(AccessTrackingTest, scan_exit)
     MOCKER(release_remote_ram).stubs();
     MOCKER(reset_acpi_mem).stubs();
     scan_exit();
+}
+
+extern "C" bool smap_swap_has_room(void);
+TEST_F(AccessTrackingTest, smap_swap_has_room)
+{
+    // swap exhaustion: nr_swap_pages goes negative or hits 0; both must
+    // be refused, a negative count must not wrap into a huge positive
+    // (u64 cast) and flip the headroom guard to true. Then plenty of
+    // room: the guard passes.
+    MOCKER(get_nr_swap_pages)
+        .stubs()
+        .will(returnValue((long)0))
+        .then(returnValue((long)-1))
+        .then(returnValue((long)TOTAL_SWAP_PAGES));
+    EXPECT_EQ(false, smap_swap_has_room());
+    EXPECT_EQ(false, smap_swap_has_room());
+    EXPECT_EQ(true, smap_swap_has_room());
 }
 
 extern "C" ktime_t calc_time_us(ktime_t start_time);

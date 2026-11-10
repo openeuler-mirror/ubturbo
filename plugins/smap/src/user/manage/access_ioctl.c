@@ -208,6 +208,20 @@ void IoctlSetRemoteScanMode(uint32_t mode)
     SMAP_LOGGER_INFO("Set remote scan mode to %u success.", mode);
 }
 
+void IoctlSetSwapConfig(uint32_t enable, uint32_t l3ColdThreshold, uint32_t hugetlbSwap)
+{
+    struct ProcessManager *manager = GetProcessManager();
+    struct SmapSwapCfg cfg = { enable, l3ColdThreshold, hugetlbSwap };
+
+    int ret = ioctl(manager->fds.access, SMAP_IOCTL_SWAP_CONFIG_CMD, &cfg);
+    if (ret < 0) {
+        SMAP_LOGGER_ERROR("ioctl set swap config failed: %s.", strerror(errno));
+        return;
+    }
+    SMAP_LOGGER_INFO("Set swap config: enable=%u, l3ColdThreshold=%u, hugetlbSwap=%u.", enable, l3ColdThreshold,
+                     hugetlbSwap);
+}
+
 int AccessIoctlRestartPid(pid_t pid)
 {
     struct ProcessManager *manager = GetProcessManager();

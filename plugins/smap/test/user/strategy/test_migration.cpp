@@ -1732,6 +1732,36 @@ TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuNoChange)
     MigrationUpdateMigrateModeAndScanCpu();
 }
 
+extern "C" bool GetSwapEnableChanged(void);
+extern "C" bool GetL3ColdThresholdChanged(void);
+extern "C" bool GetSwapEnableConfig(void);
+extern "C" uint32_t GetL3ColdThresholdConfig(void);
+extern "C" bool GetHugetlbSwapSupported(void);
+extern "C" void SetSwapEnableChanged(bool val);
+extern "C" void SetL3ColdThresholdChanged(bool val);
+extern "C" void IoctlSetSwapConfig(uint32_t enable, uint32_t l3ColdThreshold, uint32_t hugetlbSwap);
+
+TEST_F(MigrationTest, TestUpdateMigrateModeAndScanCpuSwapOffStillDelivered)
+{
+    MOCKER(GetMigrateModeChanged).stubs().will(returnValue(false));
+    MOCKER(GetScanCpuChanged).stubs().will(returnValue(false));
+    MOCKER(GetRemoteScanModeChanged).stubs().will(returnValue(false));
+    MOCKER(GetSwapEnableChanged).stubs().will(returnValue(true));
+    MOCKER(GetL3ColdThresholdChanged).stubs().will(returnValue(true));
+    MOCKER(GetSwapEnableConfig).stubs().will(returnValue(false));
+    MOCKER(GetL3ColdThresholdConfig).stubs().will(returnValue((uint32_t)30));
+    MOCKER(GetHugetlbSwapSupported).stubs().will(returnValue(false));
+    // switch-off must still reach the kernel: set_swap_enable(0) purges
+    // the staged cold pages, and swap_enable outlives the daemon
+    MOCKER(IoctlSetSwapConfig)
+        .expects(once())
+        .with(eq((uint32_t)0), eq((uint32_t)30), eq((uint32_t)0));
+    MOCKER(SetSwapEnableChanged).stubs().will(ignoreReturnValue());
+    MOCKER(SetL3ColdThresholdChanged).stubs().will(ignoreReturnValue());
+
+    MigrationUpdateMigrateModeAndScanCpu();
+}
+
 extern "C" int MigrateRemoteNuma(struct ProcessManager *manager, struct MigrateNumaIoctlMsg *msg);
 TEST_F(MigrationTest, TestMigrateRemoteNumaOne)
 {

@@ -4,6 +4,7 @@
  */
 
 #include <linux/mm.h>
+#include <linux/swap.h>
 
 static void volatile_memcpy(volatile char *to, const volatile char *from, unsigned long n)
 {
@@ -73,4 +74,13 @@ bool PageAnon(struct page *page)
 unsigned long reclaim_pages(struct list_head *folio_list, bool ignore_references)
 {
 	return 0;
+}
+
+/* The default DT swap space has plenty of room, so smap_swap_has_room()
+ * does not trigger; specific tests will use MOCKER to override it with
+ * negative/0 values to verify the headroom guard.
+ */
+long get_nr_swap_pages(void)
+{
+	return TOTAL_SWAP_PAGES;
 }

@@ -565,7 +565,7 @@ static int hva_to_hpa_4k(struct kvm *kvm, u64 host_va, struct access_pid *ap,
 
 	page = pfn_to_online_page(pte_pfn(pte));
 	if (!page)
-		return 0;
+		return -EINVAL;
 
 	if (is_young)
 		actc_data_add_fast(paddr, page, ap, PAGE_SIZE);

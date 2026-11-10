@@ -24,13 +24,21 @@
 #error "smap page flags require CONFIG_NUMA_BALANCING and LAST_CPUPID in page->flags"
 #endif
 
-/* The acc counter occupies bit[9..13] of the LAST_CPUPID field, so SMAP
- * needs at least 14 bits of it (NR_CPUS_BITS >= 12 gives the full 20-bit
- * field). With a narrower field it would spill into the spare (or
- * KASAN/MTE tag) bits above LAST_CPUPID.
+/*
+ * Frequency-layout counters in the LAST_CPUPID field:
+ *
+ *   counter               bits        width  purpose
+ *   -------------------------------------------------------------------
+ *   acc counter           bit[9..13]  5      cumulative access count
+ *   L3 cold-period cnt    bit[14..19] 6      cold duration in seconds
+ *
+ * They together occupy bit[9..19], so SMAP needs all 20 bits of the
+ * field (NR_CPUS_BITS >= 12 gives the full 20-bit field). With a
+ * narrower field they would spill into the spare (or KASAN/MTE tag)
+ * bits above LAST_CPUPID.
  */
-#if LAST_CPUPID_WIDTH < 14
-#error "smap acc counter requires at least 14 bits of the LAST_CPUPID field"
+#if LAST_CPUPID_WIDTH < 20
+#error "smap acc + cold-period counters require all 20 bits of the LAST_CPUPID field"
 #endif
 
 /* ---- Frequency field layout (relative to LAST_CPUPID_PGSHIFT) ----

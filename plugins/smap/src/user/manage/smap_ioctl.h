@@ -48,6 +48,19 @@ struct UbWatchConfig {
 
 #define SMAP_IOCTL_SCAN_MODE_SET_CMD _IOW(SMAP_ACCESS_MAGIC, 13, unsigned long)
 
+/*
+ * Single-ioctl swap configuration (kernel struct smap_swap_cfg mirror):
+ * user space reads smap_strategy.conf plus the /proc/meminfo hugetlb-swap
+ * capability and delivers both values in one command.
+ */
+struct SmapSwapCfg {
+    uint32_t enable;
+    uint32_t l3ColdThreshold;
+    uint32_t hugetlbSwap;
+};
+
+#define SMAP_IOCTL_SWAP_CONFIG_CMD _IOW(SMAP_ACCESS_MAGIC, 16, struct SmapSwapCfg)
+
 #define SMAP_MIG_MIGRATE _IOW(SMAP_MIGRATE_MAGIC, 0, struct MigrateMsg)
 #define SMAP_SET_PAGETYPE _IOW(SMAP_MIGRATE_MAGIC, 1, uint32_t)
 #define SMAP_MIG_MIGRATE_NUMA _IOW(SMAP_MIGRATE_MAGIC, 2, struct MigrateNumaIoctlMsg)
