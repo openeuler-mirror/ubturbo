@@ -1361,7 +1361,7 @@ TEST_F(TestSmapClient, SmapQueryProcessConfigEncodeRequestError)
     EXPECT_EQ(1, ret);
 }
 
-const int FREQ_QUERY = 19;
+const int FREQ_QUERY = SMAP_MAX_NUMNODES + 1;
 
 TEST_F(TestSmapClient, SmapQueryNumaFreqInvalidParameter)
 {

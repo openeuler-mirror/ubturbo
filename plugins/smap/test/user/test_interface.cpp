@@ -4245,9 +4245,9 @@ TEST_F(InterfaceTest, TestSmapQueryRemoteNumaFreqExceptionBranch)
     ret = ubturbo_smap_remote_numa_freq_query(nullptr, nullptr, 1);
     EXPECT_EQ(-EINVAL, ret);
 
-    uint16_t numa;
+    uint16_t numa = 0;
     uint64_t freq;
-    ret = ubturbo_smap_remote_numa_freq_query(&numa, &freq, 19);
+    ret = ubturbo_smap_remote_numa_freq_query(&numa, &freq, SMAP_MAX_NUMNODES + 1);
     EXPECT_EQ(-EINVAL, ret);
 }
 
