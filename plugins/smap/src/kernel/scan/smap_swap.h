@@ -71,6 +71,18 @@ bool smap_swap_stage(struct access_pid *ap, struct page *page);
  */
 void smap_swap_notify(struct access_pid *ap);
 
+/*
+ * Cancel pending/running swap work and drop its orphaned work-ref.
+ * Mirrors cancel_ap_scan_work: a cancelled pending swap work's work-ref
+ * (taken in smap_swap_notify) is never consumed by the worker, so it must
+ * be dropped here; a running instance finishes and drops its own work-ref.
+ * After this returns, swap_work is guaranteed not pending or running, so
+ * destroy_access_pid (reclaim path) does not need to cancel it — avoiding
+ * the self-cancellation deadlock when the swap worker itself is the last
+ * slot releaser.
+ */
+void cancel_ap_swap_work(struct access_pid *ap);
+
 void smap_swap_work_fn(struct work_struct *work);
 
 #endif /* _SRC_SMAP_SWAP_H */

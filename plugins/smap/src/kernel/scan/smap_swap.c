@@ -238,6 +238,24 @@ bool smap_swap_stage(struct access_pid *ap, struct page *page)
 }
 
 /*
+ * cancel_ap_swap_work - cancel pending/running swap work and drop its
+ * orphaned work-ref. Mirrors cancel_ap_scan_work: a cancelled pending swap
+ * work's work-ref (taken in smap_swap_notify) is never consumed by the
+ * worker, so it must be dropped here; a running instance finishes and drops
+ * its own work-ref. After this returns, swap_work is guaranteed not pending
+ * or running, so destroy_access_pid (reclaim path) does not need to cancel
+ * it — avoiding the self-cancellation deadlock when the swap worker itself
+ * is the last slot releaser.
+ */
+void cancel_ap_swap_work(struct access_pid *ap)
+{
+	if (!ap || !ap->swap_work.func)
+		return;
+	if (cancel_work_sync(&ap->swap_work) && ap->slot)
+		ap_put_slot(ap->slot);
+}
+
+/*
  * smap_swap_notify - trigger the swap-out worker for staged pages.
  * Called once at the end of each pid scan window; a no-op when the buffer
  * is empty. Takes a work-reference on the owning slot (mirroring the scan
@@ -255,7 +273,7 @@ void smap_swap_notify(struct access_pid *ap)
 	spin_lock(&buf->lock);
 	has_pages = buf->cnt > 0;
 	spin_unlock(&buf->lock);
-	pr_debug("notify pid %d has_pages %d\n", ap->pid, has_pages);
+	pr_debug("notify pid %d buf_nonempty=%d\n", ap->pid, has_pages);
 	if (!has_pages)
 		return;
 

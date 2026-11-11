@@ -248,11 +248,6 @@ void destroy_access_pid(struct access_pid *elem)
 	if (!elem) {
 		return;
 	}
-	/* pending/running swap activity must not touch freed memory */
-	if (cancel_work_sync(&elem->swap_work) && elem->slot) {
-		/* a cancelled pending swap work drops its orphaned work-ref */
-		ap_put_slot(elem->slot);
-	}
 	smap_swap_buf_free(elem->swap_buf);
 	elem->swap_buf = NULL;
 	if (elem->proc_root)
@@ -1348,11 +1343,16 @@ void access_remove_pid(int len, struct access_remove_pid_payload *payload)
 		slot = ap_get_slot(payload[i].pid);
 		if (!slot)
 			continue;
-		/* cancel any pending/running scan work (drops work-ref if
-		 * it deactivates a pending timer); the running instance, if
-		 * any, will observe REMOVING and drop its own work-ref.
+		/* cancel any pending/running scan and swap work (each drops
+		 * its orphaned work-ref if it deactivated a pending item);
+		 * the running instance, if any, will observe REMOVING (scan)
+		 * or simply finish and drop its own work-ref (swap). Doing
+		 * this here, while holding a transient ref, guarantees neither
+		 * work is pending or running when ap_slot_remove drops the
+		 * initial ref — so reclaim cannot trigger inside a worker.
 		 */
 		cancel_ap_scan_work(slot->ap);
+		cancel_ap_swap_work(slot->ap);
 		ap_slot_remove(payload[i].pid);
 		ap_put_slot(slot); /* drop the ref taken by ap_get_slot */
 	}
@@ -1370,7 +1370,7 @@ void access_remove_all_pid(void)
 	 * sets REMOVING and drops the initial ref; the slot is skipped by
 	 * subsequent iterations (state != INUSE), so inline iteration is safe.
 	 * Grab a transient ref per slot so the ap stays alive across
-	 * cancel_ap_scan_work + ap_slot_remove.
+	 * cancel_ap_scan_work + cancel_ap_swap_work + ap_slot_remove.
 	 */
 	for (i = 0; i < AP_MAX_SLOTS; i++) {
 		struct ap_slot *s = ap_get_slot_at(i);
@@ -1380,6 +1380,7 @@ void access_remove_all_pid(void)
 			continue;
 		pid = s->pid;
 		cancel_ap_scan_work(s->ap);
+		cancel_ap_swap_work(s->ap);
 		ap_slot_remove(pid);
 		ap_put_slot(s); /* drop the transient ref */
 	}
