@@ -24,8 +24,6 @@ extern struct access_pid_struct ap_data;
 
 struct statistics_tracking_info {
 	pid_t pid;
-	int l1_node;
-	int l2_node;
 	u64 page_num[NR_LEVEL]; // page count of local/remote levels
 	u64 *vaddr[NR_LEVEL]; // virtual address array, sorted
 	u32 scan_num; // number of scans done; scan_num % window_num = window to update
@@ -83,6 +81,7 @@ int scan_accessed_bit_forward_vm(struct access_pid *ap, int page_size);
 int scan_accessed_bit_forward_mm(struct access_pid *ap, int page_size);
 int scan_hva_info(pid_t pid_nr, u64 *l1_page_num, u64 *l2_page_num,
 		  u64 **l1_vaddr, u64 **l2_vaddr);
-int scan_hva_info_4k(pid_t pid, u64 *l1_page_num, u64 *l2_page_num,
-		     u64 **l1_vaddr, u64 **l2_vaddr);
+/* page_num and vaddr are indexed by L1 (local) and L2 (remote) */
+int scan_hva_info_4k(pid_t pid, u64 *page_num, u64 **vaddr);
+int scan_hva_info_4k_vm(pid_t pid, u64 *page_num, u64 **vaddr);
 #endif /* _SRC_ACCESSED_BIT_H */

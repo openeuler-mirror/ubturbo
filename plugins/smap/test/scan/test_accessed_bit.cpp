@@ -395,7 +395,8 @@ TEST_F(AccessedBitTest, hvaToHpaTest)
 }
 
 extern "C" struct vm_area_struct *get_vma_if_huge_page(struct kvm *kvm, unsigned long host_va);
-extern "C" int scan_kvm_memslots(struct kvm *kvm, pid_t pid, int page_size, scan_type type);
+extern "C" int scan_kvm_memslots(struct kvm *kvm, struct access_pid *ap, int page_size, u64 *stat_vaddr,
+                                 u64 stat_page_cap);
 TEST_F(AccessedBitTest, scanKvmMemslotsWithNullKvm)
 {
     int ret;
@@ -404,12 +405,15 @@ TEST_F(AccessedBitTest, scanKvmMemslotsWithNullKvm)
     struct kvm_arch arch = {.mmu = {0}};
     struct kvm kvm = {.mm = &mm, .arch = arch};
     struct kvm_memslots slots;
+    struct access_pid ap = {};
 
-    ret = scan_kvm_memslots(&kvm, 1, 0, STATISTIC_SCAN);
+    ap.pid = 1;
+    ap.type = STATISTIC_SCAN;
+    ret = scan_kvm_memslots(&kvm, &ap, PAGE_SIZE, nullptr, 0);
     EXPECT_EQ(-EINVAL, ret);
 
     MOCKER(kvm_memslots).stubs().will(returnValue((struct kvm_memslots *)nullptr));
-    ret = scan_kvm_memslots(&kvm, 1, 0, STATISTIC_SCAN);
+    ret = scan_kvm_memslots(&kvm, &ap, PAGE_SIZE, nullptr, 0);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -1103,7 +1107,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmFindPidFail)
     ap.type = NORMAL_SCAN;
     MOCKER(find_get_pid).stubs().will(returnValue((struct pid *)nullptr));
     int ret = scan_accessed_bit_forward_vm(&ap, PMD_SIZE);
-    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ(-ESRCH, ret);
 }
 
 TEST_F(AccessedBitTest, ScanAccessedBitForwardVmGetTaskFail)
@@ -1115,7 +1119,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmGetTaskFail)
     MOCKER(find_get_pid).stubs().will(returnValue(&pid_s));
     MOCKER(get_pid_task).stubs().will(returnValue((struct task_struct *)nullptr));
     int ret = scan_accessed_bit_forward_vm(&ap, PMD_SIZE);
-    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ(-ESRCH, ret);
 }
 
 TEST_F(AccessedBitTest, ScanAccessedBitForwardVmGetKvmFileFail)
@@ -1129,7 +1133,7 @@ TEST_F(AccessedBitTest, ScanAccessedBitForwardVmGetKvmFileFail)
     MOCKER(get_pid_task).stubs().will(returnValue(&task));
     MOCKER(get_kvm_file_from_task).stubs().will(returnValue((struct file *)nullptr));
     int ret = scan_accessed_bit_forward_vm(&ap, PMD_SIZE);
-    EXPECT_EQ(-EINVAL, ret);
+    EXPECT_EQ(-EBADF, ret);
 }
 
 extern "C" int hva_to_hpa_4k(struct kvm *kvm, u64 host_va, struct access_pid *ap, bool is_young);
@@ -1461,8 +1465,6 @@ TEST_F(AccessedBitTest, ClearStatisticTrackingInfoFoundAndClear)
     u8 window_data[4] = {5, 6, 7, 8};
     u8 *window_ptr = window_data;
     info.pid = 1;
-    info.l1_node = 0;
-    info.l2_node = -1;
     info.sliding_windows = &window_ptr;
     info.page_num[L1] = 3;
     info.page_num[L2] = 1;
@@ -1581,7 +1583,7 @@ TEST_F(AccessedBitTest, ProcessScanResultsBothFallbacksFail)
 extern "C" void smap_on_pte_young_cb(u64 gpa, bool is_young, bool pte_valid, void *arg);
 extern "C" void smap_on_hole_cb(u64 gpa_start, u64 gpa_end, void *arg);
 extern "C" int process_memslot_pages(struct kvm *kvm, struct kvm_memory_slot *memslot, struct access_pid *ap,
-                                     int page_size);
+                                     int page_size, struct smap_statistic_collect *stat);
 extern "C" int add_to_bm_hugepage(u64 vaddr, struct page *page, struct access_pid *ap);
 
 TEST_F(AccessedBitTest, OnPteYoungCbNotYoungNotLastScanning)
@@ -1772,7 +1774,7 @@ TEST_F(AccessedBitTest, ProcessMemslotPages2M)
     ap.pid = 1;
 
     MOCKER(smap_kvm_pgtable_stage2_mkold_range).stubs().will(returnValue(0));
-    int ret = process_memslot_pages(&kvm, &memslot, &ap, PMD_SIZE);
+    int ret = process_memslot_pages(&kvm, &memslot, &ap, PMD_SIZE, nullptr);
     EXPECT_EQ(0, ret);
     GlobalMockObject::verify();
 }
@@ -1792,7 +1794,7 @@ TEST_F(AccessedBitTest, ProcessMemslotPages4K)
     ap.pid = 1;
 
     MOCKER(smap_kvm_pgtable_stage2_mkold_range).stubs().will(returnValue(0));
-    int ret = process_memslot_pages(&kvm, &memslot, &ap, PAGE_SIZE);
+    int ret = process_memslot_pages(&kvm, &memslot, &ap, PAGE_SIZE, nullptr);
     EXPECT_EQ(0, ret);
     GlobalMockObject::verify();
 }
@@ -1812,7 +1814,7 @@ TEST_F(AccessedBitTest, ProcessMemslotPagesWalkError)
     ap.pid = 1;
 
     MOCKER(smap_kvm_pgtable_stage2_mkold_range).stubs().will(returnValue(-EAGAIN));
-    int ret = process_memslot_pages(&kvm, &memslot, &ap, PMD_SIZE);
+    int ret = process_memslot_pages(&kvm, &memslot, &ap, PMD_SIZE, nullptr);
     EXPECT_EQ(-EAGAIN, ret);
     GlobalMockObject::verify();
 }

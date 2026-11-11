@@ -2324,18 +2324,6 @@ static int AddProcessTracking(pid_t *pidArr, uint32_t *scanTime, uint32_t *durat
             ret = -EINVAL;
             goto out_free;
         }
-        if (scanType == STATISTIC_SCAN && pidTypeDetected == VM_TYPE && !IsHugeMode()) {
-            SMAP_LOGGER_ERROR("pid %d type %d 4K vm statistic scan unsupported.", pidArr[i], pidTypeDetected);
-            free(payload);
-            PutProcessAttr(attr);
-            return -EINVAL;
-        }
-        if (scanType == STATISTIC_SCAN && pidTypeDetected == VM_TYPE && !IsHugeMode()) {
-            SMAP_LOGGER_ERROR("pid %d type %d 4K vm statistic scan unsupported.", pidArr[i], pidTypeDetected);
-            free(payload);
-            PutProcessAttr(attr);
-            return -EINVAL;
-        }
         payload[i].pidType = (PidType)pidTypeDetected;
         PutProcessAttr(attr);
     }

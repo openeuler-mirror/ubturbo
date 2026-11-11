@@ -24,10 +24,9 @@ using namespace std;
 #define TEST_NUMA_WORDS NUMA_NODES_BIT_WORDS
 #define TEST_ADD_PID_STRIDE \
     ((u32)(sizeof(struct access_add_pid_payload) + (size_t)TEST_NUMA_WORDS * sizeof(unsigned long)))
-#define DECL_ADD_PID_PAYLOAD(name)                                            \
-    alignas(8) unsigned long name##_storage[4 + TEST_NUMA_WORDS] = {};        \
-    struct access_add_pid_payload &name =                                     \
-        *reinterpret_cast<struct access_add_pid_payload *>(name##_storage);   \
+#define DECL_ADD_PID_PAYLOAD(name)                                                                            \
+    alignas(8) unsigned long name##_storage[4 + TEST_NUMA_WORDS] = {};                                        \
+    struct access_add_pid_payload &name = *reinterpret_cast<struct access_add_pid_payload *>(name##_storage); \
     name.nr_words = TEST_NUMA_WORDS
 
 extern "C" struct list_head ham_pid_list;
@@ -375,7 +374,6 @@ TEST_F(DriversAccessPidTest, InitAccessStatisticPidTest)
     {
         if (tmp->pid == 17986) {
             findFlag = true;
-            EXPECT_EQ(0, tmp->l1_node);
             break;
         }
     }
@@ -394,7 +392,6 @@ TEST_F(DriversAccessPidTest, InitAccessStatisticPidTest)
     {
         if (tmp->pid == 17986) {
             findFlag = true;
-            EXPECT_EQ(1, tmp->l1_node);
             break;
         }
     }
@@ -489,8 +486,7 @@ TEST_F(DriversAccessPidTest, AccessAddPidDuplicateCase)
     int ret;
     struct access_pid *tmp;
     alignas(8) unsigned long payload_storage[2 * (4 + TEST_NUMA_WORDS)] = {};
-    struct access_add_pid_payload *payload =
-        reinterpret_cast<struct access_add_pid_payload *>(payload_storage);
+    struct access_add_pid_payload *payload = reinterpret_cast<struct access_add_pid_payload *>(payload_storage);
     struct access_add_pid_payload *p0 = access_add_pid_payload_at(payload, 0, TEST_ADD_PID_STRIDE);
     struct access_add_pid_payload *p1 = access_add_pid_payload_at(payload, 1, TEST_ADD_PID_STRIDE);
     bool findFlag = false;
@@ -1005,7 +1001,7 @@ TEST_F(DriversAccessPidTest, ConvertPosToPaddrSortedInvalidAddr)
         0b0000000000000000000000000000000000000000000000000000000000100100,
         0b0000000000000000000000000000000000000000000000000000000000100100,
     };
-    struct access_pid ap = { .pid = pid, .bm_len = { bmLen }, .paddr_bm = { bitmap } };
+    struct access_pid ap = {.pid = pid, .bm_len = {bmLen}, .paddr_bm = {bitmap}};
     ap_test_reset_slots();
     ap_slot_add(&ap);
     u64 addr[] = {4};
@@ -1026,7 +1022,7 @@ TEST_F(DriversAccessPidTest, ConvertPosToPaddrSortedPartialFailure)
         0b0000000000000000000000000000000000000000000000000000000000100100,
         0b0000000000000000000000000000000000000000000000000000000000100100,
     };
-    struct access_pid ap = { .pid = pid, .bm_len = { bmLen }, .paddr_bm = { bitmap } };
+    struct access_pid ap = {.pid = pid, .bm_len = {bmLen}, .paddr_bm = {bitmap}};
     ap_test_reset_slots();
     ap_slot_add(&ap);
     u64 pa1 = 0x20000200000;
@@ -1055,7 +1051,7 @@ TEST_F(DriversAccessPidTest, ConvertPosToPaddrSortedOK)
         0b0000000000000000000000000000000000000000000000000000000000100100,
         0b0000000000000000000000000000000000000000000000000000000000100100,
     };
-    struct access_pid ap = { .pid = pid, .bm_len = { bmLen }, .paddr_bm = { bitmap } };
+    struct access_pid ap = {.pid = pid, .bm_len = {bmLen}, .paddr_bm = {bitmap}};
     ap_test_reset_slots();
     ap_slot_add(&ap);
     u64 pa1 = 0x20000200000;
@@ -1081,22 +1077,12 @@ TEST_F(DriversAccessPidTest, ConvertPosToPaddrSortedOK)
 // ============================================================
 
 extern "C" int init_access_statistic_pid_4k(struct access_add_pid_payload *payload);
-extern "C" int scan_hva_info_4k(pid_t pid_nr, u64 *l1_page_num, u64 *l2_page_num, u64 **l1_vaddr, u64 **l2_vaddr);
+extern "C" int scan_hva_info_4k(pid_t pid_nr, u64 *page_num, u64 **vaddr);
+extern "C" int scan_hva_info_4k_vm(pid_t pid_nr, u64 *page_num, u64 **vaddr);
 
 TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kNullPayload)
 {
     int ret = init_access_statistic_pid_4k(nullptr);
-    EXPECT_EQ(-EINVAL, ret);
-}
-
-TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kInvalidL1Node)
-{
-    DECL_ADD_PID_PAYLOAD(payload);
-    nr_local_numa = 0;
-    payload.pid = 1234;
-    memset(payload.numa_nodes, 0, (size_t)TEST_NUMA_WORDS * sizeof(unsigned long));
-    payload.numa_nodes[0] = 0x00;
-    int ret = init_access_statistic_pid_4k(&payload);
     EXPECT_EQ(-EINVAL, ret);
 }
 
@@ -1171,6 +1157,36 @@ TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kSuccess)
 }
 
 extern "C" int init_access_statistic_pid(struct access_add_pid_payload *payload, int page_size);
+TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kVmSuccess)
+{
+    DECL_ADD_PID_PAYLOAD(payload);
+    struct statistics_tracking_info *tmp, *pos;
+    bool findFlag = false;
+    nr_local_numa = 4;
+    payload.pid = 17991;
+    payload.pid_type = SMAP_PID_VM;
+    payload.duration = 10;
+    payload.scan_time = 100;
+    MOCKER(scan_hva_info_4k_vm).stubs().will(returnValue(0));
+    MOCKER(init_statistic_window).stubs().will(returnValue(0));
+    int ret = init_access_statistic_pid_4k(&payload);
+    EXPECT_EQ(0, ret);
+    list_for_each_entry(tmp, &statistic_pid_list, node)
+    {
+        if (tmp->pid == 17991) {
+            findFlag = true;
+            break;
+        }
+    }
+    EXPECT_EQ(true, findFlag);
+    list_for_each_entry_safe(pos, tmp, &statistic_pid_list, node)
+    {
+        list_del(&pos->node);
+        MOCKER(vfree).stubs();
+        kfree(pos);
+    }
+}
+
 TEST_F(DriversAccessPidTest, InitAccessStatisticPid4kDispatch)
 {
     DECL_ADD_PID_PAYLOAD(payload);
@@ -1513,7 +1529,8 @@ TEST_F(DriversAccessPidTest, CalcProcessPageNumber)
     struct access_pid ap;
     ap.page_num[0] = 10;
     ap.page_num[1] = 20;
-    for (int i = 2; i < MAX_NUMNODES; i++) ap.page_num[i] = 0;
+    for (int i = 2; i < MAX_NUMNODES; i++)
+        ap.page_num[i] = 0;
     size_t ret = calc_process_page_number(&ap);
     EXPECT_EQ((size_t)30, ret);
 }
@@ -1596,8 +1613,8 @@ TEST_F(DriversAccessPidTest, CheckMigrateParamsNullAddr)
     int ret = check_migrate_params(1, nullptr);
     EXPECT_EQ(-EINVAL, ret);
 }
-/* init_access_pid：NORMAL_SCAN 初始化不消费 payload.numa_nodes
- * （该字段仅供 HAM/STATISTIC 推导 l1/l2_node） */
+/* init_access_pid: NORMAL_SCAN initialization does not consume
+ * payload.numa_nodes (the field is only used by HAM to derive l1/l2_node) */
 TEST_F(DriversAccessPidTest, InitAccessPidSuccess)
 {
     struct access_pid *tmp = nullptr;

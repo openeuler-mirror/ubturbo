@@ -31,8 +31,9 @@ namespace turbo::smap {
 
 const std::string FILE_NAME = "/dev/shm/ubturbo_page_type.dat";
 
-// freq查询数组长度上限: 与RMRS侧SmapQueryVmFreq的uint16_t数据通路一致, 防止未校验lengthIn造成GB级分配
-constexpr uint32_t SMAP_QUERY_FREQ_LENGTH_MAX = UINT16_MAX;
+// freq查询数组长度上限: 支持 8GB 的 4K 页虚机全量查询(8GB / 4KB = 2M 页),
+// 同时防止未校验 lengthIn 造成 GB 级分配
+constexpr uint32_t SMAP_QUERY_FREQ_LENGTH_MAX = 2U * 1024 * 1024;
 
 constexpr const char *LIB_SMAP_PATH = "/usr/lib64/libsmap.so";
 
