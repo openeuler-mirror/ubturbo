@@ -24,7 +24,7 @@ int ubturbo_smap_start(uint32_t pageType, Logfunc extlog);
 
 ### 描述 DESCRIPTION
 
-初始化SMAP，设置场景及迁移页面类型，虚拟化场景对应2M大页迁移，通算场景对应4K页迁移。
+初始化SMAP，设置全局迁移页面类型：`pageType=0`（4K页）支持普通进程与4K虚机场景；`pageType=1`（2M大页）仅支持虚机场景。两类场景不能在同一实例混用。
 
 ### 参数 Parameters
 
@@ -318,7 +318,8 @@ struct GroupedMigrateOutMsg {
 ### 约束 CONSTRAINTS
 
 * SMAP初始化后才能调用。
-* 仅支持2M huge page虚机，不支持4K进程或普通进程。
+* 仅支持虚机（2M大页或4K），不支持普通进程。
+* 2M虚机使用2M大页迁移；4K虚机使用4K页迁移，且暂不支持统计扫描与HAM扫描。
 * pageType需要和当前场景匹配。
 * 远端NUMA nid为全局绝对节点号，合法范围为 `[本地NUMA数量, 运行期节点上限)`，上限默认 256、最大 1024。
 * 远端NUMA被禁用时无法配置为grouped target（调用ubturbo_smap_migrate_back接口时会默认禁用远端NUMA）。
@@ -1518,8 +1519,8 @@ int main(void)
 接口声明在 `src/user/smap_interface.h`，由 `libsmap.so` 提供。除特别说明外，返回 `0` 表示请求成功，
 负 errno 或其他非零值表示失败。调用方必须使用与库同版本的头文件。
 
-- `pageType=0`：4K 普通进程页面。
-- `pageType=1`：2M 静态大页虚机。
+- `pageType=0`：4K 页面，支持普通进程与 4K 虚机。
+- `pageType=1`：2M 静态大页，仅支持虚机。
 - 所有 `msg`、数组和输出长度指针必须非空并满足头文件上限。
 - “请求成功”不一定代表异步页面迁移已收敛到目标。
 
