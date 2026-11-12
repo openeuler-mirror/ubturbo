@@ -21,7 +21,7 @@
 #include "access_ioctl.h"
 #include "smap_ioctl.h"
 
-int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
+static int AccessIoctlConfigurePid(int len, struct AccessAddPidPayload *payload, bool addPid)
 {
     if (!payload || len <= 0 || len > GetCurrentMaxNrPid()) {
         SMAP_LOGGER_ERROR("AccessIoctlAddPid: invalid len %d.", len);
@@ -54,7 +54,8 @@ int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
         wire->duration = payload[i].duration;
         wire->type = payload[i].type;
         wire->pidType = payload[i].pidType;
-        if (payload[i].type == NORMAL_SCAN) {
+        /* Updates already carry the effective periods used for applied-state recording. */
+        if (payload[i].type == NORMAL_SCAN && addPid) {
             ProcessAttr *attr = GetProcessAttr(payload[i].pid);
             GetProcessPeriods(attr, &wire->scanTime, &wire->duration);
             PutProcessAttr(attr);
@@ -87,7 +88,7 @@ int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
     if (ret < 0) {
         SMAP_LOGGER_ERROR("access ioctl add pids error: %d.", ret);
         ret = -EBADF;
-    } else {
+    } else if (addPid) {
         for (int i = 0; i < len; i++) {
             if (payload[i].type == NORMAL_SCAN) {
                 EventLoopRegisterPid(payload[i].pid);
@@ -95,6 +96,17 @@ int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
         }
     }
     return ret;
+}
+
+int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload)
+{
+    return AccessIoctlConfigurePid(len, payload, true);
+}
+
+int AccessIoctlUpdatePid(int len, struct AccessAddPidPayload *payload)
+{
+    /* Existing workers retain their mem_freq listener; registration would relock attrLock. */
+    return AccessIoctlConfigurePid(len, payload, false);
 }
 
 int AccessIoctlRemovePid(int len, struct AccessRemovePidPayload *payload)

@@ -26,12 +26,20 @@ extern "C" {
 #define DEFAULT_MIGRATE_PERIOD 2000
 #define MIN_MIGRATE_PERIOD 500
 
+#define DEFAULT_ADAPTIVE_SLOW_SCAN_PERIOD 3000U
+#define DEFAULT_ADAPTIVE_SLOW_MIGRATE_PERIOD 3000U
+
 #define MIGRATE_MODE_URMA 1
 #define MIGRATE_MODE_LD_ST 0
 
 /* Strategy config struct shared by impl and tests to avoid layout drift. */
 typedef struct {
     /* Effective periods override per-PID values while file configuration is enabled. */
+    bool adaptivePeriodEnable;
+    uint32_t adaptiveFastScanPeriod;
+    uint32_t adaptiveFastMigratePeriod;
+    uint32_t adaptiveSlowScanPeriod;
+    uint32_t adaptiveSlowMigratePeriod;
     uint32_t scanPeriod;
     uint32_t migratePeriod;
     uint32_t remoteFreqPercentile;
@@ -61,6 +69,8 @@ typedef struct {
     bool hugetlbSwapSupported;
 } StrategyConfig;
 
+bool GetAdaptivePeriodEnableConfig(void);
+void GetAdaptivePeriods(bool slow, uint32_t *scan, uint32_t *migrate);
 uint32_t GetScanPeriodConfig(void);
 uint32_t GetMigratePeriodConfig(void);
 

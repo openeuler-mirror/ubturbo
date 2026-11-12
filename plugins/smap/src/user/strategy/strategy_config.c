@@ -157,6 +157,21 @@ static void WarnParseError(int lineNo, const char *fmt, ...)
     SMAP_LOGGER_WARNING("Line %d: %s", lineNo, msg);
 }
 
+bool GetAdaptivePeriodEnableConfig(void)
+{
+    return g_strategyConfig.adaptivePeriodEnable;
+}
+
+void GetAdaptivePeriods(bool slow, uint32_t *scan, uint32_t *migrate)
+{
+    *scan = slow ? DEFAULT_ADAPTIVE_SLOW_SCAN_PERIOD : DEFAULT_SCAN_PERIOD;
+    *migrate = slow ? DEFAULT_ADAPTIVE_SLOW_MIGRATE_PERIOD : DEFAULT_MIGRATE_PERIOD;
+    if (GetFileConfSwitchConfig()) {
+        *scan = slow ? g_strategyConfig.adaptiveSlowScanPeriod : g_strategyConfig.adaptiveFastScanPeriod;
+        *migrate = slow ? g_strategyConfig.adaptiveSlowMigratePeriod : g_strategyConfig.adaptiveFastMigratePeriod;
+    }
+}
+
 uint32_t GetScanPeriodConfig(void)
 {
     return g_strategyConfig.scanPeriod;
@@ -366,6 +381,51 @@ static int32_t ConfigReadValueToInt(char *pvalue, uint32_t *resultvalue)
 }
 
 static void ConfigReadTrim(char *str);
+
+static int32_t ConfigAdaptivePeriodEnable(char *substr, char *value)
+{
+    if (strcmp(value, "true") == 0) {
+        g_tmpStrategyConfig.adaptivePeriodEnable = true;
+    } else if (strcmp(value, "false") == 0) {
+        g_tmpStrategyConfig.adaptivePeriodEnable = false;
+    } else {
+        SMAP_LOGGER_ERROR("Invalid adaptive period switch, key:%s, value:%s.", substr, value);
+        return RETURN_ERROR;
+    }
+    return RETURN_OK;
+}
+
+static int32_t ConfigAdaptivePeriodValue(char *key, char *value, uint32_t *period, bool scan)
+{
+    uint32_t parsed;
+    if (ConfigReadValueToInt(value, &parsed) != RETURN_OK ||
+        ValidateIntRange(parsed, scan ? MIN_SCAN_PERIOD : MIN_MIGRATE_PERIOD,
+                         scan ? MAX_SCAN_PERIOD : MAX_MIGRATE_PERIOD, key) != RETURN_OK) {
+        return RETURN_ERROR;
+    }
+    *period = parsed;
+    return RETURN_OK;
+}
+
+static int32_t ConfigAdaptiveFastScanPeriod(char *key, char *value)
+{
+    return ConfigAdaptivePeriodValue(key, value, &g_tmpStrategyConfig.adaptiveFastScanPeriod, true);
+}
+
+static int32_t ConfigAdaptiveFastMigratePeriod(char *key, char *value)
+{
+    return ConfigAdaptivePeriodValue(key, value, &g_tmpStrategyConfig.adaptiveFastMigratePeriod, false);
+}
+
+static int32_t ConfigAdaptiveSlowScanPeriod(char *key, char *value)
+{
+    return ConfigAdaptivePeriodValue(key, value, &g_tmpStrategyConfig.adaptiveSlowScanPeriod, true);
+}
+
+static int32_t ConfigAdaptiveSlowMigratePeriod(char *key, char *value)
+{
+    return ConfigAdaptivePeriodValue(key, value, &g_tmpStrategyConfig.adaptiveSlowMigratePeriod, false);
+}
 
 static int32_t ConfigScanPeriod(char *substr, char *value)
 {
@@ -707,6 +767,11 @@ static int32_t ConfigL3ColdThreshold(char *substr, char *value)
 }
 
 static StrategyConfigReadElem g_strategyConfigRead[] = {
+    { "smap.adaptive.period.enable", false, ConfigAdaptivePeriodEnable },
+    { "smap.adaptive.fast.scan.period", false, ConfigAdaptiveFastScanPeriod },
+    { "smap.adaptive.fast.migrate.period", false, ConfigAdaptiveFastMigratePeriod },
+    { "smap.adaptive.slow.scan.period", false, ConfigAdaptiveSlowScanPeriod },
+    { "smap.adaptive.slow.migrate.period", false, ConfigAdaptiveSlowMigratePeriod },
     { "smap.scan.period", false, ConfigScanPeriod },
     { "smap.migrate.period", false, ConfigMigratePeriod },
     { "smap.remote.freq.percentile", false, ConfigRemoteFreqPercentile },
@@ -870,8 +935,21 @@ static int ConfigReadReadFile(const char *filepath)
     return ret;
 }
 
+static bool AdaptivePeriodsValid(uint32_t scan, uint32_t migrate)
+{
+    return scan >= MIN_SCAN_PERIOD && scan <= MAX_SCAN_PERIOD && migrate >= MIN_MIGRATE_PERIOD &&
+           migrate <= MAX_MIGRATE_PERIOD && migrate % scan == 0;
+}
+
 static int32_t ValidatePeriodConstraint(void)
 {
+    if (!AdaptivePeriodsValid(g_tmpStrategyConfig.adaptiveFastScanPeriod,
+                              g_tmpStrategyConfig.adaptiveFastMigratePeriod) ||
+        !AdaptivePeriodsValid(g_tmpStrategyConfig.adaptiveSlowScanPeriod,
+                              g_tmpStrategyConfig.adaptiveSlowMigratePeriod)) {
+        SMAP_LOGGER_ERROR("Invalid adaptive periods: each profile must satisfy period bounds and M %% S == 0.");
+        return RETURN_ERROR;
+    }
     /* absent key falls back to default, no required-key check; cross-field constraint only */
     if (g_tmpStrategyConfig.scanPeriod > g_tmpStrategyConfig.migratePeriod) {
         SMAP_LOGGER_ERROR("Scan period(%d) must be less than migrate period(%d).", g_tmpStrategyConfig.scanPeriod,
@@ -898,6 +976,10 @@ static void InitStrategyConfig(void)
         SMAP_LOGGER_ERROR("memset_s strategy config failed.");
         return;
     }
+    g_strategyConfig.adaptiveFastScanPeriod = DEFAULT_SCAN_PERIOD;
+    g_strategyConfig.adaptiveFastMigratePeriod = DEFAULT_MIGRATE_PERIOD;
+    g_strategyConfig.adaptiveSlowScanPeriod = DEFAULT_ADAPTIVE_SLOW_SCAN_PERIOD;
+    g_strategyConfig.adaptiveSlowMigratePeriod = DEFAULT_ADAPTIVE_SLOW_MIGRATE_PERIOD;
     g_strategyConfig.scanPeriod = DEFAULT_SCAN_PERIOD;
     g_strategyConfig.migratePeriod = DEFAULT_MIGRATE_PERIOD;
     g_strategyConfig.remoteFreqPercentile = DEFAULT_REMOTE_FREQ_PERCENTILE;
@@ -1069,6 +1151,11 @@ void StrategyConfigRead(void)
     /* candidate starts from current effective values, then overwritten key by key
      * from file: stale leftovers from a failed previous parse never apply */
     g_tmpStrategyConfig = g_strategyConfig;
+    /* Absent profile keys use defaults on every reload, including key removal. */
+    g_tmpStrategyConfig.adaptiveFastScanPeriod = DEFAULT_SCAN_PERIOD;
+    g_tmpStrategyConfig.adaptiveFastMigratePeriod = DEFAULT_MIGRATE_PERIOD;
+    g_tmpStrategyConfig.adaptiveSlowScanPeriod = DEFAULT_ADAPTIVE_SLOW_SCAN_PERIOD;
+    g_tmpStrategyConfig.adaptiveSlowMigratePeriod = DEFAULT_ADAPTIVE_SLOW_MIGRATE_PERIOD;
     int ret = ConfigReadReadFile(STRATEGY_CONFIG_PATH);
     if (ret != RETURN_OK) {
         /* missing file / IO error: warn and keep current values; file is user/RPM owned, never rewritten */
@@ -1085,6 +1172,12 @@ void StrategyConfigRead(void)
         return;
     }
 
+    /* The automatic-period switch is independent of the fixed file-period switch. */
+    g_strategyConfig.adaptivePeriodEnable = g_tmpStrategyConfig.adaptivePeriodEnable;
+    g_strategyConfig.adaptiveFastScanPeriod = g_tmpStrategyConfig.adaptiveFastScanPeriod;
+    g_strategyConfig.adaptiveFastMigratePeriod = g_tmpStrategyConfig.adaptiveFastMigratePeriod;
+    g_strategyConfig.adaptiveSlowScanPeriod = g_tmpStrategyConfig.adaptiveSlowScanPeriod;
+    g_strategyConfig.adaptiveSlowMigratePeriod = g_tmpStrategyConfig.adaptiveSlowMigratePeriod;
     UpdateMigrateModeAndScanCpu();
     UpdateRemoteScanMode();
     UpdateSwapConfig();

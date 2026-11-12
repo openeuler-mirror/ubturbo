@@ -1,4 +1,8 @@
 /* Per-PID attributes and effective period priority integration tests. */
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
@@ -6,6 +10,7 @@
 #include <future>
 #include "gtest/gtest.h"
 #include "manage/access_ioctl.h"
+#include "manage/manage_internal.h"
 #include "manage/thread.h"
 #include "mockcpp/mokc.h"
 #include "smap_inner_interface.h"
@@ -15,12 +20,29 @@
 extern "C" EnvAtomic g_status;
 extern "C" int RestartPidScan(pid_t pid);
 extern "C" void UpdateProcessPeriods(ProcessAttr *attr);
+extern "C" void UpdateScenePerPid(ProcessAttr *attr);
+extern "C" void ApplyUbBwStop(ProcessAttr *attr, ProcessManager *manager);
+extern "C" bool IsPidAnyRemoteNodeForbidden(ProcessAttr *attr);
 
-namespace {
+namespace
+{
 AccessAddPidPayload captured[2];
 bool fileEnabled;
+bool adaptiveEnabled;
+bool AdaptiveEnabled()
+{
+    return adaptiveEnabled;
+}
 uint32_t fileScan, fileMigrate;
 int failures;
+int restartCount;
+int profileReads;
+void ChangingAdaptivePeriods(bool, uint32_t *scan, uint32_t *migrate)
+{
+    profileReads++;
+    *scan = 100 * profileReads;
+    *migrate = 1000 * profileReads;
+}
 bool FileEnabled()
 {
     return fileEnabled;
@@ -43,8 +65,8 @@ int CaptureIoctl(int, unsigned long cmd, void *arg)
     }
     auto *msg = static_cast<AccessAddPidMsg *>(arg);
     for (int i = 0; i < msg->count && i < 2; i++) {
-        auto *wire = reinterpret_cast<AccessAddPidWirePayload *>(
-            reinterpret_cast<char *>(msg->payload) + static_cast<size_t>(i) * msg->stride);
+        auto *wire = reinterpret_cast<AccessAddPidWirePayload *>(reinterpret_cast<char *>(msg->payload) +
+                                                                 static_cast<size_t>(i) * msg->stride);
         captured[i].pid = wire->pid;
         captured[i].scanTime = wire->scanTime;
         captured[i].duration = wire->duration;
@@ -70,6 +92,8 @@ protected:
         manager->eventLoop.epfd = -1;
         manager->migPeriod = 2000;
         EnvAtomicSet(&g_status, 1);
+        adaptiveEnabled = false;
+        MOCKER(GetAdaptivePeriodEnableConfig).stubs().will(invoke(AdaptiveEnabled));
         fileEnabled = false;
         fileScan = 1000;
         fileMigrate = 10000;
@@ -138,6 +162,26 @@ TEST_F(PidPeriodTest, InnerDirectlyChangesOnlyTargetAttributes)
     EXPECT_EQ(1000u, captured[0].duration);
     EXPECT_EQ(3u, captured[0].nTimes);
     EXPECT_EQ(2000u, manager->migPeriod);
+}
+
+TEST_F(PidPeriodTest, TargetPublicationPreservesManualPeriodsAndScanWindows)
+{
+    auto *attr = Add(100);
+    ASSERT_EQ(0, SmapSetPidPeriod(100, 3000, 6000));
+    attr->adaptivePeriod.previousValid = true;
+    attr->periodFeedbackReady = true;
+    ProcessAttr candidate = *attr;
+
+    PublishProcessTargetCandidate(attr, &candidate);
+
+    EXPECT_EQ(3000u, attr->scanTime);
+    EXPECT_EQ(6000u, attr->migPeriod);
+    EXPECT_FALSE(attr->adaptivePeriod.previousValid);
+    EXPECT_FALSE(attr->periodFeedbackReady);
+    UpdateProcessPeriods(attr);
+    EXPECT_EQ(3000u, captured[0].scanTime);
+    EXPECT_EQ(6000u, captured[0].duration);
+    EXPECT_EQ(2u, captured[0].nTimes);
 }
 
 TEST_F(PidPeriodTest, TrackingModeAndDurationDoNotOverwriteMigrationPeriod)
@@ -251,17 +295,59 @@ TEST_F(PidPeriodTest, NonDivisibleMaximumWindowMatchesKernel)
     EXPECT_EQ(428u, captured[0].nTimes);
 }
 
+TEST_F(PidPeriodTest, AdaptiveUpdateResolvesOnceAndRecordsTheSubmittedPeriods)
+{
+    adaptiveEnabled = true;
+    auto *attr = Add(100);
+    profileReads = 0;
+    MOCKER(GetAdaptivePeriods).expects(exactly(2)).will(invoke(ChangingAdaptivePeriods));
+    for (int update = 1; update <= 2; update++) {
+        // Cover both a steady enabled switch and a switch from disabled to enabled.
+        if (update == 2) {
+            attr->adaptivePeriod.appliedAdaptive = false;
+        }
+        UpdateProcessPeriods(attr);
+        EXPECT_EQ(update, profileReads);
+        EXPECT_EQ(attr->scanTime, captured[0].scanTime);
+        EXPECT_EQ(attr->migPeriod, captured[0].duration);
+        EXPECT_EQ(captured[0].scanTime, attr->adaptivePeriod.appliedScan);
+        EXPECT_EQ(captured[0].duration, attr->adaptivePeriod.appliedMigrate);
+        EXPECT_TRUE(attr->adaptivePeriod.appliedAdaptive);
+    }
+}
+
+TEST_F(PidPeriodTest, UpdateIoctlUsesResolvedPayloadWithoutReadingProcessPeriods)
+{
+    Add(100);
+    MOCKER(GetProcessPeriods).expects(never());
+    AccessAddPidPayload payload = {};
+    payload.pid = 100;
+    payload.type = NORMAL_SCAN;
+    payload.scanTime = 3000;
+    payload.duration = 6000;
+    ASSERT_EQ(0, AccessIoctlUpdatePid(1, &payload));
+    EXPECT_EQ(3000u, captured[0].scanTime);
+    EXPECT_EQ(6000u, captured[0].duration);
+    EXPECT_EQ(2u, captured[0].nTimes);
+}
+
 TEST_F(PidPeriodTest, FailedIoctlDoesNotUndoAttributesAndNextWindowRetries)
 {
     auto *attr = Add(100);
     ASSERT_EQ(0, SmapSetPidPeriod(100, 500, 5000));
+    uint32_t appliedScan = attr->adaptivePeriod.appliedScan;
+    uint32_t appliedMigrate = attr->adaptivePeriod.appliedMigrate;
     failures = 1;
     /* ioctl 失败时 mock 不捕获 payload，captured 保持 SetUp 的 memset 0 */
     UpdateProcessPeriods(attr);
     EXPECT_EQ(0u, captured[0].scanTime);
     EXPECT_EQ(500u, attr->scanTime);
+    EXPECT_EQ(appliedScan, attr->adaptivePeriod.appliedScan);
+    EXPECT_EQ(appliedMigrate, attr->adaptivePeriod.appliedMigrate);
     UpdateProcessPeriods(attr);
     EXPECT_EQ(500u, captured[0].scanTime);
+    EXPECT_EQ(captured[0].scanTime, attr->adaptivePeriod.appliedScan);
+    EXPECT_EQ(captured[0].duration, attr->adaptivePeriod.appliedMigrate);
 }
 
 TEST_F(PidPeriodTest, WorkerUpdatesPeriodsBeforeRestart)
@@ -307,7 +393,7 @@ TEST_F(PidPeriodTest, SetAndResetWaitForOwningSlotLock)
 {
     auto *attr = Add(100);
     auto *slot = PidSlotGetRef(100);
-    for (bool reset : {false, true}) {
+    for (bool reset : { false, true }) {
         EnvMutexLock(&slot->attrLock);
         std::promise<void> started;
         auto worker = std::async(std::launch::async, [&started, reset] {
@@ -324,4 +410,96 @@ TEST_F(PidPeriodTest, SetAndResetWaitForOwningSlotLock)
     }
     EXPECT_EQ(2, EnvAtomicRead(&slot->refs));
     PidSlotReleaseRefs(&slot, 1);
+}
+
+TEST_F(PidPeriodTest, WorkerObservesOldWindowThenAppliesNewGearBeforeRestart)
+{
+    adaptiveEnabled = true;
+    auto *attr = Add(100);
+    MOCKER(BuildPidData).stubs().will(invoke(+[](ProcessAttr *process) -> int {
+        process->periodFeedbackReady = true;
+        process->periodFeedback.localHotPages = 1;
+        process->periodFeedback.localFreq = 1;
+        process->periodFeedback.remoteHotRatio = 0.10;
+        return 0;
+    }));
+    MOCKER(UpdateScenePerPid).stubs();
+    MOCKER(ApplyUbBwStop).stubs();
+    MOCKER(IsPidAnyRemoteNodeForbidden).stubs().will(returnValue(true));
+    MOCKER(RestartPidScan).expects(exactly(3)).will(invoke(+[](pid_t) -> int {
+        EXPECT_NE(0u, captured[0].scanTime);
+        return 0;
+    }));
+    for (int window = 0; window < 3; window++) {
+        auto *slot = PidSlotGetRef(100);
+        PidMigrationWork(manager, slot, 100);
+        EXPECT_EQ(window == 0 ? 200u : 3000u, captured[0].scanTime);
+        EXPECT_EQ(window == 0 ? 10u : 1u, captured[0].nTimes);
+    }
+    EXPECT_TRUE(attr->adaptivePeriod.slow);
+    EXPECT_TRUE(attr->adaptivePeriod.previousValid); // first new slow window only
+}
+
+TEST_F(PidPeriodTest, AutoSwitchIsIndependentOfFileSwitchAndOverridesFixedPeriods)
+{
+    adaptiveEnabled = true;
+    fileEnabled = true;
+    auto *attr = Add(100);
+    UpdateProcessPeriods(attr);
+    EXPECT_EQ(200u, captured[0].scanTime);
+    EXPECT_EQ(2000u, captured[0].duration);
+    adaptiveEnabled = false;
+    UpdateProcessPeriods(attr);
+    EXPECT_EQ(fileScan, captured[0].scanTime);
+    EXPECT_EQ(fileMigrate, captured[0].duration);
+}
+
+TEST_F(PidPeriodTest, WorkerRestartsMultipleWindowsWithLiveEpollWithoutRelockingSlot)
+{
+    int epfd = epoll_create1(EPOLL_CLOEXEC);
+    ASSERT_GE(epfd, 0);
+    manager->eventLoop.epfd = epfd;
+    int oldStop = EnvAtomicRead(&manager->eventLoop.stop);
+    EnvAtomicSet(&manager->eventLoop.stop, 0);
+    restartCount = 0;
+    MOCKER(RestartPidScan).stubs().will(invoke(+[](pid_t) -> int {
+        restartCount++;
+        return 0;
+    }));
+    for (bool enabled : { false, true }) {
+        adaptiveEnabled = enabled;
+        pid_t pid = enabled ? 101 : 100;
+        auto *attr = Add(pid);
+        attr->state = PROC_MOVE; // isolate the period-update/restart tail of the worker
+        auto *slot = PidSlotGetRef(pid);
+        slot->memFreqFd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+        EXPECT_GE(slot->memFreqFd, 0);
+        struct epoll_event event = {};
+        event.events = EPOLLIN;
+        event.data.ptr = slot;
+        EXPECT_EQ(0, epoll_ctl(epfd, EPOLL_CTL_ADD, slot->memFreqFd, &event));
+        PidSlotReleaseRefs(&slot, 1);
+        pid_t child = fork();
+        EXPECT_GE(child, 0);
+        if (child == 0) {
+            // The old recursive lock is caught by SIGALRM instead of hanging the test suite.
+            alarm(2);
+            for (int window = 0; window < 2; window++) {
+                auto *workSlot = PidSlotGetRef(pid);
+                PidMigrationWork(manager, workSlot, pid);
+                if (captured[0].pid != pid || captured[0].scanTime != 200) {
+                    _exit(1);
+                }
+            }
+            _exit(restartCount == 2 ? 0 : 1);
+        }
+        if (child > 0) {
+            int status = 0;
+            EXPECT_EQ(child, waitpid(child, &status, 0));
+            EXPECT_EQ(0, status) << "worker blocked or failed before completing two scan restarts";
+        }
+    }
+    EnvAtomicSet(&manager->eventLoop.stop, oldStop);
+    manager->eventLoop.epfd = -1;
+    close(epfd);
 }
