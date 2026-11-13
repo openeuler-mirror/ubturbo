@@ -538,10 +538,10 @@ TEST_F(SeparateStrategyTest, TestSeparateStrategy4KSwapMultiNode)
     g_nrRemote = 0;
 
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(0, NM_AT(mlist, 0, 5).nr);
-    EXPECT_EQ(2, NM_AT(mlist, 5, 0).nr);
-    EXPECT_EQ(0, NM_AT(mlist, 1, 5).nr);
-    EXPECT_EQ(8, NM_AT(mlist, 5, 1).nr);
+    EXPECT_EQ(0, MigListCell(mlist, 0, 5)->nr);
+    EXPECT_EQ(2, MigListCell(mlist, 5, 0)->nr);
+    EXPECT_EQ(0, MigListCell(mlist, 1, 5)->nr);
+    EXPECT_EQ(8, MigListCell(mlist, 5, 1)->nr);
     FreeProcessAttrArrays(&process);
 }
 

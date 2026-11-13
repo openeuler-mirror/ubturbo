@@ -7,6 +7,7 @@
 
 #include "user/manage/manage.h"
 #include "manage/node_matrix.h"
+#include "strategy/strategy.h"
 #include "common.h"
 
 #define LOCAL_NUMA_BITS 4      // 保留供测试逻辑使用
@@ -19,8 +20,8 @@ int RunStrategyStub(ProcessAttr *process, struct MigList *mlist, size_t mlistSiz
     /* 只填充本地 0..3 与远端 4..21 的组合（迁出与回迁双向），模拟真实策略输出范围 */
     for (i = 0; i < LOCAL_NUMA_BITS; i++) {
         for (j = LOCAL_NUMA_BITS; j < LOCAL_NUMA_BITS + STUB_REMOTE_NUMA_NUM; j++) {
-            NM_AT(mlist, i, j).nr = 1;
-            NM_AT(mlist, j, i).nr = 1;
+            MigListCell(mlist, i, j)->nr = 1;
+            MigListCell(mlist, j, i)->nr = 1;
         }
     }
 

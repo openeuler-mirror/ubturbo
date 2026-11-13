@@ -221,6 +221,8 @@ TEST_F(MigrationTest, TestAddMigListRejectsKernelEntryOverflow)
 extern "C" void FreeMigList(struct MigList *mList);
 TEST_F(MigrationTest, TestFreeMigList)
 {
+    /* 稀疏布局的单元数由本地节点数决定，需固定取值使偏移 0 的单元落在已分配范围内 */
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     struct MigList *mlist = TestMlist();
     NM_AT(mlist, 0, 0).addr = (uint64_t *)malloc(sizeof(uint64_t));
     FreeMigList(mlist);
@@ -230,6 +232,7 @@ TEST_F(MigrationTest, TestFreeMigList)
 extern "C" void StrategyInitMigList(struct MigList *mList, int pid);
 TEST_F(MigrationTest, TestInitMigList)
 {
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     struct MigList *mlist = TestMlist();
     printf("SMAP_MAX_NUMNODES in test = %d\n", SMAP_MAX_NUMNODES);
     NM_AT(mlist, 0, 0).addr = (uint64_t *)malloc(sizeof(uint64_t));

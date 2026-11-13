@@ -53,15 +53,11 @@ static bool ShouldMigrate(ProcessAttr *process)
 
 static void FreeMlist(struct MigList *mlist)
 {
-    int cap = (int)GetNumaCap();
-    for (int from = 0; from < cap; from++) {
-        for (int to = 0; to < cap; to++) {
-            if (NM_AT(mlist, from, to).addr) {
-                free(NM_AT(mlist, from, to).addr);
-                NM_AT(mlist, from, to).addr = NULL;
-            }
-            NM_AT(mlist, from, to).nr = 0;
-        }
+    size_t count = MigListMatrixCount();
+    for (size_t i = 0; i < count; i++) {
+        free(mlist[i].addr);
+        mlist[i].addr = NULL;
+        mlist[i].nr = 0;
     }
 }
 
@@ -406,7 +402,7 @@ static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList *mlist,
     uint64_t offset = numaOffset[from];
     uint64_t n = process->scanAttr.actcLen[from];
     ActcData *currentData = process->scanAttr.actcData[from];
-    struct MigList *currentMig = &NM_AT(mlist, from, to);
+    struct MigList *currentMig = MigListCell(mlist, from, to);
     ActCount *actCount = &process->scanAttr.actCount[from];
     uint32_t *selectedBuckets = process->scanAttr.selectedBuckets[from];
     uint32_t remainBuckets[FREQ_BUCKETS_SIZE];
@@ -417,7 +413,7 @@ static int BuildSelectKMlistAddr(ProcessAttr *process, struct MigList *mlist,
     }
 
     uint64_t remainLen = n - offset;
-    uint64_t nrMig = NM_AT(mlist, from, to).nr;
+    uint64_t nrMig = MigListCell(mlist, from, to)->nr;
     nrMig = MIN(nrMig, remainLen);
     currentMig->nr = nrMig;
     if (nrMig == 0) {
@@ -463,12 +459,12 @@ static int BuildPairMlist(ProcessAttr *process, struct MigList *mlist, uint64_t 
         return 0;
     }
 
-    NM_AT(mlist, from, to).nr = nrMigrate;
+    MigListCell(mlist, from, to)->nr = nrMigrate;
     int ret = BuildSelectKMlistAddr(process, mlist, numaOffset, from, to, mode);
     if (ret) {
         return ret;
     }
-    numaOffset[from] += NM_AT(mlist, from, to).nr;
+    numaOffset[from] += MigListCell(mlist, from, to)->nr;
     return 0;
 }
 
@@ -534,13 +530,13 @@ static int SeparateStrategyInner(ProcessAttr *process, struct MigList *mlist, ui
                      swapNum, demotePageNr, promotePageNr);
 
     if (demotePageNr > 0) {
-        NM_AT(mlist, localNid, remoteNid).nr = swapNum + demotePageNr;
-        NM_AT(mlist, remoteNid, localNid).nr = swapNum;
+        MigListCell(mlist, localNid, remoteNid)->nr = swapNum + demotePageNr;
+        MigListCell(mlist, remoteNid, localNid)->nr = swapNum;
     } else if (promotePageNr > 0) {
-        NM_AT(mlist, remoteNid, localNid).nr = swapNum + promotePageNr;
-        NM_AT(mlist, localNid, remoteNid).nr = swapNum;
+        MigListCell(mlist, remoteNid, localNid)->nr = swapNum + promotePageNr;
+        MigListCell(mlist, localNid, remoteNid)->nr = swapNum;
     } else {
-        NM_AT(mlist, remoteNid, localNid).nr = NM_AT(mlist, localNid, remoteNid).nr = swapNum;
+        MigListCell(mlist, remoteNid, localNid)->nr = MigListCell(mlist, localNid, remoteNid)->nr = swapNum;
     }
 
     ret = BuildSelectKMlistAddr(process, mlist, numaOffset, localNid, remoteNid, SELECT_BOTTOM_K);
@@ -554,8 +550,8 @@ static int SeparateStrategyInner(ProcessAttr *process, struct MigList *mlist, ui
         return ret;
     }
 
-    numaOffset[localNid] += NM_AT(mlist, localNid, remoteNid).nr;
-    numaOffset[remoteNid] += NM_AT(mlist, remoteNid, localNid).nr;
+    numaOffset[localNid] += MigListCell(mlist, localNid, remoteNid)->nr;
+    numaOffset[remoteNid] += MigListCell(mlist, remoteNid, localNid)->nr;
 
     return ret;
 }
@@ -635,8 +631,9 @@ int SeparateStrategy(ProcessAttr *process, struct MigList *mlist)
         return 0;
     }
     uint64_t numaOffset[SMAP_MAX_NUMNODES] = { 0 };
-    /* 扁平 cap × cap 矩阵（列跨度 = cap） */
-    uint64_t *swapNum = calloc(NM_COUNT(GetNumaCap()), sizeof(*swapNum));
+    int localNumaNum = GetNrLocalNuma();
+    /* swapNum 只按本地行访问（[localNid][remoteNid]），分配 nrLocalNuma × cap 即可 */
+    uint64_t *swapNum = calloc(NM_COUNT(localNumaNum), sizeof(*swapNum));
     uint64_t numaFreePages[SMAP_MAX_NUMNODES] = { 0 };
     if (!swapNum) {
         return -ENOMEM;
@@ -648,7 +645,6 @@ int SeparateStrategy(ProcessAttr *process, struct MigList *mlist)
         }
     }
 
-    int localNumaNum = GetNrLocalNuma();
     NumaInfo info;
     UpdateSwapNum(process, swapNum, localNumaNum, numaFreePages);
     for (info.localNid = 0; info.localNid < localNumaNum; info.localNid++) {
@@ -852,19 +848,19 @@ static int BuildMigListForDirection(MigrateDirection dir, uint64_t *migAddrArray
                 continue;
             }
             SMAP_LOGGER_INFO("migrate %lu pages from NUMA %d to NUMA %d", pagesToThisDest, from, to);
-            NM_AT(mlist, from, to).nr = pagesToThisDest;
-            NM_AT(mlist, from, to).addr = calloc(pagesToThisDest, sizeof(uint64_t));
-            if (!NM_AT(mlist, from, to).addr) {
+            MigListCell(mlist, from, to)->nr = pagesToThisDest;
+            MigListCell(mlist, from, to)->addr = calloc(pagesToThisDest, sizeof(uint64_t));
+            if (!MigListCell(mlist, from, to)->addr) {
                 return -ENOMEM;
             }
 
             for (uint64_t i = 0; i < pagesToThisDest; i++) {
-                NM_AT(mlist, from, to).addr[i] = migAddrArray[from][curMigIndex + i];
+                MigListCell(mlist, from, to)->addr[i] = migAddrArray[from][curMigIndex + i];
             }
 
             // 地址升序排序，确保 convert_pos_to_paddr_sorted 正确工作
             if (pagesToThisDest > 1) {
-                qsort(NM_AT(mlist, from, to).addr, pagesToThisDest, sizeof(uint64_t), AddrAscFunc);
+                qsort(MigListCell(mlist, from, to)->addr, pagesToThisDest, sizeof(uint64_t), AddrAscFunc);
             }
 
             destFreeList[to] -= pagesToThisDest;
@@ -1002,7 +998,7 @@ static int PromoteMultiNumaVmStrategy(ProcessAttr *process, struct MigList *mlis
             if (!InAttrL1(process, to)) {
                 continue;
             }
-            NM_AT(mlist, from, to).nr = MIN(remoteMigInfo[nid].nrMig, localFreeHugePages[to]);
+            MigListCell(mlist, from, to)->nr = MIN(remoteMigInfo[nid].nrMig, localFreeHugePages[to]);
             int ret = BuildSelectKMlistAddr(process, mlist, numaOffset, from, to, SELECT_TOP_K);
             if (ret) {
                 SMAP_LOGGER_ERROR("PromoteMultiNumaVmStrategy build mlist addr failed %d.", ret);
@@ -1010,9 +1006,9 @@ static int PromoteMultiNumaVmStrategy(ProcessAttr *process, struct MigList *mlis
                 free(numaOffset);
                 return ret;
             }
-            SMAP_LOGGER_INFO("migrate %lu pages from NUMA %d to NUMA %d", NM_AT(mlist, from, to).nr, from, to);
-            localFreeHugePages[to] -= NM_AT(mlist, from, to).nr;
-            remoteMigInfo[nid].nrMig -= NM_AT(mlist, from, to).nr;
+            SMAP_LOGGER_INFO("migrate %lu pages from NUMA %d to NUMA %d", MigListCell(mlist, from, to)->nr, from, to);
+            localFreeHugePages[to] -= MigListCell(mlist, from, to)->nr;
+            remoteMigInfo[nid].nrMig -= MigListCell(mlist, from, to)->nr;
         }
         if (remoteMigInfo[nid].nrMig > 0) {
             SMAP_LOGGER_ERROR("Pid %d insufficient memory in the destNid.", process->pid);
