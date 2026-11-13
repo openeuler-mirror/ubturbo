@@ -905,41 +905,113 @@ static int process_memslot_pages(struct kvm *kvm,
 						   &data);
 }
 
-/* 4K statistic scan: collect HVAs of accessed 4K leaves, return the count */
-static u64 collect_statistic_4k(struct kvm *kvm, struct access_pid *ap,
-				struct kvm_memslots *slots, u64 *vaddr, u64 cap)
+/*
+ * Memslots are ordered by guest gfn instead of host hva, so collecting hvAs
+ * in memslot order may break the ascending order expected by
+ * update_statistic_scan_freq_mm(). Sort the guest RAM memslots by
+ * userspace_addr first: hvAs inside one memslot are monotonic with gfn, so
+ * the concatenated collection stays sorted.
+ */
+#define STATISTIC_MEMSLOT_SORT_MAX 64
+
+static int memslot_hva_cmp(const void *a, const void *b)
+{
+	struct kvm_memory_slot *const *slot_a = a;
+	struct kvm_memory_slot *const *slot_b = b;
+
+	if ((*slot_a)->userspace_addr < (*slot_b)->userspace_addr)
+		return -1;
+	if ((*slot_a)->userspace_addr > (*slot_b)->userspace_addr)
+		return 1;
+	return 0;
+}
+
+/*
+ * Collect the guest RAM memslots in ascending hva order.
+ * Returns the memslot count, or -1 if there are more than cap memslots.
+ */
+static int collect_statistic_memslots(struct kvm_memslots *slots,
+				      struct kvm_memory_slot **ordered, int cap)
+{
+	struct kvm_memory_slot *memslot;
+	int cnt = 0;
+	int bkt;
+
+	kvm_for_each_memslot(memslot, bkt, slots) {
+		if (!memslot_is_mem(memslot))
+			continue;
+		if (cnt >= cap) {
+			pr_warn_once(
+				"statistic scan: more than %d memslots, hva order not sorted\n",
+				cap);
+			return -1;
+		}
+		ordered[cnt++] = memslot;
+	}
+	sort(ordered, cnt, sizeof(*ordered), memslot_hva_cmp, NULL);
+	return cnt;
+}
+
+/* 4K statistic scan: collect HVAs of accessed 4K leaves into vaddr */
+static int collect_statistic_4k(struct kvm *kvm, struct access_pid *ap,
+				struct kvm_memslots *slots, u64 *vaddr, u64 cap,
+				u64 *count)
 {
 	struct smap_statistic_collect stat = {
 		.vaddr = vaddr,
 		.capacity = cap,
 	};
+	struct kvm_memory_slot *ordered[STATISTIC_MEMSLOT_SORT_MAX];
 	struct kvm_memory_slot *memslot;
-	int bkt;
+	int nr, bkt, i, ret;
 
-	kvm_for_each_memslot(memslot, bkt, slots) {
-		if (!memslot_is_mem(memslot))
-			continue;
-		process_memslot_pages(kvm, memslot, ap, PAGE_SIZE, &stat);
+	nr = collect_statistic_memslots(slots, ordered, ARRAY_SIZE(ordered));
+	if (nr < 0) {
+		kvm_for_each_memslot(memslot, bkt, slots) {
+			if (!memslot_is_mem(memslot))
+				continue;
+			ret = process_memslot_pages(kvm, memslot, ap, PAGE_SIZE,
+						    &stat);
+			if (ret)
+				return ret;
+		}
+	} else {
+		for (i = 0; i < nr; i++) {
+			ret = process_memslot_pages(kvm, ordered[i], ap,
+						    PAGE_SIZE, &stat);
+			if (ret)
+				return ret;
+		}
 	}
-	return stat.count;
+	*count = stat.count;
+	return 0;
 }
 
-/* 2M statistic scan: collect HVAs of accessed huge pages, return the count */
-static u64 collect_statistic_2m(struct kvm *kvm, struct access_pid *ap,
+/* 2M statistic scan: collect HVAs of accessed huge pages into vaddr */
+static int collect_statistic_2m(struct kvm *kvm, struct access_pid *ap,
 				struct kvm_memslots *slots, int page_size,
-				u64 *vaddr, u64 cap)
+				u64 *vaddr, u64 cap, u64 *count)
 {
+	struct kvm_memory_slot *ordered[STATISTIC_MEMSLOT_SORT_MAX];
 	struct kvm_memory_slot *memslot;
-	u64 count = 0;
-	int bkt;
+	u64 collected = 0;
+	int nr, bkt, i;
 
-	kvm_for_each_memslot(memslot, bkt, slots) {
-		if (!memslot_is_mem(memslot))
-			continue;
-		collect_statistic_vaddr(kvm, memslot, ap, page_size, vaddr, cap,
-					&count);
+	nr = collect_statistic_memslots(slots, ordered, ARRAY_SIZE(ordered));
+	if (nr < 0) {
+		kvm_for_each_memslot(memslot, bkt, slots) {
+			if (!memslot_is_mem(memslot))
+				continue;
+			collect_statistic_vaddr(kvm, memslot, ap, page_size,
+						vaddr, cap, &collected);
+		}
+	} else {
+		for (i = 0; i < nr; i++)
+			collect_statistic_vaddr(kvm, ordered[i], ap, page_size,
+						vaddr, cap, &collected);
 	}
-	return count;
+	*count = collected;
+	return 0;
 }
 
 static void finish_statistic_scan(struct kvm *kvm, struct access_pid *ap,
@@ -956,7 +1028,7 @@ static int scan_kvm_memslots(struct kvm *kvm, struct access_pid *ap,
 {
 	struct kvm_memslots *slots;
 	struct kvm_memory_slot *memslot;
-	int bkt;
+	int bkt, ret;
 	u64 count;
 
 	if (!kvm || !kvm->arch.mmu.pgt) {
@@ -982,11 +1054,14 @@ static int scan_kvm_memslots(struct kvm *kvm, struct access_pid *ap,
 	if (!stat_vaddr || !stat_page_cap)
 		return -ENOMEM;
 	if (page_size == PAGE_SIZE)
-		count = collect_statistic_4k(kvm, ap, slots, stat_vaddr,
-					     stat_page_cap);
+		ret = collect_statistic_4k(kvm, ap, slots, stat_vaddr,
+					   stat_page_cap, &count);
 	else
-		count = collect_statistic_2m(kvm, ap, slots, page_size,
-					     stat_vaddr, stat_page_cap);
+		ret = collect_statistic_2m(kvm, ap, slots, page_size,
+					   stat_vaddr, stat_page_cap, &count);
+	/* A failed round must not be published nor advance the scan window */
+	if (ret)
+		return ret;
 	finish_statistic_scan(kvm, ap, stat_vaddr, count);
 	return 0;
 }
@@ -1666,12 +1741,13 @@ static int scan_forward_vm(struct access_pid *ap, int page_size)
 	}
 
 	srcu_idx = pre_scan_kvm_memslots(kvm);
-	if (scan_kvm_memslots(kvm, ap, page_size, stat_vaddr, stat_page_cap))
+	ret = scan_kvm_memslots(kvm, ap, page_size, stat_vaddr, stat_page_cap);
+	if (ret)
 		pr_err("failed to scan kvm mem slots for pid: %d\n", ap->pid);
 	post_scan_kvm_memslots(kvm, srcu_idx);
 	vfree(stat_vaddr);
 	release_resources(filp, task, pid_s);
-	return 0;
+	return ret;
 }
 
 static inline void smap_flush_tlb_mm(struct mm_struct *mm)
