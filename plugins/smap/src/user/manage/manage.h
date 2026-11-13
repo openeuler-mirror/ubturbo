@@ -642,7 +642,8 @@ void InitProcessMigrationTargetState(ProcessAttr *attr);
  * - CloneProcessAttrArrays: 浅拷贝出的 ProcessAttr 共享源数组指针，调用本函数
  *   替换为独立深拷贝，避免候选配置写入污染 active 状态；失败时回收已克隆数组
  *   并将 dst 数组指针全部置空，调用方直接丢弃 dst 即可
- * - CopyProcessAttrArrays: 将 src 数组内容拷贝到 dst 已分配的数组（指针相同则跳过）
+ * - CopyProcessAttrArrays: 将 src 的配置类数组内容拷贝到 dst 已分配的数组
+ *   （指针相同则跳过）；运行期账本/计划矩阵不拷贝，避免候选陈旧副本覆盖 active
  */
 int InitProcessAttrArrays(ProcessAttr *attr);
 void FreeProcessAttrArrays(ProcessAttr *attr);
