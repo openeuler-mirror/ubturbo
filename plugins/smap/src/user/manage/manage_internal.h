@@ -47,6 +47,30 @@ uint32_t BuildAccountLocalMask(const ProcessAttr *attr, int remoteNid);
 
 /* manage_scan.c 使用 */
 void ResetActcData(ActcData *actcData[], int len);
+/* 释放本周期 actc 快照（actcLen 清零 + 缓冲释放），无数据时为 no-op。
+ * scan worker 单线程调用，actcData 无并发读者，不需要锁。 */
+void ClearProcessActcData(ProcessAttr *attr);
+
+/* freq_query 等待者：IPC 线程栈分配，注册到 PidSlot.freqWaiters 链表后 sem_wait，
+ * scan worker 在 BuildPidData 填充完成后持 attrLock 遍历链表 copy+post。 */
+struct FreqWaiter {
+    uint16_t *buf; /* IPC 响应缓冲 */
+    uint32_t bufLen; /* 缓冲容量 */
+    uint32_t outLen; /* 实际填充长度（scan worker 写） */
+    int retCode; /* 结果码（scan worker 写，IPC 线程读） */
+    sem_t sem; /* 初始 0，scan worker post 唤醒 */
+    struct FreqWaiter *next;
+};
+/* 注册等待者到 attr 所属槽位的 freqWaiters 链表（持 attrLock 插入头）。
+ * 返回 0 = 已注册（有回调来源）；-EINVAL = attr/w 非法或槽位未注册（无回调
+ * 来源，调用方应立即失败而非等待） */
+int RegisterFreqWaiter(ProcessAttr *attr, struct FreqWaiter *w);
+/* 超时取消等待者。返回 true = waiter 已被 scan worker take-all 处理（sem 已 post，
+ * 调用方 sem_trywait 消费后读结果）；false = 未被处理（已摘除该 waiter / attr=w 非法 /
+ * 槽位未注册，均无 post 来源，retCode 保持 -ETIMEDOUT） */
+bool CancelFreqWaiter(ProcessAttr *attr, struct FreqWaiter *w);
+/* BuildPidData 填充完成后调用：持 attrLock take 链表，遍历 copy actcData→各 waiter.buf，sem_post */
+void InvokeFreqCallbacks(ProcessAttr *attr);
 
 /* manage_grouped.c 使用 */
 int DetectPidType(pid_t pid);

@@ -2246,11 +2246,11 @@ TEST_F(InterfaceTest, TestSetSmapRemoteNumaInfoMsgSizeInvalid)
     EXPECT_EQ(-EINVAL, ret);
 }
 
-extern "C" int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut,
+extern "C" int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut,
                                         int dataSource);
-extern "C" int QueryVMFreqFromKernel(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut);
-extern "C" int QueryVMFreqFromUser(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut);
-extern "C" int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource);
+extern "C" int QueryVMFreqFromKernel(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut);
+extern "C" int QueryVMFreqFromUser(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut);
+extern "C" int g_freqQueryWaitTimeoutMs;
 TEST_F(InterfaceTest, TestSmapQueryVmFreqAbnormalOne)
 {
     int ret;
@@ -2286,7 +2286,7 @@ TEST_F(InterfaceTest, TestSmapQueryVmFreqAbnormalTwo)
 TEST_F(InterfaceTest, TestQueryVMFreqFromKernel)
 {
     uint16_t data;
-    uint16_t lengthOut;
+    uint32_t lengthOut;
 
     MOCKER(reinterpret_cast<int (*)(int, unsigned long, void *)>(ioctl)).stubs().will(returnValue(-1));
     int ret = QueryVMFreqFromKernel(0, nullptr, 0, nullptr);
@@ -2299,184 +2299,276 @@ TEST_F(InterfaceTest, TestQueryVMFreqFromKernel)
     EXPECT_EQ(1, lengthOut);
 }
 
+extern "C" void PidSlotInit(struct ProcessManager *manager);
+extern "C" void PidSlotDestroy(struct ProcessManager *manager);
+extern "C" void InvokeFreqCallbacks(ProcessAttr *attr);
+
+/* 等待回调模式的 stub 预填数据：各用例在起线程前写入，子线程填进 attr 后 InvokeFreqCallbacks */
+struct StubFreqSnapshot {
+    ActcData node0[5];
+    ActcData node1[5];
+    int len0;
+    int len1;
+};
+static StubFreqSnapshot g_stubFreq;
+
+/* 模拟 scan worker 线程：轮询等待 freq_query 注册完 waiter（消除固定 sleep 竞态），
+ * 再预填 actcData 并 InvokeFreqCallbacks（不依赖 mockcpp） */
+static void *StubScanFillAndInvoke(void *arg)
+{
+    ProcessAttr *attr = (ProcessAttr *)arg;
+    for (int i = 0; i < 5000 && g_processManager.slots[0].freqWaiters == nullptr; i++) {
+        usleep(1000); /* 最多自旋 5s 等 waiter 注册；未注册前 Invoke 会空转 post 无人收 */
+    }
+    attr->scanAttr.actcData[0] = g_stubFreq.len0 > 0 ? g_stubFreq.node0 : nullptr;
+    attr->scanAttr.actcLen[0] = g_stubFreq.len0;
+    attr->scanAttr.actcData[1] = g_stubFreq.len1 > 0 ? g_stubFreq.node1 : nullptr;
+    attr->scanAttr.actcLen[1] = g_stubFreq.len1;
+    InvokeFreqCallbacks(attr);
+    attr->scanAttr.actcData[0] = nullptr;
+    attr->scanAttr.actcLen[0] = 0;
+    attr->scanAttr.actcData[1] = nullptr;
+    attr->scanAttr.actcLen[1] = 0;
+    return nullptr;
+}
+
 TEST_F(InterfaceTest, TestQueryVMFreqFromUser)
 {
     int ret;
     int pid = 1;
-    uint16_t lengthOut;
+    uint32_t lengthOut;
     uint16_t data[5] = {0};
     size_t dataLen = sizeof(data) / sizeof(uint16_t);
-    struct ProcessManager manager;
-    ProcessAttr attr = {.pid = 1, .next = nullptr};
-    ActcData actcData1[2] = {0};
-    ActcData actcData2[4] = {0};
-    int len1 = sizeof(actcData1) / sizeof(ActcData);
-    int len2 = sizeof(actcData2) / sizeof(ActcData);
     EnvAtomicSet(&g_status, 1);
-    attr.scanAttr.actcData[0] = actcData1;
-    attr.scanAttr.actcData[1] = actcData2;
-    attr.scanAttr.actcLen[0] = len1;
-    attr.scanAttr.actcLen[1] = len2;
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &attr);
-    manager.tracking.pageSize = PAGESIZE_2M;
-    EnvMutexInit(&manager.threadLock);
-    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotInit(&g_processManager);
+    ProcessAttr attr = {.pid = 1, .next = nullptr};
+    attr.scanType = NORMAL_SCAN;
+    ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&g_processManager.threadLock);
+    memset(&g_stubFreq, 0, sizeof(g_stubFreq));
+    int len1 = 2;
+    int len2 = 4;
+    for (int i = 0; i < len1; i++) {
+        g_stubFreq.node0[i].freq = (uint16_t)(i + 10);
+    }
+    g_stubFreq.len0 = len1;
+    for (int i = 0; i < len2; i++) {
+        g_stubFreq.node1[i].freq = (uint16_t)(len1 + i + 10);
+    }
+    g_stubFreq.len1 = len2;
+    /* 等待回调模式：子线程 InvokeFreqCallbacks 填充跨 node 两段 freq，接口等待后取数 */
+    pthread_t tid;
+    ASSERT_EQ(0, pthread_create(&tid, nullptr, StubScanFillAndInvoke, &attr));
     ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
+    pthread_join(tid, nullptr);
     EXPECT_EQ(0, ret);
+    EXPECT_EQ(5U, lengthOut);
+    EXPECT_EQ(10, data[0]);
+    EXPECT_EQ(14, data[4]);
+    PidSlotDestroy(&g_processManager);
 }
 
 TEST_F(InterfaceTest, TestQueryVMFreqFromUserActcLenZero)
 {
     int ret;
     int pid = 1;
-    uint16_t lengthOut;
+    uint32_t lengthOut;
     uint16_t data[5] = {0};
     size_t dataLen = sizeof(data) / sizeof(uint16_t);
-    struct ProcessManager manager;
-    ProcessAttr attr = {.pid = 1, .next = nullptr};
-    ActcData *actcData1 = nullptr;
-    ActcData *actcData2 = nullptr;
-    int len1 = 0;
-    int len2 = 0;
     EnvAtomicSet(&g_status, 1);
-    attr.scanAttr.actcData[0] = actcData1;
-    attr.scanAttr.actcData[1] = actcData2;
-    attr.scanAttr.actcLen[0] = len1;
-    attr.scanAttr.actcLen[1] = len2;
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &attr);
-    manager.tracking.pageSize = PAGESIZE_2M;
-    EnvMutexInit(&manager.threadLock);
-    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotInit(&g_processManager);
+    ProcessAttr attr = {.pid = 1, .next = nullptr};
+    attr.scanType = NORMAL_SCAN;
+    ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&g_processManager.threadLock);
+    /* 注入短超时，避免超时路径用例空等 20s */
+    int savedTimeout = g_freqQueryWaitTimeoutMs;
+    g_freqQueryWaitTimeoutMs = 100;
+    /* 无 scan worker 触发 InvokeFreqCallbacks → freq_query 超时返回 -ETIMEDOUT */
     ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
-    EXPECT_EQ(-EINVAL, ret);
+    g_freqQueryWaitTimeoutMs = savedTimeout;
+    EXPECT_EQ(-ETIMEDOUT, ret);
+    PidSlotDestroy(&g_processManager);
+}
+
+TEST_F(InterfaceTest, TestQueryVMFreqFromUserFallbackFill)
+{
+    int pid = 1;
+    uint32_t lengthOut;
+    uint16_t data[5] = {0};
+    size_t dataLen = sizeof(data) / sizeof(uint16_t);
+    EnvAtomicSet(&g_status, 1);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotInit(&g_processManager);
+    ProcessAttr attr = {.pid = 1, .next = nullptr};
+    attr.scanType = NORMAL_SCAN;
+    ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&g_processManager.threadLock);
+    /* 子线程延迟 InvokeFreqCallbacks：freq_query 注册 waiter 后 sem 等待，被回调唤醒取数 */
+    memset(&g_stubFreq, 0, sizeof(g_stubFreq));
+    g_stubFreq.node0[0].freq = 7;
+    g_stubFreq.node0[1].freq = 8;
+    g_stubFreq.len0 = 2;
+    g_stubFreq.len1 = 0;
+    pthread_t tid;
+    ASSERT_EQ(0, pthread_create(&tid, nullptr, StubScanFillAndInvoke, &attr));
+    int ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
+    pthread_join(tid, nullptr);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(2U, lengthOut);
+    EXPECT_EQ(7, data[0]);
+    EXPECT_EQ(8, data[1]);
+    PidSlotDestroy(&g_processManager);
 }
 
 TEST_F(InterfaceTest, TestQueryVMFreqFromUserNormalOne)
 {
     int pid = 1;
-    uint16_t lengthOut;
+    uint32_t lengthOut;
     uint16_t data[5] = {0};
     size_t dataLen = sizeof(data) / sizeof(uint16_t);
-    struct ProcessManager manager;
-    ProcessAttr attr = {.pid = 1, .next = nullptr};
     EnvAtomicSet(&g_status, 1);
-    ActcData actcData1[3] = {{.freq = 0}, {.freq = 1}, {.freq = 2}};
-    ActcData actcData2[2] = {{.freq = 3}, {.freq = 4}};
-    int len1 = sizeof(actcData1) / sizeof(ActcData);
-    int len2 = sizeof(actcData2) / sizeof(ActcData);
-    attr.scanAttr.actcData[0] = actcData1;
-    attr.scanAttr.actcData[1] = actcData2;
-    attr.scanAttr.actcLen[0] = len1;
-    attr.scanAttr.actcLen[1] = len2;
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &attr);
-    manager.tracking.pageSize = PAGESIZE_2M;
-    EnvMutexInit(&manager.threadLock);
-    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotInit(&g_processManager);
+    ProcessAttr attr = {.pid = 1, .next = nullptr};
+    attr.scanType = NORMAL_SCAN;
+    ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&g_processManager.threadLock);
+    /* 跨 node 两段（3+2 页）freq 顺序 0..4，等待回调模式取数 */
+    memset(&g_stubFreq, 0, sizeof(g_stubFreq));
+    int len1 = 3;
+    int len2 = 2;
+    for (int i = 0; i < len1; i++) {
+        g_stubFreq.node0[i].freq = (uint16_t)i;
+    }
+    g_stubFreq.len0 = len1;
+    for (int i = 0; i < len2; i++) {
+        g_stubFreq.node1[i].freq = (uint16_t)(len1 + i);
+    }
+    g_stubFreq.len1 = len2;
+    pthread_t tid;
+    ASSERT_EQ(0, pthread_create(&tid, nullptr, StubScanFillAndInvoke, &attr));
     int ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
+    pthread_join(tid, nullptr);
     for (int i = 0; i < dataLen; i++) {
         EXPECT_EQ(i, data[i]);
     }
     EXPECT_EQ(0, ret);
+    PidSlotDestroy(&g_processManager);
 }
 
 TEST_F(InterfaceTest, TestQueryVMFreqFromUserNormalTwo)
 {
     int pid = 1;
-    uint16_t lengthOut;
+    uint32_t lengthOut;
     uint16_t data[5] = {0};
     size_t dataLen = sizeof(data) / sizeof(uint16_t);
-    struct ProcessManager manager;
-    ProcessAttr attr = {.pid = 1, .next = nullptr};
-    ActcData actcData1[5] = {{.freq = 0}, {.freq = 1}, {.freq = 2}, {.freq = 3}, {.freq = 4}};
-    int len1 = sizeof(actcData1) / sizeof(ActcData);
     EnvAtomicSet(&g_status, 1);
-    attr.scanAttr.actcData[0] = actcData1;
-    attr.scanAttr.actcData[1] = nullptr;
-    attr.scanAttr.actcLen[0] = len1;
-    attr.scanAttr.actcLen[1] = 0;
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &attr);
-    manager.tracking.pageSize = PAGESIZE_2M;
-    EnvMutexInit(&manager.threadLock);
-    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotInit(&g_processManager);
+    ProcessAttr attr = {.pid = 1, .next = nullptr};
+    attr.scanType = NORMAL_SCAN;
+    ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&g_processManager.threadLock);
+    /* 单 node 5 页 freq 顺序 0..4，node1 为空段不影响拼接 */
+    memset(&g_stubFreq, 0, sizeof(g_stubFreq));
+    int len1 = 5;
+    for (int i = 0; i < len1; i++) {
+        g_stubFreq.node0[i].freq = (uint16_t)i;
+    }
+    g_stubFreq.len0 = len1;
+    g_stubFreq.len1 = 0;
+    pthread_t tid;
+    ASSERT_EQ(0, pthread_create(&tid, nullptr, StubScanFillAndInvoke, &attr));
     int ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
+    pthread_join(tid, nullptr);
     for (int i = 0; i < dataLen; i++) {
         EXPECT_EQ(i, data[i]);
     }
     EXPECT_EQ(0, ret);
+    PidSlotDestroy(&g_processManager);
 }
 
 TEST_F(InterfaceTest, TestQueryVMFreqFromUserNormalThree)
 {
     int ret;
     int pid = 1;
-    uint16_t lengthOut;
+    uint32_t lengthOut;
     uint16_t data[5] = {0};
     size_t dataLen = sizeof(data) / sizeof(uint16_t);
-    struct ProcessManager manager;
-    ProcessAttr attr = {.pid = 1, .next = nullptr};
-    ActcData actcData1[2] = {{.freq = 0}, {.freq = 1}};
-    ActcData actcData2[2] = {{.freq = 2}, {.freq = 3}};
-    int len1 = sizeof(actcData1) / sizeof(ActcData);
-    int len2 = sizeof(actcData2) / sizeof(ActcData);
     EnvAtomicSet(&g_status, 1);
-    attr.scanAttr.actcData[0] = actcData1;
-    attr.scanAttr.actcData[1] = actcData2;
-    attr.scanAttr.actcLen[0] = len1;
-    attr.scanAttr.actcLen[1] = len2;
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &attr);
-    manager.tracking.pageSize = PAGESIZE_2M;
-    EnvMutexInit(&manager.threadLock);
-    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotInit(&g_processManager);
+    ProcessAttr attr = {.pid = 1, .next = nullptr};
+    attr.scanType = NORMAL_SCAN;
+    ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&g_processManager.threadLock);
+    /* 跨 node 两段共 4 页，lengthIn=5 → lengthOut 截断为实际 4，freq 顺序 0..3 */
+    memset(&g_stubFreq, 0, sizeof(g_stubFreq));
+    int len1 = 2;
+    int len2 = 2;
+    for (int i = 0; i < len1; i++) {
+        g_stubFreq.node0[i].freq = (uint16_t)i;
+    }
+    g_stubFreq.len0 = len1;
+    for (int i = 0; i < len2; i++) {
+        g_stubFreq.node1[i].freq = (uint16_t)(len1 + i);
+    }
+    g_stubFreq.len1 = len2;
+    pthread_t tid;
+    ASSERT_EQ(0, pthread_create(&tid, nullptr, StubScanFillAndInvoke, &attr));
     ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
-    EXPECT_EQ(4, lengthOut);
+    pthread_join(tid, nullptr);
+    EXPECT_EQ(4U, lengthOut);
     for (int i = 0; i < lengthOut; i++) {
         EXPECT_EQ(i, data[i]);
     }
     EXPECT_EQ(0, ret);
+    PidSlotDestroy(&g_processManager);
 }
 
 TEST_F(InterfaceTest, TestQueryVMFreqFromUserSubtractPrior)
 {
     int pid = 1;
-    uint16_t lengthOut;
+    uint32_t lengthOut;
     uint16_t data[3] = {0};
     size_t dataLen = sizeof(data) / sizeof(uint16_t);
-    struct ProcessManager manager;
-    ProcessAttr attr = {.pid = 1, .next = nullptr};
-    /* 缓存中为合成值(prior + 窗口freq), 查询接口应扣除 prior 还原窗口频次 */
-    ActcData actcData1[3] = {};
-    actcData1[0].freq = 5;
-    actcData1[0].prior = 5;
-    actcData1[1].freq = 7;
-    actcData1[1].prior = 2;
-    actcData1[2].freq = 2;
-    actcData1[2].prior = 0;
-    int len1 = sizeof(actcData1) / sizeof(ActcData);
     EnvAtomicSet(&g_status, 1);
-    attr.scanAttr.actcData[0] = actcData1;
-    attr.scanAttr.actcLen[0] = len1;
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &attr);
-    manager.tracking.pageSize = PAGESIZE_2M;
-    EnvMutexInit(&manager.threadLock);
-    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
-    MOCKER(GetProcessAttr).stubs().will(returnValue(&attr));
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotInit(&g_processManager);
+    ProcessAttr attr = {.pid = 1, .next = nullptr};
+    attr.scanType = NORMAL_SCAN;
+    ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&g_processManager.threadLock);
+    /* 缓存中为合成值(prior + 窗口freq), 回调拷贝应扣除 prior 还原窗口频次 */
+    memset(&g_stubFreq, 0, sizeof(g_stubFreq));
+    g_stubFreq.node0[0].freq = 5;
+    g_stubFreq.node0[0].prior = 5;
+    g_stubFreq.node0[1].freq = 7;
+    g_stubFreq.node0[1].prior = 2;
+    g_stubFreq.node0[2].freq = 2;
+    g_stubFreq.node0[2].prior = 0;
+    g_stubFreq.len0 = 3;
+    g_stubFreq.len1 = 0;
+    pthread_t tid;
+    ASSERT_EQ(0, pthread_create(&tid, nullptr, StubScanFillAndInvoke, &attr));
     int ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
+    pthread_join(tid, nullptr);
     EXPECT_EQ(0, ret);
-    EXPECT_EQ(3, lengthOut);
+    EXPECT_EQ(3U, lengthOut);
     EXPECT_EQ(0, data[0]); // 合成值等于 prior, 表示窗口内未访问
     EXPECT_EQ(5, data[1]);
     EXPECT_EQ(2, data[2]);
+    PidSlotDestroy(&g_processManager);
 }
 
 TEST_F(InterfaceTest, DataNull)
@@ -2484,7 +2576,7 @@ TEST_F(InterfaceTest, DataNull)
     int pid = 123;
     uint16_t *data = nullptr;
     uint16_t lengthIn = 5;
-    uint16_t *lengthOut = nullptr;
+    uint32_t *lengthOut = nullptr;
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
@@ -2497,7 +2589,7 @@ TEST_F(InterfaceTest, LengthInZero)
     int pid = 123;
     uint16_t data[10] = {0};
     uint16_t lengthIn = 0;
-    uint16_t lengthOut = 0;
+    uint32_t lengthOut = 0;
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
@@ -2510,7 +2602,7 @@ TEST_F(InterfaceTest, DataSourceInvalid)
     int pid = 123;
     uint16_t data[10] = {0};
     uint16_t lengthIn = 5;
-    uint16_t lengthOut = 0;
+    uint32_t lengthOut = 0;
     int dataSource = MAX_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
@@ -2523,7 +2615,7 @@ TEST_F(InterfaceTest, PidNotManaged)
     int pid = 123;
     uint16_t data[10] = {0};
     uint16_t lengthIn = 5;
-    uint16_t lengthOut = 0;
+    uint32_t lengthOut = 0;
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
@@ -2539,7 +2631,7 @@ TEST_F(InterfaceTest, DataSourceMismatch)
     int pid = 123;
     uint16_t data[10] = {0};
     uint16_t lengthIn = 5;
-    uint16_t lengthOut = 0;
+    uint32_t lengthOut = 0;
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
@@ -2558,7 +2650,7 @@ TEST_F(InterfaceTest, TimeCheckFailed)
     int pid = 123;
     uint16_t data[10] = {0};
     uint16_t lengthIn = 5;
-    uint16_t lengthOut = 0;
+    uint32_t lengthOut = 0;
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
@@ -2579,7 +2671,7 @@ TEST_F(InterfaceTest, TimeCheckSuccess)
     int pid = 123;
     uint16_t data[10] = {0};
     uint16_t lengthIn = 5;
-    uint16_t lengthOut = 0;
+    uint32_t lengthOut = 0;
     int dataSource = STATISTIC_DATA_SOURCE;
     struct ProcessManager manager;
     MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
@@ -4258,18 +4350,27 @@ TEST_F(InterfaceTest, TestSmapQueryRemoteNumaFreq)
     struct ProcessManager manager;
     memset(&manager, 0, sizeof(manager));
     manager.nrLocalNuma = 4;
-    ProcessAttr attr1;
-    ProcessAttr attr2;
-    memset(&manager.slots, 0, sizeof(manager.slots));
-    PidSlotAdd(&manager, &attr1);
-    PidSlotAdd(&manager, &attr2);
-    attr1.next = &attr2;
-    attr2.next = nullptr;
+    ProcessAttr *attr1 = (ProcessAttr *)calloc(1, sizeof(*attr1));
+    ProcessAttr *attr2 = (ProcessAttr *)calloc(1, sizeof(*attr2));
+    ASSERT_NE(nullptr, attr1);
+    ASSERT_NE(nullptr, attr2);
 
-    attr1.numaAttr.numaNodes = BmFromWord(0x11);
-    attr1.scanAttr.actCount[4].freqSum = 10;
-    attr2.numaAttr.numaNodes = BmFromWord(0x11);
-    attr2.scanAttr.actCount[4].freqSum = 10;
+    EnvAtomicSet(&g_status, RUNNING);
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    /* actCount 与位图由 InitProcessAttrArrays 堆分配，须先初始化再赋值 */
+    ASSERT_EQ(0, InitProcessAttrArrays(attr1));
+    ASSERT_EQ(0, InitProcessAttrArrays(attr2));
+    NumaBitmapSet(&attr1->numaAttr.numaNodes, 0);
+    NumaBitmapSet(&attr1->numaAttr.numaNodes, 4);
+    NumaBitmapSet(&attr2->numaAttr.numaNodes, 0);
+    NumaBitmapSet(&attr2->numaAttr.numaNodes, 4);
+    attr1->scanType = NORMAL_SCAN;
+    attr2->scanType = NORMAL_SCAN;
+    PidSlotAdd(&manager, attr1);
+    PidSlotAdd(&manager, attr2);
+
+    attr1->scanAttr.actCount[4].freqSum = 10;
+    attr2->scanAttr.actCount[4].freqSum = 10;
 
     EnvMutexInit(&manager.threadLock);
     MOCKER(IsOnlineRemoteNidValid).stubs().will(returnValue(true));
@@ -4278,6 +4379,11 @@ TEST_F(InterfaceTest, TestSmapQueryRemoteNumaFreq)
     EXPECT_EQ(0, ret);
     EXPECT_EQ(20, freq[0]);
     EXPECT_EQ(0, freq[1]);
+
+    FreeProcessAttrArrays(attr1);
+    FreeProcessAttrArrays(attr2);
+    free(attr1);
+    free(attr2);
 }
 
 TEST_F(InterfaceTest, TestIsPidArrRemoteNumaMatch)
@@ -5043,7 +5149,7 @@ TEST_F(InterfaceTest, TestCheckQueryVMFreqMsgValidNullData)
 TEST_F(InterfaceTest, TestCheckQueryVMFreqMsgValidZeroLength2)
 {
     uint16_t data[10];
-    uint16_t lengthOut = 0;
+    uint32_t lengthOut = 0;
     int ret = CheckQueryVMFreqMsgValid(1, data, 0, &lengthOut, 0);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -5051,7 +5157,7 @@ TEST_F(InterfaceTest, TestCheckQueryVMFreqMsgValidZeroLength2)
 TEST_F(InterfaceTest, TestCheckQueryVMFreqMsgValidInvalidSource2)
 {
     uint16_t data[10];
-    uint16_t lengthOut = 0;
+    uint32_t lengthOut = 0;
     int ret = CheckQueryVMFreqMsgValid(1, data, 10, &lengthOut, MAX_SOURCE);
     EXPECT_EQ(-EINVAL, ret);
 }
@@ -5059,17 +5165,16 @@ TEST_F(InterfaceTest, TestCheckQueryVMFreqMsgValidInvalidSource2)
 TEST_F(InterfaceTest, TestCheckQueryVMFreqMsgValidNotManaged2)
 {
     uint16_t data[10];
-    uint16_t lengthOut = 0;
+    uint32_t lengthOut = 0;
     MOCKER(GetProcessAttr).stubs().will(returnValue((ProcessAttr *)nullptr));
     int ret = CheckQueryVMFreqMsgValid(1, data, 10, &lengthOut, NORMAL_DATA_SOURCE);
     EXPECT_EQ(-EINVAL, ret);
 }
 
-extern "C" int QueryVMFreqFromUser(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut);
 TEST_F(InterfaceTest, TestQueryVMFreqFromUserPidNotFound2)
 {
     uint16_t data[10];
-    uint16_t lengthOut = 0;
+    uint32_t lengthOut = 0;
     EnvMutexInit(&g_processManager.threadLock);
     MOCKER(GetProcessAttr).stubs().will(returnValue((ProcessAttr *)nullptr));
     int ret = QueryVMFreqFromUser(1, data, 10, &lengthOut);
@@ -5079,7 +5184,7 @@ TEST_F(InterfaceTest, TestQueryVMFreqFromUserPidNotFound2)
 TEST_F(InterfaceTest, TestQueryVMFreqFromUserZeroActcLen2)
 {
     uint16_t data[10];
-    uint16_t lengthOut = 0;
+    uint32_t lengthOut = 0;
     ProcessAttr attr = {};
     EnvMutexInit(&g_processManager.threadLock);
     memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));

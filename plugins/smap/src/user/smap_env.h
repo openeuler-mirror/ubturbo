@@ -17,6 +17,7 @@
 #include <stdatomic.h>
 #include <string.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <errno.h>
 #include <unistd.h>
 #include <inttypes.h>

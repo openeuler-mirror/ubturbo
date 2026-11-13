@@ -28,7 +28,7 @@ SET(GTEST_TARBALL_NAME "ros-humble-gtest-vendor_${GTEST_VERSION}.orig.tar.gz")
 SET(GTEST_TARBALL_SHA256 "79b5f1bd841f84ac1b289ab362031cb18ef396fb6234ddf003af09bca3e050fa")
 SET(GTEST_OPENEULER_REPO "https://gitcode.com/src-openeuler/googletest.git")
 SET(GTEST_OPENEULER_BRANCH "humble")
-SET(GTEST_OPENEULER_RAW_URL "https://gitcode.com/api/v5/repos/src-openeuler/googletest/raw/${GTEST_TARBALL_NAME}?ref=${GTEST_OPENEULER_BRANCH}")
+SET(GTEST_OPENEULER_RAW_URL "https://gitee.com/src-openeuler/googletest/raw/${GTEST_OPENEULER_BRANCH}/${GTEST_TARBALL_NAME}")
 SET(GTEST_DOWNLOAD_DIR ${CMAKE_BINARY_DIR}/3rdparty/gtest-download)
 SET(GTEST_LOCAL_VENDOR_DIR ${THIRD_PARTY_DIR}/googletest)
 
@@ -42,7 +42,7 @@ ELSE()
   SET(GTEST_SOURCE_DIR ${GTEST_DOWNLOAD_DIR}/ros-humble-gtest-vendor-${GTEST_VERSION})
   SET(GTEST_DOWNLOAD_COMMAND
     ${CMAKE_COMMAND} -E make_directory ${GTEST_DOWNLOAD_DIR}
-    COMMAND curl -fsSL --retry 3 --connect-timeout 30 -o ${GTEST_DOWNLOAD_DIR}/${GTEST_TARBALL_NAME} ${GTEST_OPENEULER_RAW_URL}
+    COMMAND curl -fsSL --retry 3 --connect-timeout 30 -L -o ${GTEST_DOWNLOAD_DIR}/${GTEST_TARBALL_NAME} ${GTEST_OPENEULER_RAW_URL}
     COMMAND sh -c "echo '${GTEST_TARBALL_SHA256}  ${GTEST_DOWNLOAD_DIR}/${GTEST_TARBALL_NAME}' | sha256sum -c -"
     COMMAND ${CMAKE_COMMAND} -E chdir ${GTEST_DOWNLOAD_DIR} ${CMAKE_COMMAND} -E tar xzf ${GTEST_DOWNLOAD_DIR}/${GTEST_TARBALL_NAME}
     COMMAND ${CMAKE_COMMAND} -E copy ${GTEST_SOURCE_DIR}/CMakeLists.txt.upstream ${GTEST_SOURCE_DIR}/CMakeLists.txt)

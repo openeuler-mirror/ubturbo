@@ -271,14 +271,15 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuilds2x2NetMigration)
     const uint16_t local1[] = {0, 5};
     const uint16_t remote2[] = {3, 8, 7};
     const uint16_t remote3[] = {9, 6};
+    /* actCount 为堆分配数组，须先初始化再由 BuildPairActcData 写入 */
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     BuildPairActcData(0, local0, 3, &process.scanAttr);
     BuildPairActcData(1, local1, 2, &process.scanAttr);
     BuildPairActcData(2, remote2, 3, &process.scanAttr);
     BuildPairActcData(3, remote3, 2, &process.scanAttr);
     initializeMigList(mlist);
 
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
-    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     NM_AT(process.strategyAttr.nrMigrateBackPages, 0, 2) = 2; /* promote: remote 2 -> local 0 */
     NM_AT(process.strategyAttr.nrMigratePages, 0, 3) = 2;
     NM_AT(process.strategyAttr.nrMigrateBackPages, 1, 2) = 1;
@@ -316,11 +317,12 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuildsPairSwapAfterNetMigr
     struct MigList *mlist = TestMlist();
     const uint16_t local0[] = {0, 1, 6};
     const uint16_t remote2[] = {9, 8, 2};
+    /* actCount 为堆分配数组，须先初始化再由 BuildPairActcData 写入 */
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     BuildPairActcData(0, local0, 3, &process.scanAttr);
     BuildPairActcData(2, remote2, 3, &process.scanAttr);
     initializeMigList(mlist);
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
-    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     NM_AT(process.strategyAttr.nrMigratePages, 0, 2) = 3;
     NM_AT(process.strategyAttr.nrMigrateBackPages, 0, 2) = 2;
 
@@ -349,11 +351,12 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyUbBwSwapStopStripsSwap)
     struct MigList *mlist = TestMlist();
     const uint16_t local0[] = {0, 1, 6};
     const uint16_t remote2[] = {9, 8, 2};
+    /* actCount 为堆分配数组，须先初始化再由 BuildPairActcData 写入 */
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     BuildPairActcData(0, local0, 3, &process.scanAttr);
     BuildPairActcData(2, remote2, 3, &process.scanAttr);
     initializeMigList(mlist);
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
-    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     NM_AT(process.strategyAttr.nrMigratePages, 0, 2) = 3; /* local -> remote */
     NM_AT(process.strategyAttr.nrMigrateBackPages, 0, 2) = 2; /* remote -> local */
     process.strategyAttr.ubBwRestrict[2] = UB_BW_SWAP_STOP;
@@ -382,10 +385,11 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteSkipsBothDir
     ProcessAttr process = {};
     struct MigList *mlist = TestMlist();
     const uint16_t remote2[] = {5};
-    BuildPairActcData(2, remote2, 1, &process.scanAttr);
-    initializeMigList(mlist);
+    /* actCount 为堆分配数组，须先初始化再由 BuildPairActcData 写入 */
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
     ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    BuildPairActcData(2, remote2, 1, &process.scanAttr);
+    initializeMigList(mlist);
     NM_AT(process.strategyAttr.nrMigratePages, 0, 2) = 1;
     NM_AT(process.strategyAttr.nrMigrateBackPages, 0, 2) = 1;
     EnvAtomicSet(&g_forbiddenNodes[2], 1);

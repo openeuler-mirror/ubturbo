@@ -363,7 +363,7 @@ typedef struct {
     ScanType scanType; // 标识添加进程组件 HAM/普通冷热
     uint64_t actcLen[SMAP_NODE_CAP_LIMIT];
     ActcData *actcData[SMAP_NODE_CAP_LIMIT]; // actc数据，按nid偏移指向同一连续缓冲区，第一个非空即缓冲区起始
-    ActCount actCount[SMAP_NODE_CAP_LIMIT]; // 统计数据
+    ActCount *actCount; // 统计数据，行数=运行期cap（InitProcessAttrArrays 堆分配，[nid] 绝对nid下标）
     uint32_t (*selectedBuckets)[FREQ_BUCKETS_SIZE]; // 已选频次为freq的页面数
 } ScanAttribute;
 
@@ -433,6 +433,9 @@ enum {
  * - add: CAS FREE->RESERVED 抢槽，填元数据后发布 INUSE
  * - remove: CAS INUSE->REMOVING 摘除，释放自身引用；引用归零由最后使用者回收
  * - 读路径无锁扫描槽位，命中后取引用 + 加本 pid attrLock 读写
+ * - freq_query 等待语义：IPC 线程注册 FreqWaiter 到 freqWaiters 链表后 sem_wait；
+ *   scan worker 在 BuildPidData 填充完成后持 attrLock 遍历链表 copy+post。
+ *   actcData 全程由 scan worker 单线程访问，IPC 线程不碰，无 UAF 无锁。
  * aligned(64) 避免多槽位假共享。
  */
 struct PidSlot {
@@ -441,6 +444,7 @@ struct PidSlot {
     ProcessAttr *attr;
     EnvAtomic refs;
     EnvMutex attrLock;
+    struct FreqWaiter *freqWaiters; /* freq_query 等待者链表，attrLock 保护 */
     int memFreqFd; /* epoll 监听的 /proc/smap/<pid>/mem_freq fd，-1 未注册 */
     EnvAtomic eventEnqueued; /* 事件驱动的同pid去重：派发中置1，worker完成复位 */
 } __attribute__((aligned(64)));

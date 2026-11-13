@@ -391,7 +391,8 @@ void AllocBorrowPagesForMemsize(ProcessAttr *attr, uint32_t *availPrivatePages,
                                 uint32_t availSharedPages[SMAP_MAX_NUMNODES])
 {
     int destNid = attr->migrateParam[0].nid;
-    if (destNid < 0 || destNid >= SMAP_MAX_NUMNODES) {
+    int cap = (int)GetNumaCap();
+    if (destNid < 0 || destNid >= cap) {
         return;
     }
 
@@ -451,10 +452,17 @@ void AllocBorrowPagesForMemsize(ProcessAttr *attr, uint32_t *availPrivatePages,
 
 void CalRemoteNumaSizeAllocPerNuma(void)
 {
-    /* 节点矩阵按 SMAP_MAX_NUMNODES 行 × cap 列扁平分配（列跨度 = cap） */
-    uint32_t *tmpMaxAllocNrPages = calloc(NM_COUNT(SMAP_MAX_NUMNODES), sizeof(*tmpMaxAllocNrPages));
-    uint32_t *availPrivatePages = calloc(NM_COUNT(SMAP_MAX_NUMNODES), sizeof(*availPrivatePages));
-    uint32_t *availSharedPages = calloc(SMAP_MAX_NUMNODES, sizeof(*availSharedPages));
+    /* 节点矩阵按 nrLocalNuma 行 × cap 列扁平分配（列跨度 = cap）：
+     * 行维用真实本地节点数而非 SMAP_MAX_NUMNODES 定宽，省去无效行内存 */
+    int nrLocalNuma = GetNrLocalNuma();
+    if (nrLocalNuma <= 0 || nrLocalNuma > (int)SMAP_MAX_NUMNODES) {
+        SMAP_LOGGER_ERROR("nrLocalNuma %d invalid, skip numa size alloc.", nrLocalNuma);
+        return;
+    }
+    uint32_t *tmpMaxAllocNrPages = calloc(NM_COUNT(nrLocalNuma), sizeof(*tmpMaxAllocNrPages));
+    uint32_t *availPrivatePages = calloc(NM_COUNT(nrLocalNuma), sizeof(*availPrivatePages));
+    int cap = (int)GetNumaCap();
+    uint32_t *availSharedPages = calloc((size_t)cap, sizeof(*availSharedPages));
     if (tmpMaxAllocNrPages == NULL || availPrivatePages == NULL || availSharedPages == NULL) {
         SMAP_LOGGER_ERROR("Alloc numa size arrays failed.");
         free(tmpMaxAllocNrPages);
@@ -477,9 +485,6 @@ void CalRemoteNumaSizeAllocPerNuma(void)
     }
 
     // 计算所有进程**想要**从各本地NUMA迁移到各远端NUMA的总页面数量
-    int cap = (int)GetNumaCap();
-    /* 本地节点数提到循环外：避免循环条件重复调用 GetNrLocalNuma() */
-    int nrLocalNuma = GetNrLocalNuma();
     for (size_t k = 0; k < n; k++) {
         ProcessAttr *attr = all[k]->attr;
         if (attr->migrateMode == MIG_MEMSIZE_MODE) {

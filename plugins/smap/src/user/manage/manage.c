@@ -530,14 +530,17 @@ int InitProcessAttrArrays(ProcessAttr *attr)
 #define CALLOC_ARRAY(field, rows) sa->field = calloc(NM_COUNT(rows), sizeof(*sa->field));
     FOR_EACH_PROCESS_ATTR_ARRAY(CALLOC_ARRAY)
 #undef CALLOC_ARRAY
-    attr->scanAttr.selectedBuckets = calloc(SMAP_MAX_NUMNODES, sizeof(*attr->scanAttr.selectedBuckets));
+    /* scanAttr 两数组以绝对 nid 为下标，第一维按运行期 cap（不再 SMAP_MAX_NUMNODES 定宽） */
+    int cap = (int)GetNumaCap();
+    attr->scanAttr.selectedBuckets = calloc((size_t)cap, sizeof(*attr->scanAttr.selectedBuckets));
+    attr->scanAttr.actCount = calloc((size_t)cap, sizeof(*attr->scanAttr.actCount));
     /* 变长位图（numaAttr.numaNodes / pendingGroupPolicy.nodeBitmap）随对象一并分配 */
     bool numaAllocOk = NumaBitmapAlloc(&attr->numaAttr.numaNodes) &&
                        NumaBitmapAlloc(&attr->pendingGroupPolicy.nodeBitmap);
 
 #define ARRAY_UNINIT(field, rows) sa->field == NULL ||
     bool arrayUninit = (FOR_EACH_PROCESS_ATTR_ARRAY(ARRAY_UNINIT) 0) || attr->scanAttr.selectedBuckets == NULL ||
-                       !numaAllocOk;
+                       attr->scanAttr.actCount == NULL || !numaAllocOk;
 #undef ARRAY_UNINIT
     if (arrayUninit) {
         FreeProcessAttrArrays(attr);
@@ -560,6 +563,8 @@ void FreeProcessAttrArrays(ProcessAttr *attr)
 #undef FREE_ARRAY
     free(attr->scanAttr.selectedBuckets);
     attr->scanAttr.selectedBuckets = NULL;
+    free(attr->scanAttr.actCount);
+    attr->scanAttr.actCount = NULL;
     /* 变长位图：句柄按值内嵌，释放堆缓冲区并复位句柄（幂等） */
     NumaBitmapFree(&attr->numaAttr.numaNodes);
     NumaBitmapFree(&attr->pendingGroupPolicy.nodeBitmap);
@@ -597,7 +602,8 @@ int CloneProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src)
     }
 
 #define SRC_UNINIT(field, rows) ss->field == NULL ||
-    bool srcUninit = (FOR_EACH_PROCESS_ATTR_ARRAY(SRC_UNINIT) 0) || src->scanAttr.selectedBuckets == NULL;
+    bool srcUninit = (FOR_EACH_PROCESS_ATTR_ARRAY(SRC_UNINIT) 0) || src->scanAttr.selectedBuckets == NULL ||
+                     src->scanAttr.actCount == NULL;
 #undef SRC_UNINIT
     if (srcUninit) {
         SMAP_LOGGER_ERROR("Source pid %d arrays not initialized.", src->pid);
@@ -610,6 +616,7 @@ int CloneProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src)
     FOR_EACH_PROCESS_ATTR_ARRAY(CLEAR_ARRAY)
 #undef CLEAR_ARRAY
     dst->scanAttr.selectedBuckets = NULL;
+    dst->scanAttr.actCount = NULL;
     /* 变长位图：浅拷贝后与 src 共享缓冲区，此处脱离为独立深拷贝 */
     if (!NumaBitmapCopy(&dst->numaAttr.numaNodes, &src->numaAttr.numaNodes) ||
         !NumaBitmapCopy(&dst->pendingGroupPolicy.nodeBitmap, &src->pendingGroupPolicy.nodeBitmap)) {
@@ -625,9 +632,15 @@ int CloneProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src)
     } while (0);
     FOR_EACH_PROCESS_ATTR_ARRAY(CLONE_ARRAY)
 #undef CLONE_ARRAY
+    /* scanAttr 两数组以绝对 nid 为下标，行数 = 运行期 cap */
+    int cap = (int)GetNumaCap();
     dst->scanAttr.selectedBuckets =
-        CloneArray(src->scanAttr.selectedBuckets, SMAP_MAX_NUMNODES * sizeof(*dst->scanAttr.selectedBuckets));
+        CloneArray(src->scanAttr.selectedBuckets, (size_t)cap * sizeof(*dst->scanAttr.selectedBuckets));
     if (dst->scanAttr.selectedBuckets == NULL) {
+        goto out_fail;
+    }
+    dst->scanAttr.actCount = CloneArray(src->scanAttr.actCount, (size_t)cap * sizeof(*dst->scanAttr.actCount));
+    if (dst->scanAttr.actCount == NULL) {
         goto out_fail;
     }
     return 0;
@@ -661,8 +674,12 @@ void CopyProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src)
     FOR_EACH_PROCESS_ATTR_ARRAY(COPY_ARRAY_IF_DIFFERENT)
 #undef COPY_ARRAY_IF_DIFFERENT
     if (dst->scanAttr.selectedBuckets != NULL && dst->scanAttr.selectedBuckets != src->scanAttr.selectedBuckets) {
-        size_t bytes = SMAP_MAX_NUMNODES * sizeof(*dst->scanAttr.selectedBuckets);
+        size_t bytes = (size_t)GetNumaCap() * sizeof(*dst->scanAttr.selectedBuckets);
         (void)memcpy_s(dst->scanAttr.selectedBuckets, bytes, src->scanAttr.selectedBuckets, bytes);
+    }
+    if (dst->scanAttr.actCount != NULL && dst->scanAttr.actCount != src->scanAttr.actCount) {
+        size_t bytes = (size_t)GetNumaCap() * sizeof(*dst->scanAttr.actCount);
+        (void)memcpy_s(dst->scanAttr.actCount, bytes, src->scanAttr.actCount, bytes);
     }
     /* 变长位图：指针相同（栈上候选共享 active 位图）时跳过，其余按内容深拷贝 */
     if (dst->numaAttr.numaNodes.bits != src->numaAttr.numaNodes.bits) {
@@ -692,6 +709,7 @@ void PidSlotInit(struct ProcessManager *manager)
         EnvAtomicSet(&manager->slots[i].refs, 0);
         EnvAtomicSet(&manager->slots[i].eventEnqueued, 0);
         manager->slots[i].memFreqFd = -1;
+        manager->slots[i].freqWaiters = NULL;
         EnvMutexInit(&manager->slots[i].attrLock);
     }
 }
@@ -716,6 +734,7 @@ static void PidSlotTryReclaim(struct ProcessManager *manager, int i)
     /* 复槽前复位事件去重标志，防止上一轮残留派发与新一轮 pid 注册竞争 */
     s->pid = 0;
     EnvAtomicSet(&s->eventEnqueued, 0);
+    s->freqWaiters = NULL;
     FreeProceccesAttr(s->attr);
     s->attr = NULL;
     EnvAtomicSet(&s->state, PID_SLOT_FREE);
@@ -736,6 +755,7 @@ int PidSlotAdd(struct ProcessManager *manager, ProcessAttr *attr)
         s->attr = attr;
         EnvAtomicSet(&s->refs, 1);
         EnvAtomicSet(&s->eventEnqueued, 0);
+        s->freqWaiters = NULL;
         EnvAtomicSet(&s->state, PID_SLOT_INUSE);
         return i;
     }
@@ -1012,6 +1032,151 @@ struct PidSlot *PidSlotGetRefByAttr(const ProcessAttr *attr)
         PidSlotReleaseRefs(&s, 1);
     }
     return NULL;
+}
+
+/*
+ * 取得 attr 所属槽位并加 attrLock（引用+1），仅用于 freqWaiters 等待者链表的
+ * 注册/摘除/遍历（RegisterFreqWaiter、CancelFreqWaiter、InvokeFreqCallbacks）。
+ * attr 未注册进槽表时（单测场景）返回 NULL，调用方退化为无操作；释放时须
+ * 配对调用 ProcessAttrLockPut。锁持有期间不得再取 attrLock（非递归锁）。
+ */
+static struct PidSlot *ProcessAttrLockTake(const ProcessAttr *attr)
+{
+    struct PidSlot *slot = PidSlotGetRefByAttr(attr);
+    if (slot) {
+        EnvMutexLock(&slot->attrLock);
+    }
+    return slot;
+}
+
+static void ProcessAttrLockPut(struct PidSlot *slot)
+{
+    if (!slot) {
+        return;
+    }
+    EnvMutexUnlock(&slot->attrLock);
+    PidSlotReleaseRefs(&slot, 1);
+}
+
+/*
+ * ClearProcessActcData - 释放本周期 actc 快照（迁移闭环结束即释放）
+ * 清空 actcLen 与 actcData 缓冲，确保释放后「len==0 ⟺ 缓冲为空」的
+ * 不变式成立（OOM 判重、策略入口条件均依赖此语义）。
+ * 与 InvokeFreqCallbacks 使用同一把 attrLock，避免迁移 worker 释放快照时
+ * 扫描 worker/IPC 线程仍在读取 actcData。
+ */
+void ClearProcessActcData(ProcessAttr *attr)
+{
+    if (!attr) {
+        return;
+    }
+    struct PidSlot *slot = ProcessAttrLockTake(attr);
+    for (int nid = 0; nid < SMAP_MAX_NUMNODES; nid++) {
+        attr->scanAttr.actcLen[nid] = 0;
+    }
+    ResetActcData(attr->scanAttr.actcData, SMAP_MAX_NUMNODES);
+    if (slot) {
+        ProcessAttrLockPut(slot);
+    }
+}
+
+/*
+ * RegisterFreqWaiter - freq_query IPC 线程注册等待者到 freqWaiters 链表
+ * 持 attrLock 头插，调用方栈分配 waiter 并已 sem_init(&w->sem, 0, 0)。
+ * 返回 0 = 已注册（有 scan worker 回调来源）
+ * 返回 -EINVAL = attr/w 非法或槽位未注册（并发 remove / 未跟踪，无回调来源，
+ *        调用方应立即失败而非等待，避免 IPC 线程白等满超时）。
+ */
+int RegisterFreqWaiter(ProcessAttr *attr, struct FreqWaiter *w)
+{
+    if (!attr || !w) {
+        return -EINVAL;
+    }
+    struct PidSlot *slot = ProcessAttrLockTake(attr);
+    if (!slot) {
+        return -EINVAL;
+    }
+    w->next = slot->freqWaiters;
+    slot->freqWaiters = w;
+    ProcessAttrLockPut(slot);
+    return 0;
+}
+
+/*
+ * CancelFreqWaiter - freq_query 超时/被打断后摘除 waiter（见 manage_internal.h 契约）
+ * 摘除与 InvokeFreqCallbacks 的 take-all 在同一把 attrLock 临界区串行，
+ * 不会出现"已 take 但未 post"的中间态。
+ */
+bool CancelFreqWaiter(ProcessAttr *attr, struct FreqWaiter *w)
+{
+    if (!attr || !w) {
+        return false; /* 无 post 来源：retCode 保持 -ETIMEDOUT */
+    }
+    struct PidSlot *slot = ProcessAttrLockTake(attr);
+    if (!slot) {
+        return false; /* 槽位未注册：注册时也未入任何链表，无 post 来源 */
+    }
+    bool found = false;
+    struct FreqWaiter **pp = &slot->freqWaiters;
+    while (*pp) {
+        if (*pp == w) {
+            *pp = w->next;
+            w->next = NULL;
+            found = true;
+            break;
+        }
+        pp = &(*pp)->next;
+    }
+    ProcessAttrLockPut(slot);
+    /* 仍在链表 → 已摘除，无人 post（false）；不在链表 → take-all 全摘语义下必已被处理
+     * （true，sem 已 post，调用方 sem_trywait 消费后读结果） */
+    return !found;
+}
+
+/*
+ * InvokeFreqCallbacks - BuildPidData 填充完成后调用
+ * 持 attrLock take 整个链表，遍历 copy actcData→各 waiter.buf（bounded by bufLen），
+ * 设 outLen/retCode，sem_post。copy 在锁内完成（µs 级），保证 freq_query 超时路径
+ * 的 CancelFreqWaiter 不会看到"已 take 但未 post"的中间态。
+ * actcData 在此点写稳定（fill 完到 clear 之间只有读者），copy 无 UAF。
+ */
+void InvokeFreqCallbacks(ProcessAttr *attr)
+{
+    if (!attr) {
+        return;
+    }
+    struct PidSlot *slot = ProcessAttrLockTake(attr);
+    if (!slot) {
+        return;
+    }
+    struct FreqWaiter *w = slot->freqWaiters;
+    slot->freqWaiters = NULL;
+    while (w) {
+        struct FreqWaiter *next = w->next;
+        uint32_t copied = 0;
+        for (int nid = 0; nid < SMAP_MAX_NUMNODES && copied < w->bufLen; nid++) {
+            ActcData *actc = attr->scanAttr.actcData[nid];
+            uint64_t len = attr->scanAttr.actcLen[nid];
+            for (uint64_t j = 0; j < len && copied < w->bufLen; j++, copied++) {
+                actc_t freq = actc[j].freq;
+                /*
+                 * 缓存中的 freq 已被 MergeAccPriorToFreq 合成为“累计频次 + 窗口频次”
+                 * （合并先于发布，查询不会看到未合并数据），查询接口保持原始窗口频次
+                 * 语义：非 VM 场景减去累计 prior 还原，合并时饱和到 255 的页无法完全
+                 * 还原。VM 的 prior 是分配序语义，未参与合成，直接返回。
+                 */
+                if (attr->type != VM_TYPE) {
+                    freq = (freq > actc[j].prior) ? (actc_t)(freq - actc[j].prior) : 0;
+                }
+                w->buf[copied] = freq;
+            }
+        }
+        w->outLen = copied;
+        w->retCode = (copied > 0) ? 0 : -EINVAL;
+        sem_post(&w->sem);
+        w = next;
+    }
+    ProcessAttrLockPut(slot);
 }
 
 int ReadCmdlineByPid(pid_t pid, char *buf, int len)

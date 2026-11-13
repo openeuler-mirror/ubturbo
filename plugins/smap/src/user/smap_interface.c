@@ -2086,49 +2086,77 @@ static int QueryVMFreqFromKernel(int pid, uint16_t *data, uint32_t lengthIn, uin
     return ret;
 }
 
+/* freq_query 等待扫描线程填充回调的超时（毫秒）。非 const 全局，供上层/UT 按需调整；
+ * 默认 20000 覆盖约 10 个迁移周期（migPeriod 默认 2s），负载下扫描闭环膨胀时也可等到
+ * 下一窗口。注意：进程已注销（GetProcessAttr 返回 NULL）与非 NORMAL_SCAN 均为快速失败，
+ * 不会进入等待；仅"内核未跟踪/读取失败等回调来源缺失"场景才会等待满超时返回 -ETIMEDOUT。 */
+int g_freqQueryWaitTimeoutMs = 20000;
+
 static int QueryVMFreqFromUser(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut)
 {
-    uint64_t i = 0;
-    uint64_t actcLen = 0;
-    struct ProcessManager *manager = GetProcessManager();
     ProcessAttr *attr = GetProcessAttr(pid);
     if (!attr) {
         SMAP_LOGGER_ERROR("pid %d doesn't exist, ubturbo_smap_freq_query failed.", pid);
         PutProcessAttr(attr);
         return -EINVAL;
     }
-    int cap = (int)GetNumaCap();
-    for (int nid = 0; nid < cap; nid++) {
-        actcLen += attr->scanAttr.actcLen[nid];
-    }
-    if (actcLen == 0) {
+    /*
+     * 等待语义（callback + 信号量）：freq_query 注册 FreqWaiter 到 freqWaiters 链表后
+     * sem_timedwait；scan worker 在 BuildPidData 填充完成后持 attrLock 遍历链表 copy
+     * actcData→waiter.buf 并 sem_post。IPC 线程全程不碰 actcData，无 UAF 无锁。
+     * 非 NORMAL_SCAN 进程 BuildPidData 不填充，快速失败不等待。
+     */
+    if (attr->scanType != NORMAL_SCAN) {
         *lengthOut = 0;
-        SMAP_LOGGER_ERROR("pid %d, actcLen %llu, ubturbo_smap_freq_query failed.", pid, actcLen);
+        SMAP_LOGGER_ERROR("pid %d scanType %d not normal, ubturbo_smap_freq_query failed.", pid, attr->scanType);
         PutProcessAttr(attr);
         return -EINVAL;
     }
-    *lengthOut = (actcLen > lengthIn) ? lengthIn : actcLen;
-    for (int nid = 0; nid < cap; nid++) {
-        ActcData *actc = attr->scanAttr.actcData[nid];
-        actcLen = attr->scanAttr.actcLen[nid];
-        for (uint64_t j = 0; j < actcLen && i < lengthIn; i++, j++) {
-            actc_t freq = actc[j].freq;
-            /*
-             * 缓存中的 freq 已被 MergeAccPriorToFreq 合成为“累计频次 + 窗口频次”
-             * （合并先于发布，查询不会看到未合并数据），查询接口保持原始窗口频次
-             * 语义：非 VM 场景减去累计 prior 还原，合并时饱和到 255 的页无法完全
-             * 还原。VM 的 prior 是分配序语义，未参与合成，直接返回。
-             */
-            if (attr->type != VM_TYPE) {
-                freq = (freq > actc[j].prior) ? (actc_t)(freq - actc[j].prior) : 0;
-            }
-            data[i] = freq;
-        }
+    struct FreqWaiter waiter = { .buf = data, .bufLen = lengthIn, .outLen = 0, .retCode = -ETIMEDOUT };
+    sem_init(&waiter.sem, 0, 0);
+    int regRet = RegisterFreqWaiter(attr, &waiter);
+    if (regRet != 0) {
+        /* 槽位未注册（并发 remove / 未跟踪）：无回调来源，立即失败而非白等满超时 */
+        *lengthOut = 0;
+        sem_destroy(&waiter.sem);
+        SMAP_LOGGER_ERROR("pid %d no slot registered, ubturbo_smap_freq_query failed, ret %d.", pid, regRet);
+        PutProcessAttr(attr);
+        return -EINVAL;
     }
-    SMAP_LOGGER_INFO("ubturbo_smap_freq_query success, pid %d lengthIn %llu lengthOut %llu.", pid, lengthIn,
-                     *lengthOut);
+
+    struct timeval tv;
+    struct timespec ts;
+    gettimeofday(&tv, NULL);
+    ts.tv_sec = tv.tv_sec + g_freqQueryWaitTimeoutMs / 1000;
+    ts.tv_nsec = tv.tv_usec * 1000 + (long)(g_freqQueryWaitTimeoutMs % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) {
+        ts.tv_sec += 1;
+        ts.tv_nsec -= 1000000000L;
+    }
+    int r = sem_timedwait(&waiter.sem, &ts);
+
+    if (r != 0) {
+        /* 超时或被信号打断（EINTR 为未消费唤醒）：waiter 仍可能在链表中，必须摘除后
+         * 再返回，否则栈帧销毁后 scan worker 的回调将写已失效栈内存（UAF）。
+         * 若已不在链表（scan worker 已 take+copy+post 完成），消费 sem 取其结果。 */
+        int cancelled = CancelFreqWaiter(attr, &waiter);
+        if (cancelled == 0) {
+            sem_trywait(&waiter.sem);
+        }
+        /* cancelled<0（attr 异常/未注册）或 >0（已摘除）：retCode 保持 -ETIMEDOUT */
+    }
+
+    *lengthOut = waiter.outLen;
+    int retCode = waiter.retCode;
+    sem_destroy(&waiter.sem);
     PutProcessAttr(attr);
-    return 0;
+    if (retCode == 0) {
+        SMAP_LOGGER_INFO("ubturbo_smap_freq_query success, pid %d lengthIn %llu lengthOut %llu.", pid, lengthIn,
+                         *lengthOut);
+    } else {
+        SMAP_LOGGER_ERROR("ubturbo_smap_freq_query failed, pid %d ret %d.", pid, retCode);
+    }
+    return retCode;
 }
 
 int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource)

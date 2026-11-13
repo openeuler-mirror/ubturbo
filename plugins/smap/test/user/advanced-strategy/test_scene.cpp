@@ -214,7 +214,11 @@ extern "C" void CalcMemInfo(ProcessAttr *process);
 TEST_F(SceneTest, TestCalcMemInfo)
 {
     ProcessAttr process = {};
-    process.numaAttr.numaNodes = BmFromWord(0b00010001);
+    /* actCount 与位图均为堆分配，须先初始化再赋值 */
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    NumaBitmapSet(&process.numaAttr.numaNodes, 0);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 4);
     process.sceneInfo.pageInfoIndex = 0;
 
     process.sceneInfo.pageInfo[0].nrL1Page = 3;
@@ -225,11 +229,10 @@ TEST_F(SceneTest, TestCalcMemInfo)
     process.scanAttr.actCount[4].freqZero = 1;
     process.scanAttr.actCount[4].pageNum = 5;
 
-    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
-
     CalcMemInfo(&process);
     EXPECT_EQ(6, process.sceneInfo.pageInfo[0].nrHot);
     EXPECT_EQ(8, process.sceneInfo.pageInfo[0].nrPages);
+    FreeProcessAttrArrays(&process);
 }
 
 extern "C" int GetProcessSceneAttr(Scene scene, SceneInfo *info, PageType pageType);
