@@ -717,6 +717,9 @@ int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext 
 /* 为 per-pid 流水构建 PairRequestContext 的容量 mask。 */
 void BuildPairCapacityLocalMasks(struct ProcessManager *manager, const ProcessAttr *attr, PairRequestContext *context);
 int BuildAllPairTargets(struct ProcessManager *manager, PairTarget targets[], size_t targetCap, size_t *targetCnt);
+/* 调用方持有 remoteNumaInfo.lock；仲裁所有 PID，仅返回指定 PID 的目标。 */
+int BuildPidArbitratedTargetsLocked(struct ProcessManager *manager, pid_t pid, PairTarget targets[], size_t targetCap,
+                                    size_t *targetCnt);
 int BuildAllPairPlanInputs(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,
                            PairPidBudget pidBudgets[], size_t pidBudgetCap, size_t *pidBudgetCnt);
 int BuildAllPairPlanInputsForState(struct ProcessManager *manager, PairPlan plans[], size_t planCap, size_t *planCnt,

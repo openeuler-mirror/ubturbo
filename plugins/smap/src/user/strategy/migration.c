@@ -1657,14 +1657,14 @@ static void ClipPidTargetsToCapacity(ProcessAttr *process, PairTarget targets[],
         int remote = targets[i].remoteNid;
         int local = targets[i].localNid;
         uint64_t baseline = NM_AT(process->strategyAttr.remoteNrPagesAfterMigrate, local, remote);
-        if (targets[i].requestedPages <= baseline) {
+        if (targets[i].targetPages <= baseline) {
             continue;
         }
-        uint64_t demand = targets[i].requestedPages - baseline;
+        uint64_t demand = targets[i].targetPages - baseline;
         uint64_t privateTaken = (uint64_t)MIN(demand, NM_AT(privateAvail, local, remote));
         uint64_t sharedTaken = MIN(demand - privateTaken, sharedAvail[remote]);
 
-        targets[i].requestedPages = (uint32_t)(baseline + privateTaken + sharedTaken);
+        targets[i].targetPages = (uint32_t)(baseline + privateTaken + sharedTaken);
         NM_AT(privateAvail, local, remote) -= privateTaken;
         sharedAvail[remote] -= sharedTaken;
     }
@@ -1673,8 +1673,6 @@ static void ClipPidTargetsToCapacity(ProcessAttr *process, PairTarget targets[],
 /* 在远端账本锁内裁剪计划并预扣在途页数。 */
 static int BuildPidPairPlans(struct ProcessManager *manager, ProcessAttr *process)
 {
-    PairRequestContext requestContext = { 0 };
-    PairRequestSummary summary = { 0 };
     uint64_t plannedPages = 0;
     size_t targetCnt = 0;
     int ret;
@@ -1704,16 +1702,13 @@ static int BuildPidPairPlans(struct ProcessManager *manager, ProcessAttr *proces
         goto OUT;
     }
 
-    requestContext.nrLocalNuma = nrLocalNuma;
-    requestContext.pageSizeKB = manager->tracking.pageSize / KIB;
-    BuildPairCapacityLocalMasks(manager, process, &requestContext);
-    ret = BuildPairRequestedTargets(process, &requestContext, targets, pairCap, &targetCnt, &summary);
-    if (ret) {
-        goto OUT;
-    }
-
     /* ---------- 在线账本临界区：快照 → 剪辑 → 规划 → 预扣 ---------- */
     EnvMutexLock(&manager->remoteNumaInfo.lock);
+    ret = BuildPidArbitratedTargetsLocked(manager, process->pid, targets, pairCap, &targetCnt);
+    if (ret) {
+        EnvMutexUnlock(&manager->remoteNumaInfo.lock);
+        goto OUT;
+    }
     SnapshotRemoteCapacityLocked(privateAvail, sharedAvail);
     ClipPidTargetsToCapacity(process, targets, targetCnt, privateAvail, sharedAvail);
 
@@ -1728,7 +1723,7 @@ static int BuildPidPairPlans(struct ProcessManager *manager, ProcessAttr *proces
         plan->pid = process->pid;
         plan->localNid = targets[i].localNid;
         plan->remoteNid = targets[i].remoteNid;
-        plan->targetPages = targets[i].requestedPages;
+        plan->targetPages = targets[i].targetPages;
         plan->actualPages = NM_AT(process->strategyAttr.remoteNrPagesAfterMigrate, plan->localNid, plan->remoteNid);
         if (plan->actualPages < plan->targetPages) {
             requestedPages = plan->targetPages - plan->actualPages;
@@ -1810,10 +1805,13 @@ static void PostPidMigration(struct ProcessManager *manager, ProcessAttr *proces
         ResetGroupedSwapRuntimeLocked(process, true);
     }
 
+    /* 成功页入账与在途释放必须原子完成，避免其他 PID 重复使用容量。 */
+    EnvMutexLock(&manager->remoteNumaInfo.lock);
     UpdateMigResult(mMsg, manager);
+    LedgerSettleInFlightLocked(process->strategyAttr.nrMigratePages, manager->nrLocalNuma);
+    EnvMutexUnlock(&manager->remoteNumaInfo.lock);
     FreePidMigrateMsg(mMsg);
-    /* 计划全额回收（成功部分待下一窗口 BuildPidData 刷新 attr 后由账本重建自然入账） */
-    LedgerSettleInFlight(process->strategyAttr.nrMigratePages, manager->nrLocalNuma);
+    /* 在途已在上述锁内与成功页入账原子回收，此处不再重复结算 */
 
     if (ApplyPendingMigrationTargets(process)) {
         SMAP_LOGGER_ERROR("Apply pending migration target after pid %d migration failed.", process->pid);

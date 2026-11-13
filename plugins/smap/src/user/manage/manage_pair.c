@@ -1063,6 +1063,49 @@ static int BuildPairArbitrationSnapshotLocked(struct ProcessManager *manager, Pa
     return 0;
 }
 
+int BuildPidArbitratedTargetsLocked(struct ProcessManager *manager, pid_t pid, PairTarget targets[], size_t targetCap,
+                                    size_t *targetCnt)
+{
+    if (!manager || !targets || !targetCnt || manager->nrLocalNuma <= 0 || manager->nrLocalNuma > SMAP_MAX_NUMNODES) {
+        return -EINVAL;
+    }
+    *targetCnt = 0;
+    PairArbitrationEntry *entries = calloc(MAX_PAIR_TARGET_COUNT, sizeof(*entries));
+    uint64_t *privateCapacity = calloc(NM_COUNT(manager->nrLocalNuma), sizeof(*privateCapacity));
+    uint64_t totalCapacity[SMAP_MAX_NUMNODES] = { 0 };
+    struct PidSlot *all[MAX_PID_SLOTS];
+    size_t allCnt = 0;
+    size_t entryCount = 0;
+    int ret = 0;
+    if (!entries || !privateCapacity) {
+        ret = -ENOMEM;
+        goto out;
+    }
+    ret = BuildPairArbitrationSnapshotLocked(manager, entries, MAX_PAIR_TARGET_COUNT, &entryCount, privateCapacity,
+                                             totalCapacity, false, all, &allCnt);
+    if (ret) {
+        goto out;
+    }
+    for (size_t i = 0; i < entryCount; i++) {
+        if (entries[i].target.pid != pid) {
+            continue;
+        }
+        if (*targetCnt == targetCap) {
+            ret = -ENOSPC;
+            *targetCnt = 0;
+            goto out;
+        }
+        targets[*targetCnt] = entries[i].target;
+        targets[*targetCnt].targetPages = entries[i].privatePages + entries[i].sharedPages;
+        (*targetCnt)++;
+    }
+out:
+    PidSlotReleaseRefs(all, allCnt);
+    free(entries);
+    free(privateCapacity);
+    return ret;
+}
+
 /*
  * Build and arbitrate all normal-process Pair targets from one manager
  * snapshot. The function owns the manager -> remote capacity lock order.
