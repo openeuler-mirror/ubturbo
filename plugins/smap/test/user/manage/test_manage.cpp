@@ -6603,11 +6603,11 @@ TEST_F(ManageTest, TestBuildPidDataNullAttr)
     EXPECT_EQ(-EINVAL, BuildPidData(nullptr));
 }
 
-/* ========== manage_pair.c page accounting includes white-listed pages ========== */
+/* ========== manage_pair.c white-list deduction tests ========== */
 
 extern "C" uint64_t BuildManagedTotalPages(const ProcessAttr *attr, int nrLocalNuma);
 
-TEST_F(ManageTest, TestBuildManagedTotalPagesIncludeWhiteNum)
+TEST_F(ManageTest, TestBuildManagedTotalPagesDeductWhiteNum)
 {
     ProcessAttr attr = {};
     attr.managedLocalState.managedLocalMask = 0x3;
@@ -6619,17 +6619,17 @@ TEST_F(ManageTest, TestBuildManagedTotalPagesIncludeWhiteNum)
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.scanAttr.actCount[0].whiteNum = 30;
-    attr.scanAttr.actCount[1].whiteNum = 60; // 白名单页数不影响配额计算
+    attr.scanAttr.actCount[1].whiteNum = 60; // 白名单页数超过页数时饱和扣到 0
 
-    /* 100 + 50 + 7 */
-    EXPECT_EQ((uint64_t)157, BuildManagedTotalPages(&attr, 2));
+    /* (100 - 30) + (50 - 60 => 0) + 7 */
+    EXPECT_EQ((uint64_t)77, BuildManagedTotalPages(&attr, 2));
     FreeProcessAttrArrays(&attr);
 }
 
 extern "C" void BuildLocalRemainingPages(const ProcessAttr *attr, const PairRequestContext *context,
                                          uint64_t *pairRequests, uint64_t remainingPages[SMAP_MAX_NUMNODES]);
 
-TEST_F(ManageTest, TestBuildLocalRemainingPagesIncludeWhiteNum)
+TEST_F(ManageTest, TestBuildLocalRemainingPagesDeductWhiteNum)
 {
     ProcessAttr attr = {};
     PairRequestContext context = {};
@@ -6644,7 +6644,7 @@ TEST_F(ManageTest, TestBuildLocalRemainingPagesIncludeWhiteNum)
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     /* actCount 为堆分配数组，须在 InitProcessAttrArrays 之后写 whiteNum */
     attr.scanAttr.actCount[0].whiteNum = 30;
-    attr.scanAttr.actCount[1].whiteNum = 40; // 白名单页数不影响配额计算
+    attr.scanAttr.actCount[1].whiteNum = 40; // 饱和扣到 0
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 2) = 20;
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 1, 2) = 5;
     NM_AT(pairRequests, 0, 2) = 10;
@@ -6652,10 +6652,10 @@ TEST_F(ManageTest, TestBuildLocalRemainingPagesIncludeWhiteNum)
 
     BuildLocalRemainingPages(&attr, &context, pairRequests, remainingPages);
 
-    /* local0: 100 + 20 - 10 */
-    EXPECT_EQ((uint64_t)110, remainingPages[0]);
-    /* local1: 10 + 5 - 5 */
-    EXPECT_EQ((uint64_t)10, remainingPages[1]);
+    /* local0: (100 - 30) + 20 - 10 */
+    EXPECT_EQ((uint64_t)80, remainingPages[0]);
+    /* local1: (10 - 40 => 0) + 5 - 5 */
+    EXPECT_EQ((uint64_t)0, remainingPages[1]);
     FreeProcessAttrArrays(&attr);
     free(pairRequests);
 }
