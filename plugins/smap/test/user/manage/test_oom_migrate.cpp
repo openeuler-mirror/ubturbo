@@ -217,7 +217,8 @@ TEST_F(OomMigrateTest, TestFindPidMigrateSize_RemoteHasPages)
     ProcessAttr attr = {};
     attr.state = PROC_IDLE;
     SetAttrL2(&attr, 2);
-    attr.scanAttr.actcLen[2] = 100; /* L2 节点 2 上已有页 */
+    /* actc 快照周期末释放，判重用常驻的 walkPage 元数据 */
+    attr.walkPage.nrPages[2] = 100; /* L2 节点 2 上已有驻留页 */
     attr.next = nullptr;
     memset(&manager.slots, 0, sizeof(manager.slots));
     PidSlotAdd(&manager, &attr);

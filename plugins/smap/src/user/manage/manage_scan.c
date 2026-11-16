@@ -52,6 +52,9 @@ void SetPidNrPages(ProcessAttr *attr, size_t *nrPages, int len)
  */
 void CalcActcStats(ProcessAttr *attr)
 {
+    if (attr == NULL || attr->scanAttr.actCount == NULL) {
+        return;
+    }
     uint16_t remoteHotThreshold = GetRemoteHotThreshold();
     int nrLocalNuma = GetNrLocalNuma();
     int cap = (int)GetNumaCap();
@@ -154,6 +157,8 @@ static void MergeAccPriorToFreq(ActcData *actc, size_t actcLen)
  *
  * 非 VM 在挂到 actcData 之前完成 prior+freq 合成，保证发布出去的缓冲区
  * 一定是已合并状态，查询侧不会看到“已发布但未合并”的中间态。
+ * 并发约定：actcData 由 scan worker 单线程访问（IPC 线程不碰，freq_query 经
+ * FreqWaiter 回调取数），本函数 free 上一周期缓冲并换入新指针无需加锁。
  */
 void DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf)
 {
@@ -280,12 +285,17 @@ int BuildPidData(ProcessAttr *attr)
     if (attr->scanType != NORMAL_SCAN) {
         return 0;
     }
-    /* per-pid查询页数元数据；-ESRCH表示本周期内核未跟踪该pid，静默跳过 */
+    /* per-pid查询页数元数据；-ESRCH表示本周期内核未跟踪该pid，静默跳过。
+     * 此类无回调来源的出口须 InvokeFreqCallbacks 释放等待者（actcLen==0 →
+     * 等待者以 -EINVAL 立即失败），避免 IPC 线程在无数据（内核未跟踪/读取失败）
+     * 场景白等满超时。 */
     ret = AccessIoctlWalkPagemap(attr->pid, &pmb);
     if (ret == -ESRCH) {
+        InvokeFreqCallbacks(attr);
         return 0;
     }
     if (ret) {
+        InvokeFreqCallbacks(attr);
         return ret;
     }
     /* nrPages 定宽同上，全量拷贝（cap 之外槽位内核写 0） */
@@ -339,8 +349,11 @@ int BuildPidData(ProcessAttr *attr)
                      GetProcessManager()->nrLocalNuma);
     ret = FillPidData(attr, &pmb);
     if (ret) {
+        /* 内核读取失败：本周期无新数据，actcLen==0 → 等待者以 -EINVAL 立即失败 */
+        InvokeFreqCallbacks(attr);
         return ret;
     }
+    InvokeFreqCallbacks(attr);
     if (!attr->groupPolicy.enabled) {
         ret = RefreshManagedLocalStatePeriodic(attr);
         if (ret) {

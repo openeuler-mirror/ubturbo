@@ -280,8 +280,12 @@ void FindPidMigrateSize(uint64_t size)
         if (l2 == NUMA_NO_NODE) {
             continue; /* 未配置远端目标，跳过 */
         }
-        if (cur->state == PROC_MIGRATE || cur->state == PROC_MOVE || GetL2ActcLen(cur) > 0) {
-            continue; /* 协调扫描线程/逃生态/远端(L2)已有页，避免重复介入 */
+        /*
+         * actc 快照周期结束即释放，判重改用常驻的 walkPage 元数据：
+         * 远端(L2) 已有驻留页时避免重复介入。
+         */
+        if (cur->state == PROC_MIGRATE || cur->state == PROC_MOVE || cur->walkPage.nrPages[l2] > 0) {
+            continue;
         }
         snap[n].pid = cur->pid;
         snap[n].l2 = l2;

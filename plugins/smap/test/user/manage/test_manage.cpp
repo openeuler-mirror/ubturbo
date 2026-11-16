@@ -11,6 +11,7 @@
 #include "manage/access_ioctl.h"
 #include "manage/manage.h"
 #include "manage/node_matrix.h"
+#include "manage/manage_internal.h"
 #include "manage/smap_config.h"
 #include "manage/thread.h"
 #include "securec.h"
@@ -1874,10 +1875,10 @@ TEST_F(ManageTest, TestCalcActcStats)
     data[2].prior = 4; // 缓存为合成值, freqSum 需扣除 prior 还原窗口频次
     attr.scanAttr.actcData[4] = data;
     attr.scanAttr.actcLen[4] = 3;
-    attr.scanAttr.actCount[1].pageNum = 99;
-    /* CalcActcStats 会遍历 selectedBuckets（堆分配数组），需先初始化 */
+    /* CalcActcStats 会遍历 selectedBuckets/actCount（堆分配数组），需先初始化 */
     g_processManager.nrLocalNuma = 4;
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    attr.scanAttr.actCount[1].pageNum = 99;
     MOCKER(GetRemoteHotThreshold).stubs().will(returnValue((uint32_t)5));
 
     CalcActcStats(&attr);
@@ -1891,6 +1892,122 @@ TEST_F(ManageTest, TestCalcActcStats)
     EXPECT_EQ((uint64_t)1, attr.scanAttr.actCount[4].remoteHotNum);
     EXPECT_EQ((uint64_t)1, attr.scanAttr.actCount[4].whiteNum);
     FreeProcessAttrArrays(&attr);
+}
+
+extern "C" void ClearProcessActcData(ProcessAttr *attr);
+TEST_F(ManageTest, TestClearProcessActcData)
+{
+    ProcessAttr attr = {};
+    ActcData *buf = (ActcData *)malloc(sizeof(ActcData) * 4);
+    ASSERT_NE(nullptr, buf);
+    attr.scanAttr.actcData[0] = buf;
+    attr.scanAttr.actcData[1] = buf + 2;
+    attr.scanAttr.actcLen[0] = 2;
+    attr.scanAttr.actcLen[1] = 2;
+
+    ClearProcessActcData(&attr);
+    // actcLen 清零、缓冲释放且各 nid 指针复位
+    for (int nid = 0; nid < SMAP_MAX_NUMNODES; nid++) {
+        EXPECT_EQ((uint64_t)0, attr.scanAttr.actcLen[nid]);
+        EXPECT_EQ(nullptr, attr.scanAttr.actcData[nid]);
+    }
+
+    // 二次调用（无数据）：no-op 不崩溃
+    ClearProcessActcData(&attr);
+    ClearProcessActcData(nullptr);
+}
+
+extern "C" void PidSlotInit(struct ProcessManager *manager);
+extern "C" void PidSlotDestroy(struct ProcessManager *manager);
+
+/*
+ * 以下用例不依赖 mockcpp 打桩，直接走真实 FreqWaiter 回调机制验证
+ * freq_query 等待语义：超时取消、回调唤醒拷贝、无数据 -EINVAL。
+ * SetUp 的 memset 会清掉锁，故每个用例先用 PidSlotInit 重建有效状态。
+ */
+TEST_F(ManageTest, TestFreqWaiterTimeout)
+{
+    PidSlotInit(&g_processManager);
+    ProcessAttr attr = {.pid = 200};
+    attr.scanType = NORMAL_SCAN;
+    ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
+    /* 注册后不 InvokeFreqCallbacks，CancelFreqWaiter 摘除（返回 false=未被处理） */
+    struct FreqWaiter w = {.bufLen = 4, .retCode = -ETIMEDOUT};
+    sem_init(&w.sem, 0, 0);
+    RegisterFreqWaiter(&attr, &w);
+    EXPECT_FALSE(CancelFreqWaiter(&attr, &w));
+    sem_destroy(&w.sem);
+    PidSlotDestroy(&g_processManager);
+}
+
+/* 模拟 scan worker 线程：延迟后预填 actcData + InvokeFreqCallbacks */
+static void *FillAndInvokeThread(void *arg)
+{
+    ProcessAttr *attr = (ProcessAttr *)arg;
+    usleep(50000); /* 50ms 后填充，模拟 BuildPidData 完成 */
+    ActcData buf[2] = {{.freq = 7}, {.freq = 9}};
+    attr->scanAttr.actcData[0] = buf;
+    attr->scanAttr.actcLen[0] = 2;
+    InvokeFreqCallbacks(attr);
+    attr->scanAttr.actcData[0] = nullptr; /* 防止栈变量悬挂 */
+    attr->scanAttr.actcLen[0] = 0;
+    return nullptr;
+}
+
+TEST_F(ManageTest, TestFreqWaiterCallbackWakeup)
+{
+    PidSlotInit(&g_processManager);
+    ProcessAttr attr = {.pid = 202};
+    attr.scanType = NORMAL_SCAN;
+    ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
+    /* 注册 waiter → 子线程延迟 InvokeFreqCallbacks copy+post → 主线程 sem 唤醒读数据 */
+    uint16_t data[4] = {0};
+    struct FreqWaiter w = {.buf = data, .bufLen = 4, .retCode = -ETIMEDOUT};
+    sem_init(&w.sem, 0, 0);
+    RegisterFreqWaiter(&attr, &w);
+    pthread_t tid;
+    ASSERT_EQ(0, pthread_create(&tid, nullptr, FillAndInvokeThread, &attr));
+    struct timespec ts;
+    ts.tv_sec = time(NULL) + 2;
+    ts.tv_nsec = 0;
+    int r = sem_timedwait(&w.sem, &ts);
+    pthread_join(tid, nullptr);
+    EXPECT_EQ(0, r);
+    EXPECT_EQ(0, w.retCode);
+    EXPECT_EQ(2U, w.outLen);
+    EXPECT_EQ(7, data[0]);
+    EXPECT_EQ(9, data[1]);
+    sem_destroy(&w.sem);
+    PidSlotDestroy(&g_processManager);
+}
+
+TEST_F(ManageTest, TestFreqWaiterInvokeNoData)
+{
+    PidSlotInit(&g_processManager);
+    ProcessAttr attr = {.pid = 203};
+    attr.scanType = NORMAL_SCAN;
+    ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
+    /* actcData 为空时 InvokeFreqCallbacks 应设 outLen=0, retCode=-EINVAL */
+    uint16_t data[4] = {0};
+    struct FreqWaiter w = {.buf = data, .bufLen = 4, .retCode = -ETIMEDOUT};
+    sem_init(&w.sem, 0, 0);
+    RegisterFreqWaiter(&attr, &w);
+    InvokeFreqCallbacks(&attr); /* actcLen=0 → copy 0 → -EINVAL */
+    EXPECT_EQ(0, sem_trywait(&w.sem)); /* InvokeFreqCallbacks 已 post */
+    EXPECT_EQ(-EINVAL, w.retCode);
+    EXPECT_EQ(0U, w.outLen);
+    sem_destroy(&w.sem);
+    PidSlotDestroy(&g_processManager);
+}
+
+TEST_F(ManageTest, TestFreqWaiterNullAttr)
+{
+    PidSlotInit(&g_processManager);
+    struct FreqWaiter w = {};
+    RegisterFreqWaiter(nullptr, &w); /* no crash, returns -EINVAL */
+    EXPECT_FALSE(CancelFreqWaiter(nullptr, &w));
+    InvokeFreqCallbacks(nullptr); /* no crash */
+    PidSlotDestroy(&g_processManager);
 }
 
 extern "C" void DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf);
@@ -6443,12 +6560,17 @@ TEST_F(ManageTest, TestBuildManagedTotalPagesDeductWhiteNum)
     attr.managedLocalState.managedLocalMask = 0x3;
     attr.walkPage.nrPages[0] = 100;
     attr.walkPage.nrPages[1] = 50;
+    attr.walkPage.nrPages[2] = 7;            // 远端页数不扣白名单
+
+    /* actCount 为堆分配数组，须先初始化再写 whiteNum */
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.scanAttr.actCount[0].whiteNum = 30;
     attr.scanAttr.actCount[1].whiteNum = 60; // 白名单页数超过页数时饱和扣到 0
-    attr.walkPage.nrPages[2] = 7;            // 远端页数不扣白名单
 
     /* (100 - 30) + 0 + 7 */
     EXPECT_EQ((uint64_t)77, BuildManagedTotalPages(&attr, 2));
+    FreeProcessAttrArrays(&attr);
 }
 
 extern "C" void BuildLocalRemainingPages(const ProcessAttr *attr, const PairRequestContext *context,
@@ -6465,10 +6587,11 @@ TEST_F(ManageTest, TestBuildLocalRemainingPagesDeductWhiteNum)
     context.nrLocalNuma = 2;
     attr.walkPage.nrPages[0] = 100;
     attr.walkPage.nrPages[1] = 10;
-    attr.scanAttr.actCount[0].whiteNum = 30;
-    attr.scanAttr.actCount[1].whiteNum = 40; // 饱和扣到 0
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    /* actCount 为堆分配数组，须在 InitProcessAttrArrays 之后写 whiteNum */
+    attr.scanAttr.actCount[0].whiteNum = 30;
+    attr.scanAttr.actCount[1].whiteNum = 40; // 饱和扣到 0
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 2) = 20;
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 1, 2) = 5;
     NM_AT(pairRequests, 0, 2) = 10;

@@ -418,34 +418,37 @@ static void AllocateRemotePairRequest(const ProcessAttr *attr, const PairRequest
     }
 }
 
+/*
+ * pair-flow 节点编号（运行期定维，不再按 SMAP_MAX_NUMNODES 定宽）：
+ *   SOURCE=0, 本地=LOCAL_BASE+local (local<nrLocalNuma<=cap),
+ *   远端=remoteBase+remote (remote<cap), SINK=remoteBase+cap。
+ * pairCount = 2*cap+2：cap=1024 时仍为 2050（与旧定宽语义一致），
+ * cap=256 时降为 514，残差表由 32MB 降至 2.1MB。
+ */
 enum {
     PAIR_FLOW_SOURCE = 0,
     PAIR_FLOW_LOCAL_BASE = 1,
-    PAIR_FLOW_REMOTE_BASE = PAIR_FLOW_LOCAL_BASE + SMAP_MAX_NUMNODES,
-    PAIR_FLOW_SINK = PAIR_FLOW_REMOTE_BASE + SMAP_MAX_NUMNODES,
-    PAIR_FLOW_NODE_COUNT,
 };
 
-static bool FindPairRequestAugmentingPath(uint64_t residual[PAIR_FLOW_NODE_COUNT][PAIR_FLOW_NODE_COUNT],
-                                          int parent[PAIR_FLOW_NODE_COUNT])
+static bool FindPairRequestAugmentingPath(const uint64_t *residual, int pairCount, int sink, int *parent, bool *visited,
+                                          int *queue)
 {
-    bool visited[PAIR_FLOW_NODE_COUNT] = { false };
-    int queue[PAIR_FLOW_NODE_COUNT] = { 0 };
     int head = 0;
     int tail = 0;
 
+    (void)memset_s(visited, (size_t)pairCount * sizeof(*visited), 0, (size_t)pairCount * sizeof(*visited));
     parent[PAIR_FLOW_SOURCE] = -1;
     visited[PAIR_FLOW_SOURCE] = true;
     queue[tail++] = PAIR_FLOW_SOURCE;
     while (head < tail) {
         int current = queue[head++];
-        for (int next = 0; next < PAIR_FLOW_NODE_COUNT; next++) {
-            if (visited[next] || residual[current][next] == 0) {
+        for (int next = 0; next < pairCount; next++) {
+            if (visited[next] || residual[(size_t)current * pairCount + next] == 0) {
                 continue;
             }
             parent[next] = current;
             visited[next] = true;
-            if (next == PAIR_FLOW_SINK) {
+            if (next == sink) {
                 return true;
             }
             queue[tail++] = next;
@@ -454,19 +457,17 @@ static bool FindPairRequestAugmentingPath(uint64_t residual[PAIR_FLOW_NODE_COUNT
     return false;
 }
 
-static void CompletePairRequestFlow(uint64_t residual[PAIR_FLOW_NODE_COUNT][PAIR_FLOW_NODE_COUNT])
+static void CompletePairRequestFlow(uint64_t *residual, int pairCount, int sink, int *parent, bool *visited, int *queue)
 {
-    int parent[PAIR_FLOW_NODE_COUNT] = { 0 };
-
-    while (FindPairRequestAugmentingPath(residual, parent)) {
+    while (FindPairRequestAugmentingPath(residual, pairCount, sink, parent, visited, queue)) {
         uint64_t augment = UINT64_MAX;
-        for (int node = PAIR_FLOW_SINK; node != PAIR_FLOW_SOURCE; node = parent[node]) {
-            augment = MIN(augment, residual[parent[node]][node]);
+        for (int node = sink; node != PAIR_FLOW_SOURCE; node = parent[node]) {
+            augment = MIN(augment, residual[(size_t)parent[node] * pairCount + node]);
         }
-        for (int node = PAIR_FLOW_SINK; node != PAIR_FLOW_SOURCE; node = parent[node]) {
+        for (int node = sink; node != PAIR_FLOW_SOURCE; node = parent[node]) {
             int previous = parent[node];
-            residual[previous][node] -= augment;
-            residual[node][previous] += augment;
+            residual[(size_t)previous * pairCount + node] -= augment;
+            residual[(size_t)node * pairCount + previous] += augment;
         }
     }
 }
@@ -476,69 +477,114 @@ static int CompletePairRequestAllocation(const ProcessAttr *attr, const PairRequ
                                          uint64_t remainingPages[SMAP_MAX_NUMNODES])
 {
     uint64_t remoteFlow[SMAP_MAX_NUMNODES] = { 0 };
-    /* [514][514] 残差表 ~2.1MB，超出栈预算，必须堆分配，calloc 天然零初始化 */
-    uint64_t(*residual)[PAIR_FLOW_NODE_COUNT] = calloc(PAIR_FLOW_NODE_COUNT, sizeof(*residual));
-    if (residual == NULL) {
+    /*
+     * 节点紧凑定维，与 cap 彻底解耦：只为本轮有容量的活跃远端建流节点。
+     *   SOURCE=0, 本地=LOCAL_BASE+local, 活跃远端=remoteBase+rIdx, SINK=末位。
+     * pairCount = 2 + nrLocalNuma + nActiveRemotes（典型 ~10），残差表 KB 级；
+     * 非活跃远端（无有效容量）不参与流，其 pairRequests 列 == baseline 列。
+     */
+    int cap = (int)GetNumaCap();
+    int nrLocalNuma = context->nrLocalNuma;
+    int remoteIdx[SMAP_MAX_NUMNODES]; /* nid -> 活跃紧凑下标，-1=非活跃 */
+    for (int i = 0; i < cap; i++) {
+        remoteIdx[i] = -1;
+    }
+    int nActiveRemotes = 0;
+    for (int remote = nrLocalNuma; remote < cap; remote++) {
+        if (summary->effectiveRemotePages[remote] > 0) {
+            remoteIdx[remote] = nActiveRemotes++;
+        }
+    }
+    int remoteBase = PAIR_FLOW_LOCAL_BASE + nrLocalNuma;
+    int sink = remoteBase + nActiveRemotes;
+    int pairCount = sink + 1;
+    uint64_t *residual = calloc((size_t)pairCount * pairCount, sizeof(*residual));
+    int *parent = malloc((size_t)pairCount * sizeof(*parent));
+    bool *visited = malloc((size_t)pairCount * sizeof(*visited));
+    int *queue = malloc((size_t)pairCount * sizeof(*queue));
+    int ret = (residual == NULL || parent == NULL || visited == NULL || queue == NULL) ? -ENOMEM : 0;
+    if (ret) {
         SMAP_LOGGER_ERROR("Alloc pair request residual table failed, no memory.");
-        return -ENOMEM;
+        goto OUT;
     }
 
-    /* cap 提前求值：避免每个本地节点重复调用 GetNumaCap() */
-    int cap = (int)GetNumaCap();
-    for (int local = 0; local < context->nrLocalNuma; local++) {
+    for (int local = 0; local < nrLocalNuma; local++) {
         uint64_t localFlow = 0;
         int localNode = PAIR_FLOW_LOCAL_BASE + local;
-        for (int remote = context->nrLocalNuma; remote < cap; remote++) {
+        for (int remote = nrLocalNuma; remote < cap; remote++) {
+            int rIdx = remoteIdx[remote];
             if (NM_AT(pairRequests, local, remote) < NM_AT(baseline, local, remote)) {
-                free(residual);
-                return -ERANGE;
+                ret = -ERANGE;
+                goto OUT;
+            }
+            if (rIdx < 0) {
+                /* 非活跃远端不允许出现新增请求（容量为 0，分配不可能发生） */
+                if (NM_AT(pairRequests, local, remote) != NM_AT(baseline, local, remote)) {
+                    ret = -ERANGE;
+                    goto OUT;
+                }
+                continue;
             }
             uint64_t flow = NM_AT(pairRequests, local, remote) - NM_AT(baseline, local, remote);
             uint32_t activeMask = BuildActivePairMask(attr, context, remote);
             bool active = ((activeMask) & (1U << (local))) && attr->walkPage.nrPages[local] > 0 &&
                           NM_AT(baseline, local, remote) < UINT32_MAX;
             if (flow > 0 && !active) {
-                free(residual);
-                return -ERANGE;
+                ret = -ERANGE;
+                goto OUT;
             }
             if (!active) {
                 continue;
             }
-            int remoteNode = PAIR_FLOW_REMOTE_BASE + remote;
-            residual[localNode][remoteNode] = UINT32_MAX - NM_AT(pairRequests, local, remote);
-            residual[remoteNode][localNode] = flow;
+            int remoteNode = remoteBase + rIdx;
+            residual[(size_t)localNode * pairCount + remoteNode] = UINT32_MAX - NM_AT(pairRequests, local, remote);
+            residual[(size_t)remoteNode * pairCount + localNode] = flow;
             localFlow += flow;
             remoteFlow[remote] += flow;
         }
-        residual[PAIR_FLOW_SOURCE][localNode] = remainingPages[local];
-        residual[localNode][PAIR_FLOW_SOURCE] = localFlow;
+        residual[(size_t)PAIR_FLOW_SOURCE * pairCount + localNode] = remainingPages[local];
+        residual[(size_t)localNode * pairCount + PAIR_FLOW_SOURCE] = localFlow;
     }
 
-    for (int remote = context->nrLocalNuma; remote < cap; remote++) {
+    for (int remote = nrLocalNuma; remote < cap; remote++) {
+        int rIdx = remoteIdx[remote];
         uint64_t currentPages = 0;
-        for (int local = 0; local < context->nrLocalNuma; local++) {
+        for (int local = 0; local < nrLocalNuma; local++) {
             currentPages += NM_AT(pairRequests, local, remote);
         }
         if (currentPages > summary->effectiveRemotePages[remote]) {
-            free(residual);
-            return -ERANGE;
+            ret = -ERANGE;
+            goto OUT;
         }
-        int remoteNode = PAIR_FLOW_REMOTE_BASE + remote;
-        residual[remoteNode][PAIR_FLOW_SINK] = summary->effectiveRemotePages[remote] - currentPages;
-        residual[PAIR_FLOW_SINK][remoteNode] = remoteFlow[remote];
+        if (rIdx < 0) {
+            continue;
+        }
+        int remoteNode = remoteBase + rIdx;
+        residual[(size_t)remoteNode * pairCount + sink] = summary->effectiveRemotePages[remote] - currentPages;
+        residual[(size_t)sink * pairCount + remoteNode] = remoteFlow[remote];
     }
 
-    CompletePairRequestFlow(residual);
+    CompletePairRequestFlow(residual, pairCount, sink, parent, visited, queue);
 
-    for (int local = 0; local < context->nrLocalNuma; local++) {
+    for (int local = 0; local < nrLocalNuma; local++) {
         int localNode = PAIR_FLOW_LOCAL_BASE + local;
-        for (int remote = context->nrLocalNuma; remote < cap; remote++) {
-            int remoteNode = PAIR_FLOW_REMOTE_BASE + remote;
-            NM_AT(pairRequests, local, remote) = NM_AT(baseline, local, remote) + residual[remoteNode][localNode];
+        for (int remote = nrLocalNuma; remote < cap; remote++) {
+            int rIdx = remoteIdx[remote];
+            if (rIdx < 0) {
+                continue;
+            }
+            int remoteNode = remoteBase + rIdx;
+            NM_AT(pairRequests, local, remote) =
+                NM_AT(baseline, local, remote) + residual[(size_t)remoteNode * pairCount + localNode];
         }
     }
+    ret = 0;
+OUT:
     free(residual);
-    return 0;
+    free(parent);
+    free(visited);
+    free(queue);
+    return ret;
 }
 
 /* 为 per-pid 流水补齐 PairRequestContext 的容量 mask（与 build 全局路径一致） */
@@ -589,23 +635,30 @@ int BuildPairRequestedTargets(const ProcessAttr *attr, const PairRequestContext 
     BuildRequestedRemotePages(attr, context, result);
     BuildEffectiveRemotePages(attr, context, result);
 
-    /* 请求/基线表按 SMAP_MAX_NUMNODES 行 × cap 列扁平分配（列跨度 = cap），calloc 天然零初始化 */
-    uint64_t *pairRequests = calloc(NM_COUNT(SMAP_MAX_NUMNODES), sizeof(*pairRequests));
+    /* 请求/基线表按 nrLocalNuma 行 × cap 列扁平分配（列跨度 = cap），calloc 天然零初始化；
+     * 行维用真实本地节点数而非 SMAP_MAX_NUMNODES 定宽 */
+    int nrLocalRows = context->nrLocalNuma;
+    if (nrLocalRows <= 0 || nrLocalRows > (int)SMAP_MAX_NUMNODES) {
+        SMAP_LOGGER_ERROR("nrLocalNuma %d invalid, skip pair request build.", nrLocalRows);
+        free(result);
+        return -EINVAL;
+    }
+    uint64_t *pairRequests = calloc(NM_COUNT(nrLocalRows), sizeof(*pairRequests));
     if (pairRequests == NULL) {
         SMAP_LOGGER_ERROR("Alloc pair request table failed, no memory.");
         free(result);
         return -ENOMEM;
     }
     PreservePairAccounts(attr, context, result, pairRequests);
-    uint64_t *baseline = calloc(NM_COUNT(SMAP_MAX_NUMNODES), sizeof(*baseline));
+    uint64_t *baseline = calloc(NM_COUNT(nrLocalRows), sizeof(*baseline));
     if (baseline == NULL) {
         SMAP_LOGGER_ERROR("Alloc pair baseline table failed, no memory.");
         free(result);
         free(pairRequests);
         return -ENOMEM;
     }
-    ret = memcpy_s(baseline, NM_COUNT(SMAP_MAX_NUMNODES) * sizeof(*baseline), pairRequests,
-                   NM_COUNT(SMAP_MAX_NUMNODES) * sizeof(*pairRequests));
+    ret = memcpy_s(baseline, NM_COUNT(nrLocalRows) * sizeof(*baseline), pairRequests,
+                   NM_COUNT(nrLocalRows) * sizeof(*pairRequests));
     if (ret != EOK) {
         free(baseline);
         free(pairRequests);

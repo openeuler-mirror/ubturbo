@@ -1988,6 +1988,12 @@ enable:
 void PidMigrationWork(struct ProcessManager *manager, struct PidSlot *slot, pid_t pid)
 {
     (void)ProcessPidScanMigrate(manager, slot);
+    /*
+     * 本周期"扫描→决策→迁移→收尾"闭环结束，actc 快照消费完毕，
+     * 立即释放（actcLen 清零 + 缓冲归还），不在两周期间常驻。
+     * freq_query 见空后注册 FreqWaiter 等待下一轮 BuildPidData 填充回调取数。
+     */
+    ClearProcessActcData(PidSlotAttr(slot));
     EventLoopResetEnqueued(slot);
     PidSlotReleaseRefs(&slot, 1);
 }

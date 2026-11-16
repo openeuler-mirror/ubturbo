@@ -29,7 +29,7 @@ SET(GTEST_TARBALL_NAME "ros-humble-gtest-vendor_${GTEST_VERSION}.orig.tar.gz")
 SET(GTEST_TARBALL_SHA256 "79b5f1bd841f84ac1b289ab362031cb18ef396fb6234ddf003af09bca3e050fa")
 SET(GTEST_OPENEULER_REPO "https://gitcode.com/src-openeuler/googletest.git")
 SET(GTEST_OPENEULER_BRANCH "humble")
-SET(GTEST_OPENEULER_RAW_URL "https://gitcode.com/api/v5/repos/src-openeuler/googletest/raw/${GTEST_TARBALL_NAME}?ref=${GTEST_OPENEULER_BRANCH}")
+SET(GTEST_OPENEULER_RAW_URL "https://gitee.com/src-openeuler/googletest/raw/${GTEST_OPENEULER_BRANCH}/${GTEST_TARBALL_NAME}")
 SET(GTEST_DOWNLOAD_DIR ${CMAKE_BINARY_DIR}/3rdparty/gtest-download)
 SET(GTEST_LOCAL_VENDOR_DIR ${THIRD_PARTY_DIR}/googletest)
 
@@ -43,7 +43,7 @@ ELSE()
   SET(GTEST_SOURCE_DIR ${GTEST_DOWNLOAD_DIR}/ros-humble-gtest-vendor-${GTEST_VERSION})
   SET(GTEST_DOWNLOAD_COMMAND
     ${CMAKE_COMMAND} -E make_directory ${GTEST_DOWNLOAD_DIR}
-    COMMAND curl -fsSL --retry 3 --connect-timeout 30 -o ${GTEST_DOWNLOAD_DIR}/${GTEST_TARBALL_NAME} ${GTEST_OPENEULER_RAW_URL}
+    COMMAND curl -fsSL --retry 3 --connect-timeout 30 -L -o ${GTEST_DOWNLOAD_DIR}/${GTEST_TARBALL_NAME} ${GTEST_OPENEULER_RAW_URL}
     COMMAND sh -c "echo '${GTEST_TARBALL_SHA256}  ${GTEST_DOWNLOAD_DIR}/${GTEST_TARBALL_NAME}' | sha256sum -c -"
     COMMAND ${CMAKE_COMMAND} -E chdir ${GTEST_DOWNLOAD_DIR} ${CMAKE_COMMAND} -E tar xzf ${GTEST_DOWNLOAD_DIR}/${GTEST_TARBALL_NAME}
     # vendor 包顶层是 ROS 包装，真正可构建的 googletest CMakeLists 为 CMakeLists.txt.upstream
@@ -82,24 +82,51 @@ ELSE()
   MESSAGE(STATUS "gmock: system gmock not found, gmock tests will fail to compile without gmock-devel")
 ENDIF()
 
+# 系统 gtest-devel 与 gmock-devel 同源安装（如 24.03 均为 1.14），版本必然配对；
+# gmock 头文件内嵌 "gtest/internal/..." 引用会命中前面的 vendor gtest(1.10) 头文件，
+# 与系统 gmock(1.14) 混用导致编译错配（GetTypeName/FlatTupleConstructTag 等符号缺失）。
+# 因此当系统同时具备 gtest/gmock 时，整体改用系统套件，vendor gtest 仅作无系统环境兜底。
+FIND_PATH(GTEST_SYSTEM_INCLUDE_DIR gtest/gtest.h)
+FIND_LIBRARY(GTEST_SYSTEM_LIB NAMES gtest)
+FIND_LIBRARY(GTEST_MAIN_SYSTEM_LIB NAMES gtest_main)
+IF(GTEST_SYSTEM_INCLUDE_DIR AND GTEST_SYSTEM_LIB AND GMOCK_SYSTEM_INCLUDE_DIR AND GMOCK_SYSTEM_LIB)
+  SET(USE_SYSTEM_GTEST TRUE)
+  # 本文件经 add_subdirectory 进入独立作用域，TARGET_GTEST 宏在父目录（test/CMakeLists.txt）
+  # 作用域内求值，需同步 PARENT_SCOPE 才能在宏中生效。
+  SET(USE_SYSTEM_GTEST TRUE PARENT_SCOPE)
+  MESSAGE(STATUS "gtest/gmock: use matched system suite (gtest-devel + gmock-devel) at ${GTEST_SYSTEM_INCLUDE_DIR}")
+ELSE()
+  SET(USE_SYSTEM_GTEST FALSE)
+  SET(USE_SYSTEM_GTEST FALSE PARENT_SCOPE)
+ENDIF()
+
 MACRO(TARGET_GTEST target)
-  ADD_DEPENDENCIES(${target} gtest)
-  TARGET_INCLUDE_DIRECTORIES(${target} PUBLIC ${GTEST_INCLUDE_DIR})
-  TARGET_INCLUDE_DIRECTORIES(${target} PUBLIC ${GTEST_INCLUDE_DIR}/gtest)
-  TARGET_LINK_LIBRARIES(${target} -L${GTEST_LIBS_DIR} libgtest.a libgtest_main.a)
-  # 补充 gmock 链接（gtest vendor 包不含 gmock，由系统 gmock-devel 提供）
-  IF(GMOCK_SYSTEM_LIB)
-    TARGET_INCLUDE_DIRECTORIES(${target} PRIVATE ${GMOCK_SYSTEM_INCLUDE_DIR})
-    TARGET_LINK_LIBRARIES(${target} ${GMOCK_SYSTEM_LIB} ${GMOCK_MAIN_SYSTEM_LIB})
+  IF(USE_SYSTEM_GTEST)
+    TARGET_INCLUDE_DIRECTORIES(${target} PUBLIC ${GTEST_SYSTEM_INCLUDE_DIR})
+    TARGET_LINK_LIBRARIES(${target} ${GTEST_SYSTEM_LIB} ${GTEST_MAIN_SYSTEM_LIB} ${GMOCK_SYSTEM_LIB} ${GMOCK_MAIN_SYSTEM_LIB})
+  ELSE()
+    ADD_DEPENDENCIES(${target} gtest)
+    TARGET_INCLUDE_DIRECTORIES(${target} PUBLIC ${GTEST_INCLUDE_DIR})
+    TARGET_INCLUDE_DIRECTORIES(${target} PUBLIC ${GTEST_INCLUDE_DIR}/gtest)
+    TARGET_LINK_LIBRARIES(${target} -L${GTEST_LIBS_DIR} libgtest.a libgtest_main.a)
+    # 补充 gmock 链接（gtest vendor 包不含 gmock，由系统 gmock-devel 提供）
+    IF(GMOCK_SYSTEM_LIB)
+      TARGET_INCLUDE_DIRECTORIES(${target} PRIVATE ${GMOCK_SYSTEM_INCLUDE_DIR})
+      TARGET_LINK_LIBRARIES(${target} ${GMOCK_SYSTEM_LIB} ${GMOCK_MAIN_SYSTEM_LIB})
+    ENDIF()
   ENDIF()
 ENDMACRO()
 
 MACRO(TARGET_GTEST_HEADER_ONLY target)
-  ADD_DEPENDENCIES(${target} gtest)
-  TARGET_INCLUDE_DIRECTORIES(${target} PUBLIC ${GTEST_INCLUDE_DIR})
-  TARGET_INCLUDE_DIRECTORIES(${target} PUBLIC ${GTEST_INCLUDE_DIR}/gtest)
-  IF(GMOCK_SYSTEM_INCLUDE_DIR)
-    TARGET_INCLUDE_DIRECTORIES(${target} PRIVATE ${GMOCK_SYSTEM_INCLUDE_DIR})
+  IF(USE_SYSTEM_GTEST)
+    TARGET_INCLUDE_DIRECTORIES(${target} PUBLIC ${GTEST_SYSTEM_INCLUDE_DIR})
+  ELSE()
+    ADD_DEPENDENCIES(${target} gtest)
+    TARGET_INCLUDE_DIRECTORIES(${target} PUBLIC ${GTEST_INCLUDE_DIR})
+    TARGET_INCLUDE_DIRECTORIES(${target} PUBLIC ${GTEST_INCLUDE_DIR}/gtest)
+    IF(GMOCK_SYSTEM_INCLUDE_DIR)
+      TARGET_INCLUDE_DIRECTORIES(${target} PRIVATE ${GMOCK_SYSTEM_INCLUDE_DIR})
+    ENDIF()
   ENDIF()
 ENDMACRO()
 

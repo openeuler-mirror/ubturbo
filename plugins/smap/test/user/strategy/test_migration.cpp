@@ -866,6 +866,9 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansUsesRemainingBidirectionalBudget)
     process.scanAttr.actcData[2] = remotePages;
     process.scanAttr.actcLen[0] = 10;
     process.scanAttr.actcLen[2] = 10;
+    /* actCount 为堆分配数组，须先初始化再写 freqBuckets */
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     process.scanAttr.actCount[0].freqBuckets[0] = 10;
     process.scanAttr.actCount[2].freqBuckets[5] = 10;
     memset(&manager.slots, 0, sizeof(manager.slots));
@@ -884,6 +887,7 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansUsesRemainingBidirectionalBudget)
     EXPECT_EQ(12U, budget.plannedPages);
     EXPECT_EQ(5U, context.plannedPages[0]);
     EXPECT_EQ(0, EnvMutexDestroy(&manager.threadLock));
+    FreeProcessAttrArrays(&process);
 }
 
 TEST_F(MigrationTest, TestBuildPairSwapPlansSkipsNonConfiguredSourceLocal)
@@ -902,6 +906,9 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansSkipsNonConfiguredSourceLocal)
     process.scanAttr.actcData[2] = remotePages;
     process.scanAttr.actcLen[0] = 10;
     process.scanAttr.actcLen[2] = 10;
+    /* actCount 为堆分配数组，须先初始化再写 freqBuckets */
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     process.scanAttr.actCount[0].freqBuckets[0] = 10;
     process.scanAttr.actCount[2].freqBuckets[5] = 10;
     memset(&manager.slots, 0, sizeof(manager.slots)); PidSlotAdd(&manager, &process);
@@ -918,6 +925,7 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansSkipsNonConfiguredSourceLocal)
     EXPECT_EQ(0U, budget.plannedPages);
     EXPECT_EQ(0U, context.plannedPages[0]);
     EXPECT_EQ(0, EnvMutexDestroy(&manager.threadLock));
+    FreeProcessAttrArrays(&process);
 }
 
 TEST_F(MigrationTest, TestBuildPairSwapPlansAllowsUnconvergedPair)
@@ -932,6 +940,9 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansAllowsUnconvergedPair)
     process.scanAttr.actcData[2] = remotePages;
     process.scanAttr.actcLen[0] = 10;
     process.scanAttr.actcLen[2] = 10;
+    /* actCount 为堆分配数组，须先初始化再写 freqBuckets */
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     process.scanAttr.actCount[0].freqBuckets[0] = 10;
     process.scanAttr.actCount[2].freqBuckets[5] = 10;
     memset(&manager.slots, 0, sizeof(manager.slots));
@@ -951,6 +962,7 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansAllowsUnconvergedPair)
     EXPECT_EQ(12U, budget.plannedPages);
     EXPECT_EQ(5U, context.plannedPages[0]);
     EXPECT_EQ(0, EnvMutexDestroy(&manager.threadLock));
+    FreeProcessAttrArrays(&process);
 }
 
 TEST_F(MigrationTest, TestBuildPairSwapPlansFillsRemoteHotGuarantee)
@@ -965,7 +977,10 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansFillsRemoteHotGuarantee)
     process.scanAttr.actcData[2] = remotePages;
     process.scanAttr.actcLen[0] = 10;
     process.scanAttr.actcLen[2] = 10;
-    process.scanAttr.actCount[0].freqBuckets[5] = 10;
+    /* actCount 为堆分配数组，须先初始化再写 freqBuckets */
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    process.scanAttr.actCount[0].freqBuckets[0] = 10;
     process.scanAttr.actCount[2].freqBuckets[5] = 10;
     process.scanAttr.actCount[2].remoteHotNum = 4;
     memset(&manager.slots, 0, sizeof(manager.slots));
@@ -997,6 +1012,9 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansRejectsAmbiguousSharedRemote)
         process.scanAttr.actcData[nid] = pages[nid];
         process.scanAttr.actcLen[nid] = 4;
     }
+    /* actCount 为堆分配数组，须先初始化再写 freqBuckets/remoteHotNum */
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
     process.scanAttr.actCount[0].freqBuckets[0] = 4;
     process.scanAttr.actCount[1].freqBuckets[0] = 4;
     process.scanAttr.actCount[2].freqBuckets[5] = 4;
@@ -1019,6 +1037,7 @@ TEST_F(MigrationTest, TestBuildPairSwapPlansRejectsAmbiguousSharedRemote)
     EXPECT_EQ(0U, plans[1].swapPages);
     EXPECT_EQ(0U, budget.plannedPages);
     EXPECT_EQ(0, EnvMutexDestroy(&manager.threadLock));
+    FreeProcessAttrArrays(&process);
 }
 
 TEST_F(MigrationTest, TestBuildPairPlansZeroLocalSafeFreeBlocksPromote)
