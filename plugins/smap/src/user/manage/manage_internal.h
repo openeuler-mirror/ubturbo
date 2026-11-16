@@ -107,6 +107,7 @@ void CalRemoteMemUsed(void);
 void SnapshotRemoteCapacityLocked(uint64_t *privateAvail, uint64_t *sharedAvail);
 void LedgerPlanInFlightLocked(const uint32_t *nrMigratePages, int nrLocalNuma);
 void LedgerSettleInFlight(const uint32_t *planned, int nrLocalNuma);
+void LedgerSettleInFlightLocked(const uint32_t *planned, int nrLocalNuma);
 
 /* ========== manage_scan.c 导出给其他文件的内部函数 ========== */
 

@@ -559,7 +559,14 @@ void CalRemoteMemUsed(void)
         ProcessAttr *attr = all[k]->attr;
         /* j 为远端绝对 nid，从 nrLocal 起遍历远端空间 */
         for (j = nrLocal; j < cap; j++) {
-            remoteNumaInfo->usedInfo[j].used += attr->walkPage.nrPages[j];
+            uint64_t accounted = 0;
+            if (!attr->groupPolicy.enabled && attr->strategyAttr.remoteNrPagesAfterMigrate) {
+                for (i = 0; i < nrLocal; i++) {
+                    accounted += NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, i, j);
+                }
+            }
+            /* 扫描快照可能早于刚完成的迁出；取较大值防止释放在途后超分配。 */
+            remoteNumaInfo->usedInfo[j].used += MAX((uint64_t)attr->walkPage.nrPages[j], accounted);
             SMAP_LOGGER_DEBUG("usedInfo[%d].used: %llu, nrPages[%d]: %u.", j, remoteNumaInfo->usedInfo[j].used, j,
                               attr->walkPage.nrPages[j]);
             if (!privateReady) {
@@ -639,14 +646,13 @@ void SnapshotRemoteCapacityLocked(uint64_t *privateAvail, uint64_t *sharedAvail)
     }
 }
 
-/* 迁移结算后回收全部在途预扣；成功迁移的页数由后续快照重新入账。
+/* 调用方持账本锁，在成功页入账后回收全部在途预扣。
  * planned 为 nrLocalNuma 行 × cap 列扁平矩阵（NM_AT 访问）。 */
-void LedgerSettleInFlight(const uint32_t *planned, int nrLocalNuma)
+void LedgerSettleInFlightLocked(const uint32_t *planned, int nrLocalNuma)
 {
     struct RemoteNumaInfo *remoteNumaInfo = &GetProcessManager()->remoteNumaInfo;
     int cap = (int)GetNumaCap();
 
-    EnvMutexLock(&remoteNumaInfo->lock);
     for (int j = nrLocalNuma; j < cap; j++) {
         for (int i = 0; i < nrLocalNuma; i++) {
             uint32_t plannedPages = NM_AT(planned, i, j);
@@ -657,6 +663,13 @@ void LedgerSettleInFlight(const uint32_t *planned, int nrLocalNuma)
             *inFlight = *inFlight >= plannedPages ? *inFlight - plannedPages : 0;
         }
     }
+}
+
+void LedgerSettleInFlight(const uint32_t *planned, int nrLocalNuma)
+{
+    struct RemoteNumaInfo *remoteNumaInfo = &GetProcessManager()->remoteNumaInfo;
+    EnvMutexLock(&remoteNumaInfo->lock);
+    LedgerSettleInFlightLocked(planned, nrLocalNuma);
     EnvMutexUnlock(&remoteNumaInfo->lock);
 }
 

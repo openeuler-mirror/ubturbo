@@ -515,6 +515,21 @@ static void FreeProceccesAttr(ProcessAttr *attr)
     F(nrMigratePages, nrLocalNuma)            \
     F(nrMigrateBackPages, nrLocalNuma)
 
+/*
+ * 仅配置类数组：随 migrate_out 配置发布写入 active。
+ * 运行期矩阵（allocRemoteNrPages / remoteNrPagesAfterMigrate / nrMigratePages /
+ * nrMigrateBackPages）由每轮扫描与迁移流水重建，发布候选时必须跳过，否则会用
+ * 候选克隆时的陈旧副本覆盖正在使用的账本与计划量：
+ * - nrMigratePages 在 plan 之后被覆盖，settle 会按 0 回收，privateInFlight 永久泄漏，
+ *   最终导致 migrate_back 在 drain 检查处超时返回 -EAGAIN；
+ * - remoteNrPagesAfterMigrate 被旧值覆盖会让 drain 判定读到错误的 accountSum。
+ */
+#define FOR_EACH_PROCESS_CONFIG_ARRAY(F) \
+    F(initRemoteMemRatio, nrLocalNuma)   \
+    F(memSize, nrLocalNuma)              \
+    F(l2RemoteMemRatio, nrLocalNuma)     \
+    F(l3RemoteMemRatio, nrLocalNuma)
+
 int InitProcessAttrArrays(ProcessAttr *attr)
 {
     if (attr == NULL) {
@@ -651,7 +666,8 @@ out_fail:
     return -ENOMEM;
 }
 
-/* 将 src 数组内容拷贝到 dst 已分配的数组；指针相同（栈上候选共享 active 数组，
+/* 将 src 的配置类数组内容拷贝到 dst 已分配的数组；运行期账本/计划矩阵不拷贝
+ * （见 FOR_EACH_PROCESS_CONFIG_ARRAY 注释）；指针相同（栈上候选共享 active 数组，
  * 内容已写穿）时跳过，避免 memcpy 源目的重叠 */
 void CopyProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src)
 {
@@ -671,7 +687,7 @@ void CopyProcessAttrArrays(ProcessAttr *dst, const ProcessAttr *src)
             (void)memcpy_s(sa->field, bytes, ss->field, bytes); \
         }                                                       \
     } while (0);
-    FOR_EACH_PROCESS_ATTR_ARRAY(COPY_ARRAY_IF_DIFFERENT)
+    FOR_EACH_PROCESS_CONFIG_ARRAY(COPY_ARRAY_IF_DIFFERENT)
 #undef COPY_ARRAY_IF_DIFFERENT
     if (dst->scanAttr.selectedBuckets != NULL && dst->scanAttr.selectedBuckets != src->scanAttr.selectedBuckets) {
         size_t bytes = (size_t)GetNumaCap() * sizeof(*dst->scanAttr.selectedBuckets);

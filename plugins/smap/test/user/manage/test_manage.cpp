@@ -41,6 +41,8 @@ using namespace std;
 extern "C" void FreeProceccesAttr(ProcessAttr *attr);
 static cpu_set_t g_fake_cpu_mask;
 extern "C" struct ProcessManager g_processManager;
+extern "C" int BuildPidPairPlans(struct ProcessManager *manager, ProcessAttr *process);
+extern "C" void CalRemoteMemUsed(void);
 extern "C" uint32_t g_pageSizeNormal;
 extern "C" uint32_t g_pageSizeHuge;
 extern "C" RunMode g_runMode;
@@ -5600,6 +5602,120 @@ TEST_F(ManageTest, TestBuildAllPairTargetsCapacityShrinkAndRestore)
     AllPairTargetResult restored = RunBuildAllPairTargets(&manager);
     EXPECT_EQ(400U, restored.Requested(100, 0, 1));
     EXPECT_EQ(400U, restored.Target(100, 0, 1));
+
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    DestroyPairTargetManager(&manager);
+    FreeProcessAttrArrays(&attr);
+}
+
+TEST_F(ManageTest, TestPidPlanRecallsResidentPagesAfterCapacityShrink)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+    manager.remoteNumaInfo.privateInFlight = (uint64_t *)calloc(NM_COUNT(1), sizeof(uint64_t));
+    ASSERT_NE(nullptr, manager.remoteNumaInfo.privateInFlight);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    ScopedPageSize pageSize(PAGESIZE_4K);
+
+    ProcessAttr attr;
+    InitRatioPairProcess(&attr, 100, 1, 500, 0, 50);
+    attr.targetConfig.count = 2;
+    attr.targetConfig.targets[1] = {2, 50, 0};
+    attr.walkPage.nrPages[1] = 300;
+    attr.walkPage.nrPage = 800;
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 1) = 300;
+    attr.managedLocalState.accountLocalMask[1] = BIT(0);
+    PidSlotAdd(&manager, &attr);
+
+    NM_AT(manager.remoteNumaInfo.privateSize, 0, 1) = 1;
+    NM_AT(manager.remoteNumaInfo.privateSize, 0, 2) = 2;
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &attr));
+    EXPECT_EQ(44U, NM_AT(attr.strategyAttr.nrMigrateBackPages, 0, 1));
+    EXPECT_EQ(0U, NM_AT(attr.strategyAttr.nrMigratePages, 0, 1));
+    EXPECT_EQ(400U, NM_AT(attr.strategyAttr.nrMigratePages, 0, 2));
+
+    NM_AT(manager.remoteNumaInfo.privateSize, 0, 1) = 0;
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &attr));
+    EXPECT_EQ(300U, NM_AT(attr.strategyAttr.nrMigrateBackPages, 0, 1));
+
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    free(manager.remoteNumaInfo.privateInFlight);
+    DestroyPairTargetManager(&manager);
+    FreeProcessAttrArrays(&attr);
+}
+
+TEST_F(ManageTest, TestPidPlansShareCapacityAndReserveInflightPages)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+    manager.remoteNumaInfo.privateInFlight = (uint64_t *)calloc(NM_COUNT(1), sizeof(uint64_t));
+    ASSERT_NE(nullptr, manager.remoteNumaInfo.privateInFlight);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    ScopedPageSize pageSize(PAGESIZE_4K);
+    NM_AT(manager.remoteNumaInfo.privateSize, 0, 1) = 1;
+
+    ProcessAttr first;
+    ProcessAttr second;
+    InitRatioPairProcess(&first, 100, 1, 800, 0, 50);
+    InitRatioPairProcess(&second, 200, 1, 800, 0, 50);
+    first.walkPage.nrPage = 800;
+    second.walkPage.nrPage = 800;
+    PidSlotAdd(&manager, &first);
+    PidSlotAdd(&manager, &second);
+
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &first));
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &second));
+    EXPECT_EQ(128U, NM_AT(first.strategyAttr.nrMigratePages, 0, 1));
+    EXPECT_EQ(128U, NM_AT(second.strategyAttr.nrMigratePages, 0, 1));
+    EXPECT_EQ(256U, NM_AT(manager.remoteNumaInfo.privateInFlight, 0, 1));
+
+    /* 两个 PID 各有 200 页驻留时，缩容后的 256 页由二者共同承担。 */
+    NM_AT(manager.remoteNumaInfo.privateInFlight, 0, 1) = 0;
+    first.walkPage.nrPages[0] = second.walkPage.nrPages[0] = 600;
+    first.walkPage.nrPages[1] = second.walkPage.nrPages[1] = 200;
+    NM_AT(first.strategyAttr.remoteNrPagesAfterMigrate, 0, 1) = 200;
+    NM_AT(second.strategyAttr.remoteNrPagesAfterMigrate, 0, 1) = 200;
+    first.managedLocalState.accountLocalMask[1] = BIT(0);
+    second.managedLocalState.accountLocalMask[1] = BIT(0);
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &first));
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &second));
+    EXPECT_EQ(72U, NM_AT(first.strategyAttr.nrMigrateBackPages, 0, 1));
+    EXPECT_EQ(72U, NM_AT(second.strategyAttr.nrMigrateBackPages, 0, 1));
+
+    /* 共享容量同样要扣除另一个 PID 已预留的在途迁出。 */
+    NM_AT(manager.remoteNumaInfo.privateSize, 0, 1) = 0;
+    manager.remoteNumaInfo.sharedSize[1] = 1;
+    NM_AT(manager.remoteNumaInfo.privateInFlight, 0, 1) = 0;
+    first.walkPage.nrPages[0] = second.walkPage.nrPages[0] = 800;
+    first.walkPage.nrPages[1] = second.walkPage.nrPages[1] = 0;
+    NM_AT(first.strategyAttr.remoteNrPagesAfterMigrate, 0, 1) = 0;
+    NM_AT(second.strategyAttr.remoteNrPagesAfterMigrate, 0, 1) = 0;
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &first));
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &second));
+    EXPECT_EQ(128U, NM_AT(first.strategyAttr.nrMigratePages, 0, 1));
+    EXPECT_EQ(128U, NM_AT(second.strategyAttr.nrMigratePages, 0, 1));
+    EXPECT_EQ(256U, NM_AT(manager.remoteNumaInfo.privateInFlight, 0, 1));
+
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    free(manager.remoteNumaInfo.privateInFlight);
+    DestroyPairTargetManager(&manager);
+    FreeProcessAttrArrays(&first);
+    FreeProcessAttrArrays(&second);
+}
+
+TEST_F(ManageTest, TestRemoteUsedIncludesSettledPagesBeforeNextScan)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    ProcessAttr attr;
+    InitRatioPairProcess(&attr, 100, 1, 800, 0, 50);
+    NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 1) = 100;
+    PidSlotAdd(&manager, &attr);
+
+    CalRemoteMemUsed();
+    EXPECT_EQ(100U, manager.remoteNumaInfo.usedInfo[1].used);
+    EXPECT_EQ(100U, NM_AT(manager.remoteNumaInfo.privateUsedInfo, 0, 1).used);
 
     memset(&manager.slots, 0, sizeof(manager.slots));
     DestroyPairTargetManager(&manager);
