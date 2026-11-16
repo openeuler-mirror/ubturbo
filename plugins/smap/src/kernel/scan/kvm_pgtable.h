@@ -16,6 +16,13 @@ typedef void (*smap_pte_young_cb)(u64 gpa, bool is_young, bool pte_valid,
 
 typedef void (*smap_hole_cb)(u64 gpa_start, u64 gpa_end, void *arg);
 
+/* HVA collector for 4K-granularity statistic scan, unset for other types */
+struct smap_statistic_collect {
+	u64 *vaddr;
+	u64 capacity;
+	u64 count;
+};
+
 struct smap_stage2_range_mkold_data {
 	struct kvm *kvm;
 	struct kvm_memory_slot *memslot;
@@ -26,6 +33,7 @@ struct smap_stage2_range_mkold_data {
 	void *ap;
 	smap_pte_young_cb on_pte_young;
 	smap_hole_cb on_hole;
+	struct smap_statistic_collect *stat;
 };
 
 bool smap_kvm_pgtable_stage2_mkold(struct kvm_pgtable *pgt, u64 addr);

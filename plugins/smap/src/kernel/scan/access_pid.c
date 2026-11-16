@@ -1002,34 +1002,52 @@ static int init_statistic_window(u8 ***sliding_windows, u32 duration,
 	return 0;
 }
 
-static int init_access_statistic_pid_2m(struct access_add_pid_payload *payload)
+/* drop stale statistic records of the same pid before tracking */
+static void remove_statistic_pid(pid_t pid)
 {
 	struct statistics_tracking_info *tmp, *ap;
-	int l1_node, l2_node, ret;
-
-	if (!payload)
-		return -EINVAL;
-
-	l1_node = find_first_local_numa(payload->numa_nodes, payload->nr_words);
-	l2_node =
-		find_first_remote_numa(payload->numa_nodes, payload->nr_words);
-	if (l1_node == NUMA_NO_NODE) {
-		pr_err("invalid local node passed to init statistic access of pid: %d\n",
-		       payload->pid);
-		return -EINVAL;
-	}
 
 	down_write(&statistic_lock);
 	list_for_each_entry_safe(ap, tmp, &statistic_pid_list, node) {
-		if (ap->pid == payload->pid) {
-			pr_info("statistic access pid: %d already exists, update info\n",
-				payload->pid);
-			list_del(&ap->node);
-			destroy_access_statistic_pid(ap);
-			break;
-		}
+		if (ap->pid != pid)
+			continue;
+		pr_info("statistic access pid: %d already exists, update info\n",
+			pid);
+		list_del(&ap->node);
+		destroy_access_statistic_pid(ap);
+		break;
 	}
 	up_write(&statistic_lock);
+}
+
+/*
+ * Build sliding windows from page count and scan interval, freeing the
+ * vaddrs already scanned on failure.
+ */
+static int init_statistic_windows(struct statistics_tracking_info *tmp,
+				  struct access_add_pid_payload *payload)
+{
+	int ret = init_statistic_window(&tmp->sliding_windows,
+					payload->duration, payload->scan_time,
+					tmp->page_num[L1] + tmp->page_num[L2],
+					&tmp->window_num);
+
+	if (ret) {
+		pr_err("failed to init statistic tracking windows\n");
+		vfree(tmp->vaddr[L1]);
+		tmp->vaddr[L1] = NULL;
+	}
+	return ret;
+}
+
+static int init_access_statistic_pid_2m(struct access_add_pid_payload *payload)
+{
+	struct statistics_tracking_info *tmp;
+	int ret;
+
+	if (!payload)
+		return -EINVAL;
+	remove_statistic_pid(payload->pid);
 
 	tmp = kzalloc(sizeof(struct statistics_tracking_info), GFP_KERNEL);
 	if (!tmp) {
@@ -1037,8 +1055,6 @@ static int init_access_statistic_pid_2m(struct access_add_pid_payload *payload)
 		return -ENOMEM;
 	}
 	tmp->pid = payload->pid;
-	tmp->l1_node = l1_node;
-	tmp->l2_node = l2_node;
 	tmp->scan_num = 0;
 	ret = scan_hva_info(payload->pid, &tmp->page_num[L1],
 			    &tmp->page_num[L2], &tmp->vaddr[L1],
@@ -1049,14 +1065,8 @@ static int init_access_statistic_pid_2m(struct access_add_pid_payload *payload)
 		return ret;
 	}
 
-	ret = init_statistic_window(&tmp->sliding_windows, payload->duration,
-				    payload->scan_time,
-				    tmp->page_num[L1] + tmp->page_num[L2],
-				    &tmp->window_num);
+	ret = init_statistic_windows(tmp, payload);
 	if (ret) {
-		pr_err("failed to init statistic tracking windows\n");
-		vfree(tmp->vaddr[L1]);
-		tmp->vaddr[L1] = NULL;
 		kfree(tmp);
 		return ret;
 	}
@@ -1072,33 +1082,13 @@ static int init_access_statistic_pid_2m(struct access_add_pid_payload *payload)
 
 static int init_access_statistic_pid_4k(struct access_add_pid_payload *payload)
 {
-	struct statistics_tracking_info *tmp, *ap;
-	int l1_node, l2_node, ret;
+	struct statistics_tracking_info *tmp;
 	u64 total_pages, total_size_gb, suggested_scan_time;
+	int ret;
 
 	if (!payload)
 		return -EINVAL;
-
-	l1_node = find_first_local_numa(payload->numa_nodes, payload->nr_words);
-	l2_node =
-		find_first_remote_numa(payload->numa_nodes, payload->nr_words);
-	if (l1_node == NUMA_NO_NODE) {
-		pr_err("invalid local node passed to init statistic access of pid: %d\n",
-		       payload->pid);
-		return -EINVAL;
-	}
-
-	down_write(&statistic_lock);
-	list_for_each_entry_safe(ap, tmp, &statistic_pid_list, node) {
-		if (ap->pid == payload->pid) {
-			pr_info("statistic access pid: %d already exists, update info\n",
-				payload->pid);
-			list_del(&ap->node);
-			destroy_access_statistic_pid(ap);
-			break;
-		}
-	}
-	up_write(&statistic_lock);
+	remove_statistic_pid(payload->pid);
 
 	tmp = kzalloc(sizeof(struct statistics_tracking_info), GFP_KERNEL);
 	if (!tmp) {
@@ -1106,26 +1096,20 @@ static int init_access_statistic_pid_4k(struct access_add_pid_payload *payload)
 		return -ENOMEM;
 	}
 	tmp->pid = payload->pid;
-	tmp->l1_node = l1_node;
-	tmp->l2_node = l2_node;
 	tmp->scan_num = 0;
-	ret = scan_hva_info_4k(payload->pid, &tmp->page_num[L1],
-			       &tmp->page_num[L2], &tmp->vaddr[L1],
-			       &tmp->vaddr[L2]);
+	if (payload->pid_type == SMAP_PID_VM)
+		ret = scan_hva_info_4k_vm(payload->pid, tmp->page_num,
+					  tmp->vaddr);
+	else
+		ret = scan_hva_info_4k(payload->pid, tmp->page_num, tmp->vaddr);
 	if (ret) {
 		pr_err("failed to scan hva info for statistic tracking\n");
 		kfree(tmp);
 		return ret;
 	}
 
-	ret = init_statistic_window(&tmp->sliding_windows, payload->duration,
-				    payload->scan_time,
-				    tmp->page_num[L1] + tmp->page_num[L2],
-				    &tmp->window_num);
+	ret = init_statistic_windows(tmp, payload);
 	if (ret) {
-		pr_err("failed to init statistic tracking windows\n");
-		vfree(tmp->vaddr[L1]);
-		tmp->vaddr[L1] = NULL;
 		kfree(tmp);
 		return ret;
 	}
@@ -1148,12 +1132,19 @@ static int init_access_statistic_pid_4k(struct access_add_pid_payload *payload)
 static int init_access_statistic_pid(struct access_add_pid_payload *payload,
 				     int page_size)
 {
-	if (page_size == g_pagesize_huge)
+	if (page_size == g_pagesize_huge) {
+		if (payload->pid_type != SMAP_PID_VM) {
+			pr_err("statistic scan of pid: %d only supports VM in 2M mode\n",
+			       payload->pid);
+			return -EINVAL;
+		}
 		return init_access_statistic_pid_2m(payload);
-	else if (page_size == PAGE_SIZE)
+	}
+	if (page_size == PAGE_SIZE)
 		return init_access_statistic_pid_4k(payload);
-	else
-		return -EINVAL;
+	pr_err("unsupported page size: %d of pid: %d for statistic scan\n",
+	       page_size, payload->pid);
+	return -EINVAL;
 }
 
 int access_add_statistic_pid(int len, struct access_add_pid_payload *payload,
