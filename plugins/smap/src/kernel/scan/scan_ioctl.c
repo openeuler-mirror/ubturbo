@@ -104,7 +104,8 @@ static bool check_payload_validity(struct access_add_pid_payload *payload,
 			       p->nr_words, i);
 			return false;
 		}
-		pr_info("[%d] pid %d, numa_nodes %*pb, scan_time %u, ntimes %u, duration %u, type %d\n",
+		pr_debug(
+			"[%d] pid %d, numa_nodes %*pb, scan_time %u, ntimes %u, duration %u, type %d\n",
 			i, p->pid, (int)(p->nr_words * BITS_PER_LONG),
 			p->numa_nodes, p->scan_time, p->ntimes, p->duration,
 			p->type);
