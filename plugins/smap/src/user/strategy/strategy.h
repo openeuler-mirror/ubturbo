@@ -62,6 +62,35 @@ static inline int CheckActcDataValid(ProcessAttr *process)
     return 0;
 }
 
+/*
+ * 迁移列表矩阵按策略实际访问的方向做稀疏布局，不再分配 cap × cap 全矩阵：
+ *  - 本地行（from < nrLocalNuma）：分配全部 cap 列，覆盖 local->local 组内重平衡与 local->remote 迁出；
+ *  - 远端行（from >= nrLocalNuma）：只分配本地列，覆盖 remote->local 迁回；
+ *  - remote->remote 不会被策略产生，因此不分配。
+ * 元素数 = nrLocal*cap + (cap-nrLocal)*nrLocal；cap=1024、nrLocal=4 时约 8176，为原 cap*cap 的 1/128。
+ */
+static inline size_t MigListMatrixCount(void)
+{
+    size_t nrLocal = (size_t)GetNrLocalNuma();
+    size_t cap = (size_t)GetNumaCap();
+    if (nrLocal > cap) {
+        nrLocal = cap;
+    }
+    return nrLocal * cap + (cap - nrLocal) * nrLocal;
+}
+
+/* 取 (from, to) 对应的迁移列表单元，调用方必须保证该方向已在布局中分配
+ * （from < nrLocalNuma 或 to < nrLocalNuma） */
+static inline struct MigList *MigListCell(struct MigList *base, int from, int to)
+{
+    size_t nrLocal = (size_t)GetNrLocalNuma();
+    size_t cap = (size_t)GetNumaCap();
+    if ((size_t)from < nrLocal) {
+        return base + (size_t)from * cap + (size_t)to;
+    }
+    return base + nrLocal * cap + ((size_t)from - nrLocal) * nrLocal + (size_t)to;
+}
+
 int RunStrategy(ProcessAttr *process, struct MigList *mlist, size_t mlistSize);
 uint64_t GetNrFreePagesByNode(int nid);
 uint64_t GetNrFreeHugePagesByNode(int nid);

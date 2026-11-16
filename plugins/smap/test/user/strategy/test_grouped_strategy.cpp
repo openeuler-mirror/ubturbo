@@ -12,8 +12,16 @@
 #include "strategy/grouped_strategy.h"
 #include "strategy/strategy_config.h"
 
+extern "C" struct ProcessManager g_processManager;
+
 class GroupedStrategyTest : public ::testing::Test {
 protected:
+    void SetUp() override
+    {
+        /* 用例以 0/1 为本地节点、4/5 为远端节点，显式固定本地节点数，避免依赖前序用例遗留的全局状态 */
+        g_processManager.nrLocalNuma = 4;
+    }
+
     void TearDown() override
     {
         GlobalMockObject::verify();
