@@ -256,11 +256,9 @@ static uint64_t BuildManagedTotalPages(const ProcessAttr *attr, int nrLocalNuma)
     uint32_t managedLocalMask = attr->managedLocalState.managedLocalMask;
 
     for (int local = 0; local < nrLocalNuma; local++) {
-        if (!((managedLocalMask) & (1U << (local)))) {
-            continue;
+        if ((managedLocalMask & (1U << local)) != 0) {
+            managedTotalPages += attr->walkPage.nrPages[local];
         }
-        uint64_t whiteNum = attr->scanAttr.actCount[local].whiteNum;
-        managedTotalPages += attr->walkPage.nrPages[local] > whiteNum ? attr->walkPage.nrPages[local] - whiteNum : 0;
     }
     /* 远端 nid 为绝对值，仅遍历 [nrLocalNuma, GetNumaCap()) 有效区间 */
     int cap = (int)GetNumaCap();
@@ -364,9 +362,7 @@ static void BuildLocalRemainingPages(const ProcessAttr *attr, const PairRequestC
     /* cap 提前求值：避免每个本地节点重复调用 GetNumaCap() */
     int cap = (int)GetNumaCap();
     for (int local = 0; local < context->nrLocalNuma; local++) {
-        uint64_t whiteNum = attr->scanAttr.actCount[local].whiteNum;
-        uint64_t allocatablePages =
-            attr->walkPage.nrPages[local] > whiteNum ? attr->walkPage.nrPages[local] - whiteNum : 0;
+        uint64_t allocatablePages = attr->walkPage.nrPages[local];
         uint64_t requestedPages = 0;
 
         for (int remote = context->nrLocalNuma; remote < cap; remote++) {

@@ -1874,7 +1874,6 @@ TEST_F(ManageTest, TestCalcActcStats)
     data[1].freq = 3;
     data[1].isWhiteListPage = true;
     data[2].freq = 10;
-    data[2].prior = 4; // 缓存为合成值, freqSum 需扣除 prior 还原窗口频次
     attr.scanAttr.actcData[4] = data;
     attr.scanAttr.actcLen[4] = 3;
     /* CalcActcStats 会遍历 selectedBuckets/actCount（堆分配数组），需先初始化 */
@@ -1889,7 +1888,7 @@ TEST_F(ManageTest, TestCalcActcStats)
     EXPECT_EQ((uint8_t)10, attr.scanAttr.actCount[4].freqMax);
     EXPECT_EQ((uint8_t)0, attr.scanAttr.actCount[4].freqMin);
     EXPECT_EQ((uint64_t)2, attr.scanAttr.actCount[4].freqNum);
-    EXPECT_EQ((uint64_t)9, attr.scanAttr.actCount[4].freqSum);
+    EXPECT_EQ((uint64_t)13, attr.scanAttr.actCount[4].freqSum);
     EXPECT_EQ((uint32_t)1, attr.scanAttr.actCount[4].freqZero);
     EXPECT_EQ((uint64_t)1, attr.scanAttr.actCount[4].remoteHotNum);
     EXPECT_EQ((uint64_t)1, attr.scanAttr.actCount[4].whiteNum);
@@ -2061,68 +2060,6 @@ TEST_F(ManageTest, TestDistributeActcDataNullBuf)
     for (int nid = 0; nid < SMAP_MAX_NUMNODES; nid++) {
         EXPECT_EQ(nullptr, attr.scanAttr.actcData[nid]);
     }
-}
-
-extern "C" void MergeAccPriorToFreq(ActcData *actc, size_t actcLen);
-
-// 决策分数: freq' = prior + freq（累计热度 + 当前窗口访问）
-TEST_F(ManageTest, TestMergeAccPriorToFreq)
-{
-    ActcData data[6] = {};
-
-    data[0].freq = 0;
-    data[0].prior = 0;
-    data[1].freq = 3; // freq' = 5 + 3
-    data[1].prior = 5;
-    data[2].freq = 10; // freq' = 16 + 10
-    data[2].prior = 16;
-    data[3].freq = 7; // freq' = 0 + 7（本轮热页不沉底）
-    data[3].prior = 0;
-    data[4].freq = 0; // freq' = 8 + 0
-    data[4].prior = 8;
-    data[5].freq = 5; // freq' = 4 + 5
-    data[5].prior = 4;
-
-    MergeAccPriorToFreq(data, 6);
-    EXPECT_EQ((uint8_t)0, data[0].freq);
-    EXPECT_EQ((uint8_t)8, data[1].freq);
-    EXPECT_EQ((uint8_t)26, data[2].freq);
-    EXPECT_EQ((uint8_t)7, data[3].freq);
-    EXPECT_EQ((uint8_t)8, data[4].freq);
-    EXPECT_EQ((uint8_t)9, data[5].freq);
-    // prior 本身不被修改
-    EXPECT_EQ((uint8_t)16, data[2].prior);
-}
-
-TEST_F(ManageTest, TestDistributeActcDataVmSkipMerge)
-{
-    ProcessAttr attr = {};
-    struct ProcessMemBitmap pmb = {};
-    ActcData data[2] = {};
-
-    attr.type = VM_TYPE;
-    data[0].freq = 3;
-    data[0].prior = 5;
-    data[1].freq = 250;
-    data[1].prior = 10;
-    pmb.nrPages[1] = 2;
-
-    // VM 的 prior 来自前端采样数组, 语义不同, 不参与合成
-    DistributeActcData(&attr, &pmb, data);
-    EXPECT_EQ(data, attr.scanAttr.actcData[1]);
-    EXPECT_EQ((uint8_t)3, data[0].freq);
-    EXPECT_EQ((uint8_t)250, data[1].freq);
-}
-
-TEST_F(ManageTest, TestMergeAccPriorToFreqZeroLen)
-{
-    ActcData data[1] = {};
-    data[0].freq = 1;
-    data[0].prior = 2;
-
-    // 页数为零时不修改数据
-    MergeAccPriorToFreq(data, 0);
-    EXPECT_EQ((uint8_t)1, data[0].freq);
 }
 
 TEST_F(ManageTest, TestCheckAndRemoveInvalidProcess)
@@ -6666,11 +6603,11 @@ TEST_F(ManageTest, TestBuildPidDataNullAttr)
     EXPECT_EQ(-EINVAL, BuildPidData(nullptr));
 }
 
-/* ========== manage_pair.c white-list deduction tests ========== */
+/* ========== manage_pair.c page accounting includes white-listed pages ========== */
 
 extern "C" uint64_t BuildManagedTotalPages(const ProcessAttr *attr, int nrLocalNuma);
 
-TEST_F(ManageTest, TestBuildManagedTotalPagesDeductWhiteNum)
+TEST_F(ManageTest, TestBuildManagedTotalPagesIncludeWhiteNum)
 {
     ProcessAttr attr = {};
     attr.managedLocalState.managedLocalMask = 0x3;
@@ -6682,17 +6619,17 @@ TEST_F(ManageTest, TestBuildManagedTotalPagesDeductWhiteNum)
     MOCKER(GetNrLocalNuma).stubs().will(returnValue(4));
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     attr.scanAttr.actCount[0].whiteNum = 30;
-    attr.scanAttr.actCount[1].whiteNum = 60; // 白名单页数超过页数时饱和扣到 0
+    attr.scanAttr.actCount[1].whiteNum = 60; // 白名单页数不影响配额计算
 
-    /* (100 - 30) + 0 + 7 */
-    EXPECT_EQ((uint64_t)77, BuildManagedTotalPages(&attr, 2));
+    /* 100 + 50 + 7 */
+    EXPECT_EQ((uint64_t)157, BuildManagedTotalPages(&attr, 2));
     FreeProcessAttrArrays(&attr);
 }
 
 extern "C" void BuildLocalRemainingPages(const ProcessAttr *attr, const PairRequestContext *context,
                                          uint64_t *pairRequests, uint64_t remainingPages[SMAP_MAX_NUMNODES]);
 
-TEST_F(ManageTest, TestBuildLocalRemainingPagesDeductWhiteNum)
+TEST_F(ManageTest, TestBuildLocalRemainingPagesIncludeWhiteNum)
 {
     ProcessAttr attr = {};
     PairRequestContext context = {};
@@ -6707,7 +6644,7 @@ TEST_F(ManageTest, TestBuildLocalRemainingPagesDeductWhiteNum)
     ASSERT_EQ(0, InitProcessAttrArrays(&attr));
     /* actCount 为堆分配数组，须在 InitProcessAttrArrays 之后写 whiteNum */
     attr.scanAttr.actCount[0].whiteNum = 30;
-    attr.scanAttr.actCount[1].whiteNum = 40; // 饱和扣到 0
+    attr.scanAttr.actCount[1].whiteNum = 40; // 白名单页数不影响配额计算
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 0, 2) = 20;
     NM_AT(attr.strategyAttr.remoteNrPagesAfterMigrate, 1, 2) = 5;
     NM_AT(pairRequests, 0, 2) = 10;
@@ -6715,10 +6652,30 @@ TEST_F(ManageTest, TestBuildLocalRemainingPagesDeductWhiteNum)
 
     BuildLocalRemainingPages(&attr, &context, pairRequests, remainingPages);
 
-    /* local0: (100 - 30) + 20 - 10 */
-    EXPECT_EQ((uint64_t)80, remainingPages[0]);
-    /* local1: (10 - 40 => 0) + 5 - 5 */
-    EXPECT_EQ((uint64_t)0, remainingPages[1]);
+    /* local0: 100 + 20 - 10 */
+    EXPECT_EQ((uint64_t)110, remainingPages[0]);
+    /* local1: 10 + 5 - 5 */
+    EXPECT_EQ((uint64_t)10, remainingPages[1]);
     FreeProcessAttrArrays(&attr);
     free(pairRequests);
+}
+
+TEST_F(ManageTest, TestDistributeActcDataPreservesWindowFreq)
+{
+    ProcessAttr attr = {};
+    struct ProcessMemBitmap pmb = {};
+    ActcData data[2] = {};
+
+    attr.type = PROCESS_TYPE;
+    data[0].freq = 3;
+    data[0].prior = 5;
+    data[1].freq = 250;
+    data[1].prior = 10;
+    pmb.nrPages[1] = 2;
+
+    // 普通进程保留原始窗口频次，不与 prior 合成。
+    DistributeActcData(&attr, &pmb, data);
+    EXPECT_EQ(data, attr.scanAttr.actcData[1]);
+    EXPECT_EQ((uint8_t)3, data[0].freq);
+    EXPECT_EQ((uint8_t)250, data[1].freq);
 }

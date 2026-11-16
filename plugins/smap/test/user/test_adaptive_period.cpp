@@ -229,7 +229,7 @@ TEST_F(AdaptivePeriodTest, FeedbackUsesExistingFreqAndAllRemoteNodes)
     MOCKER(GetRemoteHotThreshold).stubs().will(returnValue(uint32_t(65535)));
     ActcData local[3] = {}, remote1[2] = {}, remote2[1] = {};
     local[0].freq = 10;
-    local[0].prior = 9; // merged freq is used as-is, not freq-prior
+    local[0].prior = 9; // Window frequency is independent of prior.
     local[1].freq = 20;
     local[1].isWhiteListPage = true;
     remote1[0].freq = 30;

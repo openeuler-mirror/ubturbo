@@ -1829,8 +1829,9 @@ static inline int cal_acidx_and_node_by_paddr(phys_addr_t paddr,
 static void process_scan_results(struct pte_walk *pte_walk)
 {
 	u64 i, pa_idx;
-	int ret, nid = 0;
+	int ret;
 	bool is_last_scan;
+	int nid = 0;
 
 	if (!pte_walk || !pte_walk->ap)
 		return;
@@ -1841,66 +1842,49 @@ static void process_scan_results(struct pte_walk *pte_walk)
 		struct scan_result_entry *entry = &pte_walk->scan_results[i];
 
 		if (entry->hot) {
-			struct page *pg =
-				pfn_to_online_page(PHYS_PFN(entry->paddr));
+			unsigned long pfn = PHYS_PFN(entry->paddr);
 
-			/* freq/acc live in page->flags: the counting path is
-			 * page-based and needs no paddr->acidx translation.
-			 */
-			if (pg) {
-				folio_set_young(page_folio(pg));
-				/* Pure HW mode: remote freq from hardware only;
-				 * other modes add software accumulation.
-				 */
-				if (!is_freq_hist_only_node(page_to_nid(pg)))
-					smap_page_freq_inc(pg);
-				/* cumulative freq: young anon page of normal scan,
-				 * aged on decay rounds (see smap_page_flags.h)
-				 */
-				if (pte_walk->type == NORMAL_SCAN &&
-				    !is_file_or_shared_page(pg))
-					smap_page_acc_inc(
-						pg, pte_walk->ap->prior_decay);
-			}
-		} else if (pte_walk->type == NORMAL_SCAN &&
-			   pte_walk->ap->prior_decay) {
-			/* decay round: cold pages must age too, otherwise a
-			 * once-hot page keeps its acc forever and can never
-			 * be demoted (squatting on a local slot)
-			 */
-			struct page *pg =
-				pfn_to_online_page(PHYS_PFN(entry->paddr));
-
-			if (pg && !is_file_or_shared_page(pg))
-				smap_page_acc_decay(pg);
+			if (pfn_valid(pfn))
+				folio_set_young(pfn_folio(pfn));
 		}
 
-		/* The bitmap records every scanned page (hot or not), but the
-		 * paddr->acidx translation is only needed on the last scan
-		 * round when the bitmap is actually recorded.
-		 */
-		if (is_last_scan) {
-			if (nid < nr_local_numa) {
-				ret = calc_paddr_acidx_acpi_known_nid(
-					entry->paddr, nid, &pa_idx, PAGE_SIZE);
-				if (ret) {
-					ret = cal_acidx_and_node_by_paddr(
-						entry->paddr, pte_walk->ap,
-						&nid, &pa_idx, PAGE_SIZE);
-				}
-			} else {
-				ret = remote_ram_snapshot_paddr_acidx_known_nid(
-					pte_walk->ap->remote_snapshot,
-					entry->paddr, nid, &pa_idx, PAGE_SIZE);
-				if (ret) {
-					ret = cal_acidx_and_node_by_paddr(
-						entry->paddr, pte_walk->ap,
-						&nid, &pa_idx, PAGE_SIZE);
-				}
+		if (nid < nr_local_numa) {
+			ret = calc_paddr_acidx_acpi_known_nid(
+				entry->paddr, nid, &pa_idx, PAGE_SIZE);
+			if (ret) {
+				ret = cal_acidx_and_node_by_paddr(entry->paddr,
+								  pte_walk->ap,
+								  &nid, &pa_idx,
+								  PAGE_SIZE);
 			}
-			if (!ret)
-				add_to_bm_page_fast(entry->paddr, nid, pa_idx,
-						    pte_walk->ap);
+		} else {
+			ret = remote_ram_snapshot_paddr_acidx_known_nid(
+				pte_walk->ap->remote_snapshot, entry->paddr,
+				nid, &pa_idx, PAGE_SIZE);
+			if (ret) {
+				ret = cal_acidx_and_node_by_paddr(entry->paddr,
+								  pte_walk->ap,
+								  &nid, &pa_idx,
+								  PAGE_SIZE);
+			}
+		}
+		if (ret)
+			continue;
+		entry->nid = nid;
+		if (entry->hot) {
+			/* Pure HW mode: remote freq comes from hardware only;
+			 * other modes add software accumulation.
+			 */
+			if (!is_freq_hist_only_node(entry->nid)) {
+				struct page *pg =
+					smap_paddr_to_page(entry->paddr);
+
+				smap_page_freq_inc(pg);
+			}
+		}
+		if (is_last_scan) {
+			add_to_bm_page_fast(entry->paddr, entry->nid, pa_idx,
+					    pte_walk->ap);
 		}
 		cond_resched();
 	}

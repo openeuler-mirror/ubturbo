@@ -20,6 +20,15 @@ int add_to_bm_hugepage(u64 vaddr, struct page *page, struct access_pid *ap);
 int add_to_bm_page(u64 paddr, struct page *page, struct access_pid *ap);
 int add_to_bm_page_fast(u64 paddr, int nid, u64 acidx, struct access_pid *ap);
 
+static inline struct page *smap_paddr_to_page(phys_addr_t paddr)
+{
+	unsigned long pfn = PHYS_PFN(paddr);
+
+	if (pfn_valid(pfn))
+		return pfn_to_online_page(pfn);
+	return NULL;
+}
+
 static inline void add_to_bm_huge(u64 vaddr, struct page *page,
 				  struct access_pid *ap)
 {

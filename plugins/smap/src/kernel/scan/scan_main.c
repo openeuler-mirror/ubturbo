@@ -563,9 +563,6 @@ static void access_work_func(struct work_struct *work)
 			goto scan_failed;
 	}
 
-	/* cumulative-freq decay cadence: age acc counters this round when due */
-	ap->prior_decay = access_pid_cur_prior_decay(ap);
-
 	down_read(&scan_state.lock);
 	down_read(&slot->ap_lock);
 	page_size = get_scan_page_size();
@@ -584,7 +581,6 @@ static void access_work_func(struct work_struct *work)
 		goto scan_failed;
 	}
 	ap->cur_times++;
-	ap->acc_times = ap->prior_decay ? 0 : (ap->acc_times + 1);
 	pr_debug("pid[%d] cpu[%d], scan took %lldus for %dth time\n", ap->pid,
 		 raw_smp_processor_id(), scan_time, ap->cur_times);
 

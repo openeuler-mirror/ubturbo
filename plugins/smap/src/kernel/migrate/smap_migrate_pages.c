@@ -19,7 +19,6 @@
 #include "dump_info.h"
 #include "smap_migrate_wrapper.h"
 #include "critical.h"
-#include "../scan/smap_page_flags.h"
 #include "smap_migrate_pages.h"
 
 #define MAX_MIGRATE_NUMA_RETRY_TIME 10
@@ -1202,25 +1201,17 @@ struct folio *smap_alloc_huge_page_node(struct folio *folio, int nid,
 
 struct folio *smap_alloc_new_node_page(struct folio *folio, unsigned long node)
 {
-	struct folio *dst_folio;
-
-	dst_folio = folio_test_hugetlb(folio)
-			    ? smap_alloc_huge_page_node(folio, node, false)
-			    : alloc_demote_page(folio, node);
-	/* inherit cumulative access count to avoid ping-pong migration */
-	migrate_folio_actc(folio, dst_folio);
-	return dst_folio;
+	if (folio_test_hugetlb(folio)) {
+		return smap_alloc_huge_page_node(folio, node, false);
+	}
+	return alloc_demote_page(folio, node);
 }
 
 struct folio *smap_alloc_new_node_page_mig_back(struct folio *folio,
 						unsigned long node)
 {
-	struct folio *dst_folio;
-
-	dst_folio = folio_test_hugetlb(folio)
-			    ? smap_alloc_huge_page_node(folio, node, true)
-			    : alloc_demote_page(folio, node);
-	/* inherit cumulative access count to avoid ping-pong migration */
-	migrate_folio_actc(folio, dst_folio);
-	return dst_folio;
+	if (folio_test_hugetlb(folio)) {
+		return smap_alloc_huge_page_node(folio, node, true);
+	}
+	return alloc_demote_page(folio, node);
 }
