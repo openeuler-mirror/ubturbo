@@ -113,6 +113,12 @@ void LedgerSettleInFlightLocked(const uint32_t *planned, int nrLocalNuma);
 
 void SetPidNrPages(ProcessAttr *attr, size_t *nrPages, int len);
 void CalcActcStats(ProcessAttr *attr);
+void InitPidAdaptivePeriod(ProcessAttr *attr);
+void ResetPidAdaptivePeriod(ProcessAttr *attr);
+void ObservePidAdaptivePeriod(ProcessAttr *attr);
+/* Returns whether adaptation is enabled; prepared adaptive periods are stored in attr. */
+bool PreparePidAdaptivePeriod(ProcessAttr *attr);
+void RecordPidAppliedPeriods(ProcessAttr *attr, uint32_t scan, uint32_t migrate, bool adaptive);
 void DistributeActcData(ProcessAttr *attr, struct ProcessMemBitmap *pmb, ActcData *buf);
 int RefreshManagedLocalStatePeriodic(ProcessAttr *attr);
 /* BuildPidData/RefreshAllPidData 已在 manage.h 中声明 */

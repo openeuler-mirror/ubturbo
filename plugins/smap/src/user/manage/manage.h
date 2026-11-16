@@ -371,6 +371,25 @@ typedef struct {
     MmapType mmapType; // 内存映射模式SHARED/PRIVATE
 } VMPidAttribute;
 
+/* Aggregates use the existing user-space freq, including its existing prior/hardware semantics. */
+typedef struct {
+    uint64_t localHotPages;
+    uint64_t remoteHotPages;
+    uint64_t localFreq;
+    uint64_t remoteFreq;
+    double remoteHotRatio;
+    double remoteFreqRatio;
+} PeriodFeedback;
+
+typedef struct {
+    uint32_t appliedScan;
+    uint32_t appliedMigrate;
+    double previousRatio;
+    bool previousValid;
+    bool appliedAdaptive;
+    bool slow;
+} AdaptivePeriod;
+
 struct ProcessAttribute {
     PidType type; // VM/PID
     pid_t pid;
@@ -379,6 +398,9 @@ struct ProcessAttribute {
     uint32_t duration; // HAM_SCAN和STATISTIC_SCAN模式下的扫描时长，单位秒
     uint32_t migPeriod; // 仅NORMAL_SCAN模式生效，进程迁移周期，单位毫秒
     ScanType scanType; // 标识添加进程组件
+    AdaptivePeriod adaptivePeriod;
+    PeriodFeedback periodFeedback;
+    bool periodFeedbackReady; // Only a freshly read complete window may drive adaptation.
     time_t scanStart;
     SceneInfo sceneInfo; // 场景：轻载/重载/稳态/非稳态，扫描周期等
     MigrateMode migrateMode; // 内存迁移模式，按照比例或是大小

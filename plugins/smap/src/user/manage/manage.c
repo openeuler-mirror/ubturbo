@@ -710,7 +710,9 @@ void GetProcessPeriods(const ProcessAttr *attr, uint32_t *scanTime, uint32_t *mi
 {
     *scanTime = attr && attr->scanTime ? attr->scanTime : DEFAULT_SCAN_PERIOD;
     *migPeriod = attr && attr->scanType == NORMAL_SCAN && attr->migPeriod ? attr->migPeriod : DEFAULT_MIGRATE_PERIOD;
-    if (GetFileConfSwitchConfig()) {
+    if ((!attr || attr->scanType == NORMAL_SCAN) && GetAdaptivePeriodEnableConfig()) {
+        GetAdaptivePeriods(attr && attr->adaptivePeriod.slow, scanTime, migPeriod);
+    } else if (GetFileConfSwitchConfig()) {
         *scanTime = GetScanPeriodConfig();
         *migPeriod = GetMigratePeriodConfig();
     }
@@ -764,8 +766,7 @@ int PidSlotAdd(struct ProcessManager *manager, ProcessAttr *attr)
             continue;
         }
         if (attr->scanType == NORMAL_SCAN) {
-            attr->scanTime = DEFAULT_SCAN_PERIOD;
-            attr->migPeriod = DEFAULT_MIGRATE_PERIOD;
+            InitPidAdaptivePeriod(attr);
         }
         s->pid = attr->pid;
         s->attr = attr;

@@ -1912,17 +1912,25 @@ static bool SmapAutoRemovePidIfRemoteEmpty(ProcessAttr *attr)
 /* Reapply effective periods before the next scan window; failed ioctls retry next window. */
 static void UpdateProcessPeriods(ProcessAttr *attr)
 {
+    bool adaptive = PreparePidAdaptivePeriod(attr);
+    uint32_t scan = attr->scanTime;
+    uint32_t migrate = attr->migPeriod;
+    if (!adaptive) {
+        GetProcessPeriods(attr, &scan, &migrate);
+    }
     struct AccessAddPidPayload payload = {
         .pid = attr->pid,
         .numaNodes = attr->numaAttr.numaNodes,
         .type = NORMAL_SCAN,
         .pidType = attr->type,
-        .scanTime = attr->scanTime,
-        .duration = attr->duration,
+        .scanTime = scan,
+        .duration = migrate,
     };
-    int ret = AccessIoctlAddPid(1, &payload);
+    int ret = AccessIoctlUpdatePid(1, &payload);
     if (ret) {
         SMAP_LOGGER_WARNING("Update pid %d periods failed: %d.", attr->pid, ret);
+    } else {
+        RecordPidAppliedPeriods(attr, scan, migrate, adaptive);
     }
 }
 
@@ -1936,14 +1944,23 @@ static int ProcessPidScanMigrate(struct ProcessManager *manager, struct PidSlot 
     struct timeval start, end;
     int ret = 0;
 
-    /* The completed window is stable; configure the next one before restarting. */
-    if (attr && attr->scanType == NORMAL_SCAN) {
-        UpdateProcessPeriods(attr);
-    }
     if (!attr || attr->scanType != NORMAL_SCAN || attr->state != PROC_IDLE) {
+        if (attr) {
+            EnvMutexLock(&slot->attrLock);
+            attr->periodFeedbackReady = false;
+            ObservePidAdaptivePeriod(attr);
+            EnvMutexUnlock(&slot->attrLock);
+        }
         goto enable;
     }
+    attr->periodFeedbackReady = false;
     ret = BuildPidData(attr);
+    EnvMutexLock(&slot->attrLock);
+    if (ret) {
+        attr->periodFeedbackReady = false;
+    }
+    ObservePidAdaptivePeriod(attr);
+    EnvMutexUnlock(&slot->attrLock);
     if (ret) {
         SMAP_LOGGER_ERROR("Build pid %d data failed: %d.", pid, ret);
         goto enable;
@@ -1998,6 +2015,11 @@ settle:
     }
     EnvMutexUnlock(&slot->attrLock);
 enable:
+    if (attr && attr->scanType == NORMAL_SCAN) {
+        EnvMutexLock(&slot->attrLock);
+        UpdateProcessPeriods(attr);
+        EnvMutexUnlock(&slot->attrLock);
+    }
     if (RestartPidScan(pid) && ret == 0) {
         ret = -EIO;
     }

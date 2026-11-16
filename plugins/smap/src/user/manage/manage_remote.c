@@ -648,6 +648,7 @@ OUT:
 
 void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *candidate)
 {
+    ResetPidAdaptivePeriod(attr);
     attr->targetConfig = candidate->targetConfig;
     attr->migrateMode = candidate->migrateMode;
     attr->remoteNumaCnt = candidate->remoteNumaCnt;
@@ -674,6 +675,7 @@ void PublishProcessTargetCandidate(ProcessAttr *attr, const ProcessAttr *candida
     CopyProcessAttrArrays(attr, candidate);
     attr->isFirstScan = candidate->isFirstScan;
     attr->scanTime = candidate->scanTime;
+    attr->migPeriod = candidate->migPeriod;
     int cap = (int)GetNumaCap();
     for (int i = 0; i < cap; i++) {
         attr->migrateParam[i] = candidate->migrateParam[i];

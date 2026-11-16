@@ -58,6 +58,8 @@ void CalcActcStats(ProcessAttr *attr)
     uint16_t remoteHotThreshold = GetRemoteHotThreshold();
     int nrLocalNuma = GetNrLocalNuma();
     int cap = (int)GetNumaCap();
+    PeriodFeedback *feedback = &attr->periodFeedback;
+    *feedback = (PeriodFeedback){ 0 };
 
     for (int nid = 0; nid < cap; nid++) {
         uint64_t actcLen = attr->scanAttr.actcLen[nid];
@@ -84,6 +86,13 @@ void CalcActcStats(ProcessAttr *attr)
 
         for (uint64_t i = 0; i < actcLen; i++) {
             actc_t freq = actc[i].freq;
+            if (nid < nrLocalNuma) {
+                feedback->localHotPages += (freq > 0);
+                feedback->localFreq += freq;
+            } else {
+                feedback->remoteHotPages += (freq > 0);
+                feedback->remoteFreq += freq;
+            }
             uint16_t bucketIdx = MIN(freq, FREQ_BUCKETS_SIZE - 1);
             if (nid >= nrLocalNuma || !actc[i].isWhiteListPage) {
                 count->freqBuckets[bucketIdx]++;
@@ -125,6 +134,14 @@ void CalcActcStats(ProcessAttr *attr)
             }
         }
     }
+    uint64_t hotPages = feedback->localHotPages + feedback->remoteHotPages;
+    uint64_t frequency = feedback->localFreq + feedback->remoteFreq;
+    feedback->remoteHotRatio = hotPages ? (double)feedback->remoteHotPages / hotPages : 0;
+    feedback->remoteFreqRatio = frequency ? (double)feedback->remoteFreq / frequency : 0;
+    SMAP_LOGGER_DEBUG("[pid_feedback] pid=%d local_hot=%llu remote_hot=%llu "
+                      "local_freq=%llu remote_freq=%llu remote_hot_pct=%.3f remote_freq_pct=%.3f.",
+                      attr->pid, feedback->localHotPages, feedback->remoteHotPages, feedback->localFreq,
+                      feedback->remoteFreq, feedback->remoteHotRatio * 100.0, feedback->remoteFreqRatio * 100.0);
 }
 
 /**
@@ -254,6 +271,7 @@ static int FillPidData(ProcessAttr *attr, struct ProcessMemBitmap *pmb)
     }
 
     CalcActcStats(attr);
+    attr->periodFeedbackReady = true;
 
     return 0;
 }
@@ -282,6 +300,7 @@ int BuildPidData(ProcessAttr *attr)
     if (!attr) {
         return -EINVAL;
     }
+    attr->periodFeedbackReady = false;
     if (attr->scanType != NORMAL_SCAN) {
         return 0;
     }

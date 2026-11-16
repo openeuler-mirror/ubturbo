@@ -99,6 +99,9 @@ struct SmapScanCpuRange {
 #define SMAP_ACCESS_SET_SCAN_CPU _IOW(SMAP_ACCESS_MAGIC, 9, struct SmapScanCpuRange)
 
 int AccessIoctlAddPid(int len, struct AccessAddPidPayload *payload);
+/* Update tracked PIDs without registering epoll again; safe while the caller holds attrLock. */
+/* NORMAL_SCAN updates must carry resolved scanTime/duration in milliseconds. */
+int AccessIoctlUpdatePid(int len, struct AccessAddPidPayload *payload);
 int AccessIoctlRemovePid(int len, struct AccessRemovePidPayload *payload);
 int AccessIoctlRemoveAllPid(void);
 int AccessIoctlWalkPagemap(pid_t pid, struct ProcessMemBitmap *pmb);
