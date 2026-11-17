@@ -24,7 +24,7 @@ int ubturbo_smap_start(uint32_t pageType, Logfunc extlog);
 
 ### 描述 DESCRIPTION
 
-初始化SMAP，设置场景及迁移页面类型，虚拟化场景对应2M大页迁移，通算场景对应4K页迁移。
+初始化SMAP，设置全局迁移页面类型：`pageType=0`（4K页）支持普通进程与4K虚机场景；`pageType=1`（2M大页）仅支持虚机场景。两类场景不能在同一实例混用。
 
 ### 参数 Parameters
 
@@ -159,7 +159,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pageType);
 | msg | IN | 配置参数。 |
 | msg.count | IN | 配置数量。 |
 | msg.payload | IN | 配置数组。 |
-| msg.payload.srcNid | IN | 近端迁出NUMA。 |
+| msg.payload.srcNid | IN | 迁出来源本地NUMA：-1表示由SMAP自动选择来源；0到本地NUMA数量-1表示固定从该本地NUMA迁出。 |
 | msg.payload.pid | IN | 进程PID。 |
 | msg.payload.count | IN | PID迁出配置数量。 |
 | msg.payload.inner | IN | PID迁出配置数组。 |
@@ -195,6 +195,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pageType);
 * 建议在PID相关的本地NUMA和远端NUMA上均预留不低于计划迁移规模5%~10%的空闲内存；对于2M huge page虚机，该预留量应换算为对应数量的空闲2M huge page。上述预留值为部署建议，不是接口入参校验条件；调用成功仅表示策略配置成功，不保证后续每轮冷热迁移都能实际迁移页面。
 * 4K进程迁移不支持远端多NUMA。
 * 迁移会过滤掉共享页。
+* msg.payload.srcNid为迁出来源本地NUMA：-1表示自动选择来源；0到本地NUMA数量-1表示固定从该本地NUMA迁出，指定后该PID的迁出及后续冷热交换仅以该本地节点为来源，其他取值返回-EINVAL。
 
 ### 附注 NOTES
 
@@ -202,7 +203,7 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pageType);
 
 ### 样例 EXAMPLES
 
-以下程序配置PID为10253的虚机进程迁出到NUMA4上，迁出比例为25%。
+以下程序配置PID为10253的虚机进程迁出到NUMA4上，迁出比例为25%，迁出来源本地NUMA由SMAP自动选择。
 
 ```c
 #include <stdio.h>
@@ -211,20 +212,22 @@ int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pageType);
 int main(void)
 {
     int ret;
-    struct MigrateOutMsg payload = {
-        .srcNid = 0,
+    struct MigrateOutPayload payload = {
+        .srcNid = -1,
         .pid = 10253,
         .count = 1,
         .inner = {
-            .destNid = 4,
-            .ratio = 25,
-            .memSize = 0,
-            .migrateMode = 0,
-        };
+            {
+                .destNid = 4,
+                .ratio = 25,
+                .memSize = 0,
+                .migrateMode = 0,
+            },
+        },
     };
     struct MigrateOutMsg msg = {
         .count = 1,
-        .payload = payload,
+        .payload = {payload},
     };
 
     ret = ubturbo_smap_migrate_out(&msg, 1);
@@ -1256,6 +1259,7 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint6
 | msg | IN | 配置参数。 |
 | msg.count | IN | 配置数量。 |
 | msg.payload | IN | 配置数组。 |
+| msg.payload.srcNid | IN | 迁出来源本地NUMA：-1表示由SMAP自动选择来源；0到本地NUMA数量-1表示固定从该本地NUMA迁出。 |
 | msg.payload.destNid | IN | 远端NUMA。 |
 | msg.payload.pid | IN | 进程PID。 |
 | msg.payload.ratio | IN | 迁出比例。 |
@@ -1285,6 +1289,7 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint6
 * 只支持内存池化场景。
 * 本接口同步完成初始迁出后，PID仍会被SMAP纳管并参与后续周期冷热迁移；冷热迁移依赖迁移目标NUMA存在可用空闲内存。对于2M huge page虚机场景，本地NUMA和远端NUMA均需要存在可用的空闲2M huge page；若本地NUMA空闲2M huge page不足，远端热页回迁或冷热交换可能无法执行；若远端NUMA空闲2M huge page不足，后续冷页迁出可能无法执行。
 * 建议在PID相关的本地NUMA和远端NUMA上均预留不低于计划迁移规模5%~10%的空闲内存；对于2M huge page虚机，该预留量应换算为对应数量的空闲2M huge page。上述预留值为部署建议，不是接口入参校验条件；调用成功仅表示策略配置成功，不保证后续每轮冷热迁移都能实际迁移页面。
+* msg.payload.srcNid为迁出来源本地NUMA：-1表示自动选择来源；0到本地NUMA数量-1表示固定从该本地NUMA迁出，指定后该PID的迁出及后续冷热交换仅以该本地节点为来源，其他取值返回-EINVAL。
 
 ### 附注 NOTES
 
@@ -1292,7 +1297,7 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint6
 
 ### 样例 EXAMPLES
 
-以下程序配置PID为10253的虚机进程迁出到NUMA4上，迁出大小为100MB，最多等待60s。
+以下程序配置PID为10253的虚机进程迁出到NUMA4上，迁出大小为100MB，最多等待60s，迁出来源本地NUMA由SMAP自动选择。
 
 ```c
 #include <stdio.h>
@@ -1301,20 +1306,22 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pageType, uint6
 int main(void)
 {
     int ret;
-    struct MigrateOutMsg payload = {
-        .srcNid = 0,
+    struct MigrateOutPayload payload = {
+        .srcNid = -1,
         .pid = 10253,
         .count = 1,
         .inner = {
-            .destNid = 4,
-            .ratio = 0,
-            .memSize = 102400,
-            .migrateMode = 1,
-        };
+            {
+                .destNid = 4,
+                .ratio = 0,
+                .memSize = 102400,
+                .migrateMode = 1,
+            },
+        },
     };
     struct MigrateOutMsg msg = {
         .count = 1,
-        .payload = payload,
+        .payload = {payload},
     };
 
     ret = ubturbo_smap_migrate_out_sync(&msg, 1, 60000);
@@ -1518,8 +1525,8 @@ int main(void)
 接口声明在 `src/user/smap_interface.h`，由 `libsmap.so` 提供。除特别说明外，返回 `0` 表示请求成功，
 负 errno 或其他非零值表示失败。调用方必须使用与库同版本的头文件。
 
-- `pageType=0`：4K 普通进程页面。
-- `pageType=1`：2M 静态大页虚机。
+- `pageType=0`：4K 页面，支持普通进程与 4K 虚机。
+- `pageType=1`：2M 静态大页，仅支持虚机。
 - 所有 `msg`、数组和输出长度指针必须非空并满足头文件上限。
 - “请求成功”不一定代表异步页面迁移已收敛到目标。
 
@@ -1556,7 +1563,9 @@ void ubturbo_smap_urgent_migrate_out(uint64_t size);
 
 - 同一 PID 可以配置多个远端 NUMA。
 - 一次调用完整替换该 PID 的普通迁出目标；目标数量为 0 表示清空。
-- 普通路径中的 `srcNid` 仅为 ABI 兼容保留，不参与本地 NUMA 选择。
+- `srcNid` 指定迁出来源本地 NUMA：`-1`（`NUMA_NO_NODE`）表示由 SMAP 自动选择来源；指定为某个本地
+  NUMA（`0` 到 本地NUMA数量-1）时，该 PID 的迁出与后续冷热交换仅以该本地节点为来源，其余本地节点
+  的页面不参与迁移。
 - 容量不足时配置可被保存，但页面按可用容量逐步收敛。
 
 分组迁出使用 `GroupedMigrateOutMsg` 描述 local 集合、目标集合、本地保留水线和远端容量，目前仅用于

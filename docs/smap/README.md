@@ -3,7 +3,7 @@
 [简体中文](README.md) | [English](readme_en.md)
 
 SMAP 是 UBTurbo 集成的多级内存扫描与页面迁移组件。它由 `libsmap.so` 用户态库以及统一的
-`smap.ko` 内核模块组成，支持 4K 普通进程和 2M 静态大页虚机场景。
+`smap.ko` 内核模块组成，支持 4K 普通进程、4K 虚机和 2M 静态大页虚机场景。
 
 ## 核心能力
 
@@ -53,7 +53,7 @@ make -C src/kernel KERNEL_VERSION=openeuler -j"$(nproc)"
 内核模块的安装、加载、扫描模式配置和卸载方法统一参见
 [UBTurbo 安装指南](../ubturbo_installation.md#安装-smap)。
 
-`ubturbo_smap_start` 的 `pageType` 为 `0` 时使用 4K 普通页面，为 `1` 时使用 2M 静态大页；同一实例
+`ubturbo_smap_start` 的 `pageType` 为 `0` 时使用 4K 页面（支持普通进程与 4K 虚机），为 `1` 时使用 2M 静态大页（仅支持虚机）；同一实例
 不得混用。典型流程为启动 SMAP、设置远端容量、添加 PID 或配置迁出目标、查询结果、移除 PID 并停止
 SMAP。完整接口见 [API 参考](api_reference.md)。
 
