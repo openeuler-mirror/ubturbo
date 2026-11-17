@@ -78,7 +78,7 @@ SMAP 从 `/opt/ubturbo/conf/smap/smap_strategy.conf` 读取扁平键值。该文
 在 SMAP 策略配置模块内，不能通过调用方参数或环境变量覆盖。单独部署 SMAP 且未安装 RPM 时，需
 手动创建目录与文件，并为实际运行主体设置合适的最小权限。`#` 开头的行是注释。
 
-解析表包含 17 个键，全部可选，键缺席时沿用下表内置默认值，不存在必填项：
+解析表包含 19 个键，全部可选，键缺席时沿用下表内置默认值，不存在必填项：
 
 | 键                                        |          默认值 | 有效范围/格式                          |
 | ----------------------------------------- | ---------------: | -------------------------------------- |
@@ -99,6 +99,16 @@ SMAP 从 `/opt/ubturbo/conf/smap/smap_strategy.conf` 读取扁平键值。该文
 | `smap.scan.cpu`                         |     空值=未配置 | `min-max`，如 `0-63`，允许 `35 - 63`   |
 | `smap.ub.bw.threshold`                  |                0 | 0–65535                               |
 | `smap.remote.scan.mode`                 |                1 | 0：纯软；1：软硬结合；2：纯硬         |
+| `smap.swap.enable`                      |            false | `true` / `false`                      |
+| `smap.l3.cold.threshold`                |               30 | 1–62，单位秒                          |
+
+`smap.swap.enable` 控制按进程内核换出开关。`false`（默认）时内核换出功能保持关闭，不下发任何换出
+配置；`true` 时本开关与 `smap.l3.cold.threshold` 在一条命令中一并下发内核。2M 大页（hugetlb）页面
+是否参与换出由运行内核的 hugetlb swap 能力决定（探测 `/proc/meminfo` 是否存在 `HugePages_Swap`
+行）；不具备该能力时仅普通进程页面换出生效，配合 4K 虚机/普通进程场景使用。
+
+`smap.l3.cold.threshold` 为 L3 冷周期时长（秒）：页面连续冷置超过该时长后进入内核换出待处理阶段。
+仅在 `smap.swap.enable=true` 时生效。
 
 `smap.scan.cpu` 空值（如 `smap.scan.cpu =`）表示未配置：不下发内核、迁移线程不绑核，内核默认
 全 CPU 生效。显式配置时绑定扫描 workqueue 与迁移线程到 `[min, max]`，`min <= max` 且两者均不得
