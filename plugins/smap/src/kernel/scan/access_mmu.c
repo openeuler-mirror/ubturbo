@@ -107,8 +107,10 @@ int add_to_bm_page(u64 paddr, struct page *page, struct access_pid *ap)
 
 			if (ap->pid_type == SMAP_PID_VM &&
 			    period >= get_l3_cold_threshold()) {
-				if (smap_swap_stage(ap, page))
+				if (smap_swap_stage(ap, page)) {
+					smap_page_cold_periods_reset(page);
 					return 0;
+				}
 			}
 			/* Staged pages belong to the swap worker now: the
 			 * early return keeps them out of the migration
@@ -242,8 +244,10 @@ int add_to_bm_hugepage(u64 vaddr, struct page *page, struct access_pid *ap)
 			 * bitmap; a failed stage needs no page-flags
 			 * compensation */
 			if (period >= get_l3_cold_threshold()) {
-				if (smap_swap_stage(ap, page))
+				if (smap_swap_stage(ap, page)) {
+					smap_page_cold_periods_reset(page);
 					return 0;
+				}
 			}
 		} else {
 			smap_page_cold_periods_reset(page);

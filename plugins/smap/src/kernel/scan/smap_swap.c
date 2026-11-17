@@ -429,12 +429,9 @@ void smap_swap_work_fn(struct work_struct *work)
 		}
 
 		/*
-		 * ignore_references=true: pages reaching the swap worker have
-		 * already been verified cold for the configured period during
-		 * scanning, so skip the shrink_folio_list() reference re-check
-		 * (folio_check_references()) and reclaim regardless of young
-		 * bits picked up in the staging-to-worker window. This keeps
-		 * the per-batch reclaimed count close to the batch size.
+		 * Recheck referenced/young state in the reclaim path. A page may
+		 * have been accessed after staging and before this worker runs;
+		 * reclaim_pages() will keep such a page from being swapped.
 		 */
 		unsigned int nr_reclaimed = 0;
 
@@ -442,7 +439,7 @@ void smap_swap_work_fn(struct work_struct *work)
 		/* reclaim_pages() internals put back every un-reclaimed
 		 * folio (releasing the isolate references) and return with
 		 * the list empty — no residual handling on this side. */
-		nr_reclaimed = reclaim_pages(&page_list, true);
+		nr_reclaimed = reclaim_pages(&page_list, false);
 #endif
 		stats.staged += n;
 		stats.lru_skip += nr_lru_skip;
