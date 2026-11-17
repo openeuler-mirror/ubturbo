@@ -419,7 +419,6 @@ int GetPidTypeFromComm(pid_t pid)
         SMAP_LOGGER_ERROR("Failed to generate comm path, ret is %d.", ret);
         return -EINVAL;
     }
-    SMAP_LOGGER_INFO("Before open comm file");
     /* 进程内直读 /proc/<pid>/comm，依赖 CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE，不再经 sudo cat.sh */
     FILE *file = fopen(path, "r");
     if (!file) {
@@ -439,7 +438,6 @@ int GetPidTypeFromComm(pid_t pid)
             return VM_TYPE;
         }
     }
-    SMAP_LOGGER_ERROR("Error occur in fgets comm file");
     (void)fclose(file);
     if (foundLine) {
         return PROCESS_TYPE;
