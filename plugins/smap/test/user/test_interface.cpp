@@ -2535,7 +2535,7 @@ TEST_F(InterfaceTest, TestQueryVMFreqFromUserNormalThree)
     PidSlotDestroy(&g_processManager);
 }
 
-TEST_F(InterfaceTest, TestQueryVMFreqFromUserSubtractPrior)
+TEST_F(InterfaceTest, TestQueryVMFreqFromUserPreservesWindowFreq)
 {
     int pid = 1;
     uint32_t lengthOut;
@@ -2549,7 +2549,7 @@ TEST_F(InterfaceTest, TestQueryVMFreqFromUserSubtractPrior)
     ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
     g_processManager.tracking.pageSize = PAGESIZE_2M;
     EnvMutexInit(&g_processManager.threadLock);
-    /* 缓存中为合成值(prior + 窗口freq), 回调拷贝应扣除 prior 还原窗口频次 */
+    /* 回调直接返回窗口频次，不扣除 prior。 */
     memset(&g_stubFreq, 0, sizeof(g_stubFreq));
     g_stubFreq.node0[0].freq = 5;
     g_stubFreq.node0[0].prior = 5;
@@ -2565,8 +2565,8 @@ TEST_F(InterfaceTest, TestQueryVMFreqFromUserSubtractPrior)
     pthread_join(tid, nullptr);
     EXPECT_EQ(0, ret);
     EXPECT_EQ(3U, lengthOut);
-    EXPECT_EQ(0, data[0]); // 合成值等于 prior, 表示窗口内未访问
-    EXPECT_EQ(5, data[1]);
+    EXPECT_EQ(5, data[0]);
+    EXPECT_EQ(7, data[1]);
     EXPECT_EQ(2, data[2]);
     PidSlotDestroy(&g_processManager);
 }

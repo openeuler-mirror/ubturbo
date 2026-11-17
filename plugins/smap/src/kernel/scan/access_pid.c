@@ -535,9 +535,7 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 			actc[len_cnt].freq = smap_page_freq_read_clear(page);
 		}
 
-		/* Fill prior: VM uses the priors array, while a normal process
-		 * uses the cumulative access count kept in page->flags.
-		 */
+		/* Fill prior from priors array */
 		if (ap->info.vm_size && ap->info.priors) {
 			if ((mapping_offset + len_cnt) < ap->info.vm_size) {
 				flags |= ACTC_PRIOR_SET(
@@ -545,7 +543,7 @@ static void fill_actc_data_by_bitmap(struct access_pid *ap, int nid,
 							len_cnt]);
 			}
 		} else {
-			flags |= ACTC_PRIOR_SET(smap_page_acc_get(page));
+			flags |= ACTC_PRIOR_SET(0);
 		}
 
 		actc[len_cnt].flags = flags;

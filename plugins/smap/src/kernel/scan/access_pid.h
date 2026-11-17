@@ -90,8 +90,6 @@ struct access_pid {
 	u32 scan_time;
 	u32 ntimes;
 	u32 cur_times;
-	u32 acc_times; /* scan rounds since last cumulative-freq decay */
-	bool prior_decay; /* current round ages cumulative freq (see smap_page_flags.h) */
 	struct delayed_work scan_work;
 	struct completion work_done;
 	/* Notify readers only after scanning and bitmap construction finish. */
@@ -198,17 +196,6 @@ static inline u8 ap_cycle_cold_secs(struct access_pid *ap)
 	ms = ktime_to_ms(ktime_sub(ktime_get(), ap->cycle_start));
 	secs = (ms + 999) / 1000; /* ceil to seconds */
 	return (u8)max_t(u64, 1, min_t(u64, secs, MAX_L3_COLD_THRESHOLD));
-}
-
-/*
- * Cumulative-freq decay round: every SMAP_ACC_DECAY_CYCLE scan rounds the
- * 5-bit acc counters stored in page->flags are aged (halved) on increment,
- * so that long-term hot pages stay distinguishable from transiently hot
- * ones within the 5-bit range.
- */
-static inline bool access_pid_cur_prior_decay(struct access_pid *ap)
-{
-	return ap->type == NORMAL_SCAN && ap->acc_times >= SMAP_ACC_DECAY_CYCLE;
 }
 
 static inline void clear_vm_mapping(u8 *priors, u32 len)

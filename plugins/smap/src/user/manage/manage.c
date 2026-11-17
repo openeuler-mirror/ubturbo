@@ -1175,17 +1175,7 @@ void InvokeFreqCallbacks(ProcessAttr *attr)
             ActcData *actc = attr->scanAttr.actcData[nid];
             uint64_t len = attr->scanAttr.actcLen[nid];
             for (uint64_t j = 0; j < len && copied < w->bufLen; j++, copied++) {
-                actc_t freq = actc[j].freq;
-                /*
-                 * 缓存中的 freq 已被 MergeAccPriorToFreq 合成为“累计频次 + 窗口频次”
-                 * （合并先于发布，查询不会看到未合并数据），查询接口保持原始窗口频次
-                 * 语义：非 VM 场景减去累计 prior 还原，合并时饱和到 255 的页无法完全
-                 * 还原。VM 的 prior 是分配序语义，未参与合成，直接返回。
-                 */
-                if (attr->type != VM_TYPE) {
-                    freq = (freq > actc[j].prior) ? (actc_t)(freq - actc[j].prior) : 0;
-                }
-                w->buf[copied] = freq;
+                w->buf[copied] = actc[j].freq;
             }
         }
         w->outLen = copied;

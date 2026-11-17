@@ -229,7 +229,7 @@ TEST_F(AdaptivePeriodTest, FeedbackUsesExistingFreqAndAllRemoteNodes)
     MOCKER(GetRemoteHotThreshold).stubs().will(returnValue(uint32_t(65535)));
     ActcData local[3] = {}, remote1[2] = {}, remote2[1] = {};
     local[0].freq = 10;
-    local[0].prior = 9; // merged freq is used as-is, not freq-prior
+    local[0].prior = 9; // Window frequency is independent of prior.
     local[1].freq = 20;
     local[1].isWhiteListPage = true;
     remote1[0].freq = 30;
@@ -243,6 +243,9 @@ TEST_F(AdaptivePeriodTest, FeedbackUsesExistingFreqAndAllRemoteNodes)
     // CalcActcStats also resets selectedBuckets.
     attr->scanAttr.selectedBuckets =
         static_cast<uint32_t(*)[FREQ_BUCKETS_SIZE]>(calloc(3, sizeof(*attr->scanAttr.selectedBuckets)));
+    /* CalcActcStats 在 actCount 为 NULL 时直接返回，须先分配再统计 */
+    attr->scanAttr.actCount = static_cast<ActCount *>(calloc(3, sizeof(ActCount)));
+    ASSERT_NE(nullptr, attr->scanAttr.actCount);
     CalcActcStats(attr);
     EXPECT_EQ(2u, attr->periodFeedback.localHotPages);
     EXPECT_EQ(2u, attr->periodFeedback.remoteHotPages);
@@ -259,6 +262,8 @@ TEST_F(AdaptivePeriodTest, FeedbackUsesExistingFreqAndAllRemoteNodes)
     EXPECT_DOUBLE_EQ(0, attr->periodFeedback.remoteHotRatio);
     EXPECT_DOUBLE_EQ(0, attr->periodFeedback.remoteFreqRatio);
     free(attr->scanAttr.selectedBuckets);
+    free(attr->scanAttr.actCount);
+    attr->scanAttr.actCount = nullptr;
     g_numaCap = oldCap;
 }
 

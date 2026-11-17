@@ -50,6 +50,7 @@ struct hva_info {
 
 struct scan_result_entry {
 	phys_addr_t paddr;
+	u8 nid;
 	u8 hot;
 };
 
