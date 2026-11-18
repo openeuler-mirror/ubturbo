@@ -472,30 +472,35 @@ static void pos_to_addr(struct mm_struct *mm, unsigned long pos,
 	*vaddr = last_vaddr;
 }
 
+/*
+ * get_mm_by_pid - get the mm of @pid with an mm_users reference held
+ *
+ * Returns the mm (caller must mmput() it), NULL if the task has no mm,
+ * or an ERR_PTR. The previous version took an extra mmgrab() that no
+ * caller ever dropped, leaking one mm_count per scan round.
+ */
 struct mm_struct *get_mm_by_pid(pid_t pid)
 {
-	struct task_struct *task = get_pid_task(find_vpid(pid), PIDTYPE_PID);
-	struct mm_struct *mm = ERR_PTR(-ESRCH);
+	struct task_struct *task;
+	struct mm_struct *mm;
 	int err;
 
-	if (task) {
-		err = down_read_killable(&task->signal->exec_update_lock);
-		if (err) {
-			put_task_struct(task);
-			return ERR_PTR(err);
-		}
+	rcu_read_lock();
+	task = pid_task(find_vpid(pid), PIDTYPE_PID);
+	if (task)
+		get_task_struct(task);
+	rcu_read_unlock();
+	if (!task)
+		return ERR_PTR(-ESRCH);
 
-		mm = get_task_mm(task);
-		up_read(&task->signal->exec_update_lock);
+	err = down_read_killable(&task->signal->exec_update_lock);
+	if (err) {
 		put_task_struct(task);
-
-		if (!IS_ERR_OR_NULL(mm)) {
-			/* ensure this mm_struct can't be freed */
-			mmgrab(mm);
-			/* but do not pin its memory */
-			mmput(mm);
-		}
+		return ERR_PTR(err);
 	}
+	mm = get_task_mm(task);
+	up_read(&task->signal->exec_update_lock);
+	put_task_struct(task);
 
 	return mm;
 }
@@ -513,9 +518,7 @@ void walk_pid_pagemap(struct pagemapread *pm)
 	}
 	/* 获取mm_struct */
 	mm = get_mm_by_pid(pm->mig_info.pid);
-	if (IS_ERR(mm))
-		return;
-	if (!mm || !mmget_not_zero(mm))
+	if (IS_ERR_OR_NULL(mm))
 		return;
 	pm->len = PM_LEN;
 

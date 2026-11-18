@@ -1543,7 +1543,7 @@ int scan_hva_info_4k(pid_t pid, u64 *page_num, u64 **vaddr)
 	int ret;
 
 	mm = get_mm_by_pid(pid);
-	if (IS_ERR(mm) || !mm || !mmget_not_zero(mm)) {
+	if (IS_ERR_OR_NULL(mm)) {
 		pr_err("bad mm of pid: %d\n", pid);
 		return -EINVAL;
 	}
@@ -1675,7 +1675,7 @@ int scan_hva_info_4k_vm(pid_t pid, u64 *page_num, u64 **vaddr)
 		goto out_segs;
 
 	mm = get_mm_by_pid(pid);
-	if (IS_ERR_OR_NULL(mm) || !mmget_not_zero(mm)) {
+	if (IS_ERR_OR_NULL(mm)) {
 		pr_err("bad mm of pid: %d\n", pid);
 		ret = -EINVAL;
 		goto out_segs;
@@ -2056,7 +2056,7 @@ static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 	pte_walk.type = ap->type;
 
 	mm = get_mm_by_pid(ap->pid);
-	if (IS_ERR(mm) || !mm || !mmget_not_zero(mm)) {
+	if (IS_ERR_OR_NULL(mm)) {
 		pr_err("bad mm of pid: %d\n", ap->pid);
 		return -EINVAL;
 	}
