@@ -813,6 +813,14 @@ static int collect_statistic_vaddr(struct kvm *kvm,
 	unsigned long hva;
 	bool is_young;
 
+	/*
+	 * The buffer is sized before the locks are retaken for the scan, so
+	 * memslots may have grown since; and the caller keeps iterating
+	 * memslots after one fills it. Never write at or past nr_pages.
+	 */
+	if (*cur_index >= nr_pages)
+		return 0;
+
 	for (gpa = memslot->base_gfn << PAGE_SHIFT;
 	     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
 	     gpa += (gpa_t)page_size) {
@@ -824,9 +832,9 @@ static int collect_statistic_vaddr(struct kvm *kvm,
 		if (!get_vma_if_huge_page(kvm, hva))
 			continue;
 		if (is_young) {
-			vaddr[(*cur_index)++] = hva;
 			if (*cur_index >= nr_pages)
 				return 0;
+			vaddr[(*cur_index)++] = hva;
 		}
 	}
 	return 0;
