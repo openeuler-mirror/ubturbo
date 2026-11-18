@@ -423,8 +423,29 @@ void smap_swap_work_fn(struct work_struct *work)
 			 * the batch list — count only real isolates; either
 			 * way the stage pin below is the only reference we
 			 * hold, so release it unconditionally. */
-			if (smap_swap_isolate_folio_to_list(folio, &page_list))
+			if (smap_swap_isolate_folio_to_list(folio,
+							    &page_list)) {
 				nr_isolated++;
+				/*
+				 * isolate_folio_to_list() accounts LRU folios in
+				 * NR_ISOLATED_{ANON,FILE}, but reclaim_pages()
+				 * only puts unreclaimed folios back with
+				 * folio_putback_lru() and never subtracts it
+				 * (its in-tree users isolate with the
+				 * unaccounted folio_isolate_lru()). Undo the
+				 * accounting right away, otherwise the counter
+				 * only grows: too_many_isolated() then throttles
+				 * direct reclaim and compaction loops forever.
+				 */
+				if (!folio_test_hugetlb(folio) &&
+				    !__folio_test_movable(folio))
+					mod_node_page_state(
+						folio_pgdat(folio),
+						NR_ISOLATED_ANON +
+							folio_is_file_lru(
+								folio),
+						-folio_nr_pages(folio));
+			}
 			folio_put(folio);
 		}
 
