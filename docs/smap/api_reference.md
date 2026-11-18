@@ -1343,7 +1343,7 @@ SMAP库 (libsmap.so)
 
 ```c
 #include "smap_interface.h"
-int ubturbo_smap_process_config_query(int nid, struct ProcessPayload *result, int inLen, int *outLen);
+int ubturbo_smap_process_config_query(int nid, struct OldProcessPayload *result, int inLen, int *outLen);
 ```
 
 ### 描述 DESCRIPTION
@@ -1390,7 +1390,8 @@ int ubturbo_smap_process_config_query(int nid, struct ProcessPayload *result, in
 int main(void)
 {
     int ret;
-    struct ProcessPayload result[100] = { 0 };
+    struct OldProcessPayload result[100] = { 0 };
+    int len = 0;
 
     ret = ubturbo_smap_process_config_query(4, &result, 100, &len);
     if (ret != 0) {
