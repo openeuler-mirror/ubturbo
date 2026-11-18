@@ -334,18 +334,24 @@ static int add_to_bm(unsigned long vaddr, pagemap_entry_t *pme,
 			goto inc_pm_pos;
 		}
 
-		if (!is_page_ready_for_migrate(page)) {
+		/*
+		 * Check capacity and hwpoison before is_page_ready_for_migrate():
+		 * it takes a folio reference for base pages, and the previous
+		 * order skipped full-array/hwpoison pages with that reference
+		 * still held, pinning them forever.
+		 */
+		if (pm->mig_info.mig_cnt >= pm->mig_info.folios_len)
+			goto inc_pm_pos;
+
+		if (is_page_hwpoison(page)) {
+			pr_err_ratelimited("unsupported page type: hwpoison\n");
 			goto inc_pm_pos;
 		}
 
-		if (is_page_hwpoison(page)) {
-			pr_err("unsupported page type: hwpoison\n");
+		if (!is_page_ready_for_migrate(page)) {
 			goto inc_pm_pos;
 		}
-		if (pm->mig_info.mig_cnt < pm->mig_info.folios_len) {
-			pm->mig_info.folios[pm->mig_info.mig_cnt++] =
-				page_folio(page);
-		}
+		pm->mig_info.folios[pm->mig_info.mig_cnt++] = page_folio(page);
 	} else {
 		if (is_access_hugepage())
 			add_to_bm_huge(vaddr, page, pm->ap);
