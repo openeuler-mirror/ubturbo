@@ -127,16 +127,28 @@ static inline bool is_kvm_file(struct file *filp)
  */
 struct file *get_kvm_file_from_task(struct task_struct *task)
 {
+	struct files_struct *files;
 	struct file *filp = NULL;
 	unsigned int i;
 
-	if (!task || !task->files)
+	if (!task)
 		return NULL;
 
 	rcu_read_lock();
 	task_lock(task);
-	for (i = 0; i < files_fdtable(task->files)->max_fds; i++) {
-		filp = files_lookup_fd_rcu(task->files, i);
+	/*
+	 * exit_files() clears task->files under task_lock(); test and use the
+	 * pointer only while holding it, or a VM exiting between an unlocked
+	 * check and the loop makes us dereference NULL.
+	 */
+	files = task->files;
+	if (!files) {
+		task_unlock(task);
+		rcu_read_unlock();
+		return NULL;
+	}
+	for (i = 0; i < files_fdtable(files)->max_fds; i++) {
+		filp = files_lookup_fd_rcu(files, i);
 		if (!filp) {
 			continue;
 		}
