@@ -7,6 +7,7 @@
 #define _SRC_MIGRATE_OBMM_MONITOR_H
 
 #include <linux/list.h>
+#include <linux/nodemask.h>
 
 #include "../comm/iomem.h"
 #include "kernel_common.h"
@@ -30,7 +31,7 @@ int find_range_by_memid(u64 memid, u64 *start, u64 *end);
 
 static inline bool is_numa_remote(int nid)
 {
-	return nid >= nr_local_numa && nid < MAX_NUMNODES;
+	return nid >= nr_local_numa && nid < MAX_NUMNODES && node_online(nid);
 }
 
 #endif /* _SRC_MIGRATE_OBMM_MONITOR_H */

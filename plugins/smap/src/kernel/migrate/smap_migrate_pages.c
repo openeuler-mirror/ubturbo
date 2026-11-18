@@ -181,7 +181,7 @@ unsigned int smap_migrate(struct folio **folios, unsigned int nr_folios,
 		return nr_folios;
 	}
 
-	if (to_node < 0 || to_node >= MAX_NUMNODES) {
+	if (is_node_invalid(to_node)) {
 		put_folios(folios, nr_folios);
 		pr_debug(
 			"invalid destination node: %d passed to SMAP migrate\n",
