@@ -648,17 +648,11 @@ int scan_init(void)
 		goto err_remote_ram;
 	}
 
-	ret = scan_ioctl_init();
-	if (ret) {
-		pr_err("unable to init scan ioctl operations\n");
-		goto err_ioctl;
-	}
-
 	scan_state_init();
 
 	ret = create_scan_workqueue();
 	if (ret) {
-		goto err_scan_ioctl;
+		goto err_scan_wq;
 	}
 
 	ret = smap_swap_init();
@@ -666,16 +660,27 @@ int scan_init(void)
 		goto err_swap_wq;
 	}
 
+	/*
+	 * Expose /dev/smap_scan_dev only after every piece of state the
+	 * ioctl handlers use (scan_state, scan/swap workqueues) is ready:
+	 * udev makes the node usable as soon as it is created.
+	 */
+	ret = scan_ioctl_init();
+	if (ret) {
+		pr_err("unable to init scan ioctl operations\n");
+		goto err_ioctl;
+	}
+
 	access_print_acpi_mem();
 
 	pr_info("scan subsystem initialized successfully\n");
 	return ret;
 
+err_ioctl:
+	smap_swap_exit();
 err_swap_wq:
 	destroy_scan_workqueue();
-err_scan_ioctl:
-	scan_ioctl_exit();
-err_ioctl:
+err_scan_wq:
 	release_remote_ram();
 err_remote_ram:
 	reset_acpi_mem();
