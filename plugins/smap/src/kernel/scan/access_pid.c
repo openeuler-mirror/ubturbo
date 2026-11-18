@@ -1543,8 +1543,13 @@ static int calc_absolute_pos(unsigned long *paddr_bm, size_t bm_len,
 #define INITIAL_POS ULONG_MAX
 #define INITIAL_POS_INDEX (-1)
 
-static int check_migrate_params(u64 len, u64 *addr)
+static int check_migrate_params(int nid, u64 len, u64 *addr)
 {
+	if (nid < 0 || nid >= MAX_NUMNODES) {
+		pr_err("invalid node %d passed to convert position to PA\n",
+		       nid);
+		return -EINVAL;
+	}
 	if (len == 0 || !addr) {
 		pr_err("invalid length or address passed to check\n");
 		return -EINVAL;
@@ -1600,7 +1605,7 @@ int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr)
 	int page_size = is_access_hugepage() ? g_pagesize_huge : PAGE_SIZE;
 	int ret;
 
-	ret = check_migrate_params(len, addr);
+	ret = check_migrate_params(nid, len, addr);
 	if (ret) {
 		return ret;
 	}

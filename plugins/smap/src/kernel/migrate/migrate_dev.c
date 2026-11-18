@@ -15,6 +15,7 @@
 #include <linux/mm.h>
 
 #include "obmm_monitor.h"
+#include "numa.h"
 #include "smap_migrate_pages.h"
 #include "critical.h"
 #include "migrate_dev.h"
@@ -142,6 +143,26 @@ static void restore_user_addr(int len, struct mig_list *mlist, u64 **user_addrs)
 	}
 }
 
+/*
+ * mig_list[].from is used as an index into per-node arrays
+ * (ap->paddr_bm[nid]/bm_len[nid]) while converting positions to physical
+ * addresses, so both node ids must be validated before any conversion.
+ */
+static int check_migrate_list_nodes(int len, struct mig_list *mlist)
+{
+	int i;
+
+	for (i = 0; i < len; i++) {
+		if (is_node_invalid(mlist[i].from) ||
+		    is_node_invalid(mlist[i].to)) {
+			pr_err("invalid node from %d to %d of migrate list %d\n",
+			       mlist[i].from, mlist[i].to, i);
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
 static int convert_migrate_list(int len, struct mig_list *mlist)
 {
 	int i, ret;
@@ -179,6 +200,11 @@ static int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist,
 	ret = create_migrate_list(msg, mlist);
 	if (ret) {
 		pr_err("failed to create migrate list, ret: %d\n", ret);
+		return ret;
+	}
+	ret = check_migrate_list_nodes(msg->cnt, *mlist);
+	if (ret) {
+		free_migrate_list(mlist);
 		return ret;
 	}
 	*user_addrs = kcalloc(msg->cnt, sizeof(**user_addrs), GFP_KERNEL);
