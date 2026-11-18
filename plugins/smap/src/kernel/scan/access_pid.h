@@ -94,6 +94,8 @@ struct access_pid {
 	struct completion work_done;
 	/* Notify readers only after scanning and bitmap construction finish. */
 	wait_queue_head_t wq;
+	/* the struct is freed RCU-delayed after POLLFREE, see destroy_access_pid() */
+	struct rcu_head rcu;
 	bool freq_ready; /* window data ready for user-space consumption */
 	struct remote_ram_snapshot *remote_snapshot;
 	/* ---- cold-page swap-out staging (VM pids only) ----

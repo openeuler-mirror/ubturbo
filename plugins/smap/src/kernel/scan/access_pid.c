@@ -264,7 +264,19 @@ void destroy_access_pid(struct access_pid *elem)
 		elem->info.priors = NULL;
 	}
 	remote_ram_snapshot_free(elem->remote_snapshot);
-	kfree(elem);
+	/*
+	 * /proc/smap/<pid>/mem_freq supports poll() and the daemon keeps it in
+	 * an epoll set. proc_remove() only blocks new callbacks, it does not
+	 * detach epoll entries queued on elem->wq, so a later EPOLL_CTL_DEL or
+	 * close() would unlink them from freed memory. Detach them with
+	 * POLLFREE (what wake_up_pollfree() does; that helper is not exported)
+	 * and, as it requires, free the wait queue only after an RCU grace
+	 * period.
+	 */
+	if (waitqueue_active(&elem->wq))
+		__wake_up(&elem->wq, TASK_NORMAL, 0,
+			  poll_to_key(EPOLLHUP | POLLFREE));
+	kfree_rcu(elem, rcu);
 	return;
 }
 
