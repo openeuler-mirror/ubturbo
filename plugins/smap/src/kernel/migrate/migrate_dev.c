@@ -435,14 +435,22 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 						  : (payloads[i].mem_size >>
 						     KB_TO_4K);
 			}
+			/*
+			 * Clamp before releasing the surplus references:
+			 * mig_cnt derives from the user supplied mem_size and
+			 * is unbounded. Assigning it to an int loop index
+			 * truncated it (e.g. mem_size = 1 << 34 -> j = 0), put
+			 * every folio here and then handed the same folios to
+			 * smap_migrate(), which drops the reference again.
+			 */
+			mig_cnt = MIN(mig_cnt, (u64)pm.mig_info.mig_cnt);
 			if (smap_pgtype != HUGE_PAGE) {
-				for (int j = mig_cnt; j < pm.mig_info.mig_cnt;
+				for (u64 j = mig_cnt; j < pm.mig_info.mig_cnt;
 				     j++) {
 					folio_put(pm.mig_info.folios[j]);
 				}
 			}
 
-			mig_cnt = MIN(mig_cnt, pm.mig_info.mig_cnt);
 			pr_info("pid:%d migrate page count: %llu, from: %d to: %d\n",
 				payloads[i].pid, mig_cnt, payloads[i].src_nid,
 				payloads[i].dest_nid);
