@@ -9,6 +9,7 @@
 #include <asm/stage2_pgtable.h>
 
 #include <linux/rmap.h>
+#include <linux/sizes.h>
 #include <linux/vmalloc.h>
 #include <linux/sort.h>
 #include <linux/kvm_host.h>
@@ -816,6 +817,29 @@ static bool memslot_is_mem(struct kvm_memory_slot *memslot)
 	return true;
 }
 
+/*
+ * GPA span walked per mmu_lock hold. The whole-VM walk used to run with
+ * kvm->mmu_lock (rwlock, preemption off), mmap_lock and RCU held from the
+ * first to the last memslot: seconds to tens of seconds for large 4K VMs
+ * on a PREEMPT_NONE kernel (soft lockups, RCU stalls), while vCPU faults
+ * and MMU notifiers waiting for the write lock stalled the guest.
+ */
+#define SMAP_KVM_SCAN_CHUNK SZ_256M
+
+/*
+ * Briefly drop the per-scan locks taken by pre_scan_kvm_memslots(). The
+ * SRCU read side stays held, so the memslots being walked stay valid; the
+ * stage-2 page table lives as long as the kvm reference held by the scan.
+ */
+static void smap_kvm_scan_yield(struct kvm *kvm)
+{
+	read_unlock(&kvm->mmu_lock);
+	mmap_read_unlock(kvm->mm);
+	cond_resched();
+	mmap_read_lock(kvm->mm);
+	read_lock(&kvm->mmu_lock);
+}
+
 static int collect_statistic_vaddr(struct kvm *kvm,
 				   struct kvm_memory_slot *memslot,
 				   struct access_pid *ap, int page_size,
@@ -836,6 +860,10 @@ static int collect_statistic_vaddr(struct kvm *kvm,
 	for (gpa = memslot->base_gfn << PAGE_SHIFT;
 	     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
 	     gpa += (gpa_t)page_size) {
+		/* do not hold mmu_lock across the whole memslot */
+		if (gpa != (memslot->base_gfn << PAGE_SHIFT) &&
+		    IS_ALIGNED(gpa, SMAP_KVM_SCAN_CHUNK))
+			smap_kvm_scan_yield(kvm);
 		is_young =
 			smap_kvm_pgtable_stage2_mkold(kvm->arch.mmu.pgt, gpa);
 		if (!is_young && !access_pid_cur_last_scanning(ap))
@@ -909,6 +937,8 @@ static int process_memslot_pages(struct kvm *kvm,
 {
 	u64 memslot_start = memslot->base_gfn << PAGE_SHIFT;
 	u64 memslot_end = (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
+	u64 start, len;
+	int ret = 0;
 	struct smap_stage2_range_mkold_data data = {
 		.kvm = kvm,
 		.memslot = memslot,
@@ -919,10 +949,16 @@ static int process_memslot_pages(struct kvm *kvm,
 	};
 	data.stride = (page_size == PMD_SIZE) ? PTRS_PER_PMD : 1;
 
-	return smap_kvm_pgtable_stage2_mkold_range(kvm->arch.mmu.pgt,
-						   memslot_start,
-						   memslot_end - memslot_start,
-						   &data);
+	for (start = memslot_start; start < memslot_end; start += len) {
+		len = min_t(u64, memslot_end - start, SMAP_KVM_SCAN_CHUNK);
+		ret = smap_kvm_pgtable_stage2_mkold_range(kvm->arch.mmu.pgt,
+							  start, len, &data);
+		if (ret)
+			break;
+		if (start + len < memslot_end)
+			smap_kvm_scan_yield(kvm);
+	}
+	return ret;
 }
 
 /*
