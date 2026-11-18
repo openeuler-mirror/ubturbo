@@ -301,12 +301,13 @@ void RebuildRemoteNids(void)
         SMAP_LOGGER_WARNING("ScanRemoteNids failed, keep current remote list");
         return;
     }
-    /* 先填充 g_remoteNids 内容，最后再发布 g_nrRemote：并发读者（for_each_remote_nid）
-     * 要么看到旧计数+旧内容，要么看到新计数+新内容，不会看到新计数+未填充的尾部 */
+    /* 先填充 g_remoteNids 内容，最后再 release 发布 g_nrRemote：并发读者（for_each_remote_nid）
+     * 要么看到旧计数+旧内容，要么看到新计数+新内容，不会看到新计数+未填充的尾部。
+     * 运行期会由 daemon 线程周期调用，必须保证 aarch64 下的 store-store 顺序 */
     for (int i = 0; i < n; i++) {
         g_remoteNids[i] = tmp[i];
     }
-    g_nrRemote = n;
+    __atomic_store_n(&g_nrRemote, n, __ATOMIC_RELEASE);
 }
 
 /* 检测远端节点集合是否变化 */
@@ -316,7 +317,7 @@ bool RemoteNidSetChanged(void)
     int n = ScanRemoteNids(tmp, SMAP_MAX_NUMNODES);
     if (n < 0)
         return false; // 扫描失败保留现状
-    if (n != g_nrRemote)
+    if (n != __atomic_load_n(&g_nrRemote, __ATOMIC_ACQUIRE))
         return true;
     for (int i = 0; i < n; i++) {
         if (g_remoteNids[i] != tmp[i])
