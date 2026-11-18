@@ -54,7 +54,7 @@ static bool smap_swap_has_room(void)
  */
 static void smap_swap_buf_purge(struct access_pid *ap)
 {
-	struct smap_swap_buf *buf = ap->swap_buf;
+	struct smap_swap_buf *buf = smp_load_acquire(&ap->swap_buf);
 	unsigned int i;
 
 	if (!buf)
@@ -148,15 +148,19 @@ void smap_swap_buf_free(struct smap_swap_buf *buf)
 
 /*
  * smap_swap_free_all - swap disabled: wait for in-flight workers, then
- * release the staged pins and free the per-pid buffers themselves.
+ * release every staged pin.
+ *
+ * The buffers themselves are kept and only freed with their access_pid
+ * (destroy_access_pid(), when no scan/swap work can reference it any more).
+ * Freeing them here raced with the scan worker (smap_swap_stage(),
+ * smap_swap_notify()) and with swap work queued after the flush, which
+ * still dereferenced ap->swap_buf; two concurrent disables also freed the
+ * same buffer twice.
  */
 void smap_swap_free_all(void)
 {
 	int i;
 
-	/* flush_workqueue() waits for the in-flight workers (the disable
-	 * gate makes them self-purge and exit; no new work gets staged while
-	 * the switch is off), so the buffers can be freed right after. */
 	flush_workqueue(smap_swap_wq);
 
 	for (i = 0; i < AP_MAX_SLOTS; i++) {
@@ -164,13 +168,8 @@ void smap_swap_free_all(void)
 
 		if (!s)
 			continue;
-		/* smap_swap_buf_free() also drops the staged pins and empties
-		 * the batch (same code as smap_swap_buf_purge), then frees
-		 * the buffer itself. */
-		if (s->ap) {
-			smap_swap_buf_free(s->ap->swap_buf);
-			s->ap->swap_buf = NULL;
-		}
+		if (s->ap)
+			smap_swap_buf_purge(s->ap);
 		ap_put_slot(s);
 	}
 }
@@ -192,8 +191,14 @@ void smap_swap_alloc_all(void)
 		if (!s)
 			continue;
 		ap = s->ap;
-		if (ap && ap->pid_type == SMAP_PID_VM && !ap->swap_buf)
-			ap->swap_buf = smap_swap_buf_create();
+		if (ap && ap->pid_type == SMAP_PID_VM &&
+		    !READ_ONCE(ap->swap_buf)) {
+			struct smap_swap_buf *buf = smap_swap_buf_create();
+
+			/* pairs with the READ_ONCE() of lock-free readers */
+			if (buf)
+				smp_store_release(&ap->swap_buf, buf);
+		}
 		ap_put_slot(s);
 	}
 }
@@ -208,7 +213,7 @@ bool smap_swap_stage(struct access_pid *ap, struct page *page)
 	return false;
 #endif
 	struct folio *folio = page_folio(page);
-	struct smap_swap_buf *buf = ap->swap_buf;
+	struct smap_swap_buf *buf = smp_load_acquire(&ap->swap_buf);
 
 	if (!buf || !smap_swap_wq || !smap_swap_symbols_ready())
 		return false;
@@ -264,7 +269,7 @@ void cancel_ap_swap_work(struct access_pid *ap)
  */
 void smap_swap_notify(struct access_pid *ap)
 {
-	struct smap_swap_buf *buf = ap->swap_buf;
+	struct smap_swap_buf *buf = smp_load_acquire(&ap->swap_buf);
 	bool has_pages;
 
 	if (!buf || !smap_swap_wq || !smap_swap_symbols_ready() || !ap->slot)
@@ -305,7 +310,7 @@ void smap_swap_work_fn(struct work_struct *work)
 {
 	struct access_pid *ap =
 		container_of(work, struct access_pid, swap_work);
-	struct smap_swap_buf *buf = ap->swap_buf;
+	struct smap_swap_buf *buf = smp_load_acquire(&ap->swap_buf);
 	unsigned long *batch;
 	unsigned int n, i;
 

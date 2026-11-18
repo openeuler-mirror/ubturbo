@@ -185,10 +185,16 @@ void copy_node_page_count(u64 *page_count)
 		page_count[node] = get_node_page_count(node);
 }
 
+/* serializes swap switch transitions (purge/alloc of all staging buffers) */
+static DEFINE_MUTEX(swap_enable_lock);
+
 void set_swap_enable(int enable)
 {
 	bool on = enable ? true : false;
-	bool old = READ_ONCE(swap_enable) != 0;
+	bool old;
+
+	mutex_lock(&swap_enable_lock);
+	old = READ_ONCE(swap_enable) != 0;
 
 	/*
 	 * enable -> on:  staging and swap-out resume per the cold seconds.
@@ -198,6 +204,7 @@ void set_swap_enable(int enable)
 	 */
 	WRITE_ONCE(swap_enable, enable != 0);
 	if (old == on) {
+		mutex_unlock(&swap_enable_lock);
 		return;
 	}
 	if (!on) {
@@ -208,6 +215,7 @@ void set_swap_enable(int enable)
 		smap_swap_alloc_all();
 	}
 	pr_info("set swap_enable to %d\n", READ_ONCE(swap_enable));
+	mutex_unlock(&swap_enable_lock);
 }
 
 bool get_swap_enable(void)
