@@ -228,35 +228,26 @@ u64 get_node_actc_len(int node_id, int page_size)
 	return page_cnt;
 }
 
+/*
+ * The access index of a local page counts all bytes of the earlier
+ * segments of the same node. This used to reset the running offset whenever
+ * the node of consecutive list entries changed, so with interleaved SRAT
+ * entries (node0, node1, node0) the second node0 segment restarted from 0,
+ * overlapping the first one and disagreeing with calc_acidx_paddr_acpi().
+ * Find the segment holding @paddr and count per node.
+ */
 int calc_paddr_acidx_acpi(u64 paddr, int *nid, u64 *index, int page_size)
 {
 	struct acpi_mem_segment *mem;
-	bool found = false;
-	u64 offset = 0;
-	u64 acidx;
-	int last_nid = NUMA_NO_NODE;
-	int shift = __builtin_ctz(page_size);
 
 	list_for_each_entry(mem, &acpi_mem.mem, segment) {
-		if (last_nid != mem->node) {
-			offset = 0;
-			last_nid = mem->node;
-		}
-		if (paddr > mem->end) {
-			offset += mem->end - mem->start + 1;
+		if (paddr < mem->start || paddr > mem->end)
 			continue;
-		} else if (unlikely(paddr < mem->start))
-			break;
-		offset += paddr - mem->start;
-		acidx = offset >> shift;
-		found = true;
-		break;
+		*nid = mem->node;
+		return calc_paddr_acidx_acpi_known_nid(paddr, mem->node, index,
+						       page_size);
 	}
-	if (!found)
-		return -ERANGE;
-	*nid = mem->node;
-	*index = acidx;
-	return 0;
+	return -ERANGE;
 }
 
 int calc_paddr_acidx_acpi_known_nid(u64 paddr, int nid, u64 *index,
