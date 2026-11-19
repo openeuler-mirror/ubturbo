@@ -189,6 +189,8 @@ int init_acpi_mem(void)
 	if (count < 0) {
 		pr_err("failed to parse ACPI entries, ret: %d\n", count);
 		acpi_put_table(table_header);
+		/* drop the segments built from the entries parsed so far */
+		reset_acpi_mem();
 		return -EINVAL;
 	}
 
