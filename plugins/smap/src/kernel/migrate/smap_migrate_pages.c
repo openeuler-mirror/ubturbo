@@ -85,6 +85,7 @@ static int smap_add_page_for_migration(struct page *page, struct folio **folios,
 				       unsigned int *nr_folios, pid_t pid,
 				       bool migrate_all)
 {
+	struct folio *folio;
 	int err;
 	err = PTR_ERR(page);
 	if (IS_ERR(page)) {
@@ -103,19 +104,20 @@ static int smap_add_page_for_migration(struct page *page, struct folio **folios,
 		pr_debug("invalid page map count or null migrate all flag\n");
 		return err;
 	}
-	if (!folio_try_get(page_folio(page))) {
+	folio = smap_try_get_page_folio(page);
+	if (!folio) {
 		pr_debug("failed to add folio reference\n");
 		return -EINVAL;
 	}
 	if (PageHuge(page)) {
 		err = smap_check_huge_page_for_migration(page, pid);
 		if (err) {
-			folio_put(page_folio(page));
+			folio_put(folio);
 			return err;
 		}
 	}
 
-	folios[*nr_folios] = page_folio(page);
+	folios[*nr_folios] = folio;
 	(*nr_folios)++;
 	return 0;
 }
@@ -280,6 +282,7 @@ static int smap_add_page_for_migrate_back(u64 pa,
 					  unsigned int *mig_pages_cnt,
 					  int dest_nid, bool migrate_all)
 {
+	struct folio *folio;
 	int ret;
 	int nid = NUMA_NO_NODE;
 	unsigned long pfn;
@@ -335,11 +338,12 @@ static int smap_add_page_for_migrate_back(u64 pa,
 		       nid);
 		return -EINVAL;
 	}
-	if (!folio_try_get(page_folio(page))) {
+	folio = smap_try_get_page_folio(page);
+	if (!folio) {
 		pr_debug("unable to add folio reference\n");
 		return -EINVAL;
 	}
-	migrate_folios[nid][mig_pages_cnt[nid]] = page_folio(page);
+	migrate_folios[nid][mig_pages_cnt[nid]] = folio;
 	mig_pages_cnt[nid]++;
 
 	return 0;
@@ -1005,7 +1009,8 @@ static int smap_pre_migrate_range(struct folio **folios,
 			    PageHuge(page)) {
 				continue;
 			}
-			if (!folio_try_get(folio)) {
+			folio = smap_try_get_page_folio(page);
+			if (!folio) {
 				pr_debug("unable to add folio reference\n");
 				continue;
 			}

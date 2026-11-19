@@ -17,6 +17,28 @@
 
 struct access_pid;
 
+/*
+ * smap_try_get_page_folio - pin the folio that currently contains @page
+ *
+ * page_folio() is evaluated without a reference: by the time folio_try_get()
+ * succeeds the page may have been freed and reused in a different (possibly
+ * compound) folio, so the reference would be taken on one folio and later
+ * dropped on another. Re-check after pinning; while the reference is held
+ * the folio can neither be freed nor split, so page_folio(page) is stable.
+ */
+static inline struct folio *smap_try_get_page_folio(struct page *page)
+{
+	struct folio *folio = page_folio(page);
+
+	if (!folio_try_get(folio))
+		return NULL;
+	if (unlikely(page_folio(page) != folio)) {
+		folio_put(folio);
+		return NULL;
+	}
+	return folio;
+}
+
 typedef enum {
 	NORMAL_MIGRATE,
 	REMOTE_MIGRATE,
