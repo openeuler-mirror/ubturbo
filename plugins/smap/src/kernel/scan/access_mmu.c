@@ -556,6 +556,10 @@ void walk_pid_pagemap(struct pagemapread *pm)
 		}
 		mmap_read_unlock(mm);
 		svpfn = evpfn;
+		/* the mmap_lock is dropped between chunks: let others run */
+		cond_resched();
+		if (fatal_signal_pending(current))
+			break;
 	}
 	pagemap_time = calc_time_us(start_time);
 	pr_debug("walk pagemap of pid: %d took %lldus\n", pm->mig_info.pid,

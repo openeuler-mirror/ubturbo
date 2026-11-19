@@ -1579,8 +1579,8 @@ static void convert_single_address(struct access_pid *ap, int nid,
 	abs_pos->index = *addr;
 	ret = calc_absolute_pos(ap->paddr_bm[nid], ap->bm_len[nid], abs_pos);
 	if (ret < 0) {
-		pr_err("calculate pid %d %lluth page pos failed\n", ap->pid,
-		       *addr);
+		pr_err_ratelimited("calculate pid %d %lluth page pos failed\n",
+				   ap->pid, *addr);
 		*addr = INVALID_PADDR;
 		return;
 	}
@@ -1599,7 +1599,8 @@ static void convert_single_address(struct access_pid *ap, int nid,
 	}
 
 	if (ret) {
-		pr_err("calculate acidx %lx paddr failed\n", abs_pos->index);
+		pr_err_ratelimited("calculate acidx %lx paddr failed\n",
+				   abs_pos->index);
 		*addr = INVALID_PADDR;
 	}
 }
@@ -1635,6 +1636,9 @@ int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr)
 		 len, pid, nid);
 	for (i = 0; i < len; i++) {
 		convert_single_address(ap, nid, page_size, &addr[i], &abs_pos);
+		/* up to MAX_MIG_LIST_NR (2^28) entries; ap_lock is an rwsem */
+		if (!(i % 4096))
+			cond_resched();
 	}
 	up_read(&slot->ap_lock);
 

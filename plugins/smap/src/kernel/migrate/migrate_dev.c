@@ -392,6 +392,12 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 		for (i = 0; i < len; i++) {
 			struct pagemapread pm = { 0 };
 
+			/* up to 300 pids x 101 rounds of full page-table walks:
+			 * stay schedulable and killable */
+			cond_resched();
+			if (fatal_signal_pending(current))
+				return;
+
 			if (node_is_critical_err(payloads[i].src_nid) ||
 			    node_is_critical_err(payloads[i].dest_nid)) {
 				pr_err_ratelimited(
@@ -414,8 +420,8 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 
 			walk_pid_pagemap(&pm);
 
-			pr_info("pid :%d total page count:%llu",
-				payloads[i].pid, pm.mig_info.page_cnt);
+			pr_debug("pid :%d total page count:%llu\n",
+				 payloads[i].pid, pm.mig_info.page_cnt);
 			if (payloads[i].is_ratio_mode) {
 				u64 keep_cnt = (pm.mig_info.page_cnt *
 							payloads[i].keep_ratio +
@@ -451,7 +457,8 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 				}
 			}
 
-			pr_info("pid:%d migrate page count: %llu, from: %d to: %d\n",
+			pr_debug(
+				"pid:%d migrate page count: %llu, from: %d to: %d\n",
 				payloads[i].pid, mig_cnt, payloads[i].src_nid,
 				payloads[i].dest_nid);
 			mig_cnt_backup = mig_cnt;

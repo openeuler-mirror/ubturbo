@@ -410,6 +410,8 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 	}
 
 	for (pa = task->pa_start; pa < task->pa_end; pa += page_size) {
+		/* ranges cover up to MAX_MIG_LIST_NR pages (PREEMPT_NONE) */
+		cond_resched();
 		pfn = PHYS_PFN(pa);
 		if (!pfn_valid(pfn)) {
 			continue;
@@ -508,6 +510,8 @@ static void process_pages_for_migration(struct migrate_back_subtask *task,
 	*nr_pre_migrate_fail = *nr_pre_migrate = 0;
 
 	for (pa = task->pa_start; pa < task->pa_end; pa += PAGE_SIZE) {
+		/* ranges cover up to MAX_MIG_LIST_NR pages (PREEMPT_NONE) */
+		cond_resched();
 		pfn = PHYS_PFN(pa);
 		if (!pfn_valid(pfn)) {
 			continue;
@@ -982,6 +986,8 @@ static int smap_pre_migrate_range(struct folio **folios,
 	int nr_hugepage = 0;
 	int nr_normalpage = 0;
 	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
+		/* ranges cover up to MAX_MIG_LIST_NR pages (PREEMPT_NONE) */
+		cond_resched();
 		struct folio *folio;
 
 		page = pfn_to_online_page(pfn);
