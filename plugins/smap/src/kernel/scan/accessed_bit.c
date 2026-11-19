@@ -1842,10 +1842,21 @@ static void process_scan_results(struct pte_walk *pte_walk)
 		struct scan_result_entry *entry = &pte_walk->scan_results[i];
 
 		if (entry->hot) {
-			unsigned long pfn = PHYS_PFN(entry->paddr);
+			/*
+			 * The PTL and mmap_lock are already dropped here: the
+			 * page may have been freed, or its memmap removed by
+			 * memory hot-remove. Only touch an online page whose
+			 * folio we hold a reference on.
+			 */
+			struct page *page =
+				pfn_to_online_page(PHYS_PFN(entry->paddr));
+			struct folio *folio =
+				page ? smap_try_get_page_folio(page) : NULL;
 
-			if (pfn_valid(pfn))
-				folio_set_young(pfn_folio(pfn));
+			if (folio) {
+				folio_set_young(folio);
+				folio_put(folio);
+			}
 		}
 
 		if (nid < nr_local_numa) {
