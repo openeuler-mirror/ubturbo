@@ -400,8 +400,10 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 	unsigned int nr_folios_min = 0;
 	unsigned int cnt = 0;
 	unsigned int j;
+	/* pa_end is inclusive; the collector loop visits every page_size
+	 * step with pa < pa_end, i.e. up to DIV_ROUND_UP(len, page_size) */
 	unsigned long max_nr_folios =
-		(task->pa_end - task->pa_start + 1) / page_size;
+		DIV_ROUND_UP(task->pa_end - task->pa_start + 1, page_size);
 	struct folio **migrate_folios =
 		vzalloc(max_nr_folios * sizeof(struct folio *));
 	if (!migrate_folios) {
@@ -551,8 +553,11 @@ void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 	unsigned int *mig_pages_cnt;
 	struct folio ***migrate_folios;
 	unsigned long nr_pre_migrate_fail;
+	/* pa_end is inclusive (obmm range end = pa + size - 1), while the
+	 * collector visits every page with pa < pa_end: size the per-node
+	 * arrays for all of them, one more than (pa_end - pa_start) / 4K */
 	unsigned long max_nr_folios =
-		(task->pa_end - task->pa_start) / PAGE_SIZE;
+		DIV_ROUND_UP(task->pa_end - task->pa_start + 1, PAGE_SIZE);
 	unsigned long nr_pre_migrate = 0;
 #ifdef DEBUG
 	ktime_t start_time, end_time;
