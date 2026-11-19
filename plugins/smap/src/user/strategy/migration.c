@@ -2046,6 +2046,12 @@ int ManagerDaemonWork(struct ProcessManager *manager)
     if (PidSlotEmpty(manager)) {
         return 0;
     }
+    /* 远端 NUMA 可能在运行期动态上线/下线，每个周期同步一次节点集合，
+     * 避免策略选页、swap、扫描校验等 for_each_remote_nid 路径长期停留在启动时的快照上 */
+    if (RemoteNidSetChanged()) {
+        SMAP_LOGGER_INFO("Remote numa set changed, rebuild remote nid list.");
+        RebuildRemoteNids();
+    }
     EventLoopEnsureRegistered(manager);
     StrategyConfigRead(); // read strategy config from file
     manager->migPeriod = GetMigratePeriodConfig();

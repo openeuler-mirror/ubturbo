@@ -242,12 +242,12 @@ static inline int NumaGetL2Count(const NumaBitmap *bm, int nrLocalNuma)
     return count;
 }
 
-/* 遍历所有远端在线节点（定义见 manage.c，内容先写、g_nrRemote 最后发布） */
+/* 遍历所有远端在线节点（定义见 manage.c，内容先写、g_nrRemote 最后 release 发布） */
 extern int g_remoteNids[SMAP_NODE_CAP_LIMIT];
 extern int g_nrRemote;
 
-#define for_each_remote_nid(nid)                                                                                 \
-    for (int __remote_nid_i__ = 0; __remote_nid_i__ < g_nrRemote && ((nid) = g_remoteNids[__remote_nid_i__], 1); \
-         __remote_nid_i__++)
+#define for_each_remote_nid(nid)                                                                      \
+    for (int __remote_nid_i__ = 0, __remote_nid_n__ = __atomic_load_n(&g_nrRemote, __ATOMIC_ACQUIRE); \
+         __remote_nid_i__ < __remote_nid_n__ && ((nid) = g_remoteNids[__remote_nid_i__], 1); __remote_nid_i__++)
 
 #endif /* __NUMA_NODES_H__ */
