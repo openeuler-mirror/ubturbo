@@ -176,14 +176,14 @@ static int check_migrate_back_msg(struct migrate_back_msg *mb_msg)
 	for (i = 0; i < mb_msg->count; i++) {
 		struct migrate_back_payload *p = &(mb_msg->payload[i]);
 		if (is_node_invalid(p->src_nid)) {
-			pr_err("invalid source node: %d of %dth message\n", i,
-			       p->src_nid);
+			pr_err("invalid source node: %d of %dth message\n",
+			       p->src_nid, i);
 			return -EINVAL;
 		}
 		if (p->dest_nid != NUMA_NO_NODE &&
 		    is_node_invalid(p->dest_nid)) {
 			pr_err("invalid destination node: %d of %dth message\n",
-			       i, p->dest_nid);
+			       p->dest_nid, i);
 			return -EINVAL;
 		}
 	}
