@@ -1,4 +1,4 @@
-name: UBTurbo-IO-Validation
+name: PR-pipeline_ci
 
 on:
   workflow_call:
@@ -103,7 +103,7 @@ stages:
               path: .ci-results/pre-commit
 
       build_x86_64:
-        name: build-x86-64
+        name: Build_x86-64
         runs-on: [self-hosted, ubse, x86, cpu=8]
         timeout-minutes: 5
 
@@ -134,7 +134,7 @@ stages:
               path: .ci-results/x86_64
 
       build_aarch64:
-        name: build-aarch64
+        name: Build_aarch64
         runs-on: [self-hosted, ubse, arm, cpu=8]
         container:
           image: swr.cn-north-4.myhuaweicloud.com/openeuler/aarch64/ci/common:24.03-lts-sp1-rust
@@ -279,8 +279,8 @@ stages:
               name: ci-result-aarch64
               path: .ci-results/aarch64
 
-      dt:
-        name: DT
+      ut:
+        name: UT_ubturbo
         runs-on: [self-hosted, ubse, arm, cpu=8]
         timeout-minutes: 60
         container:
@@ -310,8 +310,7 @@ stages:
                 patch \
                 dos2unix \
                 libboundscheck \
-                libvirt-devel \
-                gmock-devel
+                libvirt-devel
 
               for tool in gcc g++ make cmake unzip wget perl dos2unix; do
                 if ! command -v "${tool}" >/dev/null 2>&1; then
