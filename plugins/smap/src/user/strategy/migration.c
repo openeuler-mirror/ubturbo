@@ -1693,12 +1693,19 @@ static void ClipPidTargetsToCapacity(ProcessAttr *process, PairTarget targets[],
 }
 
 /* 在远端账本锁内裁剪计划并预扣在途页数。 */
-static int BuildPidPairPlans(struct ProcessManager *manager, ProcessAttr *process)
+static int BuildPidPairPlans(struct ProcessManager *manager, ProcessAttr *process, uint32_t **plannedOut,
+                             int *plannedNrLocalOut)
 {
     uint64_t plannedPages = 0;
     size_t targetCnt = 0;
     int ret;
 
+    if (plannedOut != NULL) {
+        *plannedOut = NULL;
+    }
+    if (plannedNrLocalOut != NULL) {
+        *plannedNrLocalOut = 0;
+    }
     if (!process || process->groupPolicy.enabled || manager->nrLocalNuma <= 0 ||
         manager->nrLocalNuma > SMAP_MAX_NUMNODES || manager->tracking.pageSize == 0) {
         return -EINVAL;
@@ -1793,6 +1800,17 @@ static int BuildPidPairPlans(struct ProcessManager *manager, ProcessAttr *proces
     if (ret == EOK) {
         /* 在途预扣：迁移执行之前把计划量挂进账本，结算按计划全额回收 */
         LedgerPlanInFlightLocked(nrMigratePages, nrLocalNuma);
+        /*
+         * 把本轮计划矩阵交给调用方，settle 只认这份快照：
+         * 即使 plan 之后 attr 中的方向矩阵被配置/删除路径清零，回收也不会少扣。
+         */
+        if (plannedOut != NULL) {
+            *plannedOut = nrMigratePages;
+            nrMigratePages = NULL;
+        }
+        if (plannedNrLocalOut != NULL) {
+            *plannedNrLocalOut = nrLocalNuma;
+        }
     } else {
         ret = -ret;
     }
@@ -1811,7 +1829,8 @@ OUT:
 
 /* per-pid 收尾：swap 补偿（单 pid 可重试）→ 结果即时结算 → 计划全额回收
  * 在途 → pending 发布 → 恢复 PROC_IDLE（持 attrLock，与候选切换对称）。 */
-static void PostPidMigration(struct ProcessManager *manager, ProcessAttr *process, struct MigrateMsg *mMsg)
+static void PostPidMigration(struct ProcessManager *manager, ProcessAttr *process, struct MigrateMsg *mMsg,
+                             const uint32_t *planned, int plannedNrLocal)
 {
     GroupSwapCompPlan plans[MAX_GROUP_SWAP_COMP_PLANS] = { 0 };
     int planCnt = 0;
@@ -1830,7 +1849,13 @@ static void PostPidMigration(struct ProcessManager *manager, ProcessAttr *proces
     /* 成功页入账与在途释放必须原子完成，避免其他 PID 重复使用容量。 */
     EnvMutexLock(&manager->remoteNumaInfo.lock);
     UpdateMigResult(mMsg, manager);
-    LedgerSettleInFlightLocked(process->strategyAttr.nrMigratePages, manager->nrLocalNuma);
+    /*
+     * 只按规划时的快照回收：grouped 路径没有预扣，不能拿可能过期的
+     * attr 方向矩阵去结算，否则会凭空释放其他 PID 的在途额度。
+     */
+    if (planned != NULL) {
+        LedgerSettleInFlightLocked(planned, plannedNrLocal);
+    }
     EnvMutexUnlock(&manager->remoteNumaInfo.lock);
     FreePidMigrateMsg(mMsg);
     /* 在途已在上述锁内与成功页入账原子回收，此处不再重复结算 */
@@ -1942,6 +1967,9 @@ static int ProcessPidScanMigrate(struct ProcessManager *manager, struct PidSlot 
     pid_t pid = slot->pid;
     uint64_t migratePages = 0;
     struct timeval start, end;
+    /* 规划时的方向矩阵快照：settle 只认它，不回头读 attr */
+    uint32_t *plannedSnapshot = NULL;
+    int plannedNrLocal = 0;
     int ret = 0;
 
     if (!attr || attr->scanType != NORMAL_SCAN || attr->state != PROC_IDLE) {
@@ -1990,7 +2018,7 @@ static int ProcessPidScanMigrate(struct ProcessManager *manager, struct PidSlot 
         NumaMigReduceDeal(attr);
         ret = 0;
     } else {
-        ret = BuildPidPairPlans(manager, attr);
+        ret = BuildPidPairPlans(manager, attr, &plannedSnapshot, &plannedNrLocal);
     }
     if (ret) {
         goto settle;
@@ -2008,7 +2036,9 @@ static int ProcessPidScanMigrate(struct ProcessManager *manager, struct PidSlot 
         SMAP_LOGGER_INFO("Pid %d migration pages %llu, result %d.", pid, migratePages, ret);
     }
 settle:
-    PostPidMigration(manager, attr, &msg);
+    PostPidMigration(manager, attr, &msg, plannedSnapshot, plannedNrLocal);
+    free(plannedSnapshot);
+    plannedSnapshot = NULL;
     EnvMutexLock(&slot->attrLock);
     if (attr->state == PROC_MIGRATE) {
         attr->state = PROC_IDLE;

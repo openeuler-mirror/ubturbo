@@ -2052,7 +2052,12 @@ static void ClearRemovedRemoteStrategy(ProcessAttr *attr, int remoteNid)
         NM_AT(attr->strategyAttr.memSize, i, remoteNid) = 0;
         NM_AT(attr->strategyAttr.allocRemoteNrPages, i, remoteNid) = 0;
         NM_AT(attr->strategyAttr.remoteNrPagesAfterMigrate, i, remoteNid) = 0;
-        /* 方向矩阵第一维仅本地行，清 remoteNid 列即覆盖 demote/promote 两个方向 */
+        /*
+         * 方向矩阵第一维仅本地行，清 remoteNid 列即覆盖 demote/promote 两个方向。
+         * 该节点已从扫描位图与目标配置中删除，本轮继续向它迁移会让页面脱离
+         * 后续扫描与 drain 的可见范围；settle 已改用 plan 快照结算，此处清零
+         * 不会影响在途回收。
+         */
         NM_AT(attr->strategyAttr.nrMigratePages, i, remoteNid) = 0;
         NM_AT(attr->strategyAttr.nrMigrateBackPages, i, remoteNid) = 0;
     }
