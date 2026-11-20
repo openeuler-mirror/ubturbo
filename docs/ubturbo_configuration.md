@@ -78,7 +78,7 @@ SMAP 从 `/opt/ubturbo/conf/smap/smap_strategy.conf` 读取扁平键值。该文
 在 SMAP 策略配置模块内，不能通过调用方参数或环境变量覆盖。单独部署 SMAP 且未安装 RPM 时，需
 手动创建目录与文件，并为实际运行主体设置合适的最小权限。`#` 开头的行是注释。
 
-解析表包含 19 个键，全部可选，键缺席时沿用下表内置默认值，不存在必填项：
+解析表包含 24 个键，全部可选，键缺席时沿用下表内置默认值，不存在必填项：
 
 | 键                                        |          默认值 | 有效范围/格式                          |
 | ----------------------------------------- | ---------------: | -------------------------------------- |
@@ -95,6 +95,11 @@ SMAP 从 `/opt/ubturbo/conf/smap/smap_strategy.conf` 读取扁平键值。该文
 | `smap.migrate.mode`                     |                0 | 0：LD/ST；1：URMA                      |
 | `smap.zero.freq.migrate.enable`         |             true | `true` / `false`                   |
 | `smap.adaptive.ratio.enable`            |             true | `true` / `false`                   |
+| `smap.adaptive.period.enable`           |            false | `true` / `false`                   |
+| `smap.adaptive.fast.scan.period`        |              200 | 50–60000，单位 ms                     |
+| `smap.adaptive.fast.migrate.period`     |             2000 | 500–300000，单位 ms，且为扫描周期整数倍 |
+| `smap.adaptive.slow.scan.period`        |             3000 | 50–60000，单位 ms                     |
+| `smap.adaptive.slow.migrate.period`     |             3000 | 500–300000，单位 ms，且为扫描周期整数倍 |
 | `smap.period.file.config.switch`        |            false | `true` / `false`                   |
 | `smap.scan.cpu`                         |     空值=未配置 | `min-max`，如 `0-63`，允许 `35 - 63`   |
 | `smap.ub.bw.threshold`                  |                0 | 0–65535                               |
@@ -119,6 +124,16 @@ SMAP 从 `/opt/ubturbo/conf/smap/smap_strategy.conf` 读取扁平键值。该文
 `_`、`-` 和空格，长度不超过 64。跨字段校验失败（如扫描周期大于迁移周期）时本轮配置整体不应用，
 内存保持上一次有效配置；文件缺失或读取失败同样保持当前值。配置文件归用户/RPM 所有；RPM 升级
 直接以新版配置覆盖旧版（旧版曾修改的内容备份为 `.rpmorig`），升级后以新文件内容为准。
+
+`smap.adaptive.period.enable=true` 时，SMAP 按单个进程热页在本地/远端的放置比例自动调节其扫描与迁移
+周期：比例变化剧烈（surge）时切到快档（fast），比例稳定或进程空闲（idle）时切到慢档（slow）。该开关
+独立于 `smap.period.file.config.switch` 被读取，关闭时进程沿用固定的 `smap.scan.period` /
+`smap.migrate.period`。快、慢两档周期的取值规则：默认（四键缺席或 `smap.period.file.config.switch=false`）
+生效代码内置默认值——快档 200/2000 ms、慢档 3000/3000 ms；仅当 `smap.period.file.config.switch=true` 且
+`adaptive.fast.*` / `adaptive.slow.*` 四键写入时，才以文件值（RPM 默认内容为快档 300/3000 ms、慢档
+5000/5000 ms）覆盖内置默认值，四键缺席时每次重读均回退内置默认值。快、慢两档各自须满足扫描周期在
+50–60000 ms、迁移周期在 500–300000 ms，且迁移周期为扫描周期的整数倍（`migrate % scan == 0`），
+否则本轮配置整体不应用。
 
 `smap.period.file.config.switch=true` 才允许周期读取的文件值覆盖内存中的策略配置。生产环境修改周期、
 CPU 范围或迁移方式前，应先评估扫描开销、迁移流量和业务抖动。
