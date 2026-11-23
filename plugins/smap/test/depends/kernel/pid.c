@@ -17,6 +17,11 @@ struct pid *find_vpid(int nr)
 	return NULL;
 }
 
+struct task_struct *pid_task(struct pid *pid, enum pid_type type)
+{
+	return NULL;
+}
+
 struct pid *find_get_pid(pid_t nr)
 {
 	return NULL;

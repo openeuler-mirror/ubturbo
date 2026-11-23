@@ -19,6 +19,7 @@ extern "C" {
 extern struct task_struct *get_pid_task(struct pid *pid, enum pid_type);
 
 extern struct pid *find_vpid(int nr);
+extern struct task_struct *pid_task(struct pid *pid, enum pid_type type);
 
 #ifdef __cplusplus
 }

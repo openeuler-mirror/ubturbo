@@ -1600,17 +1600,25 @@ TEST_F(DriversAccessPidTest, InitAccessHamPidKzallocFail)
     }
 }
 
-extern "C" int check_migrate_params(u64 len, u64 *addr);
+extern "C" int check_migrate_params(int nid, u64 len, u64 *addr);
 TEST_F(DriversAccessPidTest, CheckMigrateParamsInvalidLen)
 {
     u64 addr = 1;
-    int ret = check_migrate_params(0, &addr);
+    int ret = check_migrate_params(0, 0, &addr);
     EXPECT_EQ(-EINVAL, ret);
+}
+
+TEST_F(DriversAccessPidTest, CheckMigrateParamsInvalidNid)
+{
+    u64 addr = 1;
+    EXPECT_EQ(-EINVAL, check_migrate_params(-1, 1, &addr));
+    EXPECT_EQ(-EINVAL, check_migrate_params(MAX_NUMNODES, 1, &addr));
+    EXPECT_EQ(0, check_migrate_params(0, 1, &addr));
 }
 
 TEST_F(DriversAccessPidTest, CheckMigrateParamsNullAddr)
 {
-    int ret = check_migrate_params(1, nullptr);
+    int ret = check_migrate_params(0, 1, nullptr);
     EXPECT_EQ(-EINVAL, ret);
 }
 /* init_access_pid: NORMAL_SCAN initialization does not consume

@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include <linux/kthread.h>
+#include <linux/errno.h>
 
 struct task_struct *kthread_create_on_node(int (*threadfn)(void *data), void *data, int node, const char namefmt[], ...)
 {
-    return NULL;
+    /* like the kernel, report failure with an ERR_PTR, never NULL */
+    return (struct task_struct *)(long)-ENOMEM;
 }
 
 bool kthread_should_stop(void)

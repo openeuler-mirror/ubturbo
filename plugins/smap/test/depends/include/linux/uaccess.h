@@ -10,6 +10,10 @@ extern "C" {
 #endif
 unsigned long copy_from_user(void *to, const void *from, unsigned long n);
 unsigned long copy_to_user(void *to, const void *from, unsigned long n);
+static inline unsigned long clear_user(void *to, unsigned long n)
+{
+	return 0;
+}
 #ifdef __cplusplus
 }
 #endif

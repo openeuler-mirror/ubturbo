@@ -171,6 +171,22 @@ extern void put_page(struct page *page);
 extern "C" {
 #endif
 extern void folio_put(struct folio *folio);
+
+/* stubs for helpers used by the SMAP kernel fixes */
+static inline long folio_nr_pages(struct folio *folio)
+{
+	return 1;
+}
+static inline unsigned long totalram_pages(void)
+{
+	return 1UL << 20;
+}
+static inline unsigned long long div64_u64(unsigned long long dividend,
+					   unsigned long long divisor)
+{
+	return dividend / divisor;
+}
+
 #ifdef __cplusplus
 }
 #endif
