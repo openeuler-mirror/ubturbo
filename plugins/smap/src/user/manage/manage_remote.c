@@ -464,7 +464,11 @@ static void ClearCompatibleProcessTargets(ProcessAttr *attr)
             NM_AT(attr->strategyAttr.l3RemoteMemRatio, j, i) = 0;
         }
     }
-    /* 迁移量方向矩阵第一维按 nrLocalNuma 分配，按 [local][remote] 清零 */
+    /*
+     * 迁移量方向矩阵第一维按 nrLocalNuma 分配，按 [local][remote] 清零。
+     * 该路径只在 pid 非迁移态或 settle 之后执行，且 settle 已改用 plan 快照，
+     * 清零不影响在途回收；矩阵每轮规划都会整体重写。
+     */
     for (int j = 0; j < nrLocalNuma; j++) {
         for (int i = 0; i < cap; i++) {
             NM_AT(attr->strategyAttr.nrMigratePages, j, i) = 0;

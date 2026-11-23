@@ -279,6 +279,8 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuilds2x2NetMigration)
     BuildPairActcData(2, remote2, 3, &process.scanAttr);
     BuildPairActcData(3, remote3, 2, &process.scanAttr);
     initializeMigList(mlist);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 2);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 3);
 
     NM_AT(process.strategyAttr.nrMigrateBackPages, 0, 2) = 2; /* promote: remote 2 -> local 0 */
     NM_AT(process.strategyAttr.nrMigratePages, 0, 3) = 2;
@@ -323,6 +325,7 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyBuildsPairSwapAfterNetMigr
     BuildPairActcData(0, local0, 3, &process.scanAttr);
     BuildPairActcData(2, remote2, 3, &process.scanAttr);
     initializeMigList(mlist);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 2);
     NM_AT(process.strategyAttr.nrMigratePages, 0, 2) = 3;
     NM_AT(process.strategyAttr.nrMigrateBackPages, 0, 2) = 2;
 
@@ -357,6 +360,7 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyUbBwSwapStopStripsSwap)
     BuildPairActcData(0, local0, 3, &process.scanAttr);
     BuildPairActcData(2, remote2, 3, &process.scanAttr);
     initializeMigList(mlist);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 2);
     NM_AT(process.strategyAttr.nrMigratePages, 0, 2) = 3; /* local -> remote */
     NM_AT(process.strategyAttr.nrMigrateBackPages, 0, 2) = 2; /* remote -> local */
     process.strategyAttr.ubBwRestrict[2] = UB_BW_SWAP_STOP;
@@ -390,6 +394,7 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteSkipsBothDir
     ASSERT_EQ(0, InitProcessAttrArrays(&process));
     BuildPairActcData(2, remote2, 1, &process.scanAttr);
     initializeMigList(mlist);
+    NumaBitmapSet(&process.numaAttr.numaNodes, 2);
     NM_AT(process.strategyAttr.nrMigratePages, 0, 2) = 1;
     NM_AT(process.strategyAttr.nrMigrateBackPages, 0, 2) = 1;
     EnvAtomicSet(&g_forbiddenNodes[2], 1);
@@ -397,6 +402,32 @@ TEST_F(SeparateStrategyTest, TestPairMigrationStrategyDisabledRemoteSkipsBothDir
     int ret = PairMigrationStrategy(&process, mlist);
     EnvAtomicSet(&g_forbiddenNodes[2], 0);
     ASSERT_EQ(0, ret);
+    EXPECT_EQ(0U, NM_AT(mlist, 0, 2).nr);
+    EXPECT_EQ(0U, NM_AT(mlist, 2, 0).nr);
+
+    FreeMlist(mlist);
+    free(process.scanAttr.actcData[2]);
+    FreeProcessAttrArrays(&process);
+}
+
+TEST_F(SeparateStrategyTest, TestPairMigrationStrategySkipsUnmanagedRemote)
+{
+    ProcessAttr process = {};
+    struct MigList *mlist = TestMlist();
+    const uint16_t remote2[] = {5};
+    /* actCount 为堆分配数组，须先初始化再由 BuildPairActcData 写入 */
+    MOCKER(GetNrLocalNuma).stubs().will(returnValue(2));
+    ASSERT_EQ(0, InitProcessAttrArrays(&process));
+    BuildPairActcData(2, remote2, 1, &process.scanAttr);
+    initializeMigList(mlist);
+    /* 远端已被 remove 出管理范围（numaNodes 位图已清），但方向矩阵仍残留本轮计划 */
+    NM_AT(process.strategyAttr.nrMigratePages, 0, 2) = 1;
+    NM_AT(process.strategyAttr.nrMigrateBackPages, 0, 2) = 1;
+    g_remoteNids[0] = 2;
+    g_nrRemote = 1;
+
+    ASSERT_EQ(0, PairMigrationStrategy(&process, mlist));
+    g_nrRemote = 0;
     EXPECT_EQ(0U, NM_AT(mlist, 0, 2).nr);
     EXPECT_EQ(0U, NM_AT(mlist, 2, 0).nr);
 

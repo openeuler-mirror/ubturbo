@@ -490,6 +490,17 @@ int PairMigrationStrategy(ProcessAttr *process, struct MigList *mlist)
                 }
                 continue;
             }
+            /*
+             * 该远端可能在本轮 plan 之后被 remove 出管理范围：numaNodes 位图与目标配置已清，
+             * 矩阵里的残留计划不能再生效，否则页面会迁到不再跟踪的节点上且无法迁回。
+             */
+            if (NotInAttrL2(process, remoteNid)) {
+                if (localToRemote > 0 || remoteToLocal > 0) {
+                    SMAP_LOGGER_INFO("Pid %d pair %d-%d skips migration to unmanaged remote.", process->pid, localNid,
+                                     remoteNid);
+                }
+                continue;
+            }
             uint32_t swapPages = MIN(localToRemote, remoteToLocal);
             uint32_t demotePages = localToRemote - swapPages;
             uint32_t promotePages = remoteToLocal - swapPages;

@@ -41,7 +41,8 @@ using namespace std;
 extern "C" void FreeProceccesAttr(ProcessAttr *attr);
 static cpu_set_t g_fake_cpu_mask;
 extern "C" struct ProcessManager g_processManager;
-extern "C" int BuildPidPairPlans(struct ProcessManager *manager, ProcessAttr *process);
+extern "C" int BuildPidPairPlans(struct ProcessManager *manager, ProcessAttr *process, uint32_t **plannedOut,
+                                 int *plannedNrLocalOut);
 extern "C" void CalRemoteMemUsed(void);
 extern "C" uint32_t g_pageSizeNormal;
 extern "C" uint32_t g_pageSizeHuge;
@@ -5566,13 +5567,13 @@ TEST_F(ManageTest, TestPidPlanRecallsResidentPagesAfterCapacityShrink)
 
     NM_AT(manager.remoteNumaInfo.privateSize, 0, 1) = 1;
     NM_AT(manager.remoteNumaInfo.privateSize, 0, 2) = 2;
-    ASSERT_EQ(0, BuildPidPairPlans(&manager, &attr));
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &attr, nullptr, nullptr));
     EXPECT_EQ(44U, NM_AT(attr.strategyAttr.nrMigrateBackPages, 0, 1));
     EXPECT_EQ(0U, NM_AT(attr.strategyAttr.nrMigratePages, 0, 1));
     EXPECT_EQ(400U, NM_AT(attr.strategyAttr.nrMigratePages, 0, 2));
 
     NM_AT(manager.remoteNumaInfo.privateSize, 0, 1) = 0;
-    ASSERT_EQ(0, BuildPidPairPlans(&manager, &attr));
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &attr, nullptr, nullptr));
     EXPECT_EQ(300U, NM_AT(attr.strategyAttr.nrMigrateBackPages, 0, 1));
 
     memset(&manager.slots, 0, sizeof(manager.slots));
@@ -5600,8 +5601,8 @@ TEST_F(ManageTest, TestPidPlansShareCapacityAndReserveInflightPages)
     PidSlotAdd(&manager, &first);
     PidSlotAdd(&manager, &second);
 
-    ASSERT_EQ(0, BuildPidPairPlans(&manager, &first));
-    ASSERT_EQ(0, BuildPidPairPlans(&manager, &second));
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &first, nullptr, nullptr));
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &second, nullptr, nullptr));
     EXPECT_EQ(128U, NM_AT(first.strategyAttr.nrMigratePages, 0, 1));
     EXPECT_EQ(128U, NM_AT(second.strategyAttr.nrMigratePages, 0, 1));
     EXPECT_EQ(256U, NM_AT(manager.remoteNumaInfo.privateInFlight, 0, 1));
@@ -5614,8 +5615,8 @@ TEST_F(ManageTest, TestPidPlansShareCapacityAndReserveInflightPages)
     NM_AT(second.strategyAttr.remoteNrPagesAfterMigrate, 0, 1) = 200;
     first.managedLocalState.accountLocalMask[1] = BIT(0);
     second.managedLocalState.accountLocalMask[1] = BIT(0);
-    ASSERT_EQ(0, BuildPidPairPlans(&manager, &first));
-    ASSERT_EQ(0, BuildPidPairPlans(&manager, &second));
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &first, nullptr, nullptr));
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &second, nullptr, nullptr));
     EXPECT_EQ(72U, NM_AT(first.strategyAttr.nrMigrateBackPages, 0, 1));
     EXPECT_EQ(72U, NM_AT(second.strategyAttr.nrMigrateBackPages, 0, 1));
 
@@ -5627,8 +5628,8 @@ TEST_F(ManageTest, TestPidPlansShareCapacityAndReserveInflightPages)
     first.walkPage.nrPages[1] = second.walkPage.nrPages[1] = 0;
     NM_AT(first.strategyAttr.remoteNrPagesAfterMigrate, 0, 1) = 0;
     NM_AT(second.strategyAttr.remoteNrPagesAfterMigrate, 0, 1) = 0;
-    ASSERT_EQ(0, BuildPidPairPlans(&manager, &first));
-    ASSERT_EQ(0, BuildPidPairPlans(&manager, &second));
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &first, nullptr, nullptr));
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &second, nullptr, nullptr));
     EXPECT_EQ(128U, NM_AT(first.strategyAttr.nrMigratePages, 0, 1));
     EXPECT_EQ(128U, NM_AT(second.strategyAttr.nrMigratePages, 0, 1));
     EXPECT_EQ(256U, NM_AT(manager.remoteNumaInfo.privateInFlight, 0, 1));
