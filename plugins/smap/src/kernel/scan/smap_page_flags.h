@@ -47,11 +47,26 @@
  * counter to 1 and clears sentinel.
  */
 
+/*
+ * Pin the folio of @page. The folio is re-checked after pinning (the page may
+ * have been freed and reused in another folio meanwhile); while pinned it
+ * cannot be freed or split, so the folio_put(page_folio(page)) of the callers
+ * drops the reference on the same folio.
+ */
 static inline bool smap_page_freq_try_get(struct page *page)
 {
+	struct folio *folio;
+
 	if (!page)
 		return false;
-	return folio_try_get(page_folio(page));
+	folio = page_folio(page);
+	if (!folio_try_get(folio))
+		return false;
+	if (unlikely(page_folio(page) != folio)) {
+		folio_put(folio);
+		return false;
+	}
+	return true;
 }
 
 #define SMAP_FREQ_VAL_SHIFT LAST_CPUPID_PGSHIFT

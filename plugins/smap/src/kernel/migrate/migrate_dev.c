@@ -15,6 +15,7 @@
 #include <linux/mm.h>
 
 #include "obmm_monitor.h"
+#include "numa.h"
 #include "smap_migrate_pages.h"
 #include "critical.h"
 #include "migrate_dev.h"
@@ -142,6 +143,26 @@ static void restore_user_addr(int len, struct mig_list *mlist, u64 **user_addrs)
 	}
 }
 
+/*
+ * mig_list[].from is used as an index into per-node arrays
+ * (ap->paddr_bm[nid]/bm_len[nid]) while converting positions to physical
+ * addresses, so both node ids must be validated before any conversion.
+ */
+static int check_migrate_list_nodes(int len, struct mig_list *mlist)
+{
+	int i;
+
+	for (i = 0; i < len; i++) {
+		if (is_node_invalid(mlist[i].from) ||
+		    is_node_invalid(mlist[i].to)) {
+			pr_err("invalid node from %d to %d of migrate list %d\n",
+			       mlist[i].from, mlist[i].to, i);
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
 static int convert_migrate_list(int len, struct mig_list *mlist)
 {
 	int i, ret;
@@ -179,6 +200,11 @@ static int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist,
 	ret = create_migrate_list(msg, mlist);
 	if (ret) {
 		pr_err("failed to create migrate list, ret: %d\n", ret);
+		return ret;
+	}
+	ret = check_migrate_list_nodes(msg->cnt, *mlist);
+	if (ret) {
+		free_migrate_list(mlist);
 		return ret;
 	}
 	*user_addrs = kcalloc(msg->cnt, sizeof(**user_addrs), GFP_KERNEL);
@@ -366,6 +392,12 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 		for (i = 0; i < len; i++) {
 			struct pagemapread pm = { 0 };
 
+			/* up to 300 pids x 101 rounds of full page-table walks:
+			 * stay schedulable and killable */
+			cond_resched();
+			if (fatal_signal_pending(current))
+				return;
+
 			if (node_is_critical_err(payloads[i].src_nid) ||
 			    node_is_critical_err(payloads[i].dest_nid)) {
 				pr_err_ratelimited(
@@ -388,7 +420,7 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 
 			walk_pid_pagemap(&pm);
 
-			pr_info("pid :%d total page count:%llu",
+			pr_info("pid :%d total page count:%llu\n",
 				payloads[i].pid, pm.mig_info.page_cnt);
 			if (payloads[i].is_ratio_mode) {
 				u64 keep_cnt = (pm.mig_info.page_cnt *
@@ -409,14 +441,22 @@ static void walkpage_and_migrate(struct mig_payload *payloads, int len,
 						  : (payloads[i].mem_size >>
 						     KB_TO_4K);
 			}
+			/*
+			 * Clamp before releasing the surplus references:
+			 * mig_cnt derives from the user supplied mem_size and
+			 * is unbounded. Assigning it to an int loop index
+			 * truncated it (e.g. mem_size = 1 << 34 -> j = 0), put
+			 * every folio here and then handed the same folios to
+			 * smap_migrate(), which drops the reference again.
+			 */
+			mig_cnt = MIN(mig_cnt, (u64)pm.mig_info.mig_cnt);
 			if (smap_pgtype != HUGE_PAGE) {
-				for (int j = mig_cnt; j < pm.mig_info.mig_cnt;
+				for (u64 j = mig_cnt; j < pm.mig_info.mig_cnt;
 				     j++) {
 					folio_put(pm.mig_info.folios[j]);
 				}
 			}
 
-			mig_cnt = MIN(mig_cnt, pm.mig_info.mig_cnt);
 			pr_info("pid:%d migrate page count: %llu, from: %d to: %d\n",
 				payloads[i].pid, mig_cnt, payloads[i].src_nid,
 				payloads[i].dest_nid);

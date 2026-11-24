@@ -1381,11 +1381,17 @@ static int scan_thread_run(void *data)
 
 static int scan_thread_init(struct smap_hist_dev *dev)
 {
-	dev->kthread = kthread_run(scan_thread_run, dev, "hist-scan-thread");
-	if (!dev->kthread) {
-		pr_err("failed to create scan threads\n");
-		return -ECHILD;
+	struct task_struct *tsk;
+
+	/* kthread_run() reports failure with an ERR_PTR, never NULL. */
+	tsk = kthread_run(scan_thread_run, dev, "hist-scan-thread");
+	if (IS_ERR(tsk)) {
+		pr_err("failed to create scan threads, ret: %ld\n",
+		       PTR_ERR(tsk));
+		dev->kthread = NULL;
+		return PTR_ERR(tsk);
 	}
+	dev->kthread = tsk;
 
 	return 0;
 }

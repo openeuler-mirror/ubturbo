@@ -185,6 +185,16 @@ static inline long folio_nr_pages(struct folio *folio)
 {
 	return 1;
 }
+static inline unsigned long totalram_pages(void)
+{
+	return 1UL << 20;
+}
+static inline unsigned long long div64_u64(unsigned long long dividend,
+					   unsigned long long divisor)
+{
+	return dividend / divisor;
+}
+
 #ifdef __cplusplus
 }
 #endif

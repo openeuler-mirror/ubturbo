@@ -31,6 +31,7 @@ struct device_driver {
     char reserved6;
     const char *name;
     char reserved7;
+    bool suppress_bind_attrs;
 };
 
 int driver_register(struct device_driver *drv);

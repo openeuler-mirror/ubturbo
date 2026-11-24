@@ -9,6 +9,9 @@
 #define wake_up_interruptible_all(x) (x)
 #define wake_up_all(x) (x)
 #define init_waitqueue_head(x) (x)
+#define TASK_NORMAL 3
+#define waitqueue_active(wq_head) (0)
+#define __wake_up(wq_head, mode, nr, key) ((void)(wq_head), (void)(key))
 
 #define wait_event_interruptible_timeout(wq_head, condition, timeout) (0)
 

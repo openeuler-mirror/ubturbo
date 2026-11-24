@@ -19,6 +19,7 @@ void *kvmalloc(size_t size, gfp_t flags);
 void *kvzalloc(size_t size, gfp_t flags);
 void *kvcalloc(size_t n, size_t size, gfp_t flags);
 void kfree(void *p);
+#define kfree_rcu(ptr, rhf) kfree(ptr)
 void kvfree(void *p);
 
 #ifdef __cplusplus

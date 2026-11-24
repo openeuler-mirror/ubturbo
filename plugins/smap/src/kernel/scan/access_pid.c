@@ -264,7 +264,19 @@ void destroy_access_pid(struct access_pid *elem)
 		elem->info.priors = NULL;
 	}
 	remote_ram_snapshot_free(elem->remote_snapshot);
-	kfree(elem);
+	/*
+	 * /proc/smap/<pid>/mem_freq supports poll() and the daemon keeps it in
+	 * an epoll set. proc_remove() only blocks new callbacks, it does not
+	 * detach epoll entries queued on elem->wq, so a later EPOLL_CTL_DEL or
+	 * close() would unlink them from freed memory. Detach them with
+	 * POLLFREE (what wake_up_pollfree() does; that helper is not exported)
+	 * and, as it requires, free the wait queue only after an RCU grace
+	 * period.
+	 */
+	if (waitqueue_active(&elem->wq))
+		__wake_up(&elem->wq, TASK_NORMAL, 0,
+			  poll_to_key(EPOLLHUP | POLLFREE));
+	kfree_rcu(elem, rcu);
 	return;
 }
 
@@ -1543,8 +1555,13 @@ static int calc_absolute_pos(unsigned long *paddr_bm, size_t bm_len,
 #define INITIAL_POS ULONG_MAX
 #define INITIAL_POS_INDEX (-1)
 
-static int check_migrate_params(u64 len, u64 *addr)
+static int check_migrate_params(int nid, u64 len, u64 *addr)
 {
+	if (nid < 0 || nid >= MAX_NUMNODES) {
+		pr_err("invalid node %d passed to convert position to PA\n",
+		       nid);
+		return -EINVAL;
+	}
 	if (len == 0 || !addr) {
 		pr_err("invalid length or address passed to check\n");
 		return -EINVAL;
@@ -1562,8 +1579,8 @@ static void convert_single_address(struct access_pid *ap, int nid,
 	abs_pos->index = *addr;
 	ret = calc_absolute_pos(ap->paddr_bm[nid], ap->bm_len[nid], abs_pos);
 	if (ret < 0) {
-		pr_err("calculate pid %d %lluth page pos failed\n", ap->pid,
-		       *addr);
+		pr_err_ratelimited("calculate pid %d %lluth page pos failed\n",
+				   ap->pid, *addr);
 		*addr = INVALID_PADDR;
 		return;
 	}
@@ -1582,7 +1599,8 @@ static void convert_single_address(struct access_pid *ap, int nid,
 	}
 
 	if (ret) {
-		pr_err("calculate acidx %lx paddr failed\n", abs_pos->index);
+		pr_err_ratelimited("calculate acidx %lx paddr failed\n",
+				   abs_pos->index);
 		*addr = INVALID_PADDR;
 	}
 }
@@ -1600,7 +1618,7 @@ int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr)
 	int page_size = is_access_hugepage() ? g_pagesize_huge : PAGE_SIZE;
 	int ret;
 
-	ret = check_migrate_params(len, addr);
+	ret = check_migrate_params(nid, len, addr);
 	if (ret) {
 		return ret;
 	}
@@ -1618,6 +1636,9 @@ int convert_pos_to_paddr_sorted(pid_t pid, int nid, u64 len, u64 *addr)
 		 len, pid, nid);
 	for (i = 0; i < len; i++) {
 		convert_single_address(ap, nid, page_size, &addr[i], &abs_pos);
+		/* up to MAX_MIG_LIST_NR (2^28) entries; ap_lock is an rwsem */
+		if (!(i % 4096))
+			cond_resched();
 	}
 	up_read(&slot->ap_lock);
 

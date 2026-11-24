@@ -36,9 +36,13 @@ struct task_struct {
 	int				nr_cpus_allowed;
 	struct files_struct		*files;
     pid_t				tgid;
+	u64				start_boottime;
 };
 
 void schedule(void);
+/* must not evaluate its argument: the "current" stub reads sp_el0 */
+#define fatal_signal_pending(p) (0)
+#define get_task_struct(t) (t)
 extern char *__get_task_comm(char *to, size_t len, struct task_struct *tsk);
 extern struct task_struct *find_get_task_by_vpid(pid_t nr);
 #define get_task_comm(buf, tsk) ({			\

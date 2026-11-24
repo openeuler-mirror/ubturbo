@@ -106,6 +106,18 @@ static inline int pmd_trans_huge(pmd_t pmd)
     return pmd.pmd != 0;
 }
 
+static inline unsigned long pmd_pfn(pmd_t pmd)
+{
+    return 0;
+}
+
+static inline int pmd_young(pmd_t pmd)
+{
+    return 0;
+}
+
+#define pmd_trans_huge_lock(pmd, vma) ((spinlock_t *)NULL)
+
 static inline p4d_t *p4d_offset(pgd_t *pgd, unsigned long address)
 {
 	return (p4d_t *)pgd;
