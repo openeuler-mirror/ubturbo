@@ -431,7 +431,7 @@ TEST_F(AccessMMUTest, GetMMByPid)
     EXPECT_EQ(ERR_PTR(-ESRCH), mm);
 
     struct task_struct task;
-    MOCKER(get_pid_task).stubs().will(returnValue(&task));
+    MOCKER(pid_task).stubs().will(returnValue(&task));
     mm = get_mm_by_pid((pid_t)1);
     EXPECT_EQ(nullptr, mm);
 }

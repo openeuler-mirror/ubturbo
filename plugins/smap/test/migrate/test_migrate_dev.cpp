@@ -144,6 +144,7 @@ TEST_F(MigInitTest, InitMigrateListAddrCopyExceptionBranch)
 
 extern "C" int convert_migrate_list(int len, struct mig_list *mlist);
 extern "C" int build_migrate_list(struct migrate_msg *msg, struct mig_list **mlist, u64 ***user_addrs);
+extern "C" int check_migrate_list_nodes(int len, struct mig_list *mlist);
 TEST_F(MigInitTest, BuildMigrateListSuccess)
 {
     struct migrate_msg msg;
@@ -152,6 +153,7 @@ TEST_F(MigInitTest, BuildMigrateListSuccess)
 
     msg.cnt = 1;
     MOCKER(create_migrate_list).stubs().will(returnValue(0));
+    MOCKER(check_migrate_list_nodes).stubs().will(returnValue(0));
     MOCKER(init_migrate_list_addr).stubs().will(returnValue(0));
     MOCKER(convert_migrate_list).stubs().will(returnValue(0));
     int ret = build_migrate_list(&msg, &mlist, &user_addrs);

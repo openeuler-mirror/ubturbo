@@ -18,5 +18,8 @@ typedef struct poll_table_struct poll_table;
 #define POLLWRNORM 0x0100
 #define POLLERR 0x0008
 #define POLLHUP 0x0010
+#define EPOLLHUP 0x00000010
+#define POLLFREE 0x4000
+#define poll_to_key(m) ((void *)(unsigned long)(m))
 
 #endif /* _LINUX_POLL_H */

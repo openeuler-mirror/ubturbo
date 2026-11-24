@@ -245,8 +245,8 @@ void cancel_ap_scan_work(struct access_pid *ap)
 		/* cancel_delayed_work_sync returns true if it deactivated a
 		 * pending timer; that pending instance's work-ref (taken in
 		 * submit_one_work) is now orphaned and must be dropped here.
-		 * A running instance observes AP_SLOT_REMOVING and drops its
-		 * own work-ref.
+		 * A running instance cannot requeue itself while we cancel
+		 * (we hold PENDING) and then drops its own work-ref.
 		 */
 		if (cancel_delayed_work_sync(&ap->scan_work) && ap->slot)
 			ap_put_slot(ap->slot);
@@ -590,10 +590,18 @@ static void access_work_func(struct work_struct *work)
 				      &scan_delay_ms);
 	}
 	ap->last_scan_delay_ms = scan_delay_ms;
+	/*
+	 * Keep the work-ref only if the next round was really queued. While a
+	 * cancel_delayed_work_sync() waits for this running instance it holds
+	 * the PENDING bit, so queue_delayed_work() fails; cancel then returns
+	 * false (nothing was pending) and would not drop the ref either, so
+	 * the slot could never be reclaimed. Treat a failed requeue as the end
+	 * of the scan cycle.
+	 */
 	if (ap->cur_times < ap->ntimes &&
-	    atomic_read(&slot->state) == AP_SLOT_INUSE) {
-		queue_delayed_work(scan_state.scanq, &ap->scan_work,
-				   msecs_to_jiffies(scan_delay_ms));
+	    atomic_read(&slot->state) == AP_SLOT_INUSE &&
+	    queue_delayed_work(scan_state.scanq, &ap->scan_work,
+			       msecs_to_jiffies(scan_delay_ms))) {
 		ap->last_scan_end = ktime_get();
 		/* keep the work-ref for the next round */
 	} else {
@@ -648,17 +656,11 @@ int scan_init(void)
 		goto err_remote_ram;
 	}
 
-	ret = scan_ioctl_init();
-	if (ret) {
-		pr_err("unable to init scan ioctl operations\n");
-		goto err_ioctl;
-	}
-
 	scan_state_init();
 
 	ret = create_scan_workqueue();
 	if (ret) {
-		goto err_scan_ioctl;
+		goto err_scan_wq;
 	}
 
 	ret = smap_swap_init();
@@ -666,16 +668,27 @@ int scan_init(void)
 		goto err_swap_wq;
 	}
 
+	/*
+	 * Expose /dev/smap_scan_dev only after every piece of state the
+	 * ioctl handlers use (scan_state, scan/swap workqueues) is ready:
+	 * udev makes the node usable as soon as it is created.
+	 */
+	ret = scan_ioctl_init();
+	if (ret) {
+		pr_err("unable to init scan ioctl operations\n");
+		goto err_ioctl;
+	}
+
 	access_print_acpi_mem();
 
 	pr_info("scan subsystem initialized successfully\n");
 	return ret;
 
+err_ioctl:
+	smap_swap_exit();
 err_swap_wq:
 	destroy_scan_workqueue();
-err_scan_ioctl:
-	scan_ioctl_exit();
-err_ioctl:
+err_scan_wq:
 	release_remote_ram();
 err_remote_ram:
 	reset_acpi_mem();

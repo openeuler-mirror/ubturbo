@@ -604,7 +604,8 @@ TEST_F(HistOpsTest, scan_thread_init)
     int ret;
     struct smap_hist_dev dev;
     ret = scan_thread_init(&dev);
-    EXPECT_EQ(-ECHILD, ret);
+    /* kthread_run() failure is an ERR_PTR: propagated, kthread left NULL */
+    EXPECT_EQ(-ENOMEM, ret);
     EXPECT_EQ(nullptr, dev.kthread);
 }
 

@@ -85,6 +85,7 @@ static int smap_add_page_for_migration(struct page *page, struct folio **folios,
 				       unsigned int *nr_folios, pid_t pid,
 				       bool migrate_all)
 {
+	struct folio *folio;
 	int err;
 	err = PTR_ERR(page);
 	if (IS_ERR(page)) {
@@ -103,19 +104,20 @@ static int smap_add_page_for_migration(struct page *page, struct folio **folios,
 		pr_debug("invalid page map count or null migrate all flag\n");
 		return err;
 	}
-	if (!folio_try_get(page_folio(page))) {
+	folio = smap_try_get_page_folio(page);
+	if (!folio) {
 		pr_debug("failed to add folio reference\n");
 		return -EINVAL;
 	}
 	if (PageHuge(page)) {
 		err = smap_check_huge_page_for_migration(page, pid);
 		if (err) {
-			folio_put(page_folio(page));
+			folio_put(folio);
 			return err;
 		}
 	}
 
-	folios[*nr_folios] = page_folio(page);
+	folios[*nr_folios] = folio;
 	(*nr_folios)++;
 	return 0;
 }
@@ -181,7 +183,7 @@ unsigned int smap_migrate(struct folio **folios, unsigned int nr_folios,
 		return nr_folios;
 	}
 
-	if (to_node < 0 || to_node >= MAX_NUMNODES) {
+	if (is_node_invalid(to_node)) {
 		put_folios(folios, nr_folios);
 		pr_debug(
 			"invalid destination node: %d passed to SMAP migrate\n",
@@ -280,6 +282,7 @@ static int smap_add_page_for_migrate_back(u64 pa,
 					  unsigned int *mig_pages_cnt,
 					  int dest_nid, bool migrate_all)
 {
+	struct folio *folio;
 	int ret;
 	int nid = NUMA_NO_NODE;
 	unsigned long pfn;
@@ -335,11 +338,12 @@ static int smap_add_page_for_migrate_back(u64 pa,
 		       nid);
 		return -EINVAL;
 	}
-	if (!folio_try_get(page_folio(page))) {
+	folio = smap_try_get_page_folio(page);
+	if (!folio) {
 		pr_debug("unable to add folio reference\n");
 		return -EINVAL;
 	}
-	migrate_folios[nid][mig_pages_cnt[nid]] = page_folio(page);
+	migrate_folios[nid][mig_pages_cnt[nid]] = folio;
 	mig_pages_cnt[nid]++;
 
 	return 0;
@@ -396,8 +400,10 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 	unsigned int nr_folios_min = 0;
 	unsigned int cnt = 0;
 	unsigned int j;
+	/* pa_end is inclusive; the collector loop visits every page_size
+	 * step with pa < pa_end, i.e. up to DIV_ROUND_UP(len, page_size) */
 	unsigned long max_nr_folios =
-		(task->pa_end - task->pa_start + 1) / page_size;
+		DIV_ROUND_UP(task->pa_end - task->pa_start + 1, page_size);
 	struct folio **migrate_folios =
 		vzalloc(max_nr_folios * sizeof(struct folio *));
 	if (!migrate_folios) {
@@ -406,6 +412,8 @@ void smap_handle_migrate_back_subtask(struct migrate_back_subtask *task)
 	}
 
 	for (pa = task->pa_start; pa < task->pa_end; pa += page_size) {
+		/* ranges cover up to MAX_MIG_LIST_NR pages (PREEMPT_NONE) */
+		cond_resched();
 		pfn = PHYS_PFN(pa);
 		if (!pfn_valid(pfn)) {
 			continue;
@@ -504,6 +512,8 @@ static void process_pages_for_migration(struct migrate_back_subtask *task,
 	*nr_pre_migrate_fail = *nr_pre_migrate = 0;
 
 	for (pa = task->pa_start; pa < task->pa_end; pa += PAGE_SIZE) {
+		/* ranges cover up to MAX_MIG_LIST_NR pages (PREEMPT_NONE) */
+		cond_resched();
 		pfn = PHYS_PFN(pa);
 		if (!pfn_valid(pfn)) {
 			continue;
@@ -543,8 +553,11 @@ void smap_handle_migrate_back_subtask_4k(struct migrate_back_subtask *task)
 	unsigned int *mig_pages_cnt;
 	struct folio ***migrate_folios;
 	unsigned long nr_pre_migrate_fail;
+	/* pa_end is inclusive (obmm range end = pa + size - 1), while the
+	 * collector visits every page with pa < pa_end: size the per-node
+	 * arrays for all of them, one more than (pa_end - pa_start) / 4K */
 	unsigned long max_nr_folios =
-		(task->pa_end - task->pa_start) / PAGE_SIZE;
+		DIV_ROUND_UP(task->pa_end - task->pa_start + 1, PAGE_SIZE);
 	unsigned long nr_pre_migrate = 0;
 #ifdef DEBUG
 	ktime_t start_time, end_time;
@@ -978,6 +991,8 @@ static int smap_pre_migrate_range(struct folio **folios,
 	int nr_hugepage = 0;
 	int nr_normalpage = 0;
 	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
+		/* ranges cover up to MAX_MIG_LIST_NR pages (PREEMPT_NONE) */
+		cond_resched();
 		struct folio *folio;
 
 		page = pfn_to_online_page(pfn);
@@ -1005,7 +1020,8 @@ static int smap_pre_migrate_range(struct folio **folios,
 			    PageHuge(page)) {
 				continue;
 			}
-			if (!folio_try_get(folio)) {
+			folio = smap_try_get_page_folio(page);
+			if (!folio) {
 				pr_debug("unable to add folio reference\n");
 				continue;
 			}

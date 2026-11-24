@@ -56,6 +56,8 @@ static __always_inline void __node_set(int n, volatile nodemask_t *dstp)
 }
 
 #define node_possible(n)	node_state((n), N_POSSIBLE)
+/* the unit-test model has no offline nodes; range checks still apply */
+#define node_online(n)		((void)(n), 1)
 
 #if MAX_NUMNODES > 1
 #define for_each_node_mask(n, m)				    \

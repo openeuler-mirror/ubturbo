@@ -13,9 +13,6 @@
 #define TZ_OFFSET (8 * 60 * 60)
 #define EPOCH (1900L)
 
-int check_and_create_dir(char *dir);
-int check_filesize(char *filepath, loff_t max_sz, int *exceed);
-int rename_file(char *old_name, char *new_name);
 void filter_4k_migrate_info(size_t *nr_abnormal);
 
 #endif /* _SRC_DUMP_INFO_H */

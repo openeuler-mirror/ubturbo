@@ -11,6 +11,8 @@
 #define atomic_read(v) ((v)->counter)
 #endif
 #define atomic_set(v, i) ((v)->counter = (i))
+#define atomic_read_acquire(v) atomic_read(v)
+#define atomic_set_release(v, i) atomic_set(v, i)
 
 static inline int atomic_cmpxchg(atomic_t *v, int old, int newp)
 {

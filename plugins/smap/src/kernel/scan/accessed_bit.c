@@ -1543,7 +1543,7 @@ int scan_hva_info_4k(pid_t pid, u64 *page_num, u64 **vaddr)
 	int ret;
 
 	mm = get_mm_by_pid(pid);
-	if (IS_ERR(mm) || !mm || !mmget_not_zero(mm)) {
+	if (IS_ERR_OR_NULL(mm)) {
 		pr_err("bad mm of pid: %d\n", pid);
 		return -EINVAL;
 	}
@@ -1675,7 +1675,7 @@ int scan_hva_info_4k_vm(pid_t pid, u64 *page_num, u64 **vaddr)
 		goto out_segs;
 
 	mm = get_mm_by_pid(pid);
-	if (IS_ERR_OR_NULL(mm) || !mmget_not_zero(mm)) {
+	if (IS_ERR_OR_NULL(mm)) {
 		pr_err("bad mm of pid: %d\n", pid);
 		ret = -EINVAL;
 		goto out_segs;
@@ -1842,10 +1842,21 @@ static void process_scan_results(struct pte_walk *pte_walk)
 		struct scan_result_entry *entry = &pte_walk->scan_results[i];
 
 		if (entry->hot) {
-			unsigned long pfn = PHYS_PFN(entry->paddr);
+			/*
+			 * The PTL and mmap_lock are already dropped here: the
+			 * page may have been freed, or its memmap removed by
+			 * memory hot-remove. Only touch an online page whose
+			 * folio we hold a reference on.
+			 */
+			struct page *page =
+				pfn_to_online_page(PHYS_PFN(entry->paddr));
+			struct folio *folio =
+				page ? smap_try_get_page_folio(page) : NULL;
 
-			if (pfn_valid(pfn))
-				folio_set_young(pfn_folio(pfn));
+			if (folio) {
+				folio_set_young(folio);
+				folio_put(folio);
+			}
 		}
 
 		if (nid < nr_local_numa) {
@@ -2056,7 +2067,7 @@ static int scan_forward_4k_mm(struct access_pid *ap, int page_size)
 	pte_walk.type = ap->type;
 
 	mm = get_mm_by_pid(ap->pid);
-	if (IS_ERR(mm) || !mm || !mmget_not_zero(mm)) {
+	if (IS_ERR_OR_NULL(mm)) {
 		pr_err("bad mm of pid: %d\n", ap->pid);
 		return -EINVAL;
 	}
