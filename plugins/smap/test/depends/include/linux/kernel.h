@@ -16,6 +16,13 @@
 #define CAP_SYS_ADMIN        21
 
 #define ALIGN(x, a)		__ALIGN_KERNEL((x), (a))
+#ifndef IS_ALIGNED
+#define IS_ALIGNED(x, a)	(((x) & ((typeof(x))(a) - 1)) == 0)
+#endif
+#ifndef smp_load_acquire
+#define smp_load_acquire(p) __atomic_load_n(p, __ATOMIC_ACQUIRE)
+#define smp_store_release(p, v) __atomic_store_n(p, v, __ATOMIC_RELEASE)
+#endif
 
 #define DIV_ROUND_UP __KERNEL_DIV_ROUND_UP
 #define READ			0

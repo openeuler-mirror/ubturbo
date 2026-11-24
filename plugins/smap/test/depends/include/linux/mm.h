@@ -173,6 +173,14 @@ extern "C" {
 extern void folio_put(struct folio *folio);
 
 /* stubs for helpers used by the SMAP kernel fixes */
+static inline bool folio_is_file_lru(struct folio *folio)
+{
+	return false;
+}
+static inline struct pglist_data *folio_pgdat(struct folio *folio)
+{
+	return NULL;
+}
 static inline long folio_nr_pages(struct folio *folio)
 {
 	return 1;

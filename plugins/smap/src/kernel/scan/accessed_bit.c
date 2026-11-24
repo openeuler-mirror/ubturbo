@@ -9,6 +9,7 @@
 #include <asm/stage2_pgtable.h>
 
 #include <linux/rmap.h>
+#include <linux/sizes.h>
 #include <linux/vmalloc.h>
 #include <linux/sort.h>
 #include <linux/kvm_host.h>
@@ -127,16 +128,28 @@ static inline bool is_kvm_file(struct file *filp)
  */
 struct file *get_kvm_file_from_task(struct task_struct *task)
 {
+	struct files_struct *files;
 	struct file *filp = NULL;
 	unsigned int i;
 
-	if (!task || !task->files)
+	if (!task)
 		return NULL;
 
 	rcu_read_lock();
 	task_lock(task);
-	for (i = 0; i < files_fdtable(task->files)->max_fds; i++) {
-		filp = files_lookup_fd_rcu(task->files, i);
+	/*
+	 * exit_files() clears task->files under task_lock(); test and use the
+	 * pointer only while holding it, or a VM exiting between an unlocked
+	 * check and the loop makes us dereference NULL.
+	 */
+	files = task->files;
+	if (!files) {
+		task_unlock(task);
+		rcu_read_unlock();
+		return NULL;
+	}
+	for (i = 0; i < files_fdtable(files)->max_fds; i++) {
+		filp = files_lookup_fd_rcu(files, i);
 		if (!filp) {
 			continue;
 		}
@@ -804,6 +817,29 @@ static bool memslot_is_mem(struct kvm_memory_slot *memslot)
 	return true;
 }
 
+/*
+ * GPA span walked per mmu_lock hold. The whole-VM walk used to run with
+ * kvm->mmu_lock (rwlock, preemption off), mmap_lock and RCU held from the
+ * first to the last memslot: seconds to tens of seconds for large 4K VMs
+ * on a PREEMPT_NONE kernel (soft lockups, RCU stalls), while vCPU faults
+ * and MMU notifiers waiting for the write lock stalled the guest.
+ */
+#define SMAP_KVM_SCAN_CHUNK SZ_256M
+
+/*
+ * Briefly drop the per-scan locks taken by pre_scan_kvm_memslots(). The
+ * SRCU read side stays held, so the memslots being walked stay valid; the
+ * stage-2 page table lives as long as the kvm reference held by the scan.
+ */
+static void smap_kvm_scan_yield(struct kvm *kvm)
+{
+	read_unlock(&kvm->mmu_lock);
+	mmap_read_unlock(kvm->mm);
+	cond_resched();
+	mmap_read_lock(kvm->mm);
+	read_lock(&kvm->mmu_lock);
+}
+
 static int collect_statistic_vaddr(struct kvm *kvm,
 				   struct kvm_memory_slot *memslot,
 				   struct access_pid *ap, int page_size,
@@ -813,9 +849,21 @@ static int collect_statistic_vaddr(struct kvm *kvm,
 	unsigned long hva;
 	bool is_young;
 
+	/*
+	 * The buffer is sized before the locks are retaken for the scan, so
+	 * memslots may have grown since; and the caller keeps iterating
+	 * memslots after one fills it. Never write at or past nr_pages.
+	 */
+	if (*cur_index >= nr_pages)
+		return 0;
+
 	for (gpa = memslot->base_gfn << PAGE_SHIFT;
 	     gpa < (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
 	     gpa += (gpa_t)page_size) {
+		/* do not hold mmu_lock across the whole memslot */
+		if (gpa != (memslot->base_gfn << PAGE_SHIFT) &&
+		    IS_ALIGNED(gpa, SMAP_KVM_SCAN_CHUNK))
+			smap_kvm_scan_yield(kvm);
 		is_young =
 			smap_kvm_pgtable_stage2_mkold(kvm->arch.mmu.pgt, gpa);
 		if (!is_young && !access_pid_cur_last_scanning(ap))
@@ -824,9 +872,9 @@ static int collect_statistic_vaddr(struct kvm *kvm,
 		if (!get_vma_if_huge_page(kvm, hva))
 			continue;
 		if (is_young) {
-			vaddr[(*cur_index)++] = hva;
 			if (*cur_index >= nr_pages)
 				return 0;
+			vaddr[(*cur_index)++] = hva;
 		}
 	}
 	return 0;
@@ -889,6 +937,8 @@ static int process_memslot_pages(struct kvm *kvm,
 {
 	u64 memslot_start = memslot->base_gfn << PAGE_SHIFT;
 	u64 memslot_end = (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
+	u64 start, len;
+	int ret = 0;
 	struct smap_stage2_range_mkold_data data = {
 		.kvm = kvm,
 		.memslot = memslot,
@@ -899,10 +949,16 @@ static int process_memslot_pages(struct kvm *kvm,
 	};
 	data.stride = (page_size == PMD_SIZE) ? PTRS_PER_PMD : 1;
 
-	return smap_kvm_pgtable_stage2_mkold_range(kvm->arch.mmu.pgt,
-						   memslot_start,
-						   memslot_end - memslot_start,
-						   &data);
+	for (start = memslot_start; start < memslot_end; start += len) {
+		len = min_t(u64, memslot_end - start, SMAP_KVM_SCAN_CHUNK);
+		ret = smap_kvm_pgtable_stage2_mkold_range(kvm->arch.mmu.pgt,
+							  start, len, &data);
+		if (ret)
+			break;
+		if (start + len < memslot_end)
+			smap_kvm_scan_yield(kvm);
+	}
+	return ret;
 }
 
 /*
