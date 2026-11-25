@@ -49,7 +49,6 @@ LIST_HEAD(ham_pid_list);
 LIST_HEAD(statistic_pid_list);
 spinlock_t ham_lock;
 struct rw_semaphore statistic_lock;
-static u64 freq_info_num;
 
 static int scan_group_size_set(const char *val, const struct kernel_param *kp);
 
@@ -213,6 +212,11 @@ static struct freq_info *get_freq_info(struct ham_tracking_info *info, u64 *n)
 	struct freq_info *freq_info_array;
 	u64 total_len;
 	total_len = info->len[L1] + info->len[L2];
+	/* vzalloc(0) returns NULL, skip the allocation for an empty result */
+	if (!total_len) {
+		*n = 0;
+		return NULL;
+	}
 	freq_info_array = vzalloc(sizeof(struct freq_info) * total_len);
 	if (!freq_info_array) {
 		pr_err("unable to allocate memory for frequency info array\n");
@@ -238,64 +242,84 @@ static struct freq_info *get_freq_info(struct ham_tracking_info *info, u64 *n)
 	return freq_info_array;
 }
 
-static ssize_t proc_file_read(struct file *file, char __user *buf, size_t count,
-			      loff_t *pos)
+/*
+ * Serialize readers against ham_pid_list removal, which frees the entry and
+ * its arrays. ham_lock only guards the list itself.
+ */
+DEFINE_MUTEX(ham_tracking_lock);
+
+/* Caller must hold ham_tracking_lock. */
+static struct ham_tracking_info *find_ham_tracking_info(pid_t pid)
 {
-	int ret = 0;
-	struct ham_tracking_info *info = NULL;
-	struct ham_tracking_info *tmp;
-	u64 num = 0;
-	struct freq_info *freq_info_array;
-	int pid = get_pid_from_tracking_file(file);
-	if (pid < 0)
-		return -EINVAL;
+	struct ham_tracking_info *info;
 
 	spin_lock(&ham_lock);
-	list_for_each_entry(tmp, &ham_pid_list, node) {
-		if (tmp->pid == pid) {
-			info = tmp;
-			break;
+	list_for_each_entry(info, &ham_pid_list, node) {
+		if (info->pid == pid) {
+			spin_unlock(&ham_lock);
+			return info;
 		}
 	}
 	spin_unlock(&ham_lock);
+	return NULL;
+}
 
+static ssize_t proc_file_read(struct file *file, char __user *buf, size_t count,
+			      loff_t *pos)
+{
+	struct ham_tracking_info *info;
+	struct freq_info *array;
+	size_t total, to_copy;
+	ssize_t ret;
+	u64 num = 0;
+	pid_t pid = get_pid_from_tracking_file(file);
+
+	if (pid < 0)
+		return -EINVAL;
+
+	mutex_lock(&ham_tracking_lock);
+	info = find_ham_tracking_info(pid);
 	if (!info) {
 		pr_err("unable to find tracking file of pid: %d in process file system\n",
 		       pid);
+		mutex_unlock(&ham_tracking_lock);
 		return -ENXIO;
 	}
 
-	freq_info_array = get_freq_info(info, &num);
-	if (!freq_info_array) {
+	array = get_freq_info(info, &num);
+	if (!array) {
 		pr_err("unable to get frequency info array\n");
+		mutex_unlock(&ham_tracking_lock);
 		return -ENOMEM;
 	}
+
 	if (*pos == 0) {
-		if (copy_to_user(buf, &num, sizeof(u64))) {
+		/* first read: report how many entries the next read returns */
+		if (count < sizeof(num)) {
+			ret = -EINVAL;
+		} else if (copy_to_user(buf, &num, sizeof(num))) {
 			pr_err("unable to copy size of frequency info array to user space\n");
 			ret = -EFAULT;
+		} else {
+			*pos += sizeof(num);
+			ret = sizeof(num);
 		}
-		freq_info_num = num;
-		*pos += sizeof(u64);
-		count = sizeof(u64);
-		goto out;
+	} else {
+		total = sizeof(struct freq_info) * num;
+		to_copy = count < total ? count : total;
+		if (copy_to_user(buf, array, to_copy)) {
+			pr_err("unable to copy frequency info array to user space\n");
+			ret = -EFAULT;
+		} else {
+			*pos += to_copy;
+			clear_tracking_info(info);
+			ret = to_copy;
+		}
 	}
-	num = min(num, freq_info_num);
-	if (copy_to_user(buf, freq_info_array,
-			 sizeof(struct freq_info) * num)) {
-		pr_err("unable to copy frequency info array to user space\n");
-		ret = -EFAULT;
-		goto out;
-	}
-	*pos += (sizeof(struct freq_info) * num);
-	count += (sizeof(struct freq_info) * num);
-	clear_tracking_info(info);
 
-out:
-	if (freq_info_array) {
-		vfree(freq_info_array);
-	}
-	return ret ? ret : count;
+	vfree(array);
+	mutex_unlock(&ham_tracking_lock);
+	return ret;
 }
 
 static const struct proc_ops proc_file_ops = {
@@ -320,14 +344,15 @@ int smap_create_tracking_info_file(struct ham_tracking_info *info)
 		       info->pid);
 		return -ENOENT;
 	}
-	proc_file =
-		proc_create("tracking_info", S_IRUGO, proc_dir, &proc_file_ops);
+	proc_file = proc_create("tracking_info", S_IRUSR | S_IRGRP, proc_dir,
+				&proc_file_ops);
 	if (!proc_file) {
 		pr_err("unable to create tracking info file of pid: %d in process file system\n",
 		       info->pid);
 		remove_proc_entry(path, NULL);
 		return -ENOENT;
 	}
+	proc_set_user(proc_file, procfs_kuid, procfs_kgid);
 	info->pde = proc_dir;
 	return 0;
 }
@@ -335,23 +360,18 @@ int smap_create_tracking_info_file(struct ham_tracking_info *info)
 int get_ham_pages_freqs(pid_t pid, struct freq_info **freq_info_array,
 			uint64_t *freq_info_num)
 {
-	struct ham_tracking_info *info = NULL;
-	struct ham_tracking_info *tmp;
+	struct ham_tracking_info *info;
+
 	if (!access_pid_is_scanning(pid)) {
 		pr_info("the current access pid: %d is not scanning\n", pid);
 		return -EINVAL;
 	}
-	spin_lock(&ham_lock);
-	list_for_each_entry(tmp, &ham_pid_list, node) {
-		if (tmp->pid == pid) {
-			info = tmp;
-			break;
-		}
-	}
-	spin_unlock(&ham_lock);
 
+	mutex_lock(&ham_tracking_lock);
+	info = find_ham_tracking_info(pid);
 	if (!info) {
 		pr_err("unable to find pid: %d in HAM managed pid list\n", pid);
+		mutex_unlock(&ham_tracking_lock);
 		return -ENXIO;
 	}
 
@@ -359,9 +379,11 @@ int get_ham_pages_freqs(pid_t pid, struct freq_info **freq_info_array,
 	*freq_info_array = get_freq_info(info, freq_info_num);
 	if (!*freq_info_array) {
 		pr_err("unable to get frequency info of pid: %d\n", pid);
+		mutex_unlock(&ham_tracking_lock);
 		return -ENOMEM;
 	}
 	clear_tracking_info(info);
+	mutex_unlock(&ham_tracking_lock);
 	return 0;
 }
 EXPORT_SYMBOL(get_ham_pages_freqs);

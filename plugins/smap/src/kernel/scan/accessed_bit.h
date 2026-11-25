@@ -75,6 +75,8 @@ struct pte_walk {
 };
 
 int smap_create_tracking_info_file(struct ham_tracking_info *info);
+/* Serializes HAM tracking readers against removal, which frees the entry. */
+extern struct mutex ham_tracking_lock;
 int get_ham_pages_freqs(pid_t pid, struct freq_info **freq_info_array,
 			uint64_t *freq_info_num);
 struct file *get_kvm_file_from_task(struct task_struct *task);

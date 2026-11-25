@@ -366,8 +366,9 @@ static long ioctl_get_tracking(void __user *argp)
 	if (copy_from_user(&msg, argp, sizeof(msg)))
 		return -EFAULT;
 
-	if (msg.length == 0) {
-		pr_err("invalid message length passed to get tracking data\n");
+	if (msg.length == 0 || msg.length > SMAP_TRACKING_LENGTH_MAX) {
+		pr_err("invalid message length %u passed to get tracking data\n",
+		       msg.length);
 		return -EINVAL;
 	}
 

@@ -1290,29 +1290,34 @@ err:
 
 void access_remove_ham_pid(int len, struct access_remove_pid_payload *payload)
 {
-	int i, ret;
-	struct ham_tracking_info *ap, *tmp;
+	int i;
+	struct ham_tracking_info *ap;
 	char path[MAX_PATH_LENGTH];
+	bool found;
 
-	spin_lock(&ham_lock);
 	for (i = 0; i < len; i++) {
-		list_for_each_entry_safe(ap, tmp, &ham_pid_list, node) {
-			if (ap->pid != payload[i].pid) {
-				continue;
-			}
-			ret = scnprintf(path, sizeof(path), "%d_t", ap->pid);
-			if (!ret) {
-				pr_err("write pid to path of pid: %d failed\n",
-				       ap->pid);
+		found = false;
+		spin_lock(&ham_lock);
+		list_for_each_entry(ap, &ham_pid_list, node) {
+			if (ap->pid == payload[i].pid) {
+				list_del(&ap->node);
+				found = true;
 				break;
 			}
-			remove_proc_entry("tracking_info", ap->pde);
-			remove_proc_entry(path, NULL);
-			list_del(&ap->node);
-			destroy_access_ham_pid(ap);
 		}
+		spin_unlock(&ham_lock);
+		if (!found)
+			continue;
+
+		scnprintf(path, sizeof(path), "%d_t", ap->pid);
+		/* Drop proc entries outside the lock. */
+		remove_proc_entry("tracking_info", ap->pde);
+		remove_proc_entry(path, NULL);
+		/* Wait for an in-flight reader before freeing the arrays. */
+		mutex_lock(&ham_tracking_lock);
+		destroy_access_ham_pid(ap);
+		mutex_unlock(&ham_tracking_lock);
 	}
-	spin_unlock(&ham_lock);
 }
 
 void access_remove_statistic_pid(int len,
@@ -1363,8 +1368,9 @@ void access_remove_all_pid(void)
 {
 	struct ham_tracking_info *ap_ham, *tmp_ham;
 	struct statistics_tracking_info *ap_statistic, *tmp_statistic;
+	LIST_HEAD(ham_removed);
 	char path[MAX_PATH_LENGTH];
-	int i, ret;
+	int i;
 
 	pr_info("remove all pid\n");
 	/* Iterate the slot table and remove each INUSE pid. ap_slot_remove
@@ -1387,16 +1393,19 @@ void access_remove_all_pid(void)
 	}
 
 	spin_lock(&ham_lock);
-	list_for_each_entry_safe(ap_ham, tmp_ham, &ham_pid_list, node) {
-		ret = scnprintf(path, sizeof(path), "%d_t", ap_ham->pid);
-		if (!ret)
-			continue;
+	list_splice_init(&ham_pid_list, &ham_removed);
+	spin_unlock(&ham_lock);
+
+	list_for_each_entry_safe(ap_ham, tmp_ham, &ham_removed, node) {
+		scnprintf(path, sizeof(path), "%d_t", ap_ham->pid);
 		remove_proc_entry("tracking_info", ap_ham->pde);
 		remove_proc_entry(path, NULL);
 		list_del(&ap_ham->node);
+		/* Wait for an in-flight reader before freeing the arrays. */
+		mutex_lock(&ham_tracking_lock);
 		destroy_access_ham_pid(ap_ham);
+		mutex_unlock(&ham_tracking_lock);
 	}
-	spin_unlock(&ham_lock);
 
 	down_write(&statistic_lock);
 	list_for_each_entry_safe(ap_statistic, tmp_statistic,

@@ -170,17 +170,21 @@ extern "C" ssize_t proc_file_read(struct file *file, char __user *buf, size_t co
 TEST_F(AccessedBitTest, ProcFileRead)
 {
     char buf[10];
-    struct file file;
-    struct ham_tracking_info info;
+    struct file file = {};
+    struct ham_tracking_info info = {};
+    u64 paddr_buf[1] = { 0x1000 };
+    u16 freq_buf[1] = { 1 };
     loff_t pos = 0;
 
     info.pid = 1;
-    info.len[0] = 0;
-    info.len[1] = 0;
+    info.len[0] = 1;
+    info.l2_node = -1;
+    info.paddr[0] = paddr_buf;
+    info.freq[0] = freq_buf;
     list_add(&info.node, &ham_pid_list);
     MOCKER(get_pid_from_tracking_file).stubs().will(returnValue(1));
     MOCKER(copy_to_user).stubs().will(returnValue(0UL));
-    int ret = proc_file_read(&file, buf, 0, &pos);
+    int ret = proc_file_read(&file, buf, sizeof(buf), &pos);
     EXPECT_EQ(sizeof(uint64_t), ret);
     list_del(&info.node);
 }

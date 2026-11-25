@@ -4,9 +4,11 @@
 #include <linux/mm.h>
 #include <linux/idr.h>
 #include <linux/mmzone.h>
+#include <linux/cgroup.h>
 #include <linux/memcontrol.h>
 #include <linux/sched.h>
 #include <linux/pid.h>
+#include <linux/pid_namespace.h>
 #include <linux/list.h>
 #include <linux/page_ref.h>
 #include <linux/migrate.h>
@@ -19,34 +21,32 @@
 
 static DEFINE_IDR(nid_success_idr);
 
-static struct lruvec *get_lruvec(int nid, pid_t pid)
+/*
+ * Pin the memcg of pid: the returned memcg holds a css reference that the
+ * caller must drop with mem_cgroup_put(). The lruvec and its LRU lists stay
+ * valid while the reference is held.
+ */
+static struct mem_cgroup *get_memcg_by_pid(pid_t pid)
 {
-	struct task_struct *task = NULL;
+	struct task_struct *task;
 	struct mem_cgroup *memcg = NULL;
-	struct lruvec *lruvec = NULL;
-	pg_data_t *pgdat = NULL;
 
 	rcu_read_lock();
-	task = pid_task(find_vpid(pid), PIDTYPE_PID);
-	rcu_read_unlock();
+	task = pid_task(find_pid_ns(pid, &init_pid_ns), PIDTYPE_PID);
 	if (!task) {
 		pr_err("get task_struct from pid %d failed\n", pid);
-		return NULL;
+		goto out;
 	}
 
 	memcg = mem_cgroup_from_task(task);
-	if (!memcg) {
+	if (!memcg || !css_tryget_online(&memcg->css)) {
 		pr_err("get memcg from task failed\n");
-		return NULL;
+		memcg = NULL;
 	}
 
-	pgdat = NODE_DATA(nid);
-	if (!pgdat) {
-		pr_err("get NODE_DATA from nid failed, nid=%d\n", nid);
-		return NULL;
-	}
-	lruvec = mem_cgroup_lruvec(memcg, pgdat);
-	return lruvec;
+out:
+	rcu_read_unlock();
+	return memcg;
 }
 
 static bool folio_should_skip(struct folio *folio)
@@ -63,7 +63,9 @@ static bool folio_should_skip(struct folio *folio)
 int ucache_scan_folios(int nid, pid_t pid, struct folio **folios,
 		       unsigned int *nr_folios)
 {
+	struct mem_cgroup *memcg = NULL;
 	struct lruvec *lruvec = NULL;
+	pg_data_t *pgdat = NULL;
 	struct list_head *src = NULL;
 	unsigned int nr_isolated = 0;
 	unsigned int nr_pages = 0;
@@ -74,11 +76,20 @@ int ucache_scan_folios(int nid, pid_t pid, struct folio **folios,
 		return -EPERM;
 	}
 
-	lruvec = get_lruvec(nid, pid);
-	if (!lruvec) {
-		pr_err("get lruvec failed\n");
+	memcg = get_memcg_by_pid(pid);
+	if (!memcg) {
+		pr_err("get memcg from pid %d failed\n", pid);
 		return -EPERM;
 	}
+
+	pgdat = NODE_DATA(nid);
+	if (!pgdat) {
+		pr_err("get NODE_DATA from nid failed, nid=%d\n", nid);
+		mem_cgroup_put(memcg);
+		return -EPERM;
+	}
+
+	lruvec = mem_cgroup_lruvec(memcg, pgdat);
 	src = &lruvec->lists[LRU_INACTIVE_FILE];
 	pr_info("scan folios from lruvec LRU_INACTIVE_FILE list, pid=%d nid=%d\n",
 		pid, nid);
@@ -116,6 +127,7 @@ int ucache_scan_folios(int nid, pid_t pid, struct folio **folios,
 		nr_isolated, nr_pages);
 out:
 	*nr_folios = nr_isolated;
+	mem_cgroup_put(memcg);
 	return 0;
 }
 

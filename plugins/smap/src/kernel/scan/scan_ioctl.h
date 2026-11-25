@@ -84,6 +84,12 @@ struct access_remove_pid_msg {
 	struct access_remove_pid_payload *payload;
 };
 
+/*
+ * Max entries per GET_TRACKING request; keep aligned with
+ * user-space SMAP_QUERY_FREQ_LENGTH_MAX.
+ */
+#define SMAP_TRACKING_LENGTH_MAX (2U * 1024 * 1024)
+
 struct tracking_info_payload {
 	pid_t pid;
 	u32 length;
