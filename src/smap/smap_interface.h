@@ -9,6 +9,11 @@
  * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
  * See the Mulan PSL v2 for more details.
  */
+/*
+ * 本文件是 plugins/smap/src/user/smap_interface.h 中对外接口的同步副本。
+ * 插件头依赖其内部头(manage/smap_config.h、smap_env.h)，无法在ub侧直接包含，
+ * 修改任一侧的结构体、宏或函数原型时必须同步修改另一侧。
+ */
 #ifndef SMAP_INTERFACE_H
 #define SMAP_INTERFACE_H
 
@@ -33,12 +38,15 @@ extern "C" {
 #define ADAPT_ALLOC_PERIOD 1000
 #define SCAN_MIGRATE_PERIOD LIGHT_STABLE_MIGRATE_CYCLE
 #define USER_DEFAULT_MIGRATE_OUT_RATIO 25
+#define MAX_NR_OF_QUERY_VM_FREQ_HCCS 65536
 #define WAIT_TIME (100)
-#define MAX_WAIT_TIME (60 * 1000)
+#define MAX_WAIT_TIME (180 * 1000)
 #define MIN_WAIT_TIME (10 * 1000)
-#define MAX_SCAN_TIME 200
-#define MIN_SCAN_TIME 5
+#define MAX_SCAN_TIME 2000
+#define MIN_SCAN_TIME 50
 #define DEFAULT_L2_NODE (-1)
+#define MAX_SCAN_DURATION_SEC 300
+#define NON_EXIST_PID (-1)
 #define REMOTE_NUMA_BITS 18
 #define MAX_4K_PROCESSES_CNT 300
 
@@ -131,7 +139,7 @@ struct SetRemoteNumaInfoMsg {
     uint64_t size;
 };
 
-struct ProcessPayload {
+struct OldProcessPayload {
     pid_t pid;
     uint8_t ratio; // remote ratio set by upstream component
     uint8_t scanType;
@@ -244,7 +252,7 @@ int ubturbo_smap_remote_numa_info_set(struct SetRemoteNumaInfoMsg *msg);
  * @param dataSource [IN] 标识数据来源
  * @return int  0：操作成功；非0：操作失败
  */
-int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource);
+int ubturbo_smap_vm_freq_query(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut, int dataSource);
 
 /* *
  * @brief   设置SMAP运行模式
@@ -270,6 +278,37 @@ bool ubturbo_smap_is_running(void);
  * @return int  0：操作成功；非0：操作失败
  */
 int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime);
+
+typedef enum {
+    SYNC_MIGRATE_MODE_TOTAL, /* 一次性迁移全部 */
+    SYNC_MIGRATE_MODE_BATCH, /* 分批迁移 */
+} SyncMigrateMode;
+
+typedef struct SyncMigrateTask {
+    SyncMigrateMode mode;   // SYNC_MIGRATE_MODE_TOTAL / SYNC_MIGRATE_MODE_BATCH
+    int srcNid;             // 源NUMA节点
+    int destNid;            // 目的NUMA节点
+    pid_t pid;              // 目标进程
+    uint64_t totalSize;     // 迁移总大小(KB)
+    uint64_t batchSize;     // 每次批量大小(KB)
+    uint64_t sleepTimeUs;   // 批次间休眠时间(us)
+} SyncMigrateTask;
+
+/* 分批同步迁移的批次间隔时间(us)限制，与内核 common.h 保持一致 */
+#define MIGRATE_PAGES_BATCH_SLEEP_US_MIN 100
+#define MIGRATE_PAGES_BATCH_SLEEP_US_MAX 1000000
+
+/* *
+ * @brief   同步迁移进程指定大小内存(内核页表遍历+位图去重，阻塞等待完成)
+ *
+ * @param task [IN] 同步迁移任务，包含PID、源NUMA、目的NUMA与迁移大小
+ * @return int  0：迁移完成；非0：操作失败
+ *
+ * @note 同步接口，返回即代表本次迁移结束，可用于耗时测量。
+ *       同一物理页在进程多映射场景下只迁移一次；进程受SMAP管理时，
+ *       页面归属账目由后续扫描周期自动校正。
+ */
+int ubturbo_smap_migrate_pages(SyncMigrateTask *task);
 
 /* 迁移远端内存相关接口 */
 
@@ -322,6 +361,14 @@ int ubturbo_smap_process_migrate_enable(pid_t *pidArr, int len, int enable, int 
 int ubturbo_smap_remote_numa_migrate(struct MigrateNumaMsg *msg);
 
 /* *
+ * @brief   迁移远端内存到同远端内存
+ *
+ * @param msg [IN] 远端内存信息，包含源NUMA、目标NUMA、物理地址段
+ * @return int  0：操作成功；非0：操作失败
+ */
+int ubturbo_smap_same_remote_numa_migrate(struct MigrateNumaMsg *msg);
+
+/* *
  * @brief   迁移指定进程远端内存到远端内存
  *
  * @param pidArr   [IN] 进程数组起始地址
@@ -341,7 +388,7 @@ int ubturbo_smap_pid_remote_numa_migrate(struct MigrateEscapeMsg *msg);
  * @param outLen   [OUT] 返回数组大小
  * @return int  0：操作成功；非0：操作失败
  */
-int ubturbo_smap_process_config_query(int nid, struct ProcessPayload *result, int inLen, int *outLen);
+int ubturbo_smap_process_config_query(int nid, struct OldProcessPayload *result, int inLen, int *outLen);
 
 /* *
  * @brief   查询NUMA的频次统计信息

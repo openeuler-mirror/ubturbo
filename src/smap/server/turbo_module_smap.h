@@ -38,7 +38,7 @@ using SmapInitFunc = int (*)(uint32_t pageType, Logfunc extlog);
 using SmapStopFunc = int (*)(void);
 using SmapUrgentMigrateOutFunc = void (*)(uint64_t size);
 using SetSmapRemoteNumaInfoFunc = int (*)(struct SetRemoteNumaInfoMsg *msg);
-using SmapQueryFreqFunc = int (*)(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource);
+using SmapQueryFreqFunc = int (*)(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut, int dataSource);
 using SetSmapRunModeFunc = int (*)(int runMode);
 using SmapIsRunningFunc = bool (*)(void);
 using SmapMigrateOutSyncFunc = int (*)(struct MigrateOutMsg *msg, int pidType, uint64_t maxWaitTime);
@@ -48,7 +48,9 @@ using SmapRemoveProcessTrackingFunc = int (*)(pid_t *pidArr, int len, int flag);
 using SmapEnableProcessMigrateFunc = int (*)(pid_t *pidArr, int len, int enable, int flags);
 using SmapMigrateRemoteNumaFunc = int (*)(struct MigrateNumaMsg *msg);
 using SmapMigratePidRemoteNumaFunc = int (*)(struct MigrateEscapeMsg *msg);
-using SmapQueryProcessConfigFunc = int (*)(int nid, struct ProcessPayload *result, int inLen, int *outLen);
+using SmapSameRemoteNumaMigrateFunc = SmapMigrateRemoteNumaFunc;
+using SmapMigratePagesFunc = int (*)(SyncMigrateTask *task);
+using SmapQueryProcessConfigFunc = int (*)(int nid, struct OldProcessPayload *result, int inLen, int *outLen);
 using SmapQueryRemoteNumaFreqFunc = int (*)(uint16_t *numa, uint64_t *freq, uint16_t length);
 
 class TurboModuleSmap : public TurboModule {
@@ -87,6 +89,8 @@ RetCode SetSmapRunModeHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffe
 RetCode SmapIsRunningHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
 RetCode SmapMigrateOutSyncHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
 RetCode SmapMigrateRemoteNumaHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
+RetCode SmapSameRemoteNumaMigrateHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
+RetCode SmapMigratePagesHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
 RetCode SmapMigratePidRemoteNumaHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
 RetCode SmapQueryProcessConfigHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
 RetCode SmapQueryRemoteNumaFreqHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer);
