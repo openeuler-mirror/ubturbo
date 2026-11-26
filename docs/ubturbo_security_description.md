@@ -78,7 +78,7 @@ UBTurbo 体系内的可执行/库文件及其特权配置如下：
 | `ub_turbo_exec`（守护进程） | `ubturbo:ubturbo` | `500` | systemd `User=ubturbo` + `AmbientCapabilities` | 主守护进程，仅持有 `CAP_DAC_READ_SEARCH`、`CAP_SYS_PTRACE` 两项能力（启动后进程内收敛），负责加载插件、IPC、配置、日志。 |
 | `libubturbo_client.so`（客户端 SDK） | `ubturbo:ubturbo` | `550` | 文件权限 | 外部进程经此库调用 UDS；需调用方用户属于 `ubturbo` 组方能访问 socket。 |
 | `libsmap.so`（SMAP 用户态库） | `ubturbo:ubturbo` | `0500` | 文件权限 | 守护进程通过 `dlopen` 加载，内部封装对内核设备的调用与对 `/proc/<pid>/*` 的直读。 |
-| `*.ko`（SMAP 内核模块） | `ubturbo:ubturbo` | `0500` | 内核态 | 以 root 加载到内核，运行于内核态，用户态仅经设备文件交互。 |
+| `*.ko`（内核模块） | `ubturbo:ubturbo` | `0500` | 内核态 | kmod 预编译安装的模块属主属组为 `ubturbo`（spec 1.2.2-2），dkms 部署的 `updates/smap.ko` 由 root 生成保持 `root:root`。以 root 加载到内核，运行于内核态，用户态仅经设备文件交互。 |
 
 ## 文件与目录权限
 
@@ -103,9 +103,9 @@ UBTurbo 体系内的可执行/库文件及其特权配置如下：
 
 | 路径 | 权限 | 属主 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `/lib/modules/<内核版本>/updates/smap.ko` | `0500` | `root:root` | SMAP 内核模块（统一为单个 `smap.ko`，dkms 方式，来源 `ubturbo-smap-dkms`，安装时自动编译部署）。 |
-| `/lib/modules/<内核版本>/extra/smap.ko` | `0500` | `root:root` | SMAP 内核模块（预编译方式，来源 `ubturbo-smap-kmod`，需与运行内核版本一致）。 |
-| `/usr/src/ubturbo-smap-<版本>/` | `0755` | `root:root` | SMAP 内核模块 DKMS 源码树与 `dkms.conf`（仅 `ubturbo-smap-dkms` 包）。 |
+| `/lib/modules/<内核版本>/updates/smap.ko` | `0500` | `root:root` | SMAP 内核模块（统一为单个 `smap.ko`，dkms 方式，来源 `ubturbo-smap-dkms`，安装时由 root 运行 dkms 自动编译部署，属主保持 root）。 |
+| `/lib/modules/<内核版本>/extra/smap.ko` | `0500` | `ubturbo:ubturbo` | SMAP 内核模块（预编译方式，来源 `ubturbo-smap-kmod`，需与运行内核版本一致）。 |
+| `/usr/src/ubturbo-smap-<版本>/` | `0755` | `ubturbo:ubturbo` | SMAP 内核模块 DKMS 源码树与 `dkms.conf`（仅 `ubturbo-smap-dkms` 包）。 |
 | `/usr/lib64/libsmap.so` | `0500` | `ubturbo:ubturbo` | SMAP 用户态库。 |
 | `/etc/udev/rules.d/99-smap.rules` | `0640` | `ubturbo:ubturbo` | udev 规则，设置设备属主与权限。 |
 | `/dev/smap_device` | `0600` | `ubturbo:ubturbo` | SMAP 主设备。 |
@@ -166,7 +166,7 @@ UBTurbo 体系内各主体间的通信关系如下：
 | 守护进程 ↔ 插件 | 进程内 `dlopen` 调用 | `/opt/ubturbo/lib/*.so` | 文件权限 `500` + 准入白名单 | — | 插件与守护进程同进程，无跨进程通信。 |
 | 守护进程/插件 ↔ SMAP 内核 | 字符设备 `ioctl` | `/dev/smap_*`、`/dev/ucache` | 设备文件权限 `0600` | — | 经 udev 设置属主为 `ubturbo`，仅属主可访问。 |
 | 守护进程 ↔ 配置 | 文件读 | `/opt/ubturbo/conf/*` | 目录 `700` / 文件 `600` | — | 启动与周期性读取。 |
-| 守护进程 ↔ 日志 | 文件写 | `/var/log/ubturbo/*` | 目录 `700` / 文件 `600` | — | 异态环形缓冲写入。 |
+| 守护进程 ↔ 日志 | 文件写 | `/var/log/ubturbo/*` | 目录 `700` / 文件 `600` | — | 异步环形缓冲写入。 |
 | 守护进程 ↔ systemd | D-Bus / 进程管理 | `/etc/systemd/system/ubturbo.service` | root | — | 服务自启动、重启、资源约束与能力（capability）授予。 |
 
 ## 系统账号
