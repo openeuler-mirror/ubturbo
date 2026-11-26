@@ -5582,6 +5582,38 @@ TEST_F(ManageTest, TestPidPlanRecallsResidentPagesAfterCapacityShrink)
     FreeProcessAttrArrays(&attr);
 }
 
+TEST_F(ManageTest, TestPidPlanSkipsOnlyForbiddenRemote)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+    manager.remoteNumaInfo.privateInFlight = (uint64_t *)calloc(NM_COUNT(1), sizeof(uint64_t));
+    ASSERT_NE(nullptr, manager.remoteNumaInfo.privateInFlight);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    ScopedPageSize pageSize(PAGESIZE_4K);
+
+    ProcessAttr attr;
+    InitRatioPairProcess(&attr, 100, 1, 800, 0, 50);
+    attr.targetConfig.count = 2;
+    attr.targetConfig.targets[1] = {2, 50, 0};
+    attr.walkPage.nrPage = 800;
+    PidSlotAdd(&manager, &attr);
+    NM_AT(manager.remoteNumaInfo.privateSize, 0, 1) = 2;
+    NM_AT(manager.remoteNumaInfo.privateSize, 0, 2) = 2;
+
+    /* 禁用的远端只冻结该 NUMA，其余远端（含迁回方向）照常规划 */
+    EnvAtomicSet(&g_forbiddenNodes[2], NODE_FORBIDDEN_MIGBACK_DONE);
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &attr, nullptr, nullptr));
+    EXPECT_EQ(400U, NM_AT(attr.strategyAttr.nrMigratePages, 0, 1));
+    EXPECT_EQ(0U, NM_AT(attr.strategyAttr.nrMigratePages, 0, 2));
+    EXPECT_EQ(0U, NM_AT(attr.strategyAttr.nrMigrateBackPages, 0, 2));
+    EnvAtomicSet(&g_forbiddenNodes[2], 0);
+
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    free(manager.remoteNumaInfo.privateInFlight);
+    DestroyPairTargetManager(&manager);
+    FreeProcessAttrArrays(&attr);
+}
+
 TEST_F(ManageTest, TestPidPlansShareCapacityAndReserveInflightPages)
 {
     ProcessManager manager;

@@ -328,37 +328,6 @@ TEST_F(MigrationTest, TestBuildMigrationMsgNoPage)
     FreeProcessAttrArrays(&process);
 }
 
-extern "C" bool IsPidAnyRemoteNodeForbidden(ProcessAttr *attr);
-
-TEST_F(MigrationTest, TestIsPidAnyRemoteNodeForbiddenTrueWhenRemoteForbidden)
-{
-    ProcessAttr attr = {};
-    g_processManager.nrLocalNuma = 4;
-    attr.numaAttr.numaNodes = BmFromWord(0b00010001); // local nid0 + remote nid4
-    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_MIGBACK_BUSY);
-    EXPECT_TRUE(IsPidAnyRemoteNodeForbidden(&attr));
-    EnvAtomicSet(&g_forbiddenNodes[4], 0);
-}
-
-TEST_F(MigrationTest, TestIsPidAnyRemoteNodeForbiddenFalseWhenNotForbidden)
-{
-    ProcessAttr attr = {};
-    g_processManager.nrLocalNuma = 4;
-    attr.numaAttr.numaNodes = BmFromWord(0b00010001); // local nid0 + remote nid4
-    EnvAtomicSet(&g_forbiddenNodes[4], 0);
-    EXPECT_FALSE(IsPidAnyRemoteNodeForbidden(&attr));
-}
-
-TEST_F(MigrationTest, TestIsPidAnyRemoteNodeForbiddenFalseWhenPidNotOnForbiddenNode)
-{
-    ProcessAttr attr = {};
-    g_processManager.nrLocalNuma = 4;
-    attr.numaAttr.numaNodes = BmFromWord(0b00000001); // only local nid0, no remote node managed
-    EnvAtomicSet(&g_forbiddenNodes[4], NODE_FORBIDDEN_MIGBACK_BUSY);
-    EXPECT_FALSE(IsPidAnyRemoteNodeForbidden(&attr));
-    EnvAtomicSet(&g_forbiddenNodes[4], 0);
-}
-
 TEST_F(MigrationTest, TestBuildMigrationMsgAllowsNormalPromoteFromForbiddenNode)
 {
     int ret;

@@ -1868,18 +1868,6 @@ static void PostPidMigration(struct ProcessManager *manager, ProcessAttr *proces
     }
 }
 
-/* 迁回等待期间不启动涉及 forbidden 远端节点的 PID 流水。 */
-static bool IsPidAnyRemoteNodeForbidden(ProcessAttr *attr)
-{
-    int cap = (int)GetNumaCap();
-    for (int remoteNid = GetNrLocalNuma(); remoteNid < cap; remoteNid++) {
-        if (InAttrL2(attr, remoteNid) && IsNodeForbidden(remoteNid)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /* 新快照和账本均显示远端为空时自动移除；成功返回 true。 */
 static bool SmapAutoRemovePidIfRemoteEmpty(ProcessAttr *attr)
 {
@@ -2004,10 +1992,6 @@ static int ProcessPidScanMigrate(struct ProcessManager *manager, struct PidSlot 
     /* 候选切换（attrLock 双检），与 API 线程状态读写序列化 */
     EnvMutexLock(&slot->attrLock);
     if (attr->state != PROC_IDLE) {
-        EnvMutexUnlock(&slot->attrLock);
-        goto enable;
-    }
-    if (IsPidAnyRemoteNodeForbidden(attr)) {
         EnvMutexUnlock(&slot->attrLock);
         goto enable;
     }
