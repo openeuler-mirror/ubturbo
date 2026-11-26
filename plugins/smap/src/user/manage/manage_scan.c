@@ -287,8 +287,11 @@ int BuildPidData(ProcessAttr *attr)
     SetPidNrPages(attr, pmb.nrPages, SMAP_MAX_NUMNODES);
     /*
      * 本地位直接由回读的各节点页数构造（nrPages[nid] != 0 即置位），
-     * 如实反映本轮实际内存分布；远端位以接口配置的迁移目标
-     * （targetConfig）为准，不随内核观测波动。
+     * 如实反映本轮实际内存分布。远端位由三部分合成：接口配置的迁移
+     * 目标（targetConfig）、本轮实际驻留页、尚未清零的迁移账本。
+     * 被新目标整体替换掉的旧远端仍可能驻留页面，必须保留其 L2 位；
+     * 否则策略层会把迁回计划当作 unmanaged remote 丢弃，残留页永远
+     * 无法迁回。账本与驻留页都归零后该位自然消失，不会长期残留。
      */
     NumaBitmap numaNodes = { 0 };
     int nrLocalNuma = GetProcessManager()->nrLocalNuma;
@@ -303,6 +306,14 @@ int BuildPidData(ProcessAttr *attr)
     }
     for (uint32_t i = 0; i < attr->targetConfig.count; i++) {
         AddL2ByNid(&numaNodes, attr->targetConfig.targets[i].remoteNid);
+    }
+    if (!attr->groupPolicy.enabled) {
+        int cap = (int)GetNumaCap();
+        for (int remoteNid = nrLocalNuma; remoteNid < cap; remoteNid++) {
+            if (pmb.nrPages[remoteNid] != 0 || attr->managedLocalState.accountLocalMask[remoteNid] != 0) {
+                AddL2ByNid(&numaNodes, remoteNid);
+            }
+        }
     }
     /*
      * 本地位为空有两种情况：首个 walk 尚未完成（全零快照），或

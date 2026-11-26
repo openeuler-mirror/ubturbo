@@ -6558,6 +6558,16 @@ static int StubAccessWalkFillPages(pid_t pid, struct ProcessMemBitmap *pmb)
     return 0;
 }
 
+static int StubAccessWalkFillResidualRemote(pid_t pid, struct ProcessMemBitmap *pmb)
+{
+    (void)pid;
+    memset(pmb, 0, sizeof(*pmb));
+    pmb->nrPages[0] = 4;
+    /* 旧迁移目标远端已被新目标替换，但仍驻留页面 */
+    pmb->nrPages[3] = 6;
+    return 0;
+}
+
 static int StubAccessWalkEsrch(pid_t pid, struct ProcessMemBitmap *pmb)
 {
     (void)pid;
@@ -6587,6 +6597,34 @@ TEST_F(ManageTest, TestBuildPidDataSuccess)
     EXPECT_EQ(5U, attr.walkPage.nrPage);
     EXPECT_EQ(5U, attr.scanAttr.actcLen[0]);
     FreeProcessAttrArrays(&attr);
+}
+
+TEST_F(ManageTest, TestBuildPidDataKeepsResidualRemoteInL2)
+{
+    ProcessAttr attr = {.pid = 101};
+    attr.scanType = NORMAL_SCAN;
+    g_processManager.nrLocalNuma = 2;
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    /* CalibratePairAccount 重建远端 Pair 账本时会读 remoteNumaInfo.privateSize，须先分配 */
+    ASSERT_EQ(0, InitRemoteNumaInfoArrays());
+
+    /* targetConfig 为空：远端位只能来自本轮驻留页，须保留到迁回完成 */
+    MOCKER(AccessIoctlWalkPagemap).stubs().will(invoke(StubAccessWalkFillResidualRemote));
+    MOCKER(open).stubs().will(returnValue(1));
+    MOCKER(read).stubs().will(returnValue(static_cast<ssize_t>(10 * sizeof(ActcData))));
+    MOCKER(close).stubs().will(returnValue(0));
+    MOCKER(CalcActcStats).stubs().will(ignoreReturnValue());
+    MOCKER(RefreshManagedLocalStatePeriodic).stubs().will(returnValue(0));
+
+    ASSERT_EQ(0, BuildPidData(&attr));
+    EXPECT_TRUE(NumaBitmapTest(&attr.numaAttr.numaNodes, 3));
+    FreeProcessAttrArrays(&attr);
+    free(g_processManager.remoteNumaInfo.privateSize);
+    free(g_processManager.remoteNumaInfo.privateUsedInfo);
+    free(g_processManager.remoteNumaInfo.privateInFlight);
+    g_processManager.remoteNumaInfo.privateSize = nullptr;
+    g_processManager.remoteNumaInfo.privateUsedInfo = nullptr;
+    g_processManager.remoteNumaInfo.privateInFlight = nullptr;
 }
 
 TEST_F(ManageTest, TestBuildPidDataUntrackedPid)
