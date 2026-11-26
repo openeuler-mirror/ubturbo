@@ -769,6 +769,101 @@ TEST_F(TestTurboModuleSmap, SmapMigrateRemoteNumaHandlerFailed)
     EXPECT_EQ(result, TURBO_ERROR);
 }
 
+TEST_F(TestTurboModuleSmap, SmapSameRemoteNumaMigrateHandlerTest)
+{
+    TurboByteBuffer inputBuffer;
+    TurboByteBuffer outputBuffer;
+    MigrateNumaMsg msg = {0};
+    msg.count = 1;
+    msg.srcNid = 4;
+    msg.destNid = 5;
+
+    StubSmapPtr();
+    SmapSameRemoteNumaMigrateCodec codec;
+    codec.EncodeRequest(inputBuffer, &msg);
+    RetCode result = SmapSameRemoteNumaMigrateHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(result, TURBO_OK);
+
+    int ret = codec.DecodeResponse(outputBuffer);
+    EXPECT_EQ(ret, 0);
+}
+
+TEST_F(TestTurboModuleSmap, SmapSameRemoteNumaMigrateHandlerFailed)
+{
+    TurboByteBuffer inputBuffer;
+    TurboByteBuffer outputBuffer;
+
+    StubSmapPtr();
+    MOCKER_CPP(&SmapMigrateRemoteNumaCodec::DecodeRequest, int (*)(const TurboByteBuffer &buffer, MigrateNumaMsg &msg))
+        .stubs()
+        .will(returnValue(-EINVAL))
+        .then(returnValue(0));
+    RetCode result = SmapSameRemoteNumaMigrateHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(result, TURBO_ERROR);
+
+    MOCKER_CPP(&SmapMigrateRemoteNumaCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
+        .stubs()
+        .will(returnValue(-EINVAL));
+    result = SmapSameRemoteNumaMigrateHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(result, TURBO_ERROR);
+}
+
+TEST_F(TestTurboModuleSmap, SmapMigratePagesHandlerTest)
+{
+    TurboByteBuffer inputBuffer;
+    TurboByteBuffer outputBuffer;
+    SyncMigrateTask task = {
+        .mode = SYNC_MIGRATE_MODE_TOTAL,
+        .srcNid = 4,
+        .destNid = 5,
+        .pid = 1,
+        .totalSize = 1024,
+        .batchSize = 0,
+        .sleepTimeUs = 0,
+    };
+
+    StubSmapPtr();
+    SmapMigratePagesCodec codec;
+    codec.EncodeRequest(inputBuffer, &task);
+    RetCode result = SmapMigratePagesHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(result, TURBO_OK);
+
+    int ret = codec.DecodeResponse(outputBuffer);
+    EXPECT_EQ(ret, 0);
+}
+
+TEST_F(TestTurboModuleSmap, SmapMigratePagesHandlerFailed)
+{
+    TurboByteBuffer inputBuffer;
+    TurboByteBuffer outputBuffer;
+
+    StubSmapPtr();
+    MOCKER_CPP(&SmapMigratePagesCodec::DecodeRequest, int (*)(const TurboByteBuffer &buffer, SyncMigrateTask &task))
+        .stubs()
+        .will(returnValue(-EINVAL))
+        .then(returnValue(0));
+    RetCode result = SmapMigratePagesHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(result, TURBO_ERROR);
+
+    MOCKER_CPP(&SmapMigratePagesCodec::EncodeResponse, int (*)(TurboByteBuffer & buffer, int returnValue))
+        .stubs()
+        .will(returnValue(-EINVAL));
+    result = SmapMigratePagesHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(result, TURBO_ERROR);
+}
+
+TEST_F(TestTurboModuleSmap, SmapQueryFreqHandlerLengthInTooLarge)
+{
+    TurboByteBuffer inputBuffer;
+    TurboByteBuffer outputBuffer;
+
+    StubSmapPtr();
+    SmapQueryVmFreqCodec codec;
+    codec.EncodeRequest(inputBuffer, 1, MAX_NR_OF_QUERY_VM_FREQ_HCCS + 1, 0);
+    RetCode result = SmapQueryFreqHandler(inputBuffer, outputBuffer);
+    EXPECT_EQ(result, TURBO_ERROR);
+}
+
 TEST_F(TestTurboModuleSmap, SmapMigratePidRemoteNumaHandlerTest)
 {
     TurboByteBuffer inputBuffer;
@@ -825,7 +920,7 @@ TEST_F(TestTurboModuleSmap, SmapQueryProcessConfigHandlerTest)
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
     int nid = 1;
-    struct ProcessPayload payload = {0};
+    struct OldProcessPayload payload = {0};
     int inLen = 1;
     int outLen;
 
@@ -845,7 +940,7 @@ TEST_F(TestTurboModuleSmap, SmapQueryProcessConfigHandlerLenLessZero)
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
     int nid = 1;
-    struct ProcessPayload payload = {0};
+    struct OldProcessPayload payload = {0};
     int inLen = -1;
     int outLen;
 
@@ -861,7 +956,7 @@ TEST_F(TestTurboModuleSmap, SmapQueryProcessConfigHandlerFailed)
     TurboByteBuffer inputBuffer;
     TurboByteBuffer outputBuffer;
     int nid = 1;
-    struct ProcessPayload payload = {0};
+    struct OldProcessPayload payload = {0};
     int inLen = 1;
     int outLen;
 
@@ -869,7 +964,7 @@ TEST_F(TestTurboModuleSmap, SmapQueryProcessConfigHandlerFailed)
     SmapQueryProcessConfigCodec codec;
     codec.EncodeRequest(inputBuffer, nid, inLen);
     MOCKER_CPP(&SmapQueryProcessConfigCodec::EncodeResponse,
-               int (*)(TurboByteBuffer & buffer, struct ProcessPayload * result, int outLen, int returnValue))
+               int (*)(TurboByteBuffer & buffer, struct OldProcessPayload * result, int outLen, int returnValue))
         .stubs()
         .will(returnValue(-EINVAL));
     RetCode result = SmapQueryProcessConfigHandler(inputBuffer, outputBuffer);
@@ -915,7 +1010,7 @@ TEST_F(TestTurboModuleSmap, ReturnZeroWhenAllSymbolsFound)
 {
     MOCKER((void *(*)(const char *, int))(dlopen)).stubs().will(returnValue((void *)0x1234));
 
-    for (int i = 0; i < 18; ++i) {
+    for (int i = 0; i < 20; ++i) {
         MOCKER((void *(*)(void *, const char *))(dlsym)).stubs().will(returnValue((void *)0x5678));
     }
 
@@ -929,7 +1024,7 @@ TEST_F(TestTurboModuleSmap, ReturnEINVALWhenAnySymbolMissing)
 
     MOCKER((void *(*)(void *, const char *))(dlsym)).stubs().will(returnValue((void *)nullptr));
 
-    for (int i = 1; i < 18; ++i) {
+    for (int i = 1; i < 20; ++i) {
         MOCKER((void *(*)(void *, const char *))(dlsym)).stubs().will(returnValue((void *)0x5678));
     }
 

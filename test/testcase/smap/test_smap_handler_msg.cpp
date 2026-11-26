@@ -660,3 +660,92 @@ TEST_F(TestSmapHandlerMsg, SmapEnableProcessMigrateCodecEncodeResponseFailed)
     result = codec.EncodeResponse(inputBuffer, ret);
     EXPECT_EQ(result, 1);
 }
+
+TEST_F(TestSmapHandlerMsg, SmapMigratePagesCodecTest)
+{
+    TurboByteBuffer inputBuffer;
+    SyncMigrateTask task = {
+        .mode = SYNC_MIGRATE_MODE_BATCH,
+        .srcNid = 4,
+        .destNid = 5,
+        .pid = 1,
+        .totalSize = 1024,
+        .batchSize = 256,
+        .sleepTimeUs = 1000,
+    };
+    SyncMigrateTask decodeTask = {};
+
+    SmapMigratePagesCodec codec;
+    int result = codec.EncodeRequest(inputBuffer, &task);
+    EXPECT_EQ(result, 0);
+    result = codec.DecodeRequest(inputBuffer, decodeTask);
+    EXPECT_EQ(result, 0);
+    EXPECT_EQ(task.mode, decodeTask.mode);
+    EXPECT_EQ(task.srcNid, decodeTask.srcNid);
+    EXPECT_EQ(task.destNid, decodeTask.destNid);
+    EXPECT_EQ(task.pid, decodeTask.pid);
+    EXPECT_EQ(task.totalSize, decodeTask.totalSize);
+    EXPECT_EQ(task.batchSize, decodeTask.batchSize);
+    EXPECT_EQ(task.sleepTimeUs, decodeTask.sleepTimeUs);
+
+    TurboByteBuffer outputBuffer;
+    result = codec.EncodeResponse(outputBuffer, NUM_3);
+    EXPECT_EQ(result, 0);
+    EXPECT_EQ(NUM_3, codec.DecodeResponse(outputBuffer));
+}
+
+TEST_F(TestSmapHandlerMsg, SmapMigratePagesCodecEncodeRequestFailed)
+{
+    TurboByteBuffer inputBuffer;
+    SyncMigrateTask task = {};
+
+    SmapMigratePagesCodec codec;
+    g_mock_new_should_fail = true;
+    int result = codec.EncodeRequest(inputBuffer, &task);
+    EXPECT_EQ(result, -EINVAL);
+    g_mock_new_should_fail = false;
+
+    MOCKER(memcpy_s).stubs().will(returnValue(1));
+
+    result = codec.EncodeRequest(inputBuffer, &task);
+    EXPECT_EQ(result, 1);
+}
+
+TEST_F(TestSmapHandlerMsg, SmapMigratePagesCodecDecodeRequestFailed)
+{
+    TurboByteBuffer inputBuffer;
+    SyncMigrateTask task = {};
+
+    SmapMigratePagesCodec codec;
+    int result = codec.DecodeRequest(inputBuffer, task);
+    EXPECT_EQ(result, -EINVAL);
+
+    inputBuffer.len = sizeof(SyncMigrateTask);
+    result = codec.DecodeRequest(inputBuffer, task);
+    EXPECT_EQ(result, -EINVAL);
+}
+
+TEST_F(TestSmapHandlerMsg, SmapMigratePagesCodecEncodeResponseFailed)
+{
+    TurboByteBuffer outputBuffer;
+
+    SmapMigratePagesCodec codec;
+    g_mock_new_should_fail = true;
+    int result = codec.EncodeResponse(outputBuffer, 0);
+    EXPECT_EQ(result, -EINVAL);
+    g_mock_new_should_fail = false;
+
+    MOCKER(memcpy_s).stubs().will(returnValue(1));
+
+    result = codec.EncodeResponse(outputBuffer, 0);
+    EXPECT_EQ(result, 1);
+}
+
+TEST_F(TestSmapHandlerMsg, SmapMigratePagesCodecDecodeResponseFailed)
+{
+    TurboByteBuffer outputBuffer;
+
+    SmapMigratePagesCodec codec;
+    int result = codec.DecodeResponse(outputBuffer);
+    EXPECT_EQ(result, IPC_ERROR);
+}

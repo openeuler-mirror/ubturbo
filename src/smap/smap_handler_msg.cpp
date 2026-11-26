@@ -1077,6 +1077,56 @@ int SmapMigratePidRemoteNumaCodec::DecodeResponse(TurboByteBuffer &buffer)
     return *static_cast<int *>(static_cast<void *>(buffer.data));
 }
 
+int SmapMigratePagesCodec::EncodeRequest(TurboByteBuffer &buffer, SyncMigrateTask *task)
+{
+    size_t size = sizeof(SyncMigrateTask);
+    buffer.data = new (std::nothrow) uint8_t[size];
+    if (!buffer.data) {
+        return -EINVAL;
+    }
+    int ret = memcpy_s(buffer.data, size, task, size);
+    if (ret) {
+        SmapResetBuf(&buffer);
+        return ret;
+    }
+    buffer.len = size;
+    return ret;
+}
+
+int SmapMigratePagesCodec::DecodeRequest(const TurboByteBuffer &buffer, SyncMigrateTask &task)
+{
+    if (buffer.len < sizeof(SyncMigrateTask) || !buffer.data) {
+        return -EINVAL;
+    }
+    task = *static_cast<SyncMigrateTask *>(static_cast<void *>(buffer.data));
+    return 0;
+}
+
+int SmapMigratePagesCodec::EncodeResponse(TurboByteBuffer &buffer, int returnValue)
+{
+    size_t size = sizeof(int);
+    buffer.data = new (std::nothrow) uint8_t[size];
+    if (!buffer.data) {
+        return -EINVAL;
+    }
+    int ret = memcpy_s(buffer.data, size, &returnValue, size);
+    if (ret) {
+        SmapResetBuf(&buffer);
+        return ret;
+    }
+    buffer.len = size;
+    buffer.freeFunc = SmapDeleteData;
+    return ret;
+}
+
+int SmapMigratePagesCodec::DecodeResponse(TurboByteBuffer &buffer)
+{
+    if (buffer.len < sizeof(int)) {
+        return IPC_ERROR;
+    }
+    return *static_cast<int *>(static_cast<void *>(buffer.data));
+}
+
 int SmapQueryProcessConfigCodec::EncodeRequest(TurboByteBuffer &buffer, int nid, int inLen)
 {
     size_t size = buffer.len = sizeof(int) * 2;
@@ -1106,16 +1156,16 @@ int SmapQueryProcessConfigCodec::DecodeRequest(const TurboByteBuffer &buffer, in
     return 0;
 }
 
-int SmapQueryProcessConfigCodec::EncodeResponse(TurboByteBuffer &buffer, struct ProcessPayload *result, int outLen,
+int SmapQueryProcessConfigCodec::EncodeResponse(TurboByteBuffer &buffer, struct OldProcessPayload *result, int outLen,
                                                 int returnValue)
 {
     int out = outLen;
-    if (out < 0 || out > MAX_NR_MIGOUT) {
+    if (out < 0 || out > MAX_4K_PROCESSES_CNT) {
         IPC_CLIENT_LOGGER_ERROR("EncodeResponse: out value %d is invalid; must be between 0 and %d\n", out,
-                                MAX_NR_MIGOUT);
+                                MAX_4K_PROCESSES_CNT);
         return -1;
     }
-    size_t size = sizeof(int) + sizeof(int) + sizeof(struct ProcessPayload) * out;
+    size_t size = sizeof(int) + sizeof(int) + sizeof(struct OldProcessPayload) * out;
     buffer.data = new (std::nothrow) uint8_t[size];
     if (!buffer.data) {
         return -EINVAL;
@@ -1133,7 +1183,7 @@ int SmapQueryProcessConfigCodec::EncodeResponse(TurboByteBuffer &buffer, struct 
     }
     copied += sizeof(int);
     if (out) {
-        ret = memcpy_s(buffer.data + copied, size - copied, result, out * sizeof(ProcessPayload));
+        ret = memcpy_s(buffer.data + copied, size - copied, result, out * sizeof(OldProcessPayload));
         if (ret) {
             SmapResetBuf(&buffer);
             return ret;
@@ -1144,8 +1194,8 @@ int SmapQueryProcessConfigCodec::EncodeResponse(TurboByteBuffer &buffer, struct 
     return ret;
 }
 
-int SmapQueryProcessConfigCodec::DecodeResponse(TurboByteBuffer &buffer, struct ProcessPayload *result, int &outLen,
-                                                int &returnValue)
+int SmapQueryProcessConfigCodec::DecodeResponse(TurboByteBuffer &buffer, struct OldProcessPayload *result,
+                                                int &outLen, int &returnValue)
 {
     int ret = IPC_OK;
     if (buffer.len < sizeof(int) + sizeof(int)) {
@@ -1153,17 +1203,17 @@ int SmapQueryProcessConfigCodec::DecodeResponse(TurboByteBuffer &buffer, struct 
     }
     returnValue = *static_cast<int *>(static_cast<void *>(buffer.data));
     int out = *static_cast<int *>(static_cast<void *>(buffer.data + sizeof(int)));
-    if (out < 0 || out > MAX_NR_MIGOUT) {
+    if (out < 0 || out > MAX_4K_PROCESSES_CNT) {
         IPC_CLIENT_LOGGER_ERROR("DecodeResponse: out value %d is invalid; must be between 0 and %d\n", out,
-                                MAX_NR_MIGOUT);
+                                MAX_4K_PROCESSES_CNT);
         return IPC_ERROR;
     }
     if (out) {
-        if (buffer.len < sizeof(int) + sizeof(int) + out * sizeof(struct ProcessPayload)) {
+        if (buffer.len < sizeof(int) + sizeof(int) + out * sizeof(struct OldProcessPayload)) {
             return IPC_ERROR;
         }
-        ret = memcpy_s(result, out * sizeof(struct ProcessPayload), buffer.data + sizeof(int) + sizeof(int),
-                       out * sizeof(struct ProcessPayload));
+        ret = memcpy_s(result, out * sizeof(struct OldProcessPayload), buffer.data + sizeof(int) + sizeof(int),
+                       out * sizeof(struct OldProcessPayload));
         if (ret) {
             return IPC_ERROR;
         }

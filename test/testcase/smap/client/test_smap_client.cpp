@@ -941,15 +941,15 @@ TEST_F(TestSmapClient, SetSmapRemoteUBTurboFunctionCallerFailed)
 TEST_F(TestSmapClient, SmapQueryVmFreqTest)
 {
     int pid = 1;
-    uint32_t lengthIn = 10;
-    uint32_t lengthOut = 0;
+    uint16_t lengthIn = 10;
+    uint16_t lengthOut = 0;
     uint16_t data[lengthIn] = {0};
 
     MOCKER_CPP(&UBTurboFunctionCaller,
                uint32_t(*)(const std::string &function, const TurboByteBuffer &params, TurboByteBuffer &result))
         .stubs()
         .will(invoke(Test_UBTurboFunctionCaller));
-    int ret = ubturbo_smap_freq_query(pid, data, lengthIn, &lengthOut, 0);
+    int ret = ubturbo_smap_vm_freq_query(pid, data, lengthIn, &lengthOut, 0);
     EXPECT_NE(ret, 0);
 }
 
@@ -957,11 +957,11 @@ TEST_F(TestSmapClient, SmapQueryVmFreqNullData)
 {
     int ret;
     int pid = 1;
-    uint32_t lengthIn = 10;
-    uint32_t lengthOut = 0;
+    uint16_t lengthIn = 10;
+    uint16_t lengthOut = 0;
     uint16_t *data = nullptr;
 
-    ret = ubturbo_smap_freq_query(pid, data, lengthIn, &lengthOut, 0);
+    ret = ubturbo_smap_vm_freq_query(pid, data, lengthIn, &lengthOut, 0);
     EXPECT_EQ(-22, ret);
 }
 
@@ -969,11 +969,11 @@ TEST_F(TestSmapClient, SmapQueryVmFreqEmptyLengthIn)
 {
     int ret;
     int pid = 1;
-    uint32_t lengthIn = 0;
-    uint32_t lengthOut = 0;
+    uint16_t lengthIn = 0;
+    uint16_t lengthOut = 0;
     uint16_t data[lengthIn] = {0};
 
-    ret = ubturbo_smap_freq_query(pid, data, lengthIn, &lengthOut, 0);
+    ret = ubturbo_smap_vm_freq_query(pid, data, lengthIn, &lengthOut, 0);
     EXPECT_EQ(-22, ret);
 }
 
@@ -981,15 +981,15 @@ TEST_F(TestSmapClient, SmapQueryVmFreqEncodeRequestError)
 {
     int ret;
     int pid = 1;
-    uint32_t lengthIn = 10;
-    uint32_t lengthOut = 0;
+    uint16_t lengthIn = 10;
+    uint16_t lengthOut = 0;
     uint16_t data[lengthIn] = {0};
 
     MOCKER_CPP(&SmapQueryVmFreqCodec::EncodeRequest, int (*)(SmapQueryVmFreqCodec *, TurboByteBuffer &, int, uint16_t))
         .stubs()
         .will(returnValue(-1));
 
-    ret = ubturbo_smap_freq_query(pid, data, lengthIn, &lengthOut, 0);
+    ret = ubturbo_smap_vm_freq_query(pid, data, lengthIn, &lengthOut, 0);
     EXPECT_EQ(1, ret);
 }
 
@@ -997,8 +997,8 @@ TEST_F(TestSmapClient, SmapQueryVmFreqUBTurboFunctionCallerFailed)
 {
     int ret;
     int pid = 1;
-    uint32_t lengthIn = 10;
-    uint32_t lengthOut = 0;
+    uint16_t lengthIn = 10;
+    uint16_t lengthOut = 0;
     uint16_t data[lengthIn] = {0};
 
     MOCKER_CPP(&SmapQueryVmFreqCodec::EncodeRequest, int (*)(SmapQueryVmFreqCodec *, TurboByteBuffer &, int, uint16_t))
@@ -1010,7 +1010,7 @@ TEST_F(TestSmapClient, SmapQueryVmFreqUBTurboFunctionCallerFailed)
         .stubs()
         .will(returnValue(2));
 
-    ret = ubturbo_smap_freq_query(pid, data, lengthIn, &lengthOut, 0);
+    ret = ubturbo_smap_vm_freq_query(pid, data, lengthIn, &lengthOut, 0);
     EXPECT_EQ(2, ret);
 }
 
@@ -1228,6 +1228,183 @@ TEST_F(TestSmapClient, SmapMigrateRemoteNumaUBTurboFunctionCallerFailed)
     EXPECT_EQ(2, ret);
 }
 
+TEST_F(TestSmapClient, SmapSameRemoteNumaMigrateNullMsg)
+{
+    int ret;
+    struct MigrateNumaMsg *msg = nullptr;
+
+    ret = ubturbo_smap_same_remote_numa_migrate(msg);
+    EXPECT_EQ(-22, ret);
+}
+
+TEST_F(TestSmapClient, SmapSameRemoteNumaMigrateEncodeRequestError)
+{
+    int ret;
+    struct MigrateNumaMsg msg = {0};
+
+    MOCKER_CPP(&SmapMigrateRemoteNumaCodec::EncodeRequest,
+               int (*)(SmapMigrateRemoteNumaCodec *, TurboByteBuffer &, MigrateNumaMsg *))
+        .stubs()
+        .will(returnValue(-1));
+
+    ret = ubturbo_smap_same_remote_numa_migrate(&msg);
+    EXPECT_EQ(1, ret);
+}
+
+TEST_F(TestSmapClient, SmapSameRemoteNumaMigrateUBTurboFunctionCallerFailed)
+{
+    int ret;
+    struct MigrateNumaMsg msg = {0};
+
+    MOCKER_CPP(&SmapMigrateRemoteNumaCodec::EncodeRequest,
+               int (*)(SmapMigrateRemoteNumaCodec *, TurboByteBuffer &, MigrateNumaMsg *))
+        .stubs()
+        .will(returnValue(0));
+
+    MOCKER_CPP(&UBTurboFunctionCaller,
+               uint32_t(*)(const std::string &function, const TurboByteBuffer &params, TurboByteBuffer &result))
+        .stubs()
+        .will(returnValue(2));
+
+    ret = ubturbo_smap_same_remote_numa_migrate(&msg);
+    EXPECT_EQ(2, ret);
+}
+
+static uint32_t g_setIpcTimeLimitValue = 0;
+
+uint32_t RecordSetIpcTimeLimit(uint32_t timeLimit)
+{
+    g_setIpcTimeLimitValue = timeLimit;
+    return IPC_OK;
+}
+
+TEST_F(TestSmapClient, SmapMigratePagesNullTask)
+{
+    int ret;
+
+    ret = ubturbo_smap_migrate_pages(nullptr);
+    EXPECT_EQ(-22, ret);
+}
+
+TEST_F(TestSmapClient, SmapMigratePagesEncodeRequestError)
+{
+    int ret;
+    SyncMigrateTask task = {
+        .mode = SYNC_MIGRATE_MODE_TOTAL,
+        .srcNid = 4,
+        .destNid = 3,
+        .pid = 1,
+        .totalSize = 1024,
+        .batchSize = 0,
+        .sleepTimeUs = 0,
+    };
+
+    MOCKER_CPP(&SmapMigratePagesCodec::EncodeRequest,
+               int (*)(SmapMigratePagesCodec *, TurboByteBuffer &, SyncMigrateTask *))
+        .stubs()
+        .will(returnValue(-1));
+
+    ret = ubturbo_smap_migrate_pages(&task);
+    EXPECT_EQ(1, ret);
+}
+
+TEST_F(TestSmapClient, SmapMigratePagesUBTurboFunctionCallerFailed)
+{
+    int ret;
+    SyncMigrateTask task = {
+        .mode = SYNC_MIGRATE_MODE_TOTAL,
+        .srcNid = 4,
+        .destNid = 3,
+        .pid = 1,
+        .totalSize = 1024,
+        .batchSize = 0,
+        .sleepTimeUs = 0,
+    };
+
+    MOCKER_CPP(&SmapMigratePagesCodec::EncodeRequest,
+               int (*)(SmapMigratePagesCodec *, TurboByteBuffer &, SyncMigrateTask *))
+        .stubs()
+        .will(returnValue(0));
+
+    MOCKER_CPP(&UBTurboFunctionCaller,
+               uint32_t(*)(const std::string &function, const TurboByteBuffer &params, TurboByteBuffer &result))
+        .stubs()
+        .will(returnValue(2));
+
+    ret = ubturbo_smap_migrate_pages(&task);
+    EXPECT_EQ(2, ret);
+}
+
+TEST_F(TestSmapClient, SmapMigratePagesDecodeResponseError)
+{
+    int ret;
+    SyncMigrateTask task = {
+        .mode = SYNC_MIGRATE_MODE_TOTAL,
+        .srcNid = 4,
+        .destNid = 3,
+        .pid = 1,
+        .totalSize = 1024,
+        .batchSize = 0,
+        .sleepTimeUs = 0,
+    };
+
+    MOCKER_CPP(&UBTurboFunctionCaller,
+               uint32_t(*)(const std::string &function, const TurboByteBuffer &params, TurboByteBuffer &result))
+        .stubs()
+        .will(invoke(Test_UBTurboFunctionCaller));
+    MOCKER_CPP(&SmapMigratePagesCodec::DecodeResponse, int (*)(SmapMigratePagesCodec *, TurboByteBuffer &))
+        .stubs()
+        .will(returnValue(IPC_ERROR));
+
+    ret = ubturbo_smap_migrate_pages(&task);
+    EXPECT_EQ(IPC_ERROR, ret);
+}
+
+TEST_F(TestSmapClient, SmapMigratePagesExtendIpcTimeLimit)
+{
+    int ret;
+    // 1GB按100MB/s估算约11s，不超过IPC默认超时，不应修改超时
+    SyncMigrateTask smallTask = {
+        .mode = SYNC_MIGRATE_MODE_TOTAL,
+        .srcNid = 4,
+        .destNid = 3,
+        .pid = 1,
+        .totalSize = 1024 * 1024,
+        .batchSize = 0,
+        .sleepTimeUs = 0,
+    };
+    // 20GB按100MB/s估算约205s，超过IPC默认超时
+    SyncMigrateTask bigTask = {
+        .mode = SYNC_MIGRATE_MODE_TOTAL,
+        .srcNid = 4,
+        .destNid = 3,
+        .pid = 1,
+        .totalSize = 20ULL * 1024 * 1024,
+        .batchSize = 0,
+        .sleepTimeUs = 0,
+    };
+
+    MOCKER_CPP(&UBTurboFunctionCaller,
+               uint32_t(*)(const std::string &function, const TurboByteBuffer &params, TurboByteBuffer &result))
+        .stubs()
+        .will(invoke(Test_UBTurboFunctionCaller));
+    MOCKER_CPP(&SetIpcTimeLimit, uint32_t(*)(uint32_t)).stubs().will(invoke(RecordSetIpcTimeLimit));
+
+    ret = ubturbo_smap_migrate_pages(&smallTask);
+    EXPECT_NE(ret, 0);
+    EXPECT_EQ(0, g_setIpcTimeLimitValue);
+
+    ret = ubturbo_smap_migrate_pages(&bigTask);
+    EXPECT_NE(ret, 0);
+    EXPECT_EQ(205, g_setIpcTimeLimitValue);
+
+    // 超时只放宽、不调小，再次执行小任务不应修改超时
+    g_setIpcTimeLimitValue = 0;
+    ret = ubturbo_smap_migrate_pages(&smallTask);
+    EXPECT_NE(ret, 0);
+    EXPECT_EQ(0, g_setIpcTimeLimitValue);
+}
+
 TEST_F(TestSmapClient, SmapMigratePidRemoteNumaTest)
 {
     struct MigrateEscapeMsg msg = {
@@ -1302,7 +1479,7 @@ TEST_F(TestSmapClient, SmapMigratePidRemoteNumaUBTurboFunctionCallerFailed)
 TEST_F(TestSmapClient, SmapQueryProcessConfigTest)
 {
     int nid = 1;
-    struct ProcessPayload payload = {0};
+    struct OldProcessPayload payload = {0};
     int inLen = 1;
     int outLen;
     MOCKER_CPP(&UBTurboFunctionCaller,
@@ -1325,7 +1502,7 @@ TEST_F(TestSmapClient, SmapQueryProcessConfigNullMsg)
 {
     int ret;
     int nid = 1;
-    struct ProcessPayload *payload = nullptr;
+    struct OldProcessPayload *payload = nullptr;
     int inLen = 1;
     int outLen;
 
@@ -1337,7 +1514,7 @@ TEST_F(TestSmapClient, SmapQueryProcessConfigErrLen)
 {
     int ret;
     int nid = 1;
-    struct ProcessPayload payload = {0};
+    struct OldProcessPayload payload = {0};
     int inLen = -1;
     int outLen;
 
@@ -1349,7 +1526,7 @@ TEST_F(TestSmapClient, SmapQueryProcessConfigEncodeRequestError)
 {
     int ret;
     int nid = 1;
-    struct ProcessPayload payload = {0};
+    struct OldProcessPayload payload = {0};
     int inLen = 1;
     int outLen;
 

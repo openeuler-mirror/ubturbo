@@ -9,7 +9,9 @@
  * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
  * See the Mulan PSL v2 for more details.
  */
+#include <atomic>
 #include <cerrno>
+#include <cstdint>
 
 #include "smap_handler_msg.h"
 #include "smap_interface.h"
@@ -19,6 +21,47 @@
 using namespace turbo::smap::codec;
 using namespace turbo::ipc::client;
 using namespace turbo::smap::ulog;
+
+namespace {
+// IPC接收超时的默认值，与 IpcClientInner::ipcTimeLimit 的初始值一致
+const uint32_t IPC_TIME_LIMIT_DEFAULT_SEC = 60;
+
+// 记录本文件已设置过的IPC超时，保证只放宽、不调小
+std::atomic<uint32_t> g_smapIpcTimeLimit{IPC_TIME_LIMIT_DEFAULT_SEC};
+
+// 同步阻塞接口的耗时可能超过IPC默认接收超时，调用前按需放宽进程级IPC超时(不恢复)
+void ExtendIpcTimeLimit(uint32_t needSec)
+{
+    if (needSec <= g_smapIpcTimeLimit.load()) {
+        return;
+    }
+    SetIpcTimeLimit(needSec);
+    g_smapIpcTimeLimit.store(needSec);
+}
+
+// 等待远端内存腾出之后，还需为实际迁移留出的时间
+const uint64_t MIGRATE_OUT_SYNC_EXTRA_SEC = 60;
+// 同步迁移速率下限按100MB/s估算
+const uint64_t MIGRATE_PAGES_MIN_RATE_KB_PER_SEC = 100 * 1024;
+
+uint32_t ClampToUint32(uint64_t sec)
+{
+    return sec > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(sec);
+}
+
+uint32_t GetMigratePagesTimeLimitSec(const SyncMigrateTask *task)
+{
+    uint64_t sec = task->totalSize / MIGRATE_PAGES_MIN_RATE_KB_PER_SEC + 1;
+    if (task->mode == SYNC_MIGRATE_MODE_BATCH && task->batchSize != 0 && task->sleepTimeUs != 0) {
+        uint64_t batches = task->totalSize / task->batchSize;
+        if (batches > UINT64_MAX / task->sleepTimeUs) {
+            return UINT32_MAX;
+        }
+        sec += batches * task->sleepTimeUs / 1000000 + 1;
+    }
+    return ClampToUint32(sec);
+}
+} // namespace
 
 int ubturbo_smap_migrate_out(struct MigrateOutMsg *msg, int pidType)
 {
@@ -377,7 +420,7 @@ int ubturbo_smap_remote_numa_info_set(struct SetRemoteNumaInfoMsg *msg)
     return ret;
 }
 
-int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource)
+int ubturbo_smap_vm_freq_query(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut, int dataSource)
 {
     TurboByteBuffer send;
     TurboByteBuffer recv;
@@ -392,19 +435,22 @@ int ubturbo_smap_freq_query(int pid, uint16_t *data, uint32_t lengthIn, uint32_t
     }
     int ret = handler.EncodeRequest(send, pid, lengthIn, dataSource);
     if (ret) {
-        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_freq_query Encode request error %d.\n", ret);
+        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_vm_freq_query Encode request error %d.\n", ret);
         return IPC_ERROR;
     }
-    uint32_t ipcRet = UBTurboFunctionCaller("ubturbo_smap_freq_query", send, recv);
+    uint32_t ipcRet = UBTurboFunctionCaller("ubturbo_smap_vm_freq_query", send, recv);
     if (ipcRet != IPC_OK) {
-        IPC_CLIENT_LOGGER_ERROR("[Smap] Call ubturbo_smap_freq_query error %u.\n", ipcRet);
+        IPC_CLIENT_LOGGER_ERROR("[Smap] Call ubturbo_smap_vm_freq_query error %u.\n", ipcRet);
         delete[] send.data;
         return ipcRet;
     }
-    int result = handler.DecodeResponse(recv, data, *lengthOut, ret);
+    uint32_t lengthOut32 = *lengthOut;
+    int result = handler.DecodeResponse(recv, data, lengthOut32, ret);
     if (result == IPC_ERROR) {
-        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_freq_query Decode response error %d.\n", result);
+        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_vm_freq_query Decode response error %d.\n", result);
         ret = IPC_ERROR;
+    } else {
+        *lengthOut = static_cast<uint16_t>(lengthOut32);
     }
     delete[] send.data;
     delete[] recv.data;
@@ -475,6 +521,7 @@ int ubturbo_smap_migrate_out_sync(struct MigrateOutMsg *msg, int pidType, uint64
         IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_migrate_out_sync Encode request error %d.\n", ret);
         return IPC_ERROR;
     }
+    ExtendIpcTimeLimit(ClampToUint32(maxWaitTime / 1000 + MIGRATE_OUT_SYNC_EXTRA_SEC));
     uint32_t ipcRet = UBTurboFunctionCaller("ubturbo_smap_migrate_out_sync", send, recv);
     if (ipcRet != IPC_OK) {
         IPC_CLIENT_LOGGER_ERROR("[Smap] Call ubturbo_smap_migrate_out_sync error %u.\n", ipcRet);
@@ -519,6 +566,65 @@ int ubturbo_smap_remote_numa_migrate(struct MigrateNumaMsg *msg)
     return ret;
 }
 
+int ubturbo_smap_same_remote_numa_migrate(struct MigrateNumaMsg *msg)
+{
+    TurboByteBuffer send;
+    TurboByteBuffer recv;
+    SmapSameRemoteNumaMigrateCodec handler;
+    if (!msg) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] Same remote numa migrate msg is null.\n");
+        return -EINVAL;
+    }
+    int ret = handler.EncodeRequest(send, msg);
+    if (ret) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_same_remote_numa_migrate Encode request error %d.\n", ret);
+        return IPC_ERROR;
+    }
+    uint32_t ipcRet = UBTurboFunctionCaller("ubturbo_smap_same_remote_numa_migrate", send, recv);
+    if (ipcRet != IPC_OK) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] Call ubturbo_smap_same_remote_numa_migrate error %u.\n", ipcRet);
+        delete[] send.data;
+        return ipcRet;
+    }
+    ret = handler.DecodeResponse(recv);
+    if (ret == IPC_ERROR) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_same_remote_numa_migrate Decode response error %d.\n", ret);
+    }
+    delete[] send.data;
+    delete[] recv.data;
+    return ret;
+}
+
+int ubturbo_smap_migrate_pages(SyncMigrateTask *task)
+{
+    TurboByteBuffer send;
+    TurboByteBuffer recv;
+    SmapMigratePagesCodec handler;
+    if (!task) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] Migrate pages task is null.\n");
+        return -EINVAL;
+    }
+    int ret = handler.EncodeRequest(send, task);
+    if (ret) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_migrate_pages Encode request error %d.\n", ret);
+        return IPC_ERROR;
+    }
+    ExtendIpcTimeLimit(GetMigratePagesTimeLimitSec(task));
+    uint32_t ipcRet = UBTurboFunctionCaller("ubturbo_smap_migrate_pages", send, recv);
+    if (ipcRet != IPC_OK) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] Call ubturbo_smap_migrate_pages error %u.\n", ipcRet);
+        delete[] send.data;
+        return ipcRet;
+    }
+    ret = handler.DecodeResponse(recv);
+    if (ret == IPC_ERROR) {
+        IPC_CLIENT_LOGGER_ERROR("[Smap] ubturbo_smap_migrate_pages Decode response error %d.\n", ret);
+    }
+    delete[] send.data;
+    delete[] recv.data;
+    return ret;
+}
+
 int ubturbo_smap_pid_remote_numa_migrate(struct MigrateEscapeMsg *msg)
 {
     TurboByteBuffer send;
@@ -548,7 +654,7 @@ int ubturbo_smap_pid_remote_numa_migrate(struct MigrateEscapeMsg *msg)
     return ret;
 }
 
-int ubturbo_smap_process_config_query(int nid, struct ProcessPayload *result, int inLen, int *outLen)
+int ubturbo_smap_process_config_query(int nid, struct OldProcessPayload *result, int inLen, int *outLen)
 {
     TurboByteBuffer send;
     TurboByteBuffer recv;

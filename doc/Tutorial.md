@@ -155,8 +155,8 @@ int main(int argc, char* argv[])
     uint32_t duration = 1;      // 扫描持续时长，单位s（可根据需要设置）
     int len = 1;                // 进程数组大小，一个pid对应该参数就是1（无需更改）
     int scanType = 2;           // 扫描类型，统计模式参数为2（无需更改）
-    uint32_t lengthIn = 2560;  //  传入的数据长度，虚拟机场景：内存/2M，容器场景：内存/4kb（必须根据实际情况设置）
-    uint32_t lengthOut = 0;    //  输出实际数据长度（无需更改）
+    uint16_t lengthIn = 2560;  //  传入的数据长度，虚拟机场景：内存/2M，容器场景：内存/4kb（必须根据实际情况设置，最大65535）
+    uint16_t lengthOut = 0;    //  输出实际数据长度（无需更改）
     int dataSource = 1;        //  标识数据来源，统计模式为1（无需更改）
 
     // 初始化smap
@@ -191,7 +191,7 @@ int main(int argc, char* argv[])
         cout << "内存分配失败" << endl;
         return -1;
     }
-    result = ubturbo_smap_freq_query(
+    result = ubturbo_smap_vm_freq_query(
         pid,           // 查询的进程ID
         data,          // 查询页面冷热数据缓冲区
         lengthIn,      // 传入的数据长度

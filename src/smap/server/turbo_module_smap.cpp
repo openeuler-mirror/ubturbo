@@ -52,6 +52,8 @@ static SmapAddProcessTrackingFunc g_smapAddProcessTracking = nullptr;
 static SmapRemoveProcessTrackingFunc g_smapRemoveProcessTracking = nullptr;
 static SmapEnableProcessMigrateFunc g_smapEnableProcessMigrate = nullptr;
 static SmapMigrateRemoteNumaFunc g_smapMigrateRemoteNuma = nullptr;
+static SmapSameRemoteNumaMigrateFunc g_smapSameRemoteNumaMigrate = nullptr;
+static SmapMigratePagesFunc g_smapMigratePages = nullptr;
 static SmapMigratePidRemoteNumaFunc g_smapMigratePidRemoteNuma = nullptr;
 static SmapQueryProcessConfigFunc g_smapQueryProcessConfig = nullptr;
 static SmapQueryRemoteNumaFreqFunc g_smapQueryRemoteNumaFreq = nullptr;
@@ -330,22 +332,28 @@ RetCode SetSmapRemoteNumaInfoHandler(const TurboByteBuffer &inputBuffer, TurboBy
 
 RetCode SmapQueryFreqHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
 {
-    int pid;
-    uint32_t lengthIn;
-    int dataSource;
+    int pid = 0;
+    uint32_t lengthIn = 0;
+    int dataSource = 0;
     SmapQueryVmFreqCodec codec;
     int ret = codec.DecodeRequest(inputBuffer, pid, lengthIn, dataSource);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapQueryFreqHandler DecodeRequest error " << ret;
         return TURBO_ERROR;
     }
-    uint16_t *data = (uint16_t *)malloc(sizeof(uint16_t) * lengthIn);
+    // 插件接口的长度参数已收窄为uint16_t，超出范围直接拒绝，避免静默截断
+    if (lengthIn > MAX_NR_OF_QUERY_VM_FREQ_HCCS) {
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapQueryFreqHandler invalid lengthIn " << lengthIn;
+        return TURBO_ERROR;
+    }
+    uint16_t lengthIn16 = static_cast<uint16_t>(lengthIn);
+    uint16_t *data = (uint16_t *)malloc(sizeof(uint16_t) * lengthIn16);
     if (!data) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapQueryFreqHandler malloc date error ";
         return TURBO_ERROR;
     }
-    uint32_t lengthOut = lengthIn;
-    int result = g_smapQueryVmFreq(pid, data, lengthIn, &lengthOut, dataSource);
+    uint16_t lengthOut = lengthIn16;
+    int result = g_smapQueryVmFreq(pid, data, lengthIn16, &lengthOut, dataSource);
     ret = codec.EncodeResponse(outputBuffer, data, lengthOut, result);
     if (ret) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapQueryFreqHandler EncodeResponse error " << ret;
@@ -426,6 +434,44 @@ RetCode SmapMigrateRemoteNumaHandler(const TurboByteBuffer &inputBuffer, TurboBy
     return TURBO_OK;
 }
 
+RetCode SmapSameRemoteNumaMigrateHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
+{
+    MigrateNumaMsg msg{};
+    SmapSameRemoteNumaMigrateCodec codec;
+    int ret = codec.DecodeRequest(inputBuffer, msg);
+    if (ret) {
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
+            << "[Smap] SmapSameRemoteNumaMigrateHandler DecodeRequest error " << ret;
+        return TURBO_ERROR;
+    }
+    int result = g_smapSameRemoteNumaMigrate(&msg);
+    ret = codec.EncodeResponse(outputBuffer, result);
+    if (ret) {
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE)
+            << "[Smap] SmapSameRemoteNumaMigrateHandler EncodeResponse error " << ret;
+        return TURBO_ERROR;
+    }
+    return TURBO_OK;
+}
+
+RetCode SmapMigratePagesHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
+{
+    SyncMigrateTask task{};
+    SmapMigratePagesCodec codec;
+    int ret = codec.DecodeRequest(inputBuffer, task);
+    if (ret) {
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapMigratePagesHandler DecodeRequest error " << ret;
+        return TURBO_ERROR;
+    }
+    int result = g_smapMigratePages(&task);
+    ret = codec.EncodeResponse(outputBuffer, result);
+    if (ret) {
+        UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] SmapMigratePagesHandler EncodeResponse error " << ret;
+        return TURBO_ERROR;
+    }
+    return TURBO_OK;
+}
+
 RetCode SmapMigratePidRemoteNumaHandler(const TurboByteBuffer &inputBuffer, TurboByteBuffer &outputBuffer)
 {
     MigrateEscapeMsg msg{};
@@ -463,7 +509,7 @@ RetCode SmapQueryProcessConfigHandler(const TurboByteBuffer &inputBuffer, TurboB
         return TURBO_ERROR;
     }
     int outLen = 0;
-    struct ProcessPayload payload[inLen];
+    struct OldProcessPayload payload[inLen];
     int result = g_smapQueryProcessConfig(nid, payload, inLen, &outLen);
     ret = codec.EncodeResponse(outputBuffer, payload, outLen, result);
     if (ret) {
@@ -544,7 +590,7 @@ int StubSetSmapRemoteNumaInfo(struct SetRemoteNumaInfoMsg *msg)
     return 0;
 }
 
-int StubSmapQueryVmFreq(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut, int dataSource)
+int StubSmapQueryVmFreq(int pid, uint16_t *data, uint16_t lengthIn, uint16_t *lengthOut, int dataSource)
 {
     return 0;
 }
@@ -589,7 +635,17 @@ int StubSmapMigratePidRemoteNuma(struct MigrateEscapeMsg *msg)
     return 0;
 }
 
-int StubSmapQueryProcessConfig(int nid, struct ProcessPayload *result, int inLen, int *outLen)
+int StubSmapSameRemoteNumaMigrate(struct MigrateNumaMsg *msg)
+{
+    return 0;
+}
+
+int StubSmapMigratePages(SyncMigrateTask *task)
+{
+    return 0;
+}
+
+int StubSmapQueryProcessConfig(int nid, struct OldProcessPayload *result, int inLen, int *outLen)
 {
     return 0;
 }
@@ -619,6 +675,8 @@ void StubSmapPtr()
     g_smapEnableProcessMigrate = StubSmapEnableProcessMigrate;
     g_smapMigrateRemoteNuma = StubSmapMigrateRemoteNuma;
     g_smapMigratePidRemoteNuma = StubSmapMigratePidRemoteNuma;
+    g_smapSameRemoteNumaMigrate = StubSmapSameRemoteNumaMigrate;
+    g_smapMigratePages = StubSmapMigratePages;
     g_smapQueryProcessConfig = StubSmapQueryProcessConfig;
     g_smapQueryRemoteNumaFreq = StubSmapQueryRemoteNumaFreq;
 }
@@ -642,7 +700,7 @@ int OpenSmapHandler()
     g_smapStop = (SmapStopFunc)dlsym(g_smapHandler, "ubturbo_smap_stop");
     g_smapUrgentMigrateOut = (SmapUrgentMigrateOutFunc)dlsym(g_smapHandler, "ubturbo_smap_urgent_migrate_out");
     g_setSmapRemoteNumaInfo = (SetSmapRemoteNumaInfoFunc)dlsym(g_smapHandler, "ubturbo_smap_remote_numa_info_set");
-    g_smapQueryVmFreq = (SmapQueryFreqFunc)dlsym(g_smapHandler, "ubturbo_smap_freq_query");
+    g_smapQueryVmFreq = (SmapQueryFreqFunc)dlsym(g_smapHandler, "ubturbo_smap_vm_freq_query");
     g_setSmapRunMode = (SetSmapRunModeFunc)dlsym(g_smapHandler, "ubturbo_smap_run_mode_set");
     g_smapIsRunning = (SmapIsRunningFunc)dlsym(g_smapHandler, "ubturbo_smap_is_running");
     g_smapMigrateOutSync = (SmapMigrateOutSyncFunc)dlsym(g_smapHandler, "ubturbo_smap_migrate_out_sync");
@@ -652,6 +710,9 @@ int OpenSmapHandler()
     g_smapEnableProcessMigrate =
         (SmapEnableProcessMigrateFunc)dlsym(g_smapHandler, "ubturbo_smap_process_migrate_enable");
     g_smapMigrateRemoteNuma = (SmapMigrateRemoteNumaFunc)dlsym(g_smapHandler, "ubturbo_smap_remote_numa_migrate");
+    g_smapSameRemoteNumaMigrate =
+        (SmapSameRemoteNumaMigrateFunc)dlsym(g_smapHandler, "ubturbo_smap_same_remote_numa_migrate");
+    g_smapMigratePages = (SmapMigratePagesFunc)dlsym(g_smapHandler, "ubturbo_smap_migrate_pages");
     g_smapMigratePidRemoteNuma =
         (SmapMigratePidRemoteNumaFunc)dlsym(g_smapHandler, "ubturbo_smap_pid_remote_numa_migrate");
     g_smapQueryProcessConfig = (SmapQueryProcessConfigFunc)dlsym(g_smapHandler, "ubturbo_smap_process_config_query");
@@ -661,6 +722,7 @@ int OpenSmapHandler()
            !g_smapInit || !g_smapStop || !g_smapUrgentMigrateOut || !g_setSmapRemoteNumaInfo || !g_smapQueryVmFreq ||
            !g_setSmapRunMode || !g_smapIsRunning || !g_smapMigrateOutSync || !g_smapAddProcessTracking ||
            !g_smapRemoveProcessTracking || !g_smapEnableProcessMigrate || !g_smapMigrateRemoteNuma ||
+           !g_smapSameRemoteNumaMigrate || !g_smapMigratePages ||
            !g_smapMigratePidRemoteNuma || !g_smapQueryProcessConfig || !g_smapQueryRemoteNumaFreq;
     if (flag) {
         UBTURBO_LOG_ERROR(MODULE_NAME, MODULE_CODE) << "[Smap] Smap function not found";
@@ -692,11 +754,13 @@ void RegSmapHandler()
     ret |= UBTurboRegIpcService("ubturbo_smap_process_tracking_remove", SmapRemoveProcessTrackingHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_process_migrate_enable", SmapEnableProcessMigrateHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_remote_numa_info_set", SetSmapRemoteNumaInfoHandler);
-    ret |= UBTurboRegIpcService("ubturbo_smap_freq_query", SmapQueryFreqHandler);
+    ret |= UBTurboRegIpcService("ubturbo_smap_vm_freq_query", SmapQueryFreqHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_run_mode_set", SetSmapRunModeHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_is_running", SmapIsRunningHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_migrate_out_sync", SmapMigrateOutSyncHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_remote_numa_migrate", SmapMigrateRemoteNumaHandler);
+    ret |= UBTurboRegIpcService("ubturbo_smap_same_remote_numa_migrate", SmapSameRemoteNumaMigrateHandler);
+    ret |= UBTurboRegIpcService("ubturbo_smap_migrate_pages", SmapMigratePagesHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_pid_remote_numa_migrate", SmapMigratePidRemoteNumaHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_process_config_query", SmapQueryProcessConfigHandler);
     ret |= UBTurboRegIpcService("ubturbo_smap_remote_numa_freq_query", SmapQueryRemoteNumaFreqHandler);
@@ -719,11 +783,13 @@ void UnRegSmapHandler()
     ret |= UBTurboUnRegIpcService("ubturbo_smap_process_tracking_remove");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_process_migrate_enable");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_remote_numa_info_set");
-    ret |= UBTurboUnRegIpcService("ubturbo_smap_freq_query");
+    ret |= UBTurboUnRegIpcService("ubturbo_smap_vm_freq_query");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_run_mode_set");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_is_running");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_migrate_out_sync");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_remote_numa_migrate");
+    ret |= UBTurboUnRegIpcService("ubturbo_smap_same_remote_numa_migrate");
+    ret |= UBTurboUnRegIpcService("ubturbo_smap_migrate_pages");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_pid_remote_numa_migrate");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_process_config_query");
     ret |= UBTurboUnRegIpcService("ubturbo_smap_remote_numa_freq_query");

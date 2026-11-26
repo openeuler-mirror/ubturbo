@@ -171,8 +171,19 @@ class SmapQueryProcessConfigCodec {
 public:
     int EncodeRequest(TurboByteBuffer &buffer, int nid, int inLen);
     int DecodeRequest(const TurboByteBuffer &buffer, int &nid, int &inLen);
-    int EncodeResponse(TurboByteBuffer &buffer, struct ProcessPayload *result, int outLen, int returnValue);
-    int DecodeResponse(TurboByteBuffer &buffer, struct ProcessPayload *result, int &outLen, int &returnValue);
+    int EncodeResponse(TurboByteBuffer &buffer, struct OldProcessPayload *result, int outLen, int returnValue);
+    int DecodeResponse(TurboByteBuffer &buffer, struct OldProcessPayload *result, int &outLen, int &returnValue);
+};
+
+/* 与 SmapMigrateRemoteNumaCodec 报文格式相同(请求为MigrateNumaMsg，响应为int)，仅IPC服务名不同 */
+using SmapSameRemoteNumaMigrateCodec = SmapMigrateRemoteNumaCodec;
+
+class SmapMigratePagesCodec {
+public:
+    int EncodeRequest(TurboByteBuffer &buffer, SyncMigrateTask *task);
+    int DecodeRequest(const TurboByteBuffer &buffer, SyncMigrateTask &task);
+    int EncodeResponse(TurboByteBuffer &buffer, int returnValue);
+    int DecodeResponse(TurboByteBuffer &buffer);
 };
 
 class SmapQueryRemoteNumaFreqCodec {
