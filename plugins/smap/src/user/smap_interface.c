@@ -2086,11 +2086,20 @@ static int QueryVMFreqFromKernel(int pid, uint16_t *data, uint32_t lengthIn, uin
     return ret;
 }
 
-/* freq_query 等待扫描线程填充回调的超时（毫秒）。非 const 全局，供上层/UT 按需调整；
- * 默认 20000 覆盖约 10 个迁移周期（migPeriod 默认 2s），负载下扫描闭环膨胀时也可等到
- * 下一窗口。注意：进程已注销（GetProcessAttr 返回 NULL）与非 NORMAL_SCAN 均为快速失败，
- * 不会进入等待；仅"内核未跟踪/读取失败等回调来源缺失"场景才会等待满超时返回 -ETIMEDOUT。 */
-int g_freqQueryWaitTimeoutMs = 20000;
+/* 回调余量：窗口结束后 scan worker 还需被事件循环调度并完成 BuildPidData。 */
+#define FREQ_QUERY_WAIT_MARGIN_MS 5000
+
+/* 实际等待上限：内核要累计 nTimes（= 迁移周期 / 扫描周期，向下取整）轮扫描窗口后才置
+ * freq_ready 唤醒用户态，所以最坏等待约等于一个迁移周期；nTimes 取整会让窗口略短于迁移周期，
+ * 因此再加一个扫描周期覆盖取整误差与窗口漂移，最后加一段回调调度余量。 */
+static int GetFreqQueryWaitTimeoutMs(const ProcessAttr *attr)
+{
+    uint32_t scanTime = 0;
+    uint32_t migPeriod = 0;
+    GetProcessPeriods(attr, &scanTime, &migPeriod);
+
+    return (int)migPeriod + scanTime + FREQ_QUERY_WAIT_MARGIN_MS;
+}
 
 static int QueryVMFreqFromUser(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut)
 {
@@ -2126,9 +2135,10 @@ static int QueryVMFreqFromUser(int pid, uint16_t *data, uint32_t lengthIn, uint3
 
     struct timeval tv;
     struct timespec ts;
+    int waitTimeoutMs = GetFreqQueryWaitTimeoutMs(attr);
     gettimeofday(&tv, NULL);
-    ts.tv_sec = tv.tv_sec + g_freqQueryWaitTimeoutMs / 1000;
-    ts.tv_nsec = tv.tv_usec * 1000 + (long)(g_freqQueryWaitTimeoutMs % 1000) * 1000000L;
+    ts.tv_sec = tv.tv_sec + waitTimeoutMs / 1000;
+    ts.tv_nsec = tv.tv_usec * 1000 + (long)(waitTimeoutMs % 1000) * 1000000L;
     if (ts.tv_nsec >= 1000000000L) {
         ts.tv_sec += 1;
         ts.tv_nsec -= 1000000000L;

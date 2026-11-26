@@ -2250,7 +2250,6 @@ extern "C" int CheckQueryVMFreqMsgValid(int pid, uint16_t *data, uint32_t length
                                         int dataSource);
 extern "C" int QueryVMFreqFromKernel(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut);
 extern "C" int QueryVMFreqFromUser(int pid, uint16_t *data, uint32_t lengthIn, uint32_t *lengthOut);
-extern "C" int g_freqQueryWaitTimeoutMs;
 TEST_F(InterfaceTest, TestSmapQueryVmFreqAbnormalOne)
 {
     int ret;
@@ -2385,13 +2384,63 @@ TEST_F(InterfaceTest, TestQueryVMFreqFromUserActcLenZero)
     ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
     g_processManager.tracking.pageSize = PAGESIZE_2M;
     EnvMutexInit(&g_processManager.threadLock);
-    /* 注入短超时，避免超时路径用例空等 20s */
-    int savedTimeout = g_freqQueryWaitTimeoutMs;
-    g_freqQueryWaitTimeoutMs = 100;
+    /* 迁移周期/扫描周期直写最小字段值，等待上限为 5000ms 回调余量 + 2ms，用例约 5s 返回 */
+    attr.scanTime = 1;
+    attr.migPeriod = 1;
     /* 无 scan worker 触发 InvokeFreqCallbacks → freq_query 超时返回 -ETIMEDOUT */
     ret = QueryVMFreqFromUser(pid, data, dataLen, &lengthOut);
-    g_freqQueryWaitTimeoutMs = savedTimeout;
     EXPECT_EQ(-ETIMEDOUT, ret);
+    PidSlotDestroy(&g_processManager);
+}
+
+/* 模拟长迁移周期的 scan worker：等 waiter 注册后再延迟 500ms 才回调 */
+static void *StubScanFillAndInvokeAfterDelay(void *arg)
+{
+    ProcessAttr *attr = (ProcessAttr *)arg;
+    for (int i = 0; i < 5000 && g_processManager.slots[0].freqWaiters == nullptr; i++) {
+        usleep(1000);
+    }
+    usleep(500 * 1000);
+    attr->scanAttr.actcData[0] = g_stubFreq.len0 > 0 ? g_stubFreq.node0 : nullptr;
+    attr->scanAttr.actcLen[0] = g_stubFreq.len0;
+    attr->scanAttr.actcData[1] = g_stubFreq.len1 > 0 ? g_stubFreq.node1 : nullptr;
+    attr->scanAttr.actcLen[1] = g_stubFreq.len1;
+    InvokeFreqCallbacks(attr);
+    attr->scanAttr.actcData[0] = nullptr;
+    attr->scanAttr.actcLen[0] = 0;
+    attr->scanAttr.actcData[1] = nullptr;
+    attr->scanAttr.actcLen[1] = 0;
+    return nullptr;
+}
+
+/* 等待上限按迁移周期放大：迁移周期 3000ms + 扫描周期 1000ms + 余量，回调 500ms 后才到仍应成功 */
+TEST_F(InterfaceTest, TestQueryVMFreqFromUserWaitsForLongMigratePeriod)
+{
+    int pid = 1;
+    uint32_t lengthOut = 0;
+    uint16_t data[5] = {0};
+    EnvAtomicSet(&g_status, 1);
+    memset(&g_processManager.slots, 0, sizeof(g_processManager.slots));
+    PidSlotInit(&g_processManager);
+    ProcessAttr attr = {.pid = 1, .next = nullptr};
+    attr.scanType = NORMAL_SCAN;
+    attr.scanTime = 1000;
+    attr.migPeriod = 3000;
+    ASSERT_EQ(0, PidSlotAdd(&g_processManager, &attr));
+    g_processManager.tracking.pageSize = PAGESIZE_2M;
+    EnvMutexInit(&g_processManager.threadLock);
+    memset(&g_stubFreq, 0, sizeof(g_stubFreq));
+    g_stubFreq.node0[0].freq = 9;
+    g_stubFreq.node0[1].freq = 11;
+    g_stubFreq.len0 = 2;
+    pthread_t tid;
+    ASSERT_EQ(0, pthread_create(&tid, nullptr, StubScanFillAndInvokeAfterDelay, &attr));
+    int ret = QueryVMFreqFromUser(pid, data, sizeof(data) / sizeof(uint16_t), &lengthOut);
+    pthread_join(tid, nullptr);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(2U, lengthOut);
+    EXPECT_EQ(9, data[0]);
+    EXPECT_EQ(11, data[1]);
     PidSlotDestroy(&g_processManager);
 }
 
