@@ -5582,6 +5582,38 @@ TEST_F(ManageTest, TestPidPlanRecallsResidentPagesAfterCapacityShrink)
     FreeProcessAttrArrays(&attr);
 }
 
+TEST_F(ManageTest, TestPidPlanSkipsOnlyForbiddenRemote)
+{
+    ProcessManager manager;
+    InitPairTargetManager(&manager, 1);
+    manager.remoteNumaInfo.privateInFlight = (uint64_t *)calloc(NM_COUNT(1), sizeof(uint64_t));
+    ASSERT_NE(nullptr, manager.remoteNumaInfo.privateInFlight);
+    MOCKER(GetProcessManager).stubs().will(returnValue(&manager));
+    ScopedPageSize pageSize(PAGESIZE_4K);
+
+    ProcessAttr attr;
+    InitRatioPairProcess(&attr, 100, 1, 800, 0, 50);
+    attr.targetConfig.count = 2;
+    attr.targetConfig.targets[1] = {2, 50, 0};
+    attr.walkPage.nrPage = 800;
+    PidSlotAdd(&manager, &attr);
+    NM_AT(manager.remoteNumaInfo.privateSize, 0, 1) = 2;
+    NM_AT(manager.remoteNumaInfo.privateSize, 0, 2) = 2;
+
+    /* 禁用的远端只冻结该 NUMA，其余远端（含迁回方向）照常规划 */
+    EnvAtomicSet(&g_forbiddenNodes[2], NODE_FORBIDDEN_MIGBACK_DONE);
+    ASSERT_EQ(0, BuildPidPairPlans(&manager, &attr, nullptr, nullptr));
+    EXPECT_EQ(400U, NM_AT(attr.strategyAttr.nrMigratePages, 0, 1));
+    EXPECT_EQ(0U, NM_AT(attr.strategyAttr.nrMigratePages, 0, 2));
+    EXPECT_EQ(0U, NM_AT(attr.strategyAttr.nrMigrateBackPages, 0, 2));
+    EnvAtomicSet(&g_forbiddenNodes[2], 0);
+
+    memset(&manager.slots, 0, sizeof(manager.slots));
+    free(manager.remoteNumaInfo.privateInFlight);
+    DestroyPairTargetManager(&manager);
+    FreeProcessAttrArrays(&attr);
+}
+
 TEST_F(ManageTest, TestPidPlansShareCapacityAndReserveInflightPages)
 {
     ProcessManager manager;
@@ -6558,6 +6590,16 @@ static int StubAccessWalkFillPages(pid_t pid, struct ProcessMemBitmap *pmb)
     return 0;
 }
 
+static int StubAccessWalkFillResidualRemote(pid_t pid, struct ProcessMemBitmap *pmb)
+{
+    (void)pid;
+    memset(pmb, 0, sizeof(*pmb));
+    pmb->nrPages[0] = 4;
+    /* 旧迁移目标远端已被新目标替换，但仍驻留页面 */
+    pmb->nrPages[3] = 6;
+    return 0;
+}
+
 static int StubAccessWalkEsrch(pid_t pid, struct ProcessMemBitmap *pmb)
 {
     (void)pid;
@@ -6587,6 +6629,34 @@ TEST_F(ManageTest, TestBuildPidDataSuccess)
     EXPECT_EQ(5U, attr.walkPage.nrPage);
     EXPECT_EQ(5U, attr.scanAttr.actcLen[0]);
     FreeProcessAttrArrays(&attr);
+}
+
+TEST_F(ManageTest, TestBuildPidDataKeepsResidualRemoteInL2)
+{
+    ProcessAttr attr = {.pid = 101};
+    attr.scanType = NORMAL_SCAN;
+    g_processManager.nrLocalNuma = 2;
+    ASSERT_EQ(0, InitProcessAttrArrays(&attr));
+    /* CalibratePairAccount 重建远端 Pair 账本时会读 remoteNumaInfo.privateSize，须先分配 */
+    ASSERT_EQ(0, InitRemoteNumaInfoArrays());
+
+    /* targetConfig 为空：远端位只能来自本轮驻留页，须保留到迁回完成 */
+    MOCKER(AccessIoctlWalkPagemap).stubs().will(invoke(StubAccessWalkFillResidualRemote));
+    MOCKER(open).stubs().will(returnValue(1));
+    MOCKER(read).stubs().will(returnValue(static_cast<ssize_t>(10 * sizeof(ActcData))));
+    MOCKER(close).stubs().will(returnValue(0));
+    MOCKER(CalcActcStats).stubs().will(ignoreReturnValue());
+    MOCKER(RefreshManagedLocalStatePeriodic).stubs().will(returnValue(0));
+
+    ASSERT_EQ(0, BuildPidData(&attr));
+    EXPECT_TRUE(NumaBitmapTest(&attr.numaAttr.numaNodes, 3));
+    FreeProcessAttrArrays(&attr);
+    free(g_processManager.remoteNumaInfo.privateSize);
+    free(g_processManager.remoteNumaInfo.privateUsedInfo);
+    free(g_processManager.remoteNumaInfo.privateInFlight);
+    g_processManager.remoteNumaInfo.privateSize = nullptr;
+    g_processManager.remoteNumaInfo.privateUsedInfo = nullptr;
+    g_processManager.remoteNumaInfo.privateInFlight = nullptr;
 }
 
 TEST_F(ManageTest, TestBuildPidDataUntrackedPid)

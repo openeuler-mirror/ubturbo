@@ -22,7 +22,8 @@ extern "C" int RestartPidScan(pid_t pid);
 extern "C" void UpdateProcessPeriods(ProcessAttr *attr);
 extern "C" void UpdateScenePerPid(ProcessAttr *attr);
 extern "C" void ApplyUbBwStop(ProcessAttr *attr, ProcessManager *manager);
-extern "C" bool IsPidAnyRemoteNodeForbidden(ProcessAttr *attr);
+extern "C" int BuildPidPairPlans(struct ProcessManager *manager, ProcessAttr *process, uint32_t **plannedOut,
+                                 int *plannedNrLocalOut);
 
 namespace
 {
@@ -425,7 +426,8 @@ TEST_F(PidPeriodTest, WorkerObservesOldWindowThenAppliesNewGearBeforeRestart)
     }));
     MOCKER(UpdateScenePerPid).stubs();
     MOCKER(ApplyUbBwStop).stubs();
-    MOCKER(IsPidAnyRemoteNodeForbidden).stubs().will(returnValue(true));
+    /* 跳过规划流程，仅验证"旧窗口观测→新档位生效→重启扫描"的顺序 */
+    MOCKER(BuildPidPairPlans).stubs().will(returnValue(-EINVAL));
     MOCKER(RestartPidScan).expects(exactly(3)).will(invoke(+[](pid_t) -> int {
         EXPECT_NE(0u, captured[0].scanTime);
         return 0;
