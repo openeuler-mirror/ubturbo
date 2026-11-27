@@ -6,6 +6,8 @@
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/pid.h>
 #include <linux/types.h>
 #include <linux/sched.h>
 #include <linux/pid_namespace.h>
@@ -16,12 +18,20 @@ static dev_t ucache_dev;
 static struct cdev ucache_cdev;
 static struct class *ucache_dev_class;
 static struct folio *folios[NR_TO_SCAN];
+/* serialize scan+migrate, folios[] is shared by all ioctls */
+static DEFINE_MUTEX(ucache_migrate_lock);
 
 static int ucache_open(struct inode *inode, struct file *file)
 {
 	return 0;
 }
 
+/*
+ * Access control for this ioctl relies on the device node being
+ * owner/mode 0600 (ubturbo:ubturbo) plus the IPC authorization done by
+ * the daemon; the checks below only validate the target task and its
+ * parameters. pid is resolved in the initial pid namespace.
+ */
 bool is_pid_in_container(pid_t pid)
 {
 	struct task_struct *task;
@@ -29,7 +39,7 @@ bool is_pid_in_container(pid_t pid)
 	bool in_container = false;
 
 	rcu_read_lock();
-	task = pid_task(find_vpid(pid), PIDTYPE_PID);
+	task = pid_task(find_pid_ns(pid, &init_pid_ns), PIDTYPE_PID);
 	if (!task) {
 		pr_err("task not found, pid=%d\n", pid);
 		goto out;
@@ -120,10 +130,11 @@ static int dev_ucache_migrate_folios(uintptr_t arg)
 	}
 	des_nid = migrate_info.des_nid;
 
+	mutex_lock(&ucache_migrate_lock);
 	ret = ucache_scan_folios(nid, pid, folios, &nr_folios);
 	if (ret != 0) {
 		pr_err("ucache scan folios failed: %d\n", ret);
-		return ret;
+		goto out;
 	} else if (nr_folios == 0) {
 		pr_warn("ucache no folios to migrate\n");
 	}
@@ -131,9 +142,11 @@ static int dev_ucache_migrate_folios(uintptr_t arg)
 	ret = ucache_migrate_folios(des_nid, folios, nr_folios);
 	if (ret) {
 		pr_err("ucache migrate failed, ret = %d\n", ret);
-		return ret;
+		goto out;
 	}
-	return 0;
+out:
+	mutex_unlock(&ucache_migrate_lock);
+	return ret;
 }
 
 static long ucache_ioctl(struct file *file, unsigned int cmd, unsigned long arg)

@@ -538,7 +538,7 @@ TEST_F(ScanIoctlTestKernel, IoctlGetTrackingError)
 
     // invalid length case
     GlobalMockObject::verify();
-    msg.length = 65536;
+    msg.length = SMAP_TRACKING_LENGTH_MAX + 1;
     MOCKER(copy_from_user).stubs().with(outBoundP((void *)&msg, sizeof(msg))).will(returnValue(0UL));
     ret = ioctl_get_tracking(NULL);
     EXPECT_EQ(-EINVAL, ret);
